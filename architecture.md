@@ -79,7 +79,7 @@ snapshot支持两种操作：restore和clone。restore只允许原vm使用来回
 
 网络层的设计只关注一件事：VM怎么和外部网络打通？
 
-### virtio
+### guest network 与 virtio
 
 前面介绍存储层的时候并没有介绍 firecracker 虚拟化设备所用的 virtio。virtio 是一种半虚拟化技术，何为半虚拟化技术？
 
@@ -90,4 +90,6 @@ snapshot支持两种操作：restore和clone。restore只允许原vm使用来回
 
 FC VM 在网络层使用的是 virtio-net 网卡，不过他解决的是 guest VM 和 VMM(FC) 的网络
 
-### TAP
+virtio-net 需要在宿主机有相应的后端。virtio-net 发出的是以太网帧，所以我们需要有一个处理二层协议的设备。TAP 是Linux内核的一个二层交换机设备，可以用来在用户态处理以太网帧。
+
+### 数据面
