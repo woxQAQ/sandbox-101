@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "documd-visuals": {
+      "source": "markdown-viewer/skills",
+      "sourceType": "github",
+      "skillPath": "documd-visuals/SKILL.md",
+      "computedHash": "a4134d304897b1c2d81059ad450495c6e1ff3b3f68cc7d8d08f03bdd1fdc9a23"
+    }
+  }
+}
