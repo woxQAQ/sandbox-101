@@ -1,0 +1,36 @@
+[submodule "references/cubesandbox"]
+	path = references/cubesandbox
+	url = https://github.com/TencentCloud/CubeSandbox
+[submodule "references/microsandbox"]
+	path = references/microsandbox
+	url = https://github.com/superradcompany/microsandbox.git
+[submodule "references/e2b-runtime"]
+	path = references/e2b-runtime
+	url = https://github.com/e2b-dev/runtime.git
+[submodule "references/cocoonstack/cocoon"]
+	path = references/cocoonstack/cocoon
+	url = https://github.com/cocoonstack/cocoon
+[submodule "references/cocoonstack/cocoon-agent"]
+	path = references/cocoonstack/cocoon-agent
+	url = https://github.com/cocoonstack/cocoon-agent
+[submodule "references/cocoonstack/sandbox"]
+	path = references/cocoonstack/sandbox
+	url = https://github.com/cocoonstack/sandbox
+[submodule "references/cocoonstack/sandbox-operator"]
+	path = references/cocoonstack/sandbox-operator
+	url = https://github.com/cocoonstack/sandbox-operator
+[submodule "references/cocoonstack/cocoon-common"]
+	path = references/cocoonstack/cocoon-common
+	url = https://github.com/cocoonstack/cocoon-common
+[submodule "references/cocoonstack/cocoon-net"]
+	path = references/cocoonstack/cocoon-net
+	url = https://github.com/cocoonstack/cocoon-net
+[submodule "references/cocoonstack/cloud-hypervisor"]
+	path = references/cocoonstack/cloud-hypervisor
+	url = https://github.com/cocoonstack/cloud-hypervisor
+[submodule "references/cocoonstack/cocoon-macos"]
+	path = references/cocoonstack/cocoon-macos
+	url = https://github.com/cocoonstack/cocoon-macos
+[submodule "references/cocoonstack/cocoon-operator"]
+	path = references/cocoonstack/cocoon-operator
+	url = https://github.com/cocoonstack/cocoon-operator
