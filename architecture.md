@@ -1,6 +1,6 @@
 # sandbox 架构
 
-本文描述单宿主机 microVM engine 的目标设计，包括生命周期、存储、快照和网络的职责，以及一致性、资源依赖与安全约束。各章说明所选方案及其依据。
+本文描述供上层控制组件调用的单宿主机 microVM engine，包括生命周期、存储、快照和网络的职责，以及一致性、资源依赖与安全约束。engine 提供可查询、可重试、可恢复的 VM 资源操作；上层负责 sandbox 产品语义与编排。各章说明所选方案及其依据。
 
 接口字段、记录布局、具体路径、系统调用与调度参数在实现设计中确定。文中的操作名说明操作含义，示例解释方案，后端接口与源码说明后端的能力和限制。这些内容不直接定义本项目的实现接口。待定设计项与后端限制另行标明。
 
@@ -10,7 +10,7 @@
 
 engine 管理可编程的 Linux 计算机。它从软件镜像创建 VM，运行应用，保存机器状态，再恢复执行或派生另一台 VM。一台 VM 有独立的 guest kernel、用户空间和可写磁盘，由宿主上的 VMM 进程运行。
 
-系统需要独立的 guest kernel，并能保存和恢复机器级执行状态，因此选择使用精简设备模型的 microVM。首个后端是 Cloud Hypervisor，简称 CH，使用内置 virtio 设备。VMM 适配层按 CH 的实际能力设计。Firecracker，简称 FC，仅用于机制对照，本阶段不实现第二后端。CH 的发行版与内存恢复模式须一起确定，不能直接套用 FC 的内存恢复保证，见 3.2。
+系统需要独立的 guest kernel，并能保存和恢复机器级执行状态，因此选择使用精简设备模型的 microVM。首个后端是上游 Cloud Hypervisor，简称 CH，采用支持 `CopyOnWrite` 内存恢复与二次快照 `reflink` 增量写出的精确主线版本（v54+ 主线，构建版本固定到具体 commit 及配置，快照记录对应兼容性信息）。内存恢复基线为 CopyOnWrite，见 3.2。Firecracker，简称 FC，仅用于机制对照，本阶段不实现第二后端。
 
 | 核心对象 | 表达什么 | 身份与生命周期 |
 |---|---|---|
@@ -24,13 +24,15 @@ engine 是单机资源协调者，OCI 是软件分发格式，VMM 负责执行 g
 |---|---|
 | 生命周期协调 | operation、phase、VM 锁、跨资源变更与中断恢复 |
 | 元数据层 | 配置、归属、资源引用、操作意图、租约与删除标记 |
-| 存储层 | OCI 导入、启动产物、只读层组、VM 可写层 |
-| 快照层 | 一致捕获、完整发布、恢复依赖与回收 |
-| 网络层 | 每 VM 网络 namespace、TAP/bridge/veth、地址与接入配置、接口启停及资源回收 |
+| 存储层 | OCI 导入、启动产物、每层 EROFS 缓存与 `fsmeta` 组合只读根、VM 可写层 |
+| 快照层 | 一致捕获、提前恢复、完整发布、恢复依赖与回收 |
+| 网络层 | 每 VM 网络 namespace、点对点 TAP/veth、地址与接入配置、接口启停及资源回收 |
 | VMM 适配层 | 启停、设备配置、暂停与状态保存，核实后端实际保证 |
 | guest 协作 | vsock 通道、agent 握手、restore/clone 协作序列 |
 
-这些职责可在同一服务内实现。控制面和 Kubernetes 集成使用 Go。需要精细内存控制或低运行时开销的组件使用 Rust。自行实现 engine 也用于学习和掌握这些机制。
+这些职责可在同一服务内实现。engine 以程序调用契约为主，CLI 可作为客户端与诊断入口。上层组件负责模板构建与预热、warm pool、claim、TTL、租户、调度、产品 agent 初始化及任务接纳。engine 的 `running` 只表达 VM 和基础管理通道已满足本层契约，不表示上层 sandbox 服务已经就绪。
+
+控制面和 Kubernetes 集成使用 Go。需要精细内存控制或低运行时开销的组件使用 Rust。自行实现 engine 也用于学习和掌握这些机制。
 
 guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特权，VMM 应降权，只能访问自己的运行目录、必要的 KVM/TAP 句柄和磁盘。VM 配置指定 vCPU、guest 内存和虚拟磁盘大小。为防止资源耗尽，宿主还须限制实际的 CPU、内存、进程数、块 I/O、网络和物理存储使用。
 
@@ -43,16 +45,16 @@ guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特�
 - 应用预热后生成模板快照，多次 clone 得到独立 VM，减少重复初始化。
 - engine 重启后核对进程、文件与内核资源，接管 VM，继续或清理未完成操作。
 
-设计优先复用镜像层，并减少从内存快照派生 VM 时对 guest 地址重配的依赖。因此，基线采用逐层制盘和宿主地址映射，代价是层语义转换和报文处理成本。启动延迟、密度与吞吐目标尚未确定，需通过测量建立性能基线。
+设计优先复用镜像层，并减少从内存快照派生 VM 时对 guest 地址重配的依赖。因此，基线采用逐层 EROFS 缓存结合 `fsmeta` 组合挂载、以及宿主地址映射，代价是镜像物化构建与报文处理成本。首版优先验证冷启动、完整快照、并发派生、源对象独立删除与 daemon 崩溃接管。记录完整路径的耗时、峰值内存、物理存储增量与故障恢复结果，再确定启动延迟、密度与吞吐目标。
 
 ## 0.3 一个完整示例
 
 假设镜像 I 包含 Linux 内核、初始化环境和一个应用：
 
 1. 调用 `create(I)` 创建 A。engine 固定镜像摘要，转换只读层，准备 A 的可写层与宿主资源。A 尚未启动，网络阻断。
-2. 调用 `start(A)`。VMM 启动 guest，guest 挂载根文件系统并启动应用。需要访问外部服务时，另外显式启用网络。
-3. 调用 `snapshot(A)` 生成 S。engine 捕获 A 的整机状态，完整发布 S，再恢复 A 运行。
-4. 调用 `clone(S)` 派生 B。B 有新 VM ID、独立可写层、网络 namespace、TAP/bridge/veth 和映射地址，guest 网络配置不变。A 可以继续运行。
+2. 调用 `start(A)`。VMM 启动 guest，guest 挂载根文件系统并启动服务；engine 完成基础 agent 握手后返回成功。上层另行判断其 sandbox 服务是否就绪。需要访问外部服务时，另外显式启用网络。
+3. 调用 `snapshot(A)` 生成 S。engine 暂停 A 捕获一致的机器状态与磁盘副本，立即恢复 A 运行，再完成同步落盘与 S 的原子发布。
+4. 调用 `clone(S)` 派生 B。B 有新 VM ID、独立可写层、网络 namespace、TAP/veth 和映射地址，guest 网络配置不变。A 可以继续运行。
 5. 调用 `stop(A)`，再调用 `restore(A, S)`。engine 确认 A 的原 VMM 停止，切换到 S 对应资源，继续保存时的执行状态。
 6. 调用 `delete(A)`。engine 停止并回收 A 的资源，S 和 B 不随 A 一起删除。
 
@@ -60,7 +62,7 @@ guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特�
 
 ## 0.4 非目标与运行前提
 
-本阶段不覆盖多宿主机调度、集群控制面、跨 VMM 快照互换、增量快照和 IPv6。
+本阶段不覆盖多宿主机调度、集群控制面、跨 VMM 快照互换、增量快照和 IPv6，也不提供设备热插、在线 resize、网卡调整或运行期 rate limiter 更新。设备布局与限制在创建时确定。
 
 快照的一致性范围为 VM 本地状态。应用与外部系统的事务一致性、旧网络连接的恢复均不在保证范围内。跨宿主机、跨版本恢复必须另行验证兼容性。
 
@@ -70,11 +72,11 @@ guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特�
 |---|---|
 | KVM 与 `/dev/kvm` | 执行 guest；不可用则拒绝创建 |
 | 支持稀疏文件的存储与可靠的文件、目录同步语义 | 承载 raw 可写层和持久化产物 |
-| 按需内存恢复要求快照内存文件与 VM backing 路径位于同一文件系统，且支持 hardlink | 为恢复后的 VM 建立持久路径；eager copy 不要求运行期保留该依赖，见 3.2 |
-| reflink，典型为启用该特性的 XFS 或 Btrfs | 优先用于磁盘版本创建；不可用或跨文件系统时降级为源保持稳定的稀疏复制 |
-| TUN/TAP、`/dev/net/tun`、Linux bridge、veth 与 network namespace | 为每 VM 建立独立网络环境，VMM 与其网络设备位于同一 namespace |
-| 内核连接跟踪与 NAT；宿主及每 VM 网络 namespace 的 IPv4 转发 | 执行路由与两级地址转换；宿主部署方提供相容的 NAT、过滤与资源限制配置 |
-| mount/network namespace、必要特权与资源隔离机制 | 建立每 VM 固定路径视图及独立网络环境，交接 TAP fd，管理 cgroup v2 scope 与内核资源 |
+| CopyOnWrite 恢复要求快照内存文件与 VM backing 路径位于同一文件系统，且支持 hardlink | 为恢复后的 VM 建立持久路径，整个运行期保护不可变 backing，见 3.2 |
+| reflink，典型为启用该特性的 XFS 或 Btrfs | 优先用于磁盘版本创建及 CopyOnWrite 恢复后的二次内存快照；不可用或跨文件系统时降级为源保持稳定的稀疏复制或全量写出 |
+| TUN/TAP、`/dev/net/tun`、veth 与 network namespace | 为每 VM 建立独立网络环境，VMM 与其网络设备位于同一 namespace，TAP 直接承载固定网关 |
+| 内核连接跟踪与 NAT；宿主及每 VM 网络 namespace 的 IPv4 转发 | 执行路由与两级地址转换；宿主部署方提供相容的 NAT、过滤与资源限制配置，注意与宿主已有防火墙（如 iptables FORWARD 默认策略）的兼容性 |
+| mount/network namespace、`pidfd`、必要特权与资源隔离机制 | 建立每 VM 固定路径视图及独立网络环境，监控进程生命周期，交接 TAP fd，管理 cgroup v2 scope 与内核资源 |
 
 当前配置始终包含 virtio-net 与 TAP。默认断网是指保留网卡和网络配置，通过关闭宿主侧接入接口阻断通信。无网络设备的 VM 不在当前设计范围内。
 
@@ -92,16 +94,19 @@ guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特�
 
 已定项如下：
 
-- 首后端为 CH。
-- 每 VM 通过私有 mount namespace 将固定 VMM 路径绑定到自己的宿主文件，见 1.7、2.2。
+- 首后端为上游 CH（固定支持 `CopyOnWrite` 恢复与 pagemap 增量快照的精确 commit）；内存恢复基线为 CopyOnWrite，不支持的配置在恢复前拒绝，见 3.2。
+- engine 面向上层组件，按 1.8 提供程序调用、查询与状态同步契约；产品编排由上层负责。
+- daemon 通过 `pidfd` 与进程起始时间标识直接监控 VMM 生命周期，不引入与 VMM 生死绑定的伴生监管进程，见 1.6。
+- 每 VM 通过私有 mount namespace 将固定 VMM 路径绑定到自己的宿主文件，并通过 `CLONE_INTO_CGROUP` 在创建进程时直接进入专属 cgroup，加载阶段豁免 CPU 配额并在恢复执行前收紧，见 1.7、2.2。
 - 所有 VM 复用固定 guest CID，宿主通过独立 UDS 寻址，见 1.5。
 - 镜像提供 kernel、initramfs、systemd 与 guest agent，忽略 OCI `ENTRYPOINT`、`CMD`，见 2.1、2.2。
-- 每 VM 使用一个网络 namespace 承载 VMM 与 TAP/bridge/veth，保留固定 guest 地址和独立映射 IP，见第 4 章。
-- engine 管理网络生命周期，过滤与配额由宿主部署策略负责，见第 4 章。
+- 快照在完成机器状态与独立磁盘版本捕获后立即恢复源 VM 运行，文件同步与元数据发布在暂停窗口外完成，见 3.1。
+- 每 VM 使用一个网络 namespace 承载 VMM 与点对点 TAP/veth（不设内置 bridge），保留固定 guest 地址和独立映射 IP，见第 4 章。
+- engine 管理网络生命周期与宿主动态准入集合（如活跃 veth 与映射 IP 的 nftables set），过滤策略与配额由宿主部署策略负责，见第 4 章。
 
-暂定项包括快照全程暂停基线，备选方案是捕获后提前恢复，见 3.1；设备级热改能力也暂定，见 1.1。
+暂定项包括按层 EROFS 缓存结合 `fsmeta` 的只读根组合方式（相比每层独立 `virtio-blk` 可收敛 PCI 槽位占用并支持跨层 hardlink），须经过 guest 内核 `device_table` 挂载语义与块映射验证；逐层独立 `virtio-blk` 仅作机制对照，见 2.2。设备热变更不属于首版范围。
 
-主要开放项包括 CH 发行版与内存恢复模式、元数据回退的恢复点目标与人工恢复流程，以及性能基线目标。内存恢复的候选是上游 copy/ondemand 与 Cocoon fork 的 CopyOnWrite，见 3.2；元数据恢复见 1.3。FC 的捕获限制保留作对照，不阻塞首后端实现。
+主要待验证项包括所选 CH 精确版本下各必需设备的完整捕获与恢复路径、CopyOnWrite 配置准入、OCI 多层语义、宿主网络隔离与地址回收。性能门槛在基线测量后确定；一致备份周期由部署方配置，人工恢复边界见 1.3。FC 的捕获限制保留作对照，不阻塞首后端实现。
 
 镜像启动文件路径、设备标识编码、接口字段等实现细节不列为架构开放项，实现时须满足对应契约。源码证据用于确认机制的能力与限制，不表示设计必须始终使用该机制。
 
@@ -116,20 +121,20 @@ operation 表示一次有目标、前置条件和恢复规则的动作。一次�
 | 操作 | 前置条件与主要动作 | 完成结果 |
 |---|---|---|
 | `create` | 为新 VM 记录意图与归属，准备镜像、可写层及默认阻断的网络资源 | 资源完整，进入 `created` |
-| `start` | VM 为 `created` 或 `stopped`，无冲突操作；按保留配置准备网络，启动 VMM 并冷启动 guest，检查完成后按配置恢复接口 | 启动得到确认后进入 `running` |
+| `start` | VM 为 `created` 或 `stopped`，无冲突操作；按保留配置准备网络，启动 VMM 并冷启动 guest，完成基础 agent 握手后按配置恢复接口 | VMM 存活且基础管理通道就绪后进入 `running` |
 | `stop` | 核对归属，关闭网络接入接口并结束 VMM 执行，保留磁盘和网络配置；网络资源允许延迟回收 | 确认进程已退出后进入 `stopped`，接口关闭失败仍须记录并处理 |
-| `snapshot` | VM 为 `running`；建立可捕获状态，保存并发布完整快照，再恢复执行 | 新快照可用；VM 身份不变 |
-| `restore` | 目标 VM 已停止；获取快照租约，准备并绑定候选资源，加载并恢复执行，经 vsock 完成 agent 协作后更新状态 | 保留 VM ID，进入 `running`；网络默认阻断 |
-| `clone` | 从已发布快照取得租约，为新 VM 创建并绑定资源，加载并恢复执行，经 vsock 完成 agent 协作后更新状态 | 新 VM 进入 `running`；不要求源 VM 停止或仍存在 |
+| `snapshot` | VM 为 `running`；建立可捕获静止窗口，捕获内存、设备状态与独立磁盘副本后立即恢复 VM 执行，再同步产物并原子发布 | 新快照可用；VM 暂停窗口仅覆盖捕获阶段，身份不变 |
+| `restore` | 目标 VM 已停止；获取快照租约，准备并绑定候选资源，加载状态、收紧运行期 CPU 配额并恢复执行，经 vsock 完成 agent 协作后更新状态 | 保留 VM ID，进入 `running`；网络默认阻断 |
+| `clone` | 从已发布快照取得租约，为新 VM 创建并绑定资源，加载状态、收紧运行期 CPU 配额并恢复执行，经 vsock 完成 agent 协作后更新状态 | 新 VM 进入 `running`；不要求源 VM 停止或仍存在 |
 | `delete` | 先记录删除标记，禁止新使用，停止进程并解除依赖 | 所属资源回收完成后移除 VM 记录 |
 
 创建失败的 VM 和从未启动的 VM 同样可以删除。启用、禁用网络也属于 VM 资源变更，遵循同一互斥与恢复约束，网络状态单独记录。
 
-客户端为每次意图携带唯一幂等键。engine 持久化键与结果的对应关系，重复键返回首次结果而不再次执行，同一键携带不同参数直接报错。engine 分配 VM ID，将其与创建意图原子关联，并随结果返回。幂等记录保留到结果稳定，删除类操作的记录保留到墓碑清理完成。
+调用方为每次意图携带唯一幂等键。engine 原子关联幂等键、请求参数与 operation；同键同参数始终定位同一 operation，进行中返回当前状态，完成后返回固定终态，同键不同参数拒绝。调用方等待超时或连接断开不自动取消 operation。daemon 重启后继续同一操作的可恢复步骤，不生成第二次意图；终态失败后需以显式新意图重试，并核对已有副作用，不能自动重放结果未知的 guest exec。
 
-设备级变更包括挂新盘、网卡调整和块设备 rate limiter，按后端能力作为可选操作提供，遵循同一互斥与恢复约束。这些能力暂定，见 0.5。设备热插与在线 resize 须逐项核实，不能由后端名称推断支持范围。本阶段不开放 CPU 与内存热改，即使 CH 提供相应接口。
+engine 分配 VM ID，将其与创建意图原子关联。调用方可用原幂等键找回 operation，再找回对应 VM 或快照，不强制增加另一种关联 ID。幂等查询的保留期限须在接口契约中明确，至少覆盖操作执行、结果确认与中断恢复所需窗口；删除类记录保留到墓碑清理完成。
 
-磁盘容量不足时，可在验证支持后挂新盘并在 guest 内迁移，或先 stop，修改配置后再 start。
+首版设备布局与限制在创建时确定，不提供热插磁盘、网卡调整、在线 resize 或动态 rate limiter 更新。需要调整时先 stop，只修改已明确支持的离线配置并重新准入，再 start；磁盘扩容、文件系统调整和数据迁移不能由冷启动自动推断完成。
 
 ## 1.2 生命周期阶段
 
@@ -139,7 +144,7 @@ phase 表示最后确认的粗粒度运行阶段。operation 与资源检查结�
 |---|---|---|
 | `creating` | 创建意图已记录，资源尚未准备完整 | 完成准备后到 `created`，或按删除协议清理 |
 | `created` | 初始资源完整，尚未提交首次运行完成状态 | `start`，或 clone 的状态加载；也可删除 |
-| `running` | 已确认 VMM 存活并完成启动；restore/clone 还须完成 1.5 的 agent 协作 | `stop`、`snapshot`、`delete` |
+| `running` | 已确认 VMM 存活且完成基础 agent 握手；restore/clone 还须完成 1.5 的 reseed 与校时，不表达上层服务就绪 | `stop`、`snapshot`、`delete` |
 | `stopped` | 已确认 VMM 不再运行，资源保留 | `start`、`restore`、`delete` |
 
 VM 通常依次进入 `creating`、`created`、`running` 和 `stopped`，停止后可再次进入 `running`。restore/clone 先加载状态并恢复 guest 执行，再经 vsock 完成 reseed 与时钟校正，最后提交 `running`。协作失败时保留最后确认的 phase，并在 operation 中记录 VMM 已存活及待完成步骤。不能因 phase 尚未更新而重复启动或回收其资源。
@@ -163,21 +168,21 @@ VM 通常依次进入 `creating`、`created`、`running` 和 `stopped`，停止�
 
 数据库事务只保证这些记录原子更新。文件是否已落盘、进程是否已退出、网络接口是否已关闭，均需另行核对。
 
-VM 锁按 VM ID 串行化变更。同一 VM 的启停、快照、恢复、删除和网络变更不能交错执行。从检查前置条件到提交结果或留下可恢复的失败记录，操作全程持有锁。创建新 VM 时先确定 ID，再获取对应锁。基线快照直到发布并处理恢复运行结果后才释放锁。待恢复标记未解决时，不能执行与之冲突的新动作。
+VM 锁按 VM ID 串行化变更。同一 VM 的启停、快照、恢复、删除和网络变更不能交错执行。从检查前置条件到提交结果或留下可恢复的失败记录，操作持有锁。创建新 VM 时先确定 ID，再获取对应锁。快照在完成捕获并确认源 VM 恢复运行后即可允许源 VM 继续执行，而产物的 `fsync` 与 SQLite 发布无需延长源 VM 的暂停时间；待恢复标记未解决时，不能执行与之冲突的新动作。并发快照的内存转储受宿主机全局信号量约束，防止并发大文件落盘阻塞 SQLite 单写者事务。
 
 clone 修改的是新 VM，从不可变快照读取状态，因此持有目标 VM 锁与源快照租约，不依赖源 VM 锁。VM 锁不保护其他 VM 对共享快照的使用，快照登记与删除通过元数据并发协议协调，见 3.3。
 
 锁保证执行期间互斥，持久化意图用于 engine 崩溃后的恢复。所有写操作都由常驻 daemon 处理，见 1.6。同一组元数据与宿主资源只能由一个 daemon 实例协调变更，必须防止多实例同时写入。
 
-元数据须有一致备份，且能识别备份的恢复点。备份机制与触发策略根据恢复点目标确定，本文不固定 API 或执行频率。直接复制活跃数据库不保证得到一致副本。
+元数据须有一致备份，且能识别备份的恢复点。首版交付一致备份、恢复点标识、显式人工恢复与诊断流程；备份周期由部署方配置，engine 不承诺固定的恢复点目标 RPO。直接复制活跃数据库不保证得到一致副本；数据库已丢失时，普通启动不得悄悄新建空库并把宿主遗留资源视为无主。
 
-daemon 崩溃但数据库完整时，按持久化意图执行常规 reconcile。数据库回退到备份或完全丢失时，进入独立的元数据重建模式：
+daemon 崩溃但数据库完整时，按持久化意图自动 reconcile。数据库损坏、完全丢失或已知回退到备份时，须显式进入人工恢复流程；不承诺从宿主现场自动重建丢失的操作历史：
 
-- 从数据库、运行目录、清单、进程与内核资源重建可证明的归属及依赖图；归属标记不能单独证明资源无人使用。
-- 重建完成前拒绝依赖未确认事实的操作；无法证明无引用的资源禁止 GC，保留现场并报告人工处理需求。
-- 备份之后已确认的操作、墓碑和幂等结果可能丢失，不推断其结果或自动重放。记录所用恢复点、已发现的记录缺口和无法确认的历史结果，不承诺枚举所有丢失记录。
+- 从一致备份恢复数据库，再根据运行目录、清单、进程与内核资源核对可证明的归属和依赖；无备份时保留现场并诊断，不推断历史操作结果。
+- 拒绝依赖未确认事实的动作；无法证明无引用的资源禁止 GC。某项核对失败不等于全部资源均已停止或均可回收。
+- 备份之后已确认的操作、墓碑和幂等结果可能丢失，不自动重放。记录所用恢复点、已发现的缺口与待人工处置事项，不承诺枚举所有丢失记录。
 
-恢复点目标 RPO 用于界定允许丢失的已确认操作范围，它与人工恢复流程仍待确定。一致的数据库备份不能单独保证数据库与宿主资源处于同一历史时点。
+一致备份不能单独保证数据库与宿主资源处于同一历史时点。有效的旧数据库也可能通过完整性检查，不能仅凭检查成功认定没有发生回退。
 
 ## 1.4 中断恢复与删除
 
@@ -201,11 +206,13 @@ daemon 崩溃但数据库完整时，按持久化意图执行常规 reconcile。
 
 ## 1.5 guest agent
 
-guest agent 是镜像必需的协作进程，由 systemd service 启动，经 vsock 与宿主通信。自定义镜像也必须满足这一启动契约；当前不提供无 agent 的降级形态。
+guest agent 是 engine 必需的基础协作进程，由镜像中的 systemd service 启动，经 vsock 与宿主通信。自定义镜像也必须满足这一启动契约；当前不提供无 agent 的降级形态。上层可以另外部署自己的产品 agent，其初始化与就绪由上层管理。
+
+冷启动 `start` 在 VMM 存活且基础 agent 握手成功后才提交 `running`。握手超时或初始化失败时，关闭接入并停止本次启动的 VMM，确认退出后记录失败；停止未确认时保留实际状态与待清理步骤，不能报告已停止。保留串口及操作诊断，不等待外网或执行通用应用健康检查。
 
 所有 VM 使用同一个固定 guest CID，并将其随设备配置写入快照清单。CID 不作为宿主全局分配资源。CH 用户态 vsock 的宿主端为每 VM 独立的 UDS。VMM 看到固定 socket 路径，与磁盘路径使用相同约定。私有 mount namespace 将 socket 的父目录绑定到当前运行实例的目录，engine 从宿主侧按 VM ID 与运行实例定位它。
 
-clone 保留 CID 与 VMM 可见路径，不依赖 FC 的 `vsock_override` 接口。设备布局按 3.4 校验，机制见 [CH vsock 说明](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/docs/vsock.md)。
+clone 保留 CID 与 VMM 可见路径，不依赖 FC 的 `vsock_override` 接口。设备布局按 3.4 校验，机制见 [CH vsock 说明](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/docs/vsock.md)。
 
 agent 提供两项基线能力，均有超时。请求与结果关联当前运行实例和所属操作。下表说明各项能力，协议字段与编码由实现确定：
 
@@ -218,8 +225,8 @@ agent 提供两项基线能力，均有超时。请求与结果关联当前运�
 
 restore 与 clone 按以下顺序完成：
 
-1. 绑定资源并加载状态。
-2. 恢复 guest 执行。
+1. 绑定资源并加载状态（加载期间 CPU 带宽配额暂设为 `max`，其余 cgroup 限制生效）。
+2. 收紧运行期 CPU 配额（arm CPU quota），再恢复 guest 执行。
 3. 经 vsock 完成握手、reseed 与时钟校正。
 4. 核对运行实例及 operation。
 5. 提交 VM 的 `running` 状态与操作结果。
@@ -228,59 +235,74 @@ restore 与 clone 按以下顺序完成：
 
 上述协作序列全程持有 restore/clone 的 VM 锁。agent 不可达时保留失败记录及实际进程状态，可继续协作或按停止协议清理。普通 exec 不长期占有生命周期锁，但接纳、结果提交及与 stop/restore 的交错必须遵循运行实例和操作归属规则。网络阻断和 agent 的回复都不能证明 guest 可信。
 
-重复派生采用黄金镜像，即经过受控初始化、在指定捕获点生成的整机模板快照。捕获前不引入租户凭据、一次性令牌、应用注册状态或不可安全复制的用户态随机缓存。需要每实例生成的身份与业务状态留到派生后初始化。
+所有已发布、完整且兼容的快照都可以 restore 或 clone，不设置黄金模板资格门槛。上层可通过配置、预热和 ready 检查准备黄金镜像，即在受控捕获点生成的整机模板快照。engine 提供镜像、exec、snapshot 与 clone 原语；模板选择、捕获时机及发布编排由上层负责。
 
-模板构建方负责约定与验证捕获点，engine 不负责通用地重写任意应用的用户态状态。网络阻断不阻止 guest 本地执行，不能代替应用初始化屏障。黄金镜像须保证恢复后先完成熵、时间和实例初始化，再执行依赖这些状态的业务动作。
+engine 恢复协作完成只表示基础管理通道就绪。上层完成自身配置与产品 agent 检查后决定是否接纳新任务。快照中已经运行的进程会继续执行，网络阻断不暂停其本地动作。engine 不通用地重写用户态身份或 RNG，不保证已有进程等待上层初始化；模板构建方按需要避免捕获租户凭据和一次性状态。guest workload 冻结作为独立扩展评估，不是完整快照或 clone 的前置条件。
 
 ## 1.6 engine 进程形态
 
-engine 分为三层进程：
+engine 以独立常驻 daemon 运行，直接孵化并接管 VMM 进程。上层通过程序调用契约使用 engine，CLI 是可选客户端与诊断入口：
 
 | 角色 | 职责 |
 |---|---|
-| daemon | 常驻协调者和唯一写者，执行 operation、周期 reconcile、响应事件 |
-| CLI | 一次性客户端，经 Unix domain socket 向 daemon 提交意图并查询结果 |
-| supervisor | 每 VM 一个轻量进程，监控 VMM 退出、持续消费 serial 输出并保存有界日志 |
+| daemon | 常驻协调者和唯一写者，执行 operation、通过 `pidfd` 监听 VMM 退出、周期 reconcile、响应事件 |
+| CLI | 可选客户端，通过与上层相同的调用语义提交意图、查询结果和读取诊断 |
+| VMM 进程 | 每 VM 独立进程组与专属 cgroup v2 scope，与 daemon 生命周期解耦 |
 
 所有写操作都由 daemon 处理，因此 1.3 的单写者约束要求只运行一个 daemon 实例。
 
-supervisor 监控 VMM 退出并上报 daemon。监控必须绑定实际运行实例，避免 PID 复用造成误判。daemon 同时周期性执行全量 reconcile，核对 VMM 存活、快照租约、网络归属与孤儿临时产物。事件只用于降低延迟，正确性以周期核对为准，见 I15。事件监听方式与核对频率由实现确定。
+daemon 通过 `pidfd` + `epoll` 直接监听 VMM 退出，并以 `(PID, /proc/<pid>/stat starttime)` 二元组与运行实例标识核对进程身份，避免 PID 复用造成误判。不设与 VMM 生死绑定的每 VM 伴生监管进程（supervisor），从而避免辅助进程异常或升级连坐杀死正在运行的 VM。VMM 置于独立进程组与专属 cgroup scope 中；daemon 重启或崩溃均不触发 VM 停止，重启后重新扫描 `/proc` 与运行目录完成接管。发现 VMM 非预期退出时，daemon 核对后推进状态收敛与网络阻断，不自动重启。
 
-supervisor 必须持续读取 serial 控制台输出，避免日志消费停滞阻塞 guest。日志按 VM 归属保存，并限制存储占用，防止 guest 大量输出耗尽宿主磁盘。客户端首版只读查看输出，不提供串口写入。日志布局、轮转方式与读取协议由实现确定。
+daemon 同时周期性执行全量 reconcile，核对 VMM 存活、快照租约、网络归属与孤儿临时产物。`pidfd` 事件只用于降低延迟，正确性以周期核对为准，见 I15。
+
+VMM 的 serial/console 输出直接重定向至运行目录下的受限日志文件（或由独立日志收集器轮转），不依赖易阻塞 guest 的用户态管道中继进程。若采用日志截断/轮转，须支持 `O_APPEND` 或 copytruncate，防止 guest 大量输出耗尽宿主磁盘。客户端首版只读查看输出，不提供串口写入。
 
 ## 1.7 VMM 启动与资源隔离
 
 engine 负责 CH 的启动与资源隔离，不依赖 FC jailer。启动过程须满足以下隔离边界：
 
-1. 每 VM 使用独立的 cgroup v2 scope，按 VM 资源预算限制 CPU、内存、I/O 与进程数。VMM 自开始执行即受限制，不得先运行、后补隔离。
+1. 每 VM 使用独立的 cgroup v2 scope，通过 `CLONE_INTO_CGROUP` 使 VMM 自创建起即落入专属 scope（覆盖 vCPU 线程、virtio 队列 worker 与 io_uring 内核线程），按 VM 资源预算限制内存、I/O 与进程数。为避免小规格 VM 在快照加载与内存映射阶段被 CPU 带宽上限严重节流（throttling），restore/clone 启动 VMM 时将 `cpu.max` 暂设为 `max`（权重、cpuset 与内存上限自始生效），在状态加载完成、调用 `vm.resume` 让 guest vCPU 执行不可信代码前收紧为目标配额。
 2. 每 VM 使用私有 mount namespace，挂载变化不传播到宿主或其他 VM。固定 VMM 路径绑定到当前资源版本，lower 与已发布产物只读挂载，可写盘与运行目录仅属该 VM。还须以受限根目录隐藏其他宿主路径，不能仅靠 mount namespace 隔离文件访问。
-3. 每 VM 使用一个专属 network namespace，VMM 进程、TAP、Linux bridge 与 veth 一端均位于其中，veth 另一端接入宿主根 namespace。不为 VMM 另建无外联 namespace。engine 准备接口并交接 TAP fd，冷启动即使用 fd-backed 网卡，恢复时绑定目标实例的 TAP，见 4.2。VMM 可以在该 namespace 中创建 IP socket，其流量与 guest 转发流量都必须纳入宿主部署策略。namespace 本身不授予访问权限。
+3. 每 VM 使用一个专属 network namespace，VMM 进程、TAP 与 veth 一端均位于其中，veth 另一端接入宿主根 namespace。不为 VMM 另建无外联 namespace。engine 准备接口并交接 TAP fd，冷启动即使用 fd-backed 网卡，恢复时绑定目标实例的 TAP，见 4.2。VMM 可以在该 namespace 中创建 IP socket，其流量与 guest 转发流量都必须纳入宿主部署策略。namespace 本身不授予访问权限。
 4. VMM 以受限身份运行，不保留无关的补充组、capabilities 或继承句柄，且不得通过后续执行重新提权。seccomp 使用 CH 自带过滤器。文件权限和受限路径视图共同保护磁盘、API socket 与共享产物。
 
-固定路径属于 VMM 进程的宿主文件视图，与 guest 块设备名称分别管理。各实例看到相同的路径，但分别绑定到自己的可写盘、有序共享层和运行目录。冷启动、restore、clone 使用同一约定，源 VM 删除不会破坏目标实例的路径。具体路径由实现确定，guest 设备身份与层序由 2.2 的启动契约约束。
+固定路径属于 VMM 进程的宿主文件视图，与 guest 块设备名称分别管理。各实例看到相同的路径，但分别绑定到自己的可写盘、只读根产物和运行目录。冷启动、restore、clone 使用同一约定，源 VM 删除不会破坏目标实例的路径。具体路径由实现确定，guest 设备身份与挂载顺序由 2.2 的启动契约约束。
 
-create 时检查资源配置，实际 start/restore/clone 前再次核对可用资源。cgroup scope 强制执行 CPU 与内存上限，VMM rate limiter 限制块 I/O。guest RAM 位于 VMM 地址空间内，内存预算须同时容纳 VMM 自身开销。磁盘容量在创建时固定，调整方式见 1.1。snapshot 在暂停前另做空间估算与预留，见 2.5。
+create 时检查资源配置，实际 start/restore/clone 前再次核对可用资源。cgroup scope 强制执行 CPU（含处理 virtio/io_uring 尖峰的 burst 预算）与内存上限，VMM rate limiter 限制块 I/O。guest RAM 位于 VMM 地址空间内，内存预算须同时容纳 VMM 自身开销。磁盘容量在创建时固定，调整方式见 1.1。snapshot 在暂停前另做空间估算与预留，见 2.5。
 
 cgroup OOM 杀死 VMM 即表示 VM 已死亡。reconcile 修正 phase 并上报，不自动重启。
+
+## 1.8 上层调用与状态同步
+
+程序接口须支持提交意图、按原幂等键找回 operation、查询 operation 及其 VM/快照结果，以及完整列举和检查 VM 与快照。调用方在发送前保存请求参数与幂等键；响应丢失后查询或重提同一意图，不以新键直接重复创建。名称和标签可由接口设计提供，不强制引入额外关联 ID。
+
+查询分别表达 phase、当前 operation、运行实例、基础 agent 协作状态、网络配置与实际状态，以及阻止后续动作的原因。说明状态的核实情况，不能将持久化 phase 当作即时进程存活证明。对象不存在、查询失败与状态无法确认必须可区分；列表须有明确的完整读取方式。错误应提供程序可区分的类别，使上层能识别冲突、资源不足、不兼容、结果未知和需人工处置等条件，不依赖解析日志文本。字段和传输协议在实现设计中确定。
+
+对明确指向某次运行的变更，接口支持调用方携带运行实例条件，engine 在 VM 锁内重新核对后执行；条件不符返回冲突。该条件与 1.4 的异步归属检查共同阻止旧动作影响后继实例，不扩展为覆盖全部变更的通用 revision/CAS 协议。重复幂等请求仍定位原 operation，不因当前运行实例变化而产生新操作。
+
+事件用于提示上层重新核对，允许重复、丢失或断线，不承诺 exactly-once 投递或完整历史回放。连接重建后通过完整查询或初始状态同步重新建立视图，正常连接期间也保留周期查询兜底。上层根据查询结果执行自身 reconcile，engine 根据实际宿主资源执行本层 reconcile，两层不互相覆盖对方的状态与编排决策。
+
+上层初始化失败时，由上层显式决定继续初始化、stop 或 delete，并处理对应 operation 结果。engine 不因上层连接断开或产品 agent 未就绪自动销毁 VM；1.5 规定的基础 agent 冷启动失败清理仍由 engine 执行。
 
 # 2. 存储层
 
 ## 2.1 磁盘模型与镜像来源
 
-镜像由受控构建管线产出。我们提供 base image，使用方可按需构建满足同一启动契约的自定义镜像。registry 拉取与认证不在本设计范围内，输入以内容摘要固定。
+镜像由受控构建管线产出。我们提供 base image，使用方可按需构建满足同一启动契约的自定义镜像。首版支持满足该契约的受控 OCI 子集，不承诺接纳任意 OCI 镜像；特殊文件和超限等拒绝条件须明确报告。registry 拉取与认证不在本设计范围内，输入以内容摘要固定。
 
 镜像必须提供 kernel 文件、initramfs、以 systemd 为 PID 1 的根文件系统，以及 guest agent 和已启用的 systemd service。内核可以独立构建后组合进镜像，创建 VM 时固定完整镜像版本。engine 在导入时校验必要材料，缺少则拒绝导入。engine 忽略 OCI `ENTRYPOINT`、`CMD`，应用由镜像中的 systemd units 启动。
 
 | 产物 | 存储形式 | 使用方式 |
 |---|---|---|
 | kernel 与 initramfs | 从镜像提取的不可变宿主文件 | VMM 直接加载内核与早期初始化环境 |
-| 只读层组 | 每个 OCI 层对应一个 EROFS 镜像，记录完整层序 | 全局共享，每层作为只读块设备接入 guest |
+| 只读层缓存 | 每个 OCI 层按解压 `diff_id` 对应一个不可变 EROFS 镜像 | 跨镜像全局共享数据块，避免重复解压与转换 |
+| 镜像组合元数据 (`fsmeta`) | 按 manifest 摘要生成的 EROFS 元数据镜像（含 `device_table` 与 chunk 索引） | 将多层 EROFS 数据块合并为单一只读视图，消除多层 `virtio-blk` 槽位与查找开销 |
 | VM 可写层 | 每 VM 独立的 raw 稀疏文件，内部为 ext4 | 读写块设备，承载 OverlayFS 的 upper 与 work |
 | 转换缓存 | 输入摘要与转换配置关联输出内容摘要 | 避免重复转换，不允许混用不同参数的旧产物 |
 
 raw 描述块设备字节的保存方式，ext4 描述这些字节内部的文件系统组织，两者属于不同层次。可写层大小按 VM 指定，与只读层总大小无关，创建时不从 lower 复制整套系统。
 
-选择 EROFS 是因为它面向只读内容、可用单文件整体校验与引用，并支持可选压缩。按层复用由缓存和不可变产物管理实现。
+选择 EROFS 是因为它面向只读内容、可用单文件整体校验与引用，并支持基于 chunk 索引（`EROFS_INODE_CHUNK_BASED`）与设备表（`DEVICE_TABLE`）的多层零拷贝元数据合并（`fsmeta`）。按层复用由 `diff_id` 寻址的 EROFS 层缓存实现，镜像级挂载视图由 `fsmeta` 组合生成。
 
 ## 2.2 从 OCI 到 guest 可用文件系统
 
@@ -288,38 +310,34 @@ raw 描述块设备字节的保存方式，ext4 描述这些字节内部的文�
 
 ### 宿主解析镜像并生成产物
 
-1. 解析 OCI manifest 与目标平台，以内容摘要固定版本，校验 blob 内容与 CPU 架构。
-2. 在隔离工作区逐层解包，任何写入不得越出工作区。只接受常规文件、目录与符号链接，拒绝设备节点、FIFO 等特殊文件。拒绝绝对路径、`..` 与空路径组件。符号链接只保存，不跟随，解包过程不解析其目标。限制总解压字节数与文件数。解包须使用内存安全的实现，具体组件与路径校验算法由实现确定。
-3. 按镜像层序解析最终文件视图，处理覆盖与删除，再定位内核和启动文件，校验所选 VMM 能否加载。
-4. 为每个 OCI 层制作一个 EROFS，保留该层新增内容、文件属性及对下层的遮蔽语义，不预先合并全部层。
-5. 记录输入层摘要、转换工具版本与参数、输出 EROFS 摘要，将各产物按 OCI 自底向上的顺序组成只读层组。启动产物另外以完整镜像摘要、平台与转换配置为缓存键。
+1. 解析 OCI manifest 与目标平台，以内容摘要固定版本，配对压缩层摘要与解压后的 `diff_id`，校验 blob 内容与 CPU 架构。
+2. 在隔离工作区逐层解包，任何写入不得越出工作区。接受常规文件、目录、符号链接和 hardlink 条目；拒绝输入中的设备节点、FIFO 等特殊文件。whiteout 是由已验证标记转换生成的内部表示，不直接接纳镜像提供的设备节点。拒绝绝对路径、`..` 与空路径组件。符号链接只保存，不跟随，解包过程不解析其目标。限制总解压字节数与文件数。解包须使用内存安全的实现，具体组件与路径校验算法由实现确定。
+3. 为每个缺失的 OCI 层制作一个以 `diff_id` 寻址的 EROFS 层文件（常规文件采用块对齐的 `FLAT_PLAIN` 布局以便提取块映射），保留该层新增内容、文件属性及对下层的遮蔽语义，不复制已有层的数据块。
+4. 按镜像层序合并目录树，处理覆盖、whiteout（`.wh.<name>`）、opaque（`.wh..wh..opq`）及同层/跨层 hardlink（在合并树中共享同一目标 inode 与块映射），定位并提取最终视图中的内核和启动文件，校验所选 VMM 能否加载。
+5. 生成按 manifest 摘要寻址的 `fsmeta.erofs`（仅包含合并后的目录树元数据、`device_table` 槽位与指向各层 EROFS 数据块的 chunk 索引），记录输入层 `diff_id` 序列、转换工具/构建器版本与参数、输出摘要。启动产物另外以完整镜像摘要、平台与转换配置为缓存键。
 
-产物发布与快照遵循同一协议，见 I7。engine 以内容摘要识别和复用产物，文件及其可读路径完整持久化后，才在 SQLite 登记可用引用。重复导入复用相同转换输入与配置对应的已发布产物。
+产物发布与快照遵循同一协议，见 I7。engine 以内容摘要识别和复用产物，文件及其可读路径完整持久化后，才在 SQLite 登记可用引用。重复导入复用相同转换输入与配置对应的已发布产物；当层缓存已存在而 `fsmeta` 缺失时，直接从已验证的层 EROFS 重建元数据，无需重新下载或解包源 tar。
 
-未发布产物不能经可用性入口读取，重启后按操作归属继续发布或清理。GC 只回收既无已发布引用，也无进行中操作引用的产物。目录布局与命名方式由实现确定。
+未发布产物不能经可用性入口读取，重启后按操作归属继续发布或清理。GC 将已发布镜像引用、`fsmeta` 和活跃 VM/快照作为根，仅回收无任何可达引用的层产物。目录布局与命名方式由实现确定。
 
-OCI 的 `.wh.<name>` 表示删除下层同名路径，`.wh..wh..opq` 表示目录不再继承下层内容。导入必须将这些标记转换为所选 guest 内核支持的 OverlayFS whiteout 与 opaque 表示。
-
-逐层独立转换还要求 hardlink 的目标可在本层内解析。不同 EROFS 文件系统不能直接保存跨层硬链接，当前基线遇到此类引用时拒绝导入。若以后读取父层内容来生成此类文件，必须重新定义链接语义，并将实际父层依赖纳入缓存键。参见 [OCI hardlink 说明](https://github.com/opencontainers/image-spec/blob/main/layer.md#hardlinks)。
-
-多层挂载语义需要按转换工具、EROFS 特性、压缩配置与 guest 内核的具体组合验证，依据为 [OCI 层规范](https://github.com/opencontainers/image-spec/blob/main/layer.md#whiteouts)、[EROFS 文档](https://docs.kernel.org/filesystems/erofs.html)和 [OverlayFS 文档](https://docs.kernel.org/filesystems/overlayfs.html)。
+多层合并与挂载语义需要按构建器、EROFS 特性与 guest 内核的具体组合端到端验证（若使用外部 `mkfs.erofs`，须强制版本 `>= 1.8` 以规避旧版 `--tar=f` 静默写出损坏压缩簇的缺陷），验证范围包括层序、覆盖、whiteout、opaque、同层与跨层 hardlink、UID/GID、权限与支持的 xattr。须从 OCI 输入贯通到实际 guest 文件视图，不能仅验证转换工具成功退出。依据为 [OCI 层规范](https://github.com/opencontainers/image-spec/blob/main/layer.md#whiteouts)、[EROFS 文档](https://docs.kernel.org/filesystems/erofs.html)和 [OverlayFS 文档](https://docs.kernel.org/filesystems/overlayfs.html)。
 
 ### VMM 接入启动材料与块设备
 
-engine 为 VM 创建并格式化独立 ext4 可写层，在该 VM 的私有 mount namespace 内绑定固定路径。每个 EROFS 分别作为只读块设备接入，可写层作为读写块设备接入，kernel 与 initramfs 交给 VMM 加载。清单记录设备身份、角色、只读层序和 VMM 可见路径。clone 保留这些路径，但绑定到不同的可写宿主文件。
+Cloud Hypervisor 默认单个 PCI segment 仅有 32 个槽位。若将每个 OCI 层作为独立 `virtio-blk` 接入，超过约 20 层的镜像即会耗尽 PCI 槽位，且显著增加 VMM 队列线程与 guest 启动期块设备枚举开销。
 
-每层一个设备会增加设备数量。导入或创建时必须检查完整层组是否满足后端与 guest 的设备数量限制，超限则拒绝。后续可考虑将多层打包到同一磁盘的不同分区，其缓存与共享方式尚未确定，不属于当前基线。
+因此，基线采用 **`fsmeta` 组合接入**（或将 `fsmeta` 与各层 EROFS 线性映射为单一只读组合块设备，或受控数量的设备表后端），配合 1 个独立的 ext4 可写层读写块设备，使 guest 始终只需挂载单一合并后的 EROFS lower 与单一 ext4 upper/work。engine 在该 VM 的私有 mount namespace 内将底层只读文件与可写盘绑定到固定路径，kernel 与 initramfs 交给 VMM 加载（在 aarch64 架构下，开启 `acpi=on` 或配合 UEFI firmware 以确保 ACPI 表、`VMGenID` 与 RTC 正常暴露）。清单记录设备身份、角色、底层 EROFS `diff_id` 序列、`fsmeta` 摘要和 VMM 可见路径。clone 保留这些路径，但绑定到不同的可写宿主文件。
 
-宿主侧对共享层执行写保护。共享文件使用只读 bind mount，VMM 只读打开文件并拒绝块写请求，也不能访问共享文件的其他可写路径。这些限制同时阻止 guest 绕过文件系统直接写块设备。
+宿主侧对共享层与 `fsmeta` 执行写保护。共享文件使用只读 bind mount，VMM 只读打开文件并拒绝块写请求，也不能访问共享文件的其他可写路径。这些限制同时阻止 guest 绕过文件系统直接写块设备。
 
 ### guest 构造根文件系统并启动应用
 
-initramfs 中的早期初始化进程负责建立正式根文件系统，并满足以下交接条件：
+initramfs 中的早期初始化进程（静态编译的轻量 `init`）负责建立正式根文件系统，并满足以下交接条件：
 
-1. 按启动契约等待预期块设备就绪，校验设备身份、数量与角色；超时或不匹配则明确失败，不按偶然的 `/dev/vd*` 枚举顺序猜测层序。
-2. 按完整层序挂载 EROFS lower，在独立 ext4 可写层的同一文件系统内准备 upper 与 work，由 OverlayFS 组成正式根文件系统。
-3. 正式根接管所需的设备、内核接口、运行时状态及底层挂载；清理早期初始化环境不能破坏这些依赖。
-4. 完成真正的根切换并交接给作为 PID 1 的 systemd，不能只改变进程的路径视图而遗留旧根的生命周期依赖。具体工具、命令和挂载路径由实现确定。
+1. 按启动契约直接通过 `/sys/block` 轮询解析预期块设备的 serial/身份，校验设备数量与角色；超时或不匹配则明确失败，不依赖重量级 `udev` 守护进程，也不按偶然的 `/dev/vd*` 枚举顺序猜测设备角色。
+2. 挂载只读 EROFS lower（使用 `fsmeta` 合并视图），在独立 ext4 可写层的同一文件系统内准备 upper 与 work，由 OverlayFS 组成正式根文件系统。
+3. 正式根接管所需的设备、内核接口（`/dev`、`/proc`、`/sys` 通过 `move_mount` 迁移）、运行时状态及底层挂载；清理早期初始化环境不能破坏这些依赖。
+4. 完成真正的 `switch_root` 并交接给作为 PID 1 的 systemd，不能只改变进程的路径视图而遗留旧根的生命周期依赖。具体工具、命令和挂载路径由实现确定。
 
 guest 文件视图须保持 OCI 上层覆盖下层的语义，完整层序直接决定可见内容。systemd 负责启动 guest agent service 与应用、管理服务生命周期和回收子进程。agent service 不依赖外网就绪，避免默认断网阻塞 vsock 握手。
 
@@ -354,13 +372,15 @@ restore/clone 不重新执行这些初始化，沿用捕获时的 guest 网络�
 
 快照要求后端建立覆盖 vCPU、设备与磁盘来源的静止窗口，并可靠报告失败。已接收 I/O 的完成结果必须反映到一致的 guest 内存与设备状态。普通写入完成不等于断电持久化，产物持久化仍由 engine 确认。
 
-首后端选择 CH，因为上游 v53.0 内置块设备的 pause 排空协议符合所需的静止窗口。engine 仍负责磁盘版本创建、文件同步及原子发布，不能把 pause 成功当成断电持久化完成。
+首后端选择 CH，其上游内置块设备的 pause 排空协议符合所需的静止窗口。engine 仍负责磁盘版本创建、文件同步及原子发布，不能把 pause 成功当成断电持久化完成。
 
 该依据限于 KVM 与内置 virtio-blk，vhost-user 等外部后端不在基线范围内。网络等其他设备仍须满足第 3 章的捕获条件。版本比较与源码链接见[附录：后端 I/O 边界依据](#附录后端-io-边界依据)。集成尚待实现和验证，采用 fork 或更换版本、设备时须重新核实。
 
 ## 2.5 容量、故障与存储回收
 
 容量至少区分 guest 可见的可写容量、镜像逻辑长度、宿主实际分配空间和后续写入预留。EROFS 的压缩镜像长度与解压后的内容量分别计量。共享只读层按缓存实际占用计量；reflink 版本按实际物理占用核算，共享块只计一次。
+
+首版不超额承诺存储容量。VM 可写盘为后续写入保留最坏新增物理占用，同时计入尚未分配的区间与 reflink 共享块后续分离的需求，不能只按 guest 文件系统的空闲容量估算。已落盘占用与尚未兑现的预留分别记录，随着写入核对并转换，避免同一需求重复计量或过早释放。VM、clone、snapshot、导入、日志与临时产物共享同一宿主文件系统预算；不预先扣除尚未确认的稀疏、压缩或共享节省。配套 Linux 参考部署提供配额和其他写者的限制，账面预留不能替代实际配额。
 
 每份快照在逻辑上保存完整 guest RAM，因此按 guest 配置内存估算内存文件的最坏需求，不以当前 RSS 或已驻留页面替代。物理占用还包括可写层版本、清单与状态文件。稀疏文件、reflink 或特定后端可能减少实际占用，但准入预算不能扣除尚未确认的节省。
 
@@ -373,7 +393,7 @@ snapshot 在暂停前检查空间预算，满足以下条件才可继续。空�
 - 预留保留到所属操作不再写入产物，成功或失败后的解除都须核对实际写入者已结束。基线允许保守地继续预留已部分落盘的字节；不能过早释放而让并发捕获重复使用预算。
 - daemon 重启后先核对在途操作、产物与预留，再接纳新 snapshot。安全余量为宿主其他写入和清理留空间；准入检查不替代文件系统配额，也不能保证无外部写入竞争。
 
-guest ext4 写满时，应用收到空间不足错误。宿主写满时，即使 guest 尚有空闲块，也可能遇到块 I/O 错误或文件系统转只读。创建时检查当前空闲空间，后续写入所需的预留、配额与超额分配策略尚待确定。失败必须上报，空间恢复后须核对 VM 和文件系统状态，再决定如何继续。
+guest ext4 写满时，应用收到空间不足错误。宿主写满时，即使 guest 尚有空闲块，也可能遇到块 I/O 错误或文件系统转只读。准入须核对 VM 后续写入预算及配额，不能只检查创建时空闲空间；仍须处理预算估算偏差、外部写入与存储故障。失败必须上报，空间恢复后须核对 VM 和文件系统状态，再决定如何继续。
 
 当前可写层使用 raw 文件与宿主文件克隆，避免引入额外磁盘格式与链管理。qcow2 可以只用于可写层，与多个 EROFS lower 并存。若以后采用，须单独验证后端支持、一致性和 backing chain 回收。
 
@@ -402,21 +422,21 @@ guest ext4 写满时，应用收到空间不足错误。宿主写满时，即使
 2. 由 VMM 停止 vCPU 执行并协调设备暂停，阻止设备继续接收会改变捕获状态的新请求；只有成功确认后才继续捕获。
 3. 确认后端已接收的 I/O 已排空，完成结果已反映到 guest 内存、队列与中断状态；这些条件可由后端暂停协议一并完成。若要保存并重放在途请求，必须由后端明确支持并验证。未消费的 virtqueue 项可随状态保存。
 4. 在已确认的静止窗口内保存内存、CPU 与设备状态，并建立可写层版本；记录只读层的摘要与顺序。
-5. 确认所有捕获输出完整且来源未继续变化，再交给发布阶段。
+5. 确认所有捕获输出（内存快照、设备状态、独立可写层副本）已在临时位置生成且来源不再被后续 guest 写入污染后，**立即恢复源 VM 执行**并清除待恢复运行标记，再进入发布阶段完成文件同步与元数据提交。
 
-同一捕获点由协调后的内存、CPU、设备与磁盘状态共同确定。从机器状态保存到磁盘版本建立完成，设备与其他宿主写者都不得修改磁盘来源。reflink 完成后副本独立，稀疏复制完成前源必须持续稳定。
+同一捕获点由协调后的内存、CPU、设备与磁盘状态共同确定。从机器状态保存到磁盘版本建立完成，设备与其他宿主写者都不得修改磁盘来源。reflink 完成后副本独立，稀疏复制完成前源必须持续稳定；因此只要步骤 4 在静止窗口内完成了机器状态写出与磁盘版本创建，步骤 5 先恢复源 VM 运行不会破坏已捕获副本的一致性。若对由 `CopyOnWrite` 恢复的 VM 再次快照，且快照临时目录与原内存 backing 位于同一支持 reflink 的文件系统，CH 可先 reflink 原内存文件再通过 `/proc/self/pagemap` 仅覆写脏页，从而大幅缩短暂停窗口与物理写放大。
 
 捕获条件按设备逐个核实，形成设备捕获能力表：
 
 | 设备 | 捕获与恢复要求 |
 |---|---|
-| virtio-net | guest 网络身份、MTU 与队列配置纳入恢复校验；宿主接入由 4.4 重建，VM 网络 namespace 与宿主的连接跟踪状态均不随快照回滚；需核实暂停时 net 队列是否仍被处理 |
-| vsock | 宿主侧对端不随快照保存；restore 后旧连接视为断开，agent 重新握手；需核实后端对 vsock 快照的支持 |
-| 熵源 | restore/clone 后经 agent reseed，见 1.5 |
+| virtio-net | 上游 CH 实现 pause 与 snapshot；须端到端验证队列静止窗口与目标 TAP 重绑定。guest 网络身份、MTU 与队列配置纳入恢复校验；宿主接入由 4.4 重建，两级 namespace 的连接跟踪状态不随快照回滚 |
+| vsock | 上游 CH 实现 pause 与 snapshot；宿主对端不保存，restore 后旧连接视为断开，须验证基础 agent 重新握手及独立 UDS 寻址 |
+| 熵源 | restore/clone 后经 agent reseed；CH 提供 VM Generation ID（aarch64 下须开启 ACPI），须验证 guest 驱动适用条件，不能代替用户态状态处理，见 1.5 |
 | 时钟 | restore/clone 后经 agent 校正，见 1.5 |
-| 热插设备 | 与快照使用同一 VM 锁，捕获期间不能交错执行；清单记录捕获时刻的设备布局，restore 按 3.4 校验 |
+| 设备布局 | 首版布局固定，清单记录捕获时的完整设备身份与配置，restore 按 3.4 校验；设备热变更另行评估 |
 
-后端不满足某设备的捕获条件时，对应配置禁止快照。
+上游 CH 源码入口为 [`Net` 暂停与状态保存](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/virtio-devices/src/net.rs#L1072-L1093)及 [`Vsock` 暂停与状态保存](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/virtio-devices/src/vsock/device.rs#L528-L552)。接口存在不代替完整路径验证。后端不满足某设备的捕获条件时，对应配置禁止快照。
 
 guest 尚未提交的脏页可以留在内存快照中，恢复后继续写回。整机快照因此可以保留应用尚未刷盘的缓存。一致性范围限于 VM 本地状态，与外部数据库服务等参与者的事务协调由应用处理。宿主页缓存后台回写属于已有逻辑写入的落盘过程，其断电持久化由发布阶段确认。
 
@@ -424,27 +444,24 @@ guest 尚未提交的脏页可以留在内存快照中，恢复后继续写回�
 
 ### 阶段二：发布
 
-发布须将完整快照持久化，再将其作为一个整体提供给恢复端。
+发布须将已捕获的完整快照持久化（`fsync`），再将其作为一个整体提供给恢复端。由于源 VM 在阶段一末尾已完成独立副本创建并恢复运行，发布阶段的磁盘同步与 SQLite 事务不再占用源 VM 的暂停窗口。
 
 基线以 SQLite 中的已发布引用作为可用性入口，先持久化文件，再登记引用：
 
-1. 将已捕获的组成文件与其清单放在所属操作的临时位置，校验完整性。
-2. 同步组成文件与清单；若需 rename 到最终位置，在同一文件系统内原子移动，并同步受影响的目录项。
-3. 文件和路径确认持久化后，在 SQLite 事务中提交快照的已发布引用及长期依赖。临时产物不能通过该入口被读取。
-4. 提交结果确认后恢复源 VM；确认恢复运行后清除待恢复标记，结束操作。
+1. 对所属操作临时位置中的已捕获组成文件与清单校验完整性。
+2. 同步（`fsync`）组成文件与清单；若需 rename 到最终位置，在同一文件系统内原子移动，并同步受影响的目录项。
+3. 文件和路径确认持久化后，在 SQLite 事务中提交快照的已发布引用及长期依赖，结束操作。临时产物不能通过该入口被读取。
 
 数据库的持久化配置与宿主文件系统的同步语义都必须验证。rename 保证路径切换的原子可见性，文件和目录同步保证产物及路径持久化，数据库事务提交可用引用。发布必须满足这些条件。
 
 | 失败或中断点 | 处理 |
 |---|---|
-| 捕获未完成 | 不发布；核对临时产物和设备状态，再决定清理与是否恢复运行 |
-| 文件完整但发布未提交 | 仍不可用于恢复；依据操作记录确认完整性后继续发布，或按依赖清理 |
+| 捕获未完成 | 不发布；清理临时产物，核对设备状态，若源 VM 仍处于暂停则恢复运行 |
+| 捕获已完成但源 VM 恢复运行失败 | 保留待恢复标记与原因，优先处理源 VM 恢复或停止；独立捕获产物可按完整性决定继续发布或回滚清理 |
+| 源 VM 已恢复，文件完整但发布未提交 | 仍不可用于恢复；daemon 重启后依据操作记录校验临时产物完整性，继续完成 `fsync` 与发布，或按依赖清理并标记 snapshot 操作失败（不影响已恢复运行的源 VM） |
 | 提交结果未知 | 核对已发布引用及其清单，重试不能生成另一份互相冲突的结果 |
-| 已发布但源 VM 恢复运行失败 | 快照继续有效；保留待恢复标记与原因，单独继续 VM 恢复 |
 
-当前基线直到完整发布后才恢复 VM，暂停时间包含设备排空、内存保存、磁盘版本创建和文件同步，需按完整流程测量。
-
-未来可在机器状态与独立稳定磁盘版本均已捕获后恢复 VM，再在后台持久化和发布。该方案需要另行定义中断恢复，不属于当前基线。采用普通复制时，须在复制完成后才恢复源的写入。
+暂停窗口仅包含设备排空、内存保存和磁盘版本创建（reflink 或稀疏复制）；文件 `fsync`、目录同步与数据库事务均在恢复后执行。若未来引入“快照并立即停止释放内存”（hibernate 语义），则可在同一暂停窗口内完成持久化后直接终止 VMM。
 
 ## 3.2 磁盘快照与内存快照
 
@@ -469,17 +486,17 @@ reflink 创建的副本有独立的文件生命周期，初始共享物理块，
 
 ### 内存恢复方式与 backing
 
-CH 发行版与内存恢复模式尚未选定，须一起选择。上游 CH v53.0 提供 `Copy` 与 `OnDemand`，默认复制到独立 guest RAM。references 中的 Cocoon fork 另有 `CopyOnWrite` 文件映射。不能将这些模式统称为 CH 默认的 `MAP_PRIVATE` 恢复，也不能将 FC 的内存恢复基线当作本设计的已定项。
+内存恢复基线为上游 CH 的 `CopyOnWrite`，即以 `MAP_PRIVATE` 映射不可变快照内存文件，未修改页面可共享宿主页缓存，guest 写入生成实例私有页面。它已经是上游能力，无需为此采用第三方魔改分支。CH 默认模式仍是 `Copy`，且在配置不满足 `is_restore_cow_supported` 时仅打印警告并静默回退到 `Copy`；因此 engine 必须显式指定恢复模式并在恢复前做严格准入校验。升级 CH 时固定精确 commit 并重新验证模式限制。
 
-| 候选恢复方式 | 页面来源与限制 | 源内存文件依赖 |
+| 恢复方式 | 页面来源与限制 | 源内存文件依赖 |
 |---|---|---|
-| 上游 CH `Copy`，即 eager copy | 恢复期间把快照数据复制到独立 guest RAM；增加启动读盘和每实例内存占用 | 确认复制完成且后端不再读取后可解除，不要求运行期 hardlink |
-| 上游 CH `OnDemand`，使用 UFFD | userfaultfd handler 按需读取快照，将页面复制到 guest RAM；要求宿主 UFFD 能力 | 延续到所有实际读取结束；不能仅凭 restore API 成功释放 |
-| Cocoon CH fork `CopyOnWrite`，使用 `MAP_PRIVATE` | 未修改页可共享宿主页缓存，guest 写入生成私有 COW 页；仅适用于 fork 允许的内存与设备配置 | 整个 VM 生命周期持有不可变文件；使用自己的 hardlink 与长期引用 |
+| `CopyOnWrite`，当前基线 | 文件私有 COW 映射；仅接纳经校验的静态私有 RAM 与设备配置；二次快照支持 reflink + pagemap 增量覆写 | 整个 VM 生命周期持有不可变文件；使用自己的 hardlink 与长期引用 |
+| `Copy`，机制对照与扩展方向 | 恢复期间把快照数据复制到独立 guest RAM，增加恢复读盘和每实例内存占用 | 确认复制完成且后端不再读取后可解除，不要求运行期 hardlink |
+| `OnDemand`，机制对照与扩展方向 | UFFD handler 按需将快照页面复制到 guest RAM，要求宿主 UFFD 能力 | 延续到所有实际源读取结束，不能仅凭 restore API 成功释放 |
 
-依据：上游 v53.0 [`MemoryRestoreMode`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/vmm/src/config.rs#L2778-L2827)、[`new_from_snapshot`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/vmm/src/memory_manager.rs#L1879-L1923)；Cocoon fork 固定 commit `a02b114bd42c65b73033231a27bd23f3c487fc4c` 的 [CopyOnWrite 说明](https://github.com/cocoonstack/cloud-hypervisor/blob/a02b114bd42c65b73033231a27bd23f3c487fc4c/docs/snapshot_restore.md#L154-L190)。
+依据：上游 CH commit `038ce5a72d761380a02f714a4eb4ca63e0ea073d` 及后续 `0295e241e`（Reuse the copy-on-write restore source in snapshots）的 [`MemoryRestoreMode`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/vmm/src/config.rs#L2931-L2956)、[CopyOnWrite 限制](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/docs/snapshot_restore.md#copy-on-write-restore)与 [VM Generation ID](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/docs/snapshot_restore.md#vm-generation-id)。后者依赖 guest 内核 `CONFIG_VMGENID` 与 ACPI 驱动路径，不能据此保证所有用户态 RNG 已更新。
 
-若选择 fork 的 CopyOnWrite，须限制为其支持的静态私有 RAM 等配置。shared、hugepages、部分 zone 参数及设备直通等可能触发 eager-copy 回退。engine 必须在恢复前校验模式及限制，不得以共享页预算接纳实际执行全量复制的配置。不满足限制时，拒绝当前配置，或明确选择另一模式并重新检查准入条件。
+首版限制为经验证的静态私有 RAM，不开放 shared、hugepages、内存热改、设备直通及其他会触发 eager-copy 回退的配置；`prefault` 也不接纳。恢复前校验所选模式、内存区域与设备限制，条件不符直接拒绝，不接受静默回退。不能以共享页预算接纳实际执行全量复制的配置；以后引入其他模式须单独定义准入与依赖解除条件。
 
 按需恢复时，每个实例在自己的资源目录中通过 hardlink 持有不可变内存文件。删除源快照目录不会破坏实例的读取路径，协议见 3.3。不得通过任一路径改写或截断该文件，也不得保留能修改它的 fd 或共享可写映射。宿主侧负责执行写保护。
 
@@ -537,7 +554,7 @@ restore 保留 VM ID。先记录旧引用和目标快照，独立准备候选资
 
 整个过程保持网络阻断，恢复 guest 执行并完成 1.5 的 agent 协作后才提交 `running`。中断时按 1.4 核对，不能在进程仍使用候选资源时直接回滚或删除这些资源。
 
-clone 创建新 VM。从同一磁盘快照建立自己的可写层，共享不可变 lower，并取得独立宿主网络身份。VMM 可见路径与源快照相同，但私有 mount namespace 内的绑定指向目标 VM 资源，不读取源 VM 的可写盘。内存按 3.2 所选模式复制或由自己的 hardlink 持有。完成加载、恢复执行与 agent 协作后提交状态。guest CID 保持固定，主机名、凭据、用户态随机状态或应用注册信息不会自动变化。
+clone 创建新 VM，所有完整且兼容的已发布快照均可使用，不要求黄金模板资格。从同一磁盘快照建立自己的可写层，共享不可变 lower，并取得独立宿主网络身份。VMM 可见路径与源快照相同，但私有 mount namespace 内的绑定指向目标 VM 资源，不读取源 VM 的可写盘。内存以 CopyOnWrite 由自己的 hardlink 与长期引用保护。完成加载、恢复执行与 agent 协作后提交状态。guest CID 保持固定，主机名、凭据、用户态随机状态或应用注册信息不会自动变化。
 
 engine 保证捕获点一致性、派生 VM 的可变宿主资源独立，以及共享不可变资源的使用路径受保护。restore 保留 machine-id。restore/clone 均先执行内核熵重置与时钟校正，再更新完成状态。clone 的 machine-id、密钥、注册状态、用户态 RNG 状态由黄金镜像约定与调用方处理，不进入快照元数据，见 1.5。
 
@@ -547,9 +564,11 @@ engine 保证捕获点一致性、派生 VM 的可变宿主资源独立，以及
 
 # 4. 网络层
 
-每 VM 使用一个 network namespace，VMM 与 TAP、Linux bridge、veth 一端位于其中。TAP 接入该 VM 的 bridge，bridge 配置固定 guest 网关。veth 作为三层上联接入宿主根 namespace。guest 地址保持固定，宿主使用唯一映射 IP 区分 VM。交换、路由、邻居解析、连接跟踪和 NAT 均由 Linux 内核处理。
+每 VM 使用一个专属 network namespace，VMM 与 TAP、veth 一端位于其中。由于每台 VM 独占 network namespace 且仅包含一张虚拟网卡，无需在 namespace 内额外部署 `Linux bridge`：固定 guest 网关 IP 与固定网关 MAC 直接配置在 `tap0` 接口上，构成点对点二层链路；`veth` 作为三层上联接入宿主根 namespace。guest 地址保持固定，宿主使用唯一映射 IP 区分 VM。路由、邻居解析、连接跟踪和 NAT 均由 Linux 内核处理。
 
-engine 负责网络资源的创建、核对、接口启停与回收，不定义过滤策略、网络限速或配额。宿主部署方案负责这些规则及其生效条件。规则可以由 engine 按既定配置安装，也可以由独立的宿主网络管理组件安装，同一资源必须有明确的管理者。
+engine 负责网络资源的创建、核对、接口启停、宿主动态准入集合（nftables set）的元素维护与资源回收；宿主部署方案负责静态过滤策略骨架、网络限速与配额。同一资源必须有明确的管理者。
+
+项目交付配套 Linux 宿主参考部署，明确 engine 与外部规则管理者各自拥有的资源、接口启用前提、过滤与配额、进程监管和地址回收流程，并纳入首版端到端验收。参考部署不绑定 NixOS 等发行版，也不改变 engine 的生命周期职责。
 
 本阶段不实现自定义 eBPF 数据面、CNI 接入、TCP 出站代理或网络资源预热池。出口 NAT 由宿主承担，不要求上游路由映射网段。
 
@@ -559,12 +578,12 @@ engine 负责网络资源的创建、核对、接口启停与回收，不定义�
 
 | 网络环境 | 资源与职责 |
 |---|---|
-| 每 VM 网络 namespace | VMM 进程、TAP、独立 bridge、veth 一端、固定网关、路由、地址映射与 conntrack 状态 |
-| 宿主根 network namespace | veth 另一端、到各映射 IP 的路由、宿主保护规则、出口 NAT 与相应 conntrack 状态 |
+| 每 VM 网络 namespace | VMM 进程、直接承载固定网关 IP/MAC 的 `tap0`、veth 一端、路由、namespace 级地址映射（SNAT/DNAT）与 conntrack 状态 |
+| 宿主根 network namespace | veth 另一端、到各映射 IP 的 `/32` 路由、基于常驻 nftables set 的宿主保护与转发规则、出口 NAT 与相应 conntrack 状态 |
 
-Linux bridge 提供二层接入，网关 IP 与 MAC 配在 bridge 上，而不是其 TAP 端口上。veth 是一对跨 namespace 连接的虚拟接口，一端发出的报文由另一端接收。veth 的 VM 端不加入 bridge，bridge 到 veth 之间走三层路由。不同 VM 的 bridge 不互连，因此相同的 guest IP/MAC 不进入共享二层网络。
+`tap0` 直接提供点对点二层终结与三层网关，网关 IP 与固定 MAC 直接配置在 `tap0` 上。veth 是一对跨 namespace 连接的虚拟接口，一端发出的报文由另一端接收。`tap0` 到 veth 之间直接在 VM 网络 namespace 内走三层路由转发，省去二层 bridge 转发与 netfilter bridge hook 开销。不同 VM 的 `tap0` 位于各自独立的 network namespace，因此相同的 guest IP/MAC 与网关 MAC 互不冲突。
 
-virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 通过 TAP 接入 bridge。TAP 方向以宿主接口为参照：
+virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 直接读写 `tap0` 文件描述符。TAP 方向以宿主接口为参照：
 
 | guest 视角 | VMM 动作 | TAP 方向 |
 |---|---|---|
@@ -574,9 +593,9 @@ virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 通过 TAP 接入 br
 ### 出站
 
 1. 应用将报文交给 guest 协议栈，guest 根据默认路由构造发往网关 MAC 的帧。
-2. virtio-net 将帧交给 VMM，VMM 写入所属 TAP，帧经 bridge 到达本 namespace 的网关。
-3. VM 网络 namespace 的内核按宿主部署配置执行过滤、连接跟踪和路由。SNAT 将固定 guest 源 IP 改为该 VM 的唯一映射 IP，再经 veth 发往宿主。
-4. 宿主根 namespace 执行其网络配置，将发往外部的流量经出口 NAT 转成宿主出口地址。
+2. virtio-net 将帧交给 VMM，VMM 写入所属 `tap0`，内核在 `tap0` 上接收三层报文。
+3. VM 网络 namespace 的内核按配置执行过滤、连接跟踪和路由。SNAT 将固定 guest 源 IP 改为该 VM 的唯一映射 IP，再经 veth 发往宿主。
+4. 宿主根 namespace 匹配活跃 veth 与映射 IP 集合，将发往外部的流量经出口 NAT 转成宿主出口地址。
 5. 报文到达外部服务。
 
 ### 入站与响应
@@ -584,7 +603,7 @@ virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 通过 TAP 接入 br
 1. 响应到达宿主，内核按出口 NAT 的连接记录反向转换，恢复目标映射 IP。
 2. 宿主完成转发过滤，由映射 IP 的 `/32` 路由经所属 veth 送入对应 VM 网络 namespace。
 3. VM 网络 namespace 的内核按连接记录将目标地址还原为 guest IP；对显式允许的新入站连接，使用映射 IP 到 guest IP 的 DNAT。
-4. VM 网络 namespace 完成过滤与路由，经 bridge 和 TAP 将帧交给 VMM，再由 virtio-net 送达 guest。
+4. VM 网络 namespace 完成过滤与路由，经 `tap0` 将帧交给 VMM，再由 virtio-net 送达 guest。
 
 宿主主动访问 VM 时，从宿主 `output` 路径按映射 IP 路由进入 veth，再走 VM 网络 namespace 的 DNAT 与转发过滤。映射 IP 只提供宿主内部寻址能力，不自动成为公开服务入口。
 
@@ -601,10 +620,10 @@ virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 通过 TAP 接入 br
 | 地址或资源 | VM A | VM B | 作用 |
 |---|---|---|---|
 | guest IP | `192.168.127.2/30` | `192.168.127.2/30` | guest 内部固定地址 |
-| 默认网关 IP | `192.168.127.1/30` | `192.168.127.1/30` | 配置在各自 bridge 上，由 Linux 回应 ARP |
-| guest MAC / bridge 网关 MAC | 固定配置 | 与 A 相同 | 各自二层链路隔离，快照内的网关缓存可继续使用 |
-| VM 网络 namespace / bridge / TAP | `net-a` / `br0` / `tap0` | `net-b` / `br0` / `tap0` | VMM 与网络设备处于同一 namespace；接口名可在不同 namespace 重复 |
-| veth 地址，宿主端 / VM 网络端 | `10.201.0.1/30` / `10.201.0.2/30` | `10.201.0.5/30` / `10.201.0.6/30` | 连接各 VM 网络 namespace 与宿主的独立三层链路 |
+| 默认网关 IP | `192.168.127.1/30` | `192.168.127.1/30` | 直接配置在各自 `tap0` 上，由 Linux 回应 ARP |
+| guest MAC / TAP 网关 MAC | 固定配置 | 与 A 相同 | 各自 namespace 二层隔离，快照内的网关 ARP 缓存可继续有效 |
+| VM 网络 namespace / TAP | `net-a` / `tap0` | `net-b` / `tap0` | VMM 与网络设备处于同一 namespace；接口名可在不同 namespace 重复 |
+| veth 地址，宿主端 / VM 网络端 | `10.201.0.1/31` / `10.201.0.0/31` | `10.201.0.3/31` / `10.201.0.2/31` | 连接各 VM 网络 namespace 与宿主的独立点对点三层链路（可用 `/31` 或 `/30`） |
 | 映射 IP | `10.200.0.2` | `10.200.0.3` | 宿主路由与共享连接跟踪看到的唯一 VM 地址 |
 | 出口地址 | 宿主出口地址 | 可共享出口地址 | 外部服务实际看到的源地址 |
 
@@ -612,33 +631,35 @@ virtio-net 在 guest 与 VMM 之间交换以太网帧，VMM 通过 TAP 接入 br
 
 每 VM 网络 namespace 的默认路由指向 veth 宿主端。宿主为每个映射 IP 建立 `/32` 路由，下一跳是对应 veth 的 VM 网络端。映射 IP 不配置为宿主本地地址，这样入站流量才会沿路由进入目标 namespace，而非成为宿主本地流量。
 
-bridge 配置固定网关 IP 与 MAC，TAP 作为二层端口不配置网关 IP。Linux 负责 bridge 与 guest 链路上的 ARP 和邻居解析。veth 两端使用普通的链路寻址，不对映射 IP 做动态 ARP 学习。网络归属由 namespace、bridge、TAP 与 veth 的宿主记录确定，不由 guest 自报的地址确定。
+`tap0` 直接配置固定网关 IP 与固定 MAC，Linux 内核负责 `tap0` 与 guest 之间的 ARP 和邻居解析。veth 两端使用普通的链路寻址，不对映射 IP 做动态 ARP 学习。网络归属由 namespace、TAP 与 veth 的宿主记录确定，不由 guest 自报的地址确定。
 
-guest 的静态地址与默认路由按 2.2 在内核启动阶段配置。guest、虚拟网卡、TAP、bridge 与 veth 的 MTU 必须相容，并与宿主出口条件一起核对。engine 准备实际接口配置，VMM 不因接入网络而获得修改宿主网络的特权。
+guest 的静态地址与默认路由按 2.2 在内核启动阶段配置。guest、虚拟网卡、TAP 与 veth 的 MTU 必须相容，并与宿主出口条件一起核对。engine 准备实际接口配置，VMM 不因接入网络而获得修改宿主网络的特权。
 
-固定 guest 网络配置、bridge 网关 MAC、MTU 和队列配置属于快照恢复契约。restore/clone 不重新初始化 guest 网络，配置不相容时拒绝恢复。宿主网络方案须放行必要的 ICMP 错误。
+固定 guest 网络配置、TAP 网关 MAC、MTU 和队列配置属于快照恢复契约。restore/clone 不重新初始化 guest 网络，配置不相容时拒绝恢复。宿主网络方案须放行必要的 ICMP 错误。
 
 CH 从冷启动起使用 fd-backed 网卡及稳定设备 ID。每次 restore/clone 按设备身份重新绑定目标 VM 网络 namespace 的 TAP。VMM 位于同一 namespace，可以访问其中的接口信息。不能复用快照里的 fd 数值，也不能临时连接源 VM 的 TAP。不为 clone 更换 guest 网卡身份，也不要求其重新配置 IP。
 
-CH 仅对原本 fd-backed 的网卡替换 fd，通过 UDS 的 `SCM_RIGHTS` 接收实际句柄，并以 `net_fds` 按设备 ID 交接，见 [`vm_restore` 配置交接](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/vmm/src/lib.rs#L2354-L2387)。
+CH 仅对原本 fd-backed 的网卡替换 fd，通过 UDS 的 `SCM_RIGHTS` 接收实际句柄，并以 `net_fds` 按设备 ID 交接，见 [`vm_restore` 配置交接](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/vmm/src/lib.rs#L2676-L2689)。
 
 另一方案是将 veth 的 VM 端地址直接作为宿主可见的 VM 地址，可减少独立映射地址池及逐 VM 的 `/32` 路由，但会把该地址与上联链路绑定。当前不采用该方案，保留独立映射 IP，后续只有接受这种绑定关系时才切换。
 
-E2B 的 [namespace NAT](https://github.com/e2b-dev/runtime/blob/4ecf3643c112899247d5594a5c6faa0364b33458/packages/orchestrator/pkg/sandbox/network/v2/ns_nat.go#L14-L20)复用内核 conntrack，与本设计的固定 guest 地址模型相符。Cocoon 的 [TAP MTU 同步](https://github.com/cocoonstack/cocoon/blob/b3b40f3bdedc384c482eb81dcdc60a774dd8d560/network/cni/lifecycle_linux.go#L168-L219)可作为设备相容性参考。Cocoon 的 CNI 路径将网络身份交给 guest，[clone 后需重新配置网络](https://github.com/cocoonstack/cocoon/blob/b3b40f3bdedc384c482eb81dcdc60a774dd8d560/docs/snapshots.md#L56-L95)，本设计不采用该接入模型。引用这些机制不表示引入其代理、插件或资源池。
+E2B 的 [namespace NAT 与直连 TAP 拓扑](https://github.com/e2b-dev/runtime/blob/4ecf3643c112899247d5594a5c6faa0364b33458/packages/orchestrator/pkg/sandbox/network/v2/ns_nat.go#L14-L20)复用内核 conntrack 且无需内置网桥，与本设计的固定 guest 地址模型相符。Cocoon 的 [TAP MTU 同步](https://github.com/cocoonstack/cocoon/blob/b3b40f3bdedc384c482eb81dcdc60a774dd8d560/network/cni/lifecycle_linux.go#L168-L219)可作为设备相容性参考。Cocoon 的 CNI 路径将网络身份交给 guest，[clone 后需重新配置网络](https://github.com/cocoonstack/cocoon/blob/b3b40f3bdedc384c482eb81dcdc60a774dd8d560/docs/snapshots.md#L56-L95)，本设计不采用该接入模型。引用这些机制不表示引入其代理、插件或资源池。
 
 ## 4.3 engine 与宿主网络的职责边界
 
-engine 管理接入资源的生命周期，Linux 内核处理报文，宿主部署方定义并维护过滤、限速、配额与共享出口配置。规则可由 engine 或外部组件安装，具体方式由部署集成决定。这不改变上述分工，也不要求 engine 提供逐 VM 策略求值、撤权或连接清理能力。
+engine 管理接入资源的生命周期，Linux 内核处理报文，宿主部署方定义并维护过滤策略骨架、限速、配额与共享出口配置。为避免每增删一台 VM 都线性追加宿主防火墙规则，参考部署采用 **常驻 nftables 表 + O(1) 动态集合（`set`）** 的协同边界：宿主部署方维护静态规则链，engine 在启用/回收 VM 网络时原子增删集合元素（如活跃宿主端 `veth` 名与映射 `/32` IP），并安装每 VM netns 内部的基础 NAT 与本地防逃逸规则。这不要求 engine 提供业务级 L7 策略求值、动态撤权或全局连接清理能力。
 
 | 管理者 | 职责 |
 |---|---|
-| engine | 记录网络配置与资源归属，创建和回收 namespace、TAP/bridge/veth，协调所需地址、路由及 NAT 接入，关闭或恢复接口 |
-| 宿主部署方及其网络管理组件 | 提供接入所需的网络规则、过滤与配额，保护宿主和其他 VM，维护共享出口与地址安全复用条件 |
-| Linux 内核 | 执行交换、路由、邻居解析、过滤、连接跟踪和 NAT，按内核机制维护连接状态 |
+| engine | 记录网络配置与资源归属，创建和回收 namespace、TAP/veth，配置 namespace 内 SNAT/DNAT 与基礎隔离，更新宿主动态准入集合（active veth / 映射 IP set）与 `/32` 路由，关闭或恢复接口 |
+| 宿主部署方及其网络管理组件 | 提供常驻防火墙表结构、跨 VM 隔离、元数据/内网黑名单、限速与配额，处理宿主上既有防火墙（如 Docker 默认 `iptables FORWARD DROP` 策略，因 netfilter 对所有挂载的 forward hook 取最严判决）的兼容性 |
+| Linux 内核 | 执行路由、邻居解析、过滤、连接跟踪和 NAT，按内核机制维护连接状态 |
 
-接入所需的地址、路由和 NAT 配置必须在接口启用前准备好。engine 配置失败或依赖的宿主网络准备失败时不启用接口，但不承诺持续核验全部宿主过滤规则。规则可使用 nftables 等宿主机制实现，本设计不固定规则编排工具。engine 只修改约定由自己管理的资源，不能通过清空宿主防火墙或覆盖外部配置修复接入。
+接入所需的地址、路由、namespace NAT 和宿主集合注册必须在接口启用前准备好。engine 配置失败或依赖的宿主网络表不存在时不启用接口，但不承诺持续核验全部外部过滤规则。engine 只修改约定由自己管理的 namespace 表和宿主指定集合/路由，不能通过清空宿主防火墙或覆盖外部配置修复接入。daemon 重启时保留宿主集合中仍存活沙箱的元素，避免存活 VM 断网。
 
-namespace 和 bridge 不负责访问授权。运行不可信 guest 的部署须保护宿主管理服务、其他 VM、集群控制面和云元数据服务，并明确 DNS 等必要服务的访问规则。策略须同时覆盖 guest 转发流量与 VMM 在该 namespace 内主动建立的连接。后者不经过 TAP，不能仅靠 TAP 上的限制保护宿主。
+network namespace 本身不负责访问授权。运行不可信 guest 的部署须保护宿主管理服务、其他 VM、集群控制面和云元数据服务，并明确 DNS 等必要服务的访问规则。策略须同时覆盖两类流量：
+1. guest 经 `tap0` 进入的转发流量；
+2. VMM 进程在该 network namespace 内主动创建的 IP socket 流量（此类流量属于 namespace 的 `output` 链，不经过 `tap0`，必须在 namespace 内或宿主 veth 入口统一拦截与审计，不能仅靠 `tap0` 上的规则保护宿主）。
 
 来源防伪、IPv6 与未支持协议的阻断，以及网络带宽、包速率、连接容量的限制均由宿主部署方负责，不由 engine 实现。
 
@@ -646,7 +667,7 @@ conntrack 将双向报文关联到连接并维护状态与超时，即使不做 
 
 内核处理 IPv4 分片、NAT 相关 ICMP 错误及校验和。部署集成仍须验证完整报文路径、MTU 与虚拟网卡卸载能力的组合，不能因使用内核网络栈就省略端到端验证。
 
-禁用网络时，engine 关闭本 VM 的 guest 接入接口与 veth 上联，使 guest 和 VMM 都不能经这些接口通信。禁用不通过删除连接条目实现，vsock 管理通道与各自的 loopback 不受影响。过滤策略更新、存量连接撤权和网络配额变化由规则管理者处理，不属于 engine 生命周期协议。
+禁用网络时，engine 关闭本 VM 的 `tap0` 与 veth 上联，使 guest 和 VMM 都不能经这些接口通信。禁用不通过删除连接条目实现，vsock 管理通道与各自的 loopback 不受影响。过滤策略更新、存量连接撤权和网络配额变化由规则管理者处理，不属于 engine 生命周期协议。
 
 ## 4.4 网络生命周期
 
@@ -656,20 +677,22 @@ conntrack 将双向报文关联到连接并维护状态与超时，即使不做 
 |---|---|
 | create | 建立归属和网络配置，默认关闭接入接口 |
 | start | 按保留配置核对、重建或复用网络资源；启动检查完成后按联网意图恢复接口，配置为禁用时继续关闭 |
-| stop、VMM panic 或确认 VMM 退出 | 关闭所属接口，保留网络配置和地址归属；namespace、bridge、TAP/veth 等允许延迟回收，下次 start 按配置重建 |
+| stop、VMM panic 或确认 VMM 退出 | 关闭所属接口，保留网络配置和地址归属；namespace、TAP/veth 等允许延迟回收，下次 start 按配置重建 |
 | restore | 关闭接口，按目标 VM 配置准备网络，加载状态并完成 agent 协作；之后仍默认断网，须显式启用，不主动清理 conntrack |
-| clone | 新建 namespace、bridge、TAP/veth、链路地址与映射 IP；guest 配置保持不变，接口默认关闭 |
-| delete | 关闭接口，确认进程与设备使用结束后回收所属资源；地址满足安全复用条件后才交给其他 VM |
+| clone | 新建 namespace、TAP/veth、链路地址与映射 IP；guest 配置保持不变，接口默认关闭 |
+| delete | 关闭接口，确认进程与设备使用结束后依次撤销宿主集合注册、路由、veth，最后删除命名 network namespace；完成回收检查后才把地址交给其他 VM |
 
-supervisor 事件与 daemon reconcile 确认 VMM 退出，随后按归属关闭接口。接口关闭失败须报告并重试，不能以 VMM 已退出代替网络操作成功。guest 内核 panic 但 VMM 尚存活时，须先判定故障或执行停止操作，再进入同一处理流程，不能直接视为 VMM 已退出。
+`pidfd` 事件与 daemon reconcile 确认 VMM 退出，随后按归属关闭接口。接口关闭失败须报告并重试，不能以 VMM 已退出代替网络操作成功。guest 内核 panic 但 VMM 尚存活时，须先判定故障或执行停止操作，再进入同一处理流程，不能直接视为 VMM 已退出。
 
-网络资源归属由 VM ID 与本次创建标识共同确定，在创建前持久化，重建时更换创建标识。重启后核对 namespace 实例、bridge/TAP 从属关系、veth 配对关系、地址以及约定的宿主接入配置。名称和 ifindex 均可复用，不能单独作为归属证据。
+网络资源归属由 VM ID 与本次创建标识共同确定，在创建前持久化，重建时更换创建标识。重启后核对 namespace 实例、TAP 状态、veth 配对关系、地址以及约定的宿主接入配置。名称和 ifindex 均可复用，不能单独作为归属证据。
 
 异步配置与延迟回收结果生效前须核对当前运行实例及 operation，不能让旧回收任务关闭或删除已经重新启用的资源。
 
 内核维护 conntrack，它既不随 guest 快照回滚，也不因接口关闭而自动全部清除。复用原 VM 网络或重建 namespace 均不保证旧连接持续可用，也不保证旧连接强制失效。应用与外部系统的连接恢复不在 engine 保证范围内。宿主过滤策略使用当前部署配置，不随快照恢复为历史权限。
 
-延迟回收不表示地址可立即复用。网络资源退出使用后，地址仍可保留或隔离。宿主网络方案须保证旧 NAT 状态与迟到报文不会被投递给新的 VM，不能仅凭接口已关闭或任意等待一段时间就认定安全。可通过地址隔离与回收机制提供该保证，不要求 engine 主动清理 conntrack。条件无法确认时，不将地址分配给其他 VM。
+地址允许跨 VM 复用，但须先结束旧进程与设备使用，按实例归属撤销旧接入，完成所属路由、NAT、宿主集合元素及已登记使用者的清理，核对回收结果后再释放地址。保留资源直到清理成功；失败或状态无法确认时禁止复用。命名 network namespace 入口（如 `/run/netns/<id>`）作为泄漏发现锚点，必须在所有宿主侧关联状态（集合元素、路由、veth）全部成功清理后才最后删除；若宿主侧清理中途失败，保留该锚点与元数据归属以便重试，防止宿主残留无主路由或防火墙项。
+
+参考部署须验证旧流量隔离、地址重新分配及延迟清理与新建之间的交错，并说明保证范围与限制。不能把接口关闭、任意等待时长或单次 conntrack 清理表述为全部旧 NAT 状态与迟到报文都已消失的证明。首版不增加永久禁止地址复用或预热 slot 池的限制；具体回收条件与参数在部署实现中确定。
 
 回收中途失败时保留归属与恢复依据，不能先删除记录再遗留宿主资源。仅删除 namespace 的命名入口不证明其内核对象已销毁。
 
@@ -686,38 +709,41 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | I3 | phase 描述已确认阶段；操作放行同时校验归属与实际资源状态，确认进程退出后才标记 `stopped` |
 | I4 | 每台 VM 独占自己的可写层；VMM 实际访问的可变文件必须属于本实例；共享 lower 与已发布快照不可变，写保护由宿主侧执行 |
 | I5 | 镜像与恢复依赖固定到内容摘要、完整层序和转换配置 |
-| I6 | 整机快照的内存、CPU、设备与磁盘属于同一一致捕获点，捕获期间维持静止窗口并核对排空和同步结果 |
+| I6 | 整机快照的内存、CPU、设备与磁盘属于同一一致捕获点，捕获期间维持静止窗口并核对排空结果；独立副本捕获完成后即可恢复源 VM 运行，文件同步与元数据发布在暂停窗口外原子完成 |
 | I7 | 文件与目录先持久化再登记引用；快照与镜像产物只经已发布引用对恢复与创建可见 |
 | I8 | 新使用登记与删除检查遵循同一并发协议；租约覆盖实际读取期，依赖结束或转为等价长期引用后方可释放，回收等待实际依赖解除 |
-| I9 | 接管与回收须核对可区分资源复用的归属信息；无法确认时保留现场并阻止危险动作 |
-| I10 | VMM 与所属 TAP/bridge/veth 位于同一 VM 网络 namespace。固定 guest 地址在进入宿主共享 conntrack 前转换为唯一映射 IP。engine 通过接口启停管理接入，配置失败不放行，停止后保留配置。宿主部署负责过滤与配额。地址跨 VM 复用须满足安全条件，不以 engine 主动清理 conntrack 为前提 |
+| I9 | 接管与回收须核对可区分资源复用的归属信息（如 `(PID, starttime)` 与运行实例标识）；无法确认时保留现场并阻止危险动作 |
+| I10 | VMM 与所属点对点 TAP/veth 位于同一 VM 网络 namespace，网关直接配置在 TAP 上。固定 guest 地址在进入宿主共享 conntrack 前转换为唯一映射 IP。engine 通过接口启停与宿主动态集合管理接入，配置失败不放行，停止后保留配置。宿主部署负责过滤策略与配额。地址跨 VM 复用前结束旧使用并完成按归属的集合、路由与 veth 清理，最后删除 netns 锚点；失败时保留锚点与资源并禁止复用 |
 | I11 | clone 独立拥有可变宿主资源。所有实际读取结束或依赖已转移到等价长期引用后，才解除源快照的临时使用登记。按需读取期间持续保护不可变 backing，删除源快照不能破坏派生 VM 的读取。guest 身份由黄金镜像约定与调用方处理，外部状态不随快照回滚 |
-| I12 | 隔离、物理资源预算、配额、权限和故障报告在宿主侧执行；如需安全擦除，须使用专门存储机制 |
-| I13 | guest agent 是镜像必需组件；restore/clone 恢复执行后经 vsock 完成握手、内核 reseed 与时钟校正，再提交 `running` 与成功结果；失败保留实际进程状态且网络阻断，restore 不重置 machine-id |
-| I14 | 每次操作意图携带客户端幂等键；重复键返回首次结果，同键不同参数拒绝 |
-| I15 | 所有写操作都由单个 daemon 实例处理；退出事件用于降低延迟，周期 reconcile 使记录与实际状态一致，phase 以实际核对为准 |
-| I16 | 异步操作结果生效前，在 VM 锁内确认其仍属于当前运行实例和当前 operation；退出事件按运行实例核对 |
-| I17 | snapshot 暂停前原子检查空间预算并登记预留；不满足 `空闲空间 - 已预留 - 本次需求 >= 安全余量` 时拒绝捕获 |
+| I12 | VMM 通过 `CLONE_INTO_CGROUP` 自创建即受专属 cgroup v2 约束，状态加载期可暂放宽 CPU 带宽上限并在 `vm.resume` 前收紧；物理资源预算、配额、权限和故障报告在宿主侧执行；如需安全擦除，须使用专门存储机制 |
+| I13 | 基础 guest agent 是镜像必需组件。冷启动须握手成功后提交 `running`，失败则停止本次 VMM 并核对退出；restore/clone 须完成握手、内核 reseed 与校时，失败保留实际状态且网络阻断。restore 不重置 machine-id；上层服务就绪另行判断 |
+| I14 | 每次操作意图携带调用方幂等键；同键同参数定位同一 operation，进行中返回当前状态，终态固定，同键不同参数拒绝；调用方超时或断线不自动取消操作 |
+| I15 | 所有写操作都由单个 daemon 实例处理；`pidfd` 退出事件用于降低延迟，周期 reconcile 使记录与实际状态一致，phase 以实际核对为准 |
+| I16 | 异步操作结果生效前，在 VM 锁内确认其仍属于当前运行实例和当前 operation；退出事件按运行实例核对。调用方显式指定运行实例条件时也须在锁内核验，不匹配则拒绝 |
+| I17 | 首版不超额承诺存储容量，VM 后续写入与各类操作共享预算。snapshot 暂停前原子检查空间预算并登记预留；不满足 `空闲空间 - 已预留 - 本次需求 >= 安全余量` 时拒绝捕获 |
+| I18 | 上层可通过原幂等键和完整查询重新关联 operation 与资源；事件仅提示核对，允许丢失、重复与断线，查询失败不得解释为对象不存在 |
+| I19 | VMM 进程与 daemon 生命周期解耦，不设连坐销毁 VMM 的伴生 supervisor；daemon 退出或重启不终止 VM，运行实例核对与资源清理由 daemon 通过 `pidfd` 与周期 reconcile 完成 |
 
 实现验证应覆盖完整使用路径与故障边界：
 
 | 验证范围 | 覆盖行为 |
 |---|---|
-| 镜像与启动 | OCI 到实际 guest 文件视图、initramfs 到 systemd 的根切换及 agent 启动、共享层拒绝原始块写 |
-| 捕获与发布 | 内存与磁盘一致恢复、发布中断、并发 snapshot 的空间预留 |
-| 资源独立与回收 | 固定路径下并发 clone 与源 VM 删除、租约与删除竞争、所选内存模式的源依赖释放、长期依赖交接及源快照删除后的缺页读取、共享 backing 写保护 |
-| guest 协作 | 固定 CID 与独立 UDS 寻址、restore 保留 machine-id、agent 协作失败与迟到结果、黄金镜像初始化顺序 |
-| 中断恢复 | daemon 重启后的接管与核对、数据库回退时保守重建 |
-| 网络生命周期 | VMM 与 TAP/bridge 同 namespace、内核启动配置、同 IP/MAC 的并发 clone、CH 恢复重绑定、配置失败不启用接口、stop/VMM 退出后关闭接口、按保留配置 start、延迟回收与重新启动竞争、daemon 接管及回收失败后的归属保留 |
-| 宿主网络集成 | bridge 与路由接入、两级 NAT、ARP/DNS、IPv4 分片、ICMP 错误与 MTU/卸载相容性；部署规则覆盖 guest 和 VMM 两类流量、过滤与配额生效，以及保留 conntrack 时的地址跨 VM 复用隔离 |
+| 镜像与启动 | OCI 覆盖、whiteout、opaque、同层与跨层 hardlink、权限与 xattr 经 `fsmeta` 组合到实际 guest 文件视图；initramfs `/sys/block` 设备解析与根切换、基础 agent 握手与失败清理、共享层拒绝原始块写 |
+| 捕获与发布 | 内存与磁盘一致恢复、捕获后立即恢复源 VM、后台 `fsync`/发布中断恢复、CopyOnWrite 二次快照 reflink 增量覆写、并发 snapshot 与 VM 后续写入的统一空间预算 |
+| 资源独立与回收 | 固定路径下并发 clone 与源 VM 删除、租约与删除竞争、所选内存模式的源依赖释放、长期依赖交接及源快照删除后的缺页读取、共享 backing 写保护、加载期 CPU 配额豁免与恢复前收紧 |
+| guest 协作 | 固定 CID 与独立 UDS 寻址、restore 保留 machine-id、协作失败与迟到结果、基础就绪与上层产品就绪分离；普通快照可 clone，已有进程继续执行 |
+| 中断恢复 | daemon 重启后的无损接管、`pidfd` + `starttime` 退出核对、一致备份与显式人工恢复、回退后归属和引用不明时保留资源 |
+| 上层调用 | 创建响应丢失后按原键找回 operation 与资源、终态重查、运行实例条件拒绝迟到动作、查询失败与不存在区分、完整列举、事件断线重同步及轮询兜底 |
+| 网络生命周期 | VMM 与点对点 TAP/veth 同 namespace、内核启动配置、同 IP/MAC 的并发 clone、CH 恢复重绑定、配置失败不启用接口、stop/VMM 退出后关闭接口、按保留配置 start、延迟回收与重新启动竞争、daemon 接管及宿主清理失败后的 netns 锚点保留 |
+| 宿主网络集成 | 点对点 TAP 网关与 `/32` 路由接入、两级 NAT、常驻 nftables set 动态增删、与宿主既有 iptables FORWARD 策略相容、ARP/DNS、IPv4 分片、ICMP 错误与 MTU/卸载相容性；部署规则覆盖 guest 和 VMM 两类流量、过滤与配额生效，以及保留 conntrack 时的地址跨 VM 复用隔离 |
 
 后端不满足某个前置条件时，须明确限制对应能力。验证方式在实现时确定，须证明上述行为与故障处理符合不变量。
 
 # 附录：后端 I/O 边界依据
 
-下表比较 FC v1.17.0 与 CH v53.0，范围限于 KVM 与内置 virtio-blk，是 2.4 后端选择与捕获边界的源码依据。它不规定 engine 的内部实现。与本项目的集成尚待实现和验证，更换版本、设备或外部后端后必须重新核实。
+下表比较 FC v1.17.0 与上游 CH（v54+ 主线），范围限于 KVM 与内置 virtio-blk，是 2.4 后端选择与捕获边界的源码依据。它不规定 engine 的内部实现。与本项目的集成尚待实现和验证，更换版本、设备或外部后端后必须重新核实。
 
-| 比较项 | Firecracker v1.17.0 | Cloud Hypervisor v53.0 |
+| 比较项 | Firecracker v1.17.0 | Cloud Hypervisor (v54+ 主线) |
 |---|---|---|
 | 请求执行 | 内置块设备有同步与基于 io_uring 的异步路径；异步已提交请求可在 vCPU 暂停后继续完成 | 内置块设备由设备 worker 处理队列，暂停协议协调 worker 与已接收请求 |
 | `pause` 的边界 | 等待 vCPU 暂停，不负责排空块设备；设备事件循环仍可处理队列通知、限流唤醒和完成事件 | 先暂停 vCPU，再暂停设备；块设备停止接收新请求，等待已接收请求归零，再等待 worker 暂停 |
@@ -730,13 +756,13 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 源码依据：
 
 - FC：[`pause_vm` 与 `save_state`](https://github.com/firecracker-microvm/firecracker/blob/v1.17.0/src/vmm/src/lib.rs#L474-L538)、[`VirtioBlock::prepare_save`](https://github.com/firecracker-microvm/firecracker/blob/v1.17.0/src/vmm/src/devices/virtio/block/virtio/device.rs#L739-L756)、[`sync_snapshot_files`](https://github.com/firecracker-microvm/firecracker/blob/v1.17.0/src/vmm/src/vmm_config/snapshot.rs#L38-L59)。后者默认开启，但不代替 engine 捕获磁盘与发布清单。
-- CH v53.0，固定 commit `9ed824d6d08df3e96f7d5f50795d9449ac99f431`：[`Vm::pause`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/vmm/src/vm.rs#L3245-L3280)、[`Block::pause`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/virtio-devices/src/block.rs#L1320-L1339)、[`Vm::snapshot`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/9ed824d6d08df3e96f7d5f50795d9449ac99f431/vmm/src/vm.rs#L3317-L3390)。
+- CH 主线（commit `038ce5a72d761380a02f714a4eb4ca63e0ea073d` 及后续 `0295e241e`）：[`Vm::pause`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/vmm/src/vm.rs#L3301-L3329)、[`Block::pause`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/virtio-devices/src/block.rs#L1306-L1334)、[`Vm::snapshot`](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/vmm/src/vm.rs#L3375)。
 
 # 附录：术语表
 
 | 名称 | 含义 |
 |---|---|
-| engine | 单宿主机 VM 管理引擎，协调生命周期与宿主资源 |
+| engine | 供上层组件调用的单宿主机 VM 管理引擎，协调生命周期与宿主资源 |
 | host / guest | 宿主机 / 虚拟机内部运行环境 |
 | VM / microVM | 虚拟机 / 使用精简虚拟设备模型的虚拟机 |
 | VMM | Virtual Machine Monitor，运行 vCPU 并管理虚拟设备的宿主程序 |
@@ -751,7 +777,7 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | 启动产物 / initramfs | 提取给 VMM 的内核及启动文件 / 挂载正式根之前的内存启动环境 |
 | 根切换 | 从早期初始化环境交接到正式根文件系统，保留必要挂载并结束旧根的生命周期；本设计由 systemd 接任 PID 1 |
 | mount namespace | 进程的独立挂载视图；将相同 VMM 路径绑定到不同实例资源，需配合受限根与权限实现访问隔离 |
-| EROFS | Enhanced Read-Only File System，用单文件承载不可变只读层，可选压缩 |
+| EROFS / `fsmeta` | Enhanced Read-Only File System，用不可变文件承载只读层 / 基于 `EROFS_INODE_CHUNK_BASED` 与 `DEVICE_TABLE` 将多层 EROFS 数据块合并为单一挂载视图的元数据镜像 |
 | raw / ext4 | 按块偏移直接保存字节的镜像形式 / 本设计可写层内部使用的文件系统 |
 | OverlayFS | guest 内的联合文件系统，将多层目录叠加为一个目录视图 |
 | lower / upper / work | 只读来源目录 / 保存修改的目录 / OverlayFS 工作目录；upper 与 work 位于同一文件系统 |
@@ -773,8 +799,7 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | manifest / 清单 | 记录快照组成文件、摘要、层序与恢复配置的完整描述 |
 | snapshot lease | 快照租约，跟踪操作或 VM 的实际读取依赖，阻止过早回收 |
 | 按需加载内存 | 运行时再读取尚未加载的快照内存页，可能长期依赖源文件 |
-| TAP / TUN | Linux 二层以太网帧接口 / 三层 IP 包接口；本设计 virtio-net 使用 TAP |
-| Linux bridge | 内核二层交换设备；本设计每 VM 独立使用，TAP 为其端口，bridge 本身配置固定 guest 网关 |
+| TAP / TUN | Linux 二层以太网帧接口 / 三层 IP 包接口；本设计 virtio-net 使用点对点 TAP，并在其上直接配置固定 guest 网关 IP 与 MAC |
 | network namespace / netns | 隔离网络设备、IP 栈、路由与连接跟踪等的内核边界；每 VM 的 VMM 与网络设备共用一个 netns，经 veth 接入宿主根 netns |
 | veth | 成对虚拟以太网接口，一端发送的报文由另一端接收；本设计连接 VM 网络 namespace 与宿主根 namespace |
 | SCM_RIGHTS / net_fds | Unix socket 传递实际 fd 的机制 / CH 恢复时按设备 ID 绑定新网络 fd 的参数 |
@@ -785,7 +810,7 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | DNAT | Destination NAT，目标地址转换；用于将显式允许的新入站连接的映射目标地址转换为 guest 地址 |
 | conntrack | Linux 连接跟踪，关联双向报文并维护连接状态与超时；可独立于 NAT 使用，为有状态过滤和本设计的 NAT 提供连接上下文 |
 | ARP / 邻居项 | IPv4 地址到链路层地址的解析协议 / 保存这种映射的记录 |
-| MTU | Maximum Transmission Unit，接口可承载的最大 IP 包大小；guest、TAP、bridge、veth 与出口路径须相容，远端更小路径由路径 MTU 发现处理 |
+| MTU | Maximum Transmission Unit，接口可承载的最大 IP 包大小；guest、TAP、veth 与出口路径须相容，远端更小路径由路径 MTU 发现处理 |
 | CNI | Container Network Interface，容器网络插件接口；本阶段不引入，由 engine 直接管理接入资源 |
 | `/32` 主机路由 | 只匹配一个 IPv4 地址的路由；本设计在宿主把映射 IP 经 veth 路由到所属 VM 网络 namespace |
 | ifindex | 内核分配的网络接口编号，可复用，只用于定位，不能单独证明归属 |
@@ -793,11 +818,12 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | fail-closed | 本设计指 engine 接入配置失败或归属不明时不启用接口；不等同于控制面失联、外部规则缺失时自动断网，见 4.4 |
 | vsock / CID | guest 与宿主之间的套接字式通信设备 / guest vsock 地址；所有 VM 使用同一固定 CID，宿主按独立 UDS 寻址 |
 | guest agent | 镜像必需、由 systemd service 启动的协作进程，经 vsock 提供 exec 与 reseed 能力 |
-| 幂等键 | 客户端为每次意图生成的唯一键；engine 持久化键到结果的映射 |
-| daemon | 常驻协调进程、唯一写者；CLI 经 UDS 提交意图 |
-| supervisor | 每 VM 的轻量进程，监控 VMM 退出、持续消费 serial 输出并保存有界日志 |
-| cgroup scope | cgroup v2 中每 VM 的资源限制边界；VMM 自开始执行即受其约束 |
-| `MAP_PRIVATE` / UFFD / eager copy | 文件映射私有 COW / userfaultfd 用户态缺页处理 / 全量复制到独立 guest 内存；CH 基线模式待选 |
+| 幂等键 | 调用方为意图生成的唯一键；engine 持久化键到 operation 的映射，终态结果固定 |
+| daemon | 常驻协调进程、唯一写者；通过 `pidfd` 监控 VMM 并执行周期 reconcile；上层和可选 CLI 经程序接口调用 |
+| `pidfd` | Linux 指向特定进程实例的文件描述符，配合 `/proc/<pid>/stat` 起始时间用于无轮询监听 VMM 退出并防止 PID 复用误判 |
+| cgroup scope | cgroup v2 中每 VM 的资源限制边界；VMM 通过 `CLONE_INTO_CGROUP` 自创建即受其约束，加载阶段可暂豁免 CPU 带宽上限并在 `vm.resume` 前收紧 |
+| `MAP_PRIVATE` / UFFD / eager copy | 文件映射私有 COW / userfaultfd 用户态缺页处理 / 全量复制到独立 guest 内存；基线采用上游 CH CopyOnWrite |
+| VM Generation ID | CH 恢复时改变的机器代次标识；受支持的 guest 驱动据此更新内核随机状态，不重置应用自有 RNG |
 | sealed memfd | 由内核 seals 约束内容修改与尺寸变化的内存文件，无普通持久路径，可由多个实例共享 |
-| 黄金镜像 | 受控初始化后在指定捕获点生成的整机模板快照，实例身份与业务状态留到派生后初始化 |
+| 黄金镜像 | 上层完成配置、预热与准备检查后捕获的整机模板快照；不是通用 clone 的资格限制 |
 | 决策状态 | 已定 / 暂定 / 开放，标注架构方案的决策状态；依据与适用范围另行说明，见 0.5 |
