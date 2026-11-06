@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -263,5 +264,67 @@ func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
 	}
 	if tables != 0 || version != storeSchemaVersion+1 {
 		t.Fatal("opening an incompatible database changed its schema")
+	}
+}
+
+// Schema 3 introduced configuration fences but has no template_intents.
+// It must be rejected before any DDL touches the file, leaving both the raw
+// bytes and the table set exactly as they were.
+func TestSchemaThreeStateIsRejectedBeforeDDL(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openStore(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.db.Exec(
+		"UPDATE version SET version=3; DROP TABLE template_intents",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sandboxd.db")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Open(
+		Options{
+			StateDir:  dir,
+			Engine:    newFakeEngine(),
+			Agent:     &fakeAgent{},
+			RootToken: "root-secret",
+		},
+	); !isCode(err, api.Incompatible) {
+		t.Fatalf("schema 3 state accepted: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected open modified the database bytes")
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, intents int
+	if err = db.QueryRow("SELECT version FROM version").
+		Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE name='template_intents'",
+	).Scan(&intents); err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 || intents != 0 {
+		t.Fatal("rejected open changed the schema", version, intents)
 	}
 }

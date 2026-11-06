@@ -179,7 +179,7 @@ Agent 在执行多步推理或代码修改时，可随时对沙箱创建 `checkp
 ## 1.4 元数据、并发锁与崩溃恢复
 
 `sandboxd` 使用独立的宿主机本地 SQLite 数据库（与 `engine` 的数据库物理隔离，各自维护单写者边界），记录：
-- 模板目录（`template_id` $\rightarrow$ `engine_snapshot_id`、镜像摘要、资源规格、状态）
+- 模板目录（`template_id` $\rightarrow$ `engine_snapshot_id`、镜像摘要、资源规格、状态）；模板名在首次接纳时以 `template_intents` 占位永久归属该租户，失败或重启不转移归属，滚动重建期间继续提供已发布版本
 - 沙箱记录（`sandbox_id`、归属租户、状态、当前绑定的 `engine_vm_id` 或 `hib_snapshot_id`、运行实例代次、令牌哈希、租约时间、环境变量、出网策略）
 - 检查点记录（`checkpoint_id`、归属租户、对应的 `engine_snapshot_id`、元数据标签）
 - 意图日志与操作幂等表（关联向 `engine` 发起的确定性幂等键）

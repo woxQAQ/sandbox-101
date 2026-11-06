@@ -661,10 +661,52 @@ func (s *Service) Submit(
 			)
 		}
 		existing, e := getTemplateTx(ctx, tx, t.ID)
-		if e == nil && !p.Root && existing.TenantID != p.TenantID {
+		if e != nil && !isCode(e, api.NotFound) {
+			return o, e
+		}
+		owner, current, e := templateIntent(ctx, tx, t.ID)
+		if e != nil {
+			return o, e
+		}
+		if owner == "" && existing.ID != "" {
+			// A published row without a placeholder still proves ownership.
+			owner = existing.TenantID
+		}
+		// Foreign and missing names share one response; root must name the
+		// owning tenant explicitly and can never transfer the reservation.
+		if owner != "" && owner != p.TenantID {
 			return o, api.Fail(api.NotFound, "not found")
 		}
-		if e != nil && !isCode(e, api.NotFound) {
+		if current != "" {
+			var status string
+			e := tx.QueryRowContext(
+				ctx,
+				"SELECT status FROM operations WHERE id=?",
+				current,
+			).Scan(&status)
+			if errors.Is(e, sql.ErrNoRows) {
+				return o, api.Fail(
+					api.ManualRecovery,
+					"template intent references a missing operation",
+				)
+			}
+			if e != nil {
+				return o, e
+			}
+			if status == "pending" || status == "running" {
+				return o, api.Fail(
+					api.Conflict,
+					"template publication is already in flight",
+				)
+			}
+			// A terminal pointer is recycled without touching its result.
+		}
+		// The first admission reserves the name permanently for this tenant
+		// and commits the placeholder atomically with the operation.
+		if owner == "" {
+			owner = p.TenantID
+		}
+		if e = reserveTemplateIntent(ctx, tx, t.ID, owner, o.ID); e != nil {
 			return o, e
 		}
 		t.TenantID = p.TenantID

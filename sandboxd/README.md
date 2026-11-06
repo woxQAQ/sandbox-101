@@ -36,6 +36,8 @@ The response returns the tenant token when generated. With that tenant authority
 
 Replace the digest with an already imported engine image. `template_put` registers cold provisioning or an authorized published golden snapshot. Snapshot provenance is private to one tenant: tenants can register their own sandboxd captures; external golden snapshots require a root `template_put` with an explicit target tenant (`X-Tenant-ID` over HTTP). Published engine state alone grants no tenant access. Root import cannot transfer an existing snapshot owner. Root may pause or checkpoint an existing sandbox with its default or selected request tenant; every resulting capture remains owned by the source sandbox's tenant, including receipt recovery. Captures and root grants are immutable SQLite authorization records, rechecked before publication, clone and warm refill; these records do not retain physical snapshots for GC. `template_build` creates a build VM, runs optional `template.warmup`, prepares the guest for capture, publishes a golden snapshot and retires the build VM. Build warmup uses a deterministic keyed guest execution intent. Build network currently remains blocked, so bake dependencies into the image or supply them without external fetches. Increase `target_warm` on a published golden template to maintain a pool.
 
+The first admission of a template name reserves it permanently to that tenant (`template_intents`): another tenant's submission gets the same 404 as a foreign published name, a second in-flight publication from the owning tenant conflicts, and a failed build keeps the reservation so only the owner retries. Root updates require the explicit owning target tenant and never transfer the reservation. A rolling rebuild keeps serving the previously published snapshot until the new one publishes.
+
 Claim using `POST /v1/claim`:
 
 ```json
@@ -110,7 +112,7 @@ sandboxctl --token-file /private/tenant-token --key pause-001 change SANDBOX_ID 
 
 `pause.json` contains `{"action":"pause"}`. `sandboxctl exec` uses unkeyed execution; use the SDK's explicit `exec_key` for durable deduplication.
 
-Metadata schema 3 stores snapshot authorization and configuration fences in SQLite and preserves both through backup/restore. Schema 1 and 2 require explicit review and are rejected before schema DDL; no labels or existing template references are used to infer owners. Stop the service and preserve a consistent backup before planning migration; do not overwrite old state to bypass the version boundary.
+Metadata schema 4 stores snapshot authorization, configuration fences and template ownership placeholders in SQLite and preserves them through backup/restore. Schema 1, 2 and 3 require explicit review and are rejected before schema DDL; no labels or existing template references are used to infer owners. Stop the service and preserve a consistent backup before planning migration; do not overwrite old state to bypass the version boundary.
 
 ## Egress, Preview and boundaries
 

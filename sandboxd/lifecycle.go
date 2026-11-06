@@ -916,15 +916,51 @@ func (s *Service) template(o *Operation) error {
 		}
 	}
 	t.State = "ready"
-	_, err := s.store.db.ExecContext(
+	// Publication never creates or transfers ownership: the placeholder
+	// admitted with this operation is the only accepted provenance, and it is
+	// verified with all three identities in the same transaction as the
+	// catalog write. A zero match is never an UPSERT fallback.
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	owner, current, err := templateIntent(s.ctx, tx, t.ID)
+	if err != nil {
+		return err
+	}
+	if owner == "" {
+		return api.Fail(
+			api.ManualRecovery,
+			"template ownership placeholder is missing",
+		)
+	}
+	if owner != t.TenantID {
+		return api.Fail(
+			api.Conflict,
+			"template ownership does not match this operation",
+		)
+	}
+	if current != o.ID {
+		return api.Fail(
+			api.Conflict,
+			"template publication was superseded",
+		)
+	}
+	if _, err = tx.ExecContext(
 		s.ctx,
 		"INSERT INTO templates(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant,body=excluded.body",
 		t.ID,
 		t.TenantID,
 		encode(t),
-	)
+	); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	o.Result.Template = &t
-	return err
+	return nil
 }
 
 func (s *Service) DataReady(

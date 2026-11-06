@@ -20,7 +20,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-const storeSchemaVersion = 3
+const storeSchemaVersion = 4
 
 type store struct {
 	db      *sql.DB
@@ -159,10 +159,11 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	_, err = s.db.Exec(`
  CREATE TABLE IF NOT EXISTS version(version INTEGER NOT NULL);
- INSERT INTO version SELECT 3 WHERE NOT EXISTS (SELECT 1 FROM version);
+ INSERT INTO version SELECT 4 WHERE NOT EXISTS (SELECT 1 FROM version);
  CREATE TABLE IF NOT EXISTS tenants(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS sandboxes(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, state TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS template_intents(template_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, operation_id TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS checkpoints(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, idem_key TEXT NOT NULL, spec_hash TEXT NOT NULL, status TEXT NOT NULL, body BLOB NOT NULL, UNIQUE(tenant,idem_key));
  CREATE TABLE IF NOT EXISTS warm(vm_id TEXT PRIMARY KEY, template_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -381,6 +382,45 @@ func clearConfigFence(
 	if err == nil && n != 1 {
 		return api.Fail(api.Conflict, "configuration operation was superseded")
 	}
+	return err
+}
+
+// templateIntent returns the permanent owner of a template name and the
+// operation currently holding its publication pointer. An empty owner means
+// the name has never been admitted; an empty operation means no publication
+// is in flight. Ownership is never released by failure or restart.
+func templateIntent(
+	ctx context.Context,
+	e executor,
+	id string,
+) (owner, operation string, err error) {
+	err = e.QueryRowContext(
+		ctx,
+		"SELECT tenant_id,operation_id FROM template_intents WHERE template_id=?",
+		id,
+	).Scan(&owner, &operation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return owner, operation, err
+}
+
+// reserveTemplateIntent records first ownership or moves the publication
+// pointer. Every caller serializes its check and this write in one
+// transaction under the resource-ownership lock, so the conditional claim is
+// the preceding read; an existing row's ownership is never rewritten here.
+func reserveTemplateIntent(
+	ctx context.Context,
+	e executor,
+	id, tenant, operation string,
+) error {
+	_, err := e.ExecContext(
+		ctx,
+		"INSERT INTO template_intents(template_id,tenant_id,operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET operation_id=excluded.operation_id",
+		id,
+		tenant,
+		operation,
+	)
 	return err
 }
 
