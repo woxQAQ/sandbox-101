@@ -390,14 +390,15 @@ func (s *Service) Submit(
 		return Operation{}, err
 	}
 	o := Operation{
-		ID:        newID("op_"),
-		Key:       key,
-		TenantID:  p.TenantID,
-		Hash:      hash,
-		Command:   sanitized(c),
-		Status:    "pending",
-		CreatedAt: time.Now().UTC(),
-		Result:    Result{},
+		ID:             newID("op_"),
+		Key:            key,
+		TenantID:       p.TenantID,
+		ChargeTenantID: p.TenantID,
+		Hash:           hash,
+		Command:        sanitized(c),
+		Status:         "pending",
+		CreatedAt:      time.Now().UTC(),
+		Result:         Result{},
 	}
 	o.Result.OperationID = o.ID
 	// Configuration admission and binding publication share this short guard.
@@ -439,7 +440,7 @@ func (s *Service) Submit(
 				ctx,
 				tx,
 				t.SnapshotID,
-				p.TenantID,
+				o.ChargeTenantID,
 			); err != nil {
 				return o, err
 			}
@@ -485,11 +486,12 @@ func (s *Service) Submit(
 			if source.TenantID != p.TenantID {
 				return o, api.Fail(api.NotFound, "not found")
 			}
+			o.ChargeTenantID = source.TenantID
 			if err = requireSnapshotOwner(
 				ctx,
 				tx,
 				source.SnapshotID,
-				p.TenantID,
+				o.ChargeTenantID,
 			); err != nil {
 				return o, err
 			}
@@ -506,14 +508,46 @@ func (s *Service) Submit(
 		if c.Action == "fork" && source.State == "running" {
 			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
 		}
+		sharedCost, e := quoteSnapshot(
+			ctx,
+			tx,
+			o.ChargeTenantID,
+			o.SnapshotID,
+			t.Shape,
+		)
+		if e != nil {
+			return o, e
+		}
 		if err = s.quota(
 			ctx,
 			tx,
-			p,
+			Principal{Root: p.Root, TenantID: o.ChargeTenantID},
 			count,
-			t.Shape.DiskMiB*int64(count)+o.ReservedMiB,
+			t.Shape.DiskMiB*int64(count)+o.ReservedMiB+sharedCost,
 		); err != nil {
 			return o, err
+		}
+		if err = quotaSnapshot(
+			ctx,
+			tx,
+			o,
+			o.SnapshotID,
+			t.Shape,
+			quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
+		); err != nil {
+			return o, err
+		}
+		if o.ReservedMiB > 0 {
+			if err = reserveQuotaStep(
+				ctx,
+				tx,
+				o,
+				"fork-snapshot",
+				source.ID,
+				o.ReservedMiB,
+			); err != nil {
+				return o, err
+			}
 		}
 		ttl, e := s.ttl(c.TTLSeconds)
 		if e != nil {
@@ -536,7 +570,7 @@ func (s *Service) Submit(
 		for i := 0; i < count; i++ {
 			b := Sandbox{
 				ID:              newID("sbx_"),
-				TenantID:        p.TenantID,
+				TenantID:        o.ChargeTenantID,
 				State:           "provisioning",
 				TemplateID:      t.ID,
 				Shape:           t.Shape,
@@ -551,6 +585,23 @@ func (s *Service) Submit(
 				CreatedAt:       time.Now().UTC(),
 			}
 			o.IDs = append(o.IDs, b.ID)
+			if err = quotaSlot(ctx, tx, o, b); err != nil {
+				return o, err
+			}
+			step := "provision"
+			if c.Action == "fork" {
+				step = "fork-clone:" + b.ID
+			}
+			if err = reserveQuotaStep(
+				ctx,
+				tx,
+				o,
+				step,
+				b.ID,
+				b.Shape.DiskMiB,
+			); err != nil {
+				return o, err
+			}
 			if err = saveSandbox(ctx, tx, b); err != nil {
 				return o, err
 			}
@@ -572,6 +623,7 @@ func (s *Service) Submit(
 		if source.State == "terminated" && c.Action != "release" {
 			return o, api.Fail(api.Conflict, "sandbox terminated")
 		}
+		o.ChargeTenantID = source.TenantID
 		o.SnapshotID = source.SnapshotID
 		if c.Action == "rollback" {
 			cp, e := getCheckpointTx(ctx, tx, c.CheckpointID)
@@ -596,15 +648,86 @@ func (s *Service) Submit(
 					source.State,
 				)
 			}
-			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
-			if err = s.quota(ctx, tx, p, 0, o.ReservedMiB); err != nil {
-				return o, err
+			o.ReservedMiB = 0
+			if source.State == "running" {
+				o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
 			}
 			o.IDs = []string{newID("cp_")}
 		}
-		if c.Action == "pause" && source.State == "running" {
-			o.ReservedMiB = source.Shape.MemoryMiB
-			if err = s.quota(ctx, tx, p, 0, o.ReservedMiB); err != nil {
+		if c.Action == "pause" &&
+			(source.State == "running" || (source.State == "pausing" && source.SnapshotID == "")) {
+			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
+		}
+		step := ""
+		switch c.Action {
+		case "checkpoint":
+			if source.State == "running" {
+				step = "checkpoint-capture"
+			}
+		case "pause":
+			if source.State == "running" ||
+				(source.State == "pausing" && source.SnapshotID == "") {
+				step = "hibernate-snapshot"
+			}
+		case "resume":
+			if source.State == "paused" || source.State == "resuming" {
+				step = "resume-clone"
+				o.ReservedMiB = source.Shape.DiskMiB
+			}
+		case "rollback":
+			if source.State == "running" || source.State == "paused" ||
+				source.State == "resuming" {
+				step = "rollback-clone"
+				if source.VMID != "" {
+					step = "rollback-restore"
+				}
+				o.ReservedMiB = source.Shape.DiskMiB
+			}
+		}
+		if o.ReservedMiB > 0 {
+			if err = s.quota(
+				ctx,
+				tx,
+				Principal{Root: p.Root, TenantID: o.ChargeTenantID},
+				0,
+				o.ReservedMiB,
+			); err != nil {
+				return o, err
+			}
+		}
+		if step != "" {
+			if err = reserveQuotaStep(
+				ctx,
+				tx,
+				o,
+				step,
+				source.ID,
+				o.ReservedMiB,
+			); err != nil {
+				return o, err
+			}
+		}
+		if o.SnapshotID != "" &&
+			(c.Action == "resume" || c.Action == "rollback" || c.Action == "checkpoint") {
+			if e := requireSnapshotOwner(
+				ctx,
+				tx,
+				o.SnapshotID,
+				o.ChargeTenantID,
+			); e != nil {
+				return o, api.Fail(
+					api.ManualRecovery,
+					"snapshot responsibility has no trusted provenance",
+				)
+			}
+			if err = putQuotaRef(
+				ctx,
+				tx,
+				o.ChargeTenantID,
+				"snapshot",
+				o.SnapshotID,
+				quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
+			); err != nil {
 				return o, err
 			}
 		}
@@ -643,6 +766,7 @@ func (s *Service) Submit(
 		if !p.Root && cp.TenantID != p.TenantID {
 			return o, api.Fail(api.NotFound, "not found")
 		}
+		o.ChargeTenantID = cp.TenantID
 	case "template_put", "template_build":
 		if p.SandboxID != "" || c.Template == nil {
 			return o, api.Fail(api.Invalid, "template required")
@@ -837,118 +961,6 @@ func getCheckpointTx(
 	return cp, err
 }
 
-func (s *Service) quota(
-	ctx context.Context,
-	tx *sql.Tx,
-	p Principal,
-	count int,
-	storage int64,
-) error {
-	if p.Root {
-		return nil
-	}
-	var raw []byte
-	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).
-		Scan(&raw); err != nil {
-		return api.Fail(api.NotFound, "not found")
-	}
-	var t Tenant
-	if err := json.Unmarshal(raw, &t); err != nil {
-		return err
-	}
-	rows, err := tx.QueryContext(
-		ctx,
-		"SELECT body FROM sandboxes WHERE tenant=? AND state!='terminated'",
-		p.TenantID,
-	)
-	if err != nil {
-		return err
-	}
-	n := 0
-	used := int64(0)
-	coveredSnapshots := map[string]bool{}
-	for rows.Next() {
-		var b []byte
-		if err = rows.Scan(&b); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		sb, e := decodeSandbox(b)
-		if e != nil {
-			return errors.Join(e, rows.Close())
-		}
-		n++
-		used += sb.Shape.DiskMiB
-		if sb.SnapshotID != "" {
-			coveredSnapshots[sb.SnapshotID] = true
-			used += sb.Shape.MemoryMiB
-		}
-	}
-	err = errors.Join(rows.Err(), rows.Close())
-	if err != nil {
-		return err
-	}
-	rows, err = tx.QueryContext(
-		ctx,
-		"SELECT body FROM checkpoints WHERE tenant=?",
-		p.TenantID,
-	)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var b []byte
-		var cp Checkpoint
-		if err = rows.Scan(&b); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		if err = json.Unmarshal(b, &cp); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		used += cp.Shape.DiskMiB + cp.Shape.MemoryMiB
-		coveredSnapshots[cp.SnapshotID] = true
-	}
-	err = errors.Join(rows.Err(), rows.Close())
-	if err != nil {
-		return err
-	}
-	rows, err = tx.QueryContext(ctx, `SELECT body FROM resource_recovery
-        WHERE json_extract(body,'$.kind')='retired_snapshot'
-        AND json_extract(body,'$.tenant_id')=?
-        AND COALESCE(json_extract(body,'$.done'),0)=0`, p.TenantID)
-	if err != nil {
-		return err
-	}
-	charges := map[string]int64{}
-	for rows.Next() {
-		var raw []byte
-		var r resourceRecovery
-		if err = rows.Scan(&raw); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		if err = json.Unmarshal(raw, &r); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		if !coveredSnapshots[r.Snapshot] && r.MemoryMiB > charges[r.Snapshot] {
-			charges[r.Snapshot] = r.MemoryMiB
-		}
-	}
-	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	for _, charge := range charges {
-		used += charge
-	}
-	var reserved int64
-	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(CAST(json_extract(body,'$.reserved_mib') AS INTEGER)),0) FROM operations WHERE tenant=? AND status IN ('pending','running')", p.TenantID).
-		Scan(&reserved); err != nil {
-		return err
-	}
-	if n+count > t.MaxSandboxes || used+reserved+storage > t.MaxStorageMiB {
-		return api.Fail(api.Exhausted, "tenant quota exceeded")
-	}
-	return nil
-}
-
 func (s *Service) start(o Operation) {
 	if o.Status == "succeeded" || o.Status == "failed" {
 		return
@@ -1062,7 +1074,13 @@ func (s *Service) engine(
 	r api.Request,
 ) (api.Operation, error) {
 	r.Key = stepKey(o, step)
+	if err := s.requireQuotaReservation(o, step); err != nil {
+		return api.Operation{}, err
+	}
 	captureTenant := o.TenantID
+	if o.ChargeTenantID != "" {
+		captureTenant = o.ChargeTenantID
+	}
 	if r.Action == "snapshot" && o.Command.SandboxID != "" {
 		source, err := getSandbox(s.ctx, s.store.db, o.Command.SandboxID)
 		if err != nil {
@@ -1077,7 +1095,66 @@ func (s *Service) engine(
 		// Root's selected tenant scopes the request, not the existing data.
 		captureTenant = source.TenantID
 	}
+	if r.Action == "restore" && o.ChargeTenantID != "" {
+		source, err := getSandbox(s.ctx, s.store.db, o.Command.SandboxID)
+		if err != nil {
+			return api.Operation{}, err
+		}
+		if source.TenantID != o.ChargeTenantID {
+			return api.Operation{}, api.Fail(
+				api.ManualRecovery,
+				"restore charge owner mismatch",
+			)
+		}
+		if err = putQuotaRef(
+			s.ctx,
+			s.store.db,
+			o.ChargeTenantID,
+			"snapshot",
+			r.SnapshotID,
+			quotaRef{Kind: "active_use", ID: "backing:" + r.VMID},
+		); err != nil {
+			return api.Operation{}, err
+		}
+	}
+	if r.Action == "clone" && o.ChargeTenantID != "" {
+		if err := referenceQuotaSnapshot(
+			s.ctx,
+			s.store.db,
+			o.ChargeTenantID,
+			r.SnapshotID,
+			quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
+		); err != nil {
+			return api.Operation{}, err
+		}
+	}
+	if err := s.beginQuotaDispatch(o, step); err != nil {
+		return api.Operation{}, err
+	}
 	result, err := api.Wait(s.ctx, s.opts.Engine, r)
+	if r.Action == "clone" && result.VMID != "" && o.ChargeTenantID != "" {
+		if e := referenceQuotaSnapshot(
+			s.ctx,
+			s.store.db,
+			o.ChargeTenantID,
+			r.SnapshotID,
+			quotaRef{Kind: "active_use", ID: "backing:" + result.VMID},
+		); e != nil {
+			return result, errors.Join(err, e)
+		}
+	}
+	if ledgerErr := s.acceptQuotaReceipt(o, step, r, result); ledgerErr != nil {
+		return result, errors.Join(err, ledgerErr)
+	}
+	if err == nil && (r.Action == "delete" || r.Action == "delete_snapshot") {
+		kind, key := "vm_disk", r.VMID
+		if r.Action == "delete_snapshot" {
+			kind, key = "snapshot", r.SnapshotID
+		}
+		if ledgerErr := s.reclaimQuota(kind, key); ledgerErr != nil {
+			return result, ledgerErr
+		}
+	}
 	if err == nil && r.Action == "snapshot" {
 		ownership := s.lockResourceOwnership()
 		err = recordSnapshotOwner(
@@ -1141,6 +1218,12 @@ func (s *Service) run(o Operation) {
 			o.Status = "succeeded"
 		}
 		o.FinishedAt = time.Now().UTC()
+		// Resource receipts are recorded before publishing a terminal result.
+		if e := s.finishQuotaOperation(o); e != nil {
+			o.Status = "failed"
+			o.Error = internalError(errors.Join(err, e))
+		}
+		_ = s.reconcileQuota()
 		if e := saveOp(s.ctx, s.store.db, o); e != nil {
 			return
 		}

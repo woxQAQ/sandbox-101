@@ -32,6 +32,14 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 		if err != nil && !isCode(err, api.NotFound) {
 			return err
 		}
+		if isCode(err, api.NotFound) {
+			if reclaimErr := s.reclaimQuota(
+				"vm_disk",
+				b.VMID,
+			); reclaimErr != nil {
+				return reclaimErr
+			}
+		}
 		if err == nil {
 			if b.Instance != "" && b.Instance != v.Instance {
 				return api.Fail(
@@ -58,5 +66,5 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 	if t.SnapshotID == "" {
 		b.ProvisionSource = "cold"
 	}
-	return s.saveSandboxReference(*b)
+	return s.reserveWarmReplacement(o, *b)
 }

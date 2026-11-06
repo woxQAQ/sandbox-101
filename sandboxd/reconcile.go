@@ -314,7 +314,7 @@ func (s *Service) pools() {
 				n, _ = res.RowsAffected()
 			}
 			if n == 1 {
-				_, _ = api.Wait(
+				_, cleanupErr := api.Wait(
 					s.ctx,
 					s.opts.Engine,
 					api.Request{
@@ -323,6 +323,9 @@ func (s *Service) pools() {
 						VMID:   m.vm,
 					},
 				)
+				if cleanupErr == nil {
+					_ = s.reclaimQuota("vm_disk", m.vm)
+				}
 			}
 			ownership()
 			unlock()
@@ -347,9 +350,10 @@ func (s *Service) pools() {
 		}
 		for n := healthy + pending; n < t.TargetWarm; n++ {
 			o := Operation{
-				ID:       newID("op_"),
-				Key:      newID("refill_"),
-				TenantID: t.TenantID,
+				ID:             newID("op_"),
+				Key:            newID("refill_"),
+				TenantID:       t.TenantID,
+				ChargeTenantID: t.TenantID,
 				Command: Command{
 					Action:     "refill",
 					TemplateID: t.ID,

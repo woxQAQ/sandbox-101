@@ -40,7 +40,7 @@ func (s *Service) lockResourceOwnership() func() { return s.lock("resource-owner
 func (s *Service) saveSandboxReference(b Sandbox) error {
 	unlock := s.lockResourceOwnership()
 	defer unlock()
-	return saveSandbox(s.ctx, s.store.db, b)
+	return s.saveQuotaSandbox(b)
 }
 
 func (s *Service) saveOperationReference(o Operation) error {
@@ -50,13 +50,41 @@ func (s *Service) saveOperationReference(o Operation) error {
 }
 
 func (s *Service) saveRecovery(r resourceRecovery) error {
-	_, err := s.store.db.ExecContext(
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if r.Kind == "retired_snapshot" {
+		if r.Done {
+			_, err = tx.ExecContext(
+				s.ctx,
+				`DELETE FROM quota_refs WHERE holder_id=?`,
+				"recovery:"+r.ID,
+			)
+		} else {
+			err = referenceQuotaSnapshot(
+				s.ctx,
+				tx,
+				r.TenantID,
+				r.Snapshot,
+				quotaRef{Kind: "cleanup", ID: "recovery:" + r.ID},
+			)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(
 		s.ctx,
 		"INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
 		r.ID,
 		encode(r),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) resourceRecoveries() ([]resourceRecovery, error) {
@@ -135,6 +163,11 @@ func (s *Service) recoverResources() error {
 	byOp := map[string]Operation{}
 	for _, o := range ops {
 		byOp[o.ID] = o
+		if recoveryTerminal(o.Status) && o.ChargeTenantID != "" {
+			if err = s.finishQuotaOperation(o); err != nil {
+				return err
+			}
+		}
 	}
 	all, err := s.store.sandboxes(s.ctx)
 	if err != nil {
@@ -230,7 +263,7 @@ func (s *Service) recoverResources() error {
 			failures = errors.Join(failures, s.recoverOrphanResource(&r))
 		}
 	}
-	return failures
+	return errors.Join(failures, s.reconcileQuota())
 }
 
 // commitRunning transfers the sleep reference and its storage charge together.
@@ -265,6 +298,34 @@ func (s *Service) commitRunning(o Operation, b *Sandbox) error {
 	}
 	next.SnapshotID = ""
 	next.PausedUntil = time.Time{}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`UPDATE OR IGNORE quota_refs SET holder_kind='cleanup' WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_id=?`,
+		next.TenantID,
+		r.Snapshot,
+		"sandbox:"+next.ID,
+	); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_id=? AND holder_kind!='cleanup'`,
+		next.TenantID,
+		r.Snapshot,
+		"sandbox:"+next.ID,
+	); err != nil {
+		return err
+	}
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		next.TenantID,
+		"snapshot",
+		r.Snapshot,
+		quotaRef{Kind: "cleanup", ID: "recovery:" + r.ID},
+	); err != nil {
+		return err
+	}
 	if err = saveSandbox(s.ctx, tx, next); err != nil {
 		return err
 	}
@@ -298,6 +359,9 @@ func (s *Service) recoverRetiredSnapshot(r *resourceRecovery) error {
 	defer ownership()
 	_, err := s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
 	if isCode(err, api.NotFound) {
+		if err = s.reclaimQuota("snapshot", r.Snapshot); err != nil {
+			return err
+		}
 		return s.finishRecoveryAttempt(r, nil)
 	}
 	if err != nil {
@@ -472,6 +536,30 @@ func (s *Service) resourceReferences(
 			}
 		}
 	}
+	rows, err = s.store.db.QueryContext(
+		s.ctx,
+		`SELECT kind,resource_key FROM quota_refs WHERE holder_kind IN ('active_use','engine_dependency') AND holder_id NOT LIKE 'backing:%' AND holder_id NOT IN (?,?)`,
+		"sandbox:"+excludeSandbox,
+		"operation:"+excludeOperation,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var kind, key string
+		if err = rows.Scan(&kind, &key); err != nil {
+			return nil, nil, errors.Join(err, rows.Close())
+		}
+		switch kind {
+		case "snapshot":
+			snaps[key] = true
+		case "vm_disk":
+			vms[key] = true
+		}
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, nil, err
+	}
 	return vms, snaps, nil
 }
 
@@ -585,6 +673,9 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 		}
 		v, e := s.opts.Engine.GetVM(s.ctx, r.VMID)
 		if isCode(e, api.NotFound) {
+			if e = s.reclaimQuota("vm_disk", r.VMID); e != nil {
+				return e
+			}
 			return s.finishRecoveryAttempt(r, nil)
 		}
 		if e != nil {
@@ -683,7 +774,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		return nil
 	}
 	o := r.operation()
-	o.TenantID, o.Command = source.TenantID, source.Command
+	o.TenantID, o.ChargeTenantID, o.Command = source.TenantID, source.ChargeTenantID, source.Command
 	switch b.State {
 	case "provisioning", "terminated":
 		cleanup := &o
@@ -783,6 +874,9 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		}
 		v, e := s.opts.Engine.GetVM(s.ctx, b.VMID)
 		if isCode(e, api.NotFound) && b.SnapshotID != "" {
+			if err = s.reclaimQuota("vm_disk", b.VMID); err != nil {
+				return err
+			}
 			b.State, b.VMID, b.Instance, b.OperationID = "paused", "", "", ""
 			b.PausedUntil = time.Now().UTC().Add(s.opts.PausedTTL)
 			return s.finishRecoveryAttempt(r, saveSandbox(s.ctx, s.store.db, b))
@@ -797,6 +891,16 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 				api.ManualRecovery,
 				"cannot prove the original hibernating VM instance",
 			)
+		}
+		if b.SnapshotID == "" {
+			if err = s.admitQuotaRecovery(
+				o,
+				b,
+				"hibernate-snapshot",
+				b.Shape.DiskMiB+b.Shape.MemoryMiB,
+			); err != nil {
+				return err
+			}
 		}
 		err = s.pause(&o, &b)
 		return s.finishRecoveryAttempt(
@@ -892,6 +996,14 @@ func (s *Service) recoverFailedClone(
 		if e != nil && !isCode(e, api.NotFound) {
 			return e
 		}
+		if isCode(e, api.NotFound) {
+			if reclaimErr := s.reclaimQuota(
+				"vm_disk",
+				vmid,
+			); reclaimErr != nil {
+				return reclaimErr
+			}
+		}
 		if e == nil {
 			if !v.Verified || (b.Instance != "" && b.Instance != v.Instance) ||
 				(r.Instance != "" && r.Instance != v.Instance) {
@@ -966,7 +1078,7 @@ func (s *Service) recoverRollback(
 		)
 	}
 	o := r.operation()
-	o.Command, o.TenantID = source.Command, source.TenantID
+	o.Command, o.TenantID, o.ChargeTenantID = source.Command, source.TenantID, source.ChargeTenantID
 	if b.VMID == "" {
 		return api.Fail(
 			api.ManualRecovery,
@@ -992,6 +1104,14 @@ func (s *Service) recoverRollback(
 				api.ManualRecovery,
 				"rollback stop receipt does not prove the stopped source",
 			)
+		}
+		if err = s.admitQuotaRecovery(
+			o,
+			*b,
+			"rollback-restore",
+			b.Shape.DiskMiB,
+		); err != nil {
+			return err
 		}
 		_, err = s.engine(
 			o,

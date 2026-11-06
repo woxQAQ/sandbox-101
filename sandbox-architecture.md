@@ -93,7 +93,9 @@ sandboxd 管理可按需认领、分支、休眠和销毁的隔离编程环境�
 3. **静默捕获**：关闭构建 VM 的网络接入，确认 Admin `prepare_template` 已完成、Workload 无在途 RPC/会话后，调用 `engine.snapshot` 生成黄金快照。
 4. **原子晋升与池滚动**：将新 `snapshot_id` 登记到 `sandboxd` 模板目录，调用 `engine.delete` 销毁临时构建 VM。通知预热池管理器按新快照补充（refill）新预热实例，并逐步排空旧版本预热实例。
 
-快照授权来源由 `sandboxd` schema 2 的不可变 `snapshot_owners` 记录持久化：本层捕获以原 operation 和 engine receipt 证明来源，外部黄金快照仅允许 root 为明确目标租户导入。普通租户登记、模板发布与所有 clone/refill/恢复消费都核验同租户来源；engine 的 published 状态和继承 labels 不构成授权。单个 snapshot ID 不跨租户共享或转移，授权记录本身不是 GC 保活引用。schema 1 不自动推断所有权，启动前须备份并另行审查迁移。
+快照授权来源由 `sandboxd` schema 5 的不可变 `snapshot_owners` 记录持久化：本层捕获以原 operation 和 engine receipt 证明来源，外部黄金快照仅允许 root 为明确目标租户导入。普通租户登记、模板发布与所有 clone/refill/恢复消费都核验同租户来源；engine 的 published 状态和继承 labels 不构成授权。单个 snapshot ID 不跨租户共享或转移，授权记录本身不是 GC 保活引用。schema 1–4 与未来版本在 DDL 前拒绝，旧 JSON 不用于推断账本或迁移所有权，启动前须备份并另行审查显式迁移。
+
+租户配额只汇总 `quota_resources` 持久资源表，`quota_refs` 记录实际使用、在途依赖和清理责任。slot 与访问状态分离：`terminated` 立即撤销访问，但 VM、未知分配或独占休眠清理未被可信证明回收前仍占 slot。独立 VM 盘按 D MiB、snapshot 按 D+M MiB 计量；相同 SID 的 checkpoint、休眠、模板、VM/warm backing 与 cleanup 引用只计一次。clone/restore 的内存 hardlink 仍占空间时，删除 snapshot catalog 或清空 `Sandbox.SnapshotID` 都不清账。独立 restore 盘版本保守留费至 VM 删除，因为公开 engine API 没有单版本 GC 证明。准入、pending→receipt、引用发布与 terminal→cleanup 交接使用 SQLite 事务；未知响应、查询错误和未知实例不能退费。`Operation.ChargeTenantID` 固定可信资源 owner，root 默认或选择其他请求租户只绕过准入拒绝，仍完整记录原 owner 费用；维护按 owner 普通预算准入。现有配置 fence、模板归属与 publication guard 保持原有职责，构建及 warm 准入政策留给 013。详见 [资源责任矩阵](sandboxd/README.md#durable-quota-responsibility)。
 
 ### 预热池（Warm Pool）管理
 

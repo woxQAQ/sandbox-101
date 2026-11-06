@@ -608,12 +608,13 @@ func failedRecoveryOperation(
 ) Operation {
 	t.Helper()
 	o := Operation{
-		ID:       newID("op_"),
-		Key:      newID("test_"),
-		TenantID: b.TenantID,
-		Command:  Command{Action: action, SandboxID: b.ID},
-		IDs:      []string{b.ID},
-		Status:   "failed",
+		ID:             newID("op_"),
+		Key:            newID("test_"),
+		TenantID:       b.TenantID,
+		ChargeTenantID: b.TenantID,
+		Command:        Command{Action: action, SandboxID: b.ID},
+		IDs:            []string{b.ID},
+		Status:         "failed",
 		Error: &api.Error{
 			Code:    api.Internal,
 			Message: "interrupted cleanup",
@@ -621,6 +622,18 @@ func failedRecoveryOperation(
 		CreatedAt: time.Now().UTC(),
 	}
 	o.Hash = s.store.sign(o.ID)
+	if action == "resume" {
+		if err := reserveQuotaStep(
+			s.ctx,
+			s.store.db,
+			o,
+			"resume-clone",
+			b.ID,
+			b.Shape.DiskMiB,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := saveOp(s.ctx, s.store.db, o); err != nil {
 		t.Fatal(err)
 	}
@@ -1024,7 +1037,7 @@ func TestRetiredSnapshotCleanupKeepsQuotaUntilReclaimed(t *testing.T) {
 			ID:            p.TenantID,
 			Token:         "alice-token",
 			MaxSandboxes:  50,
-			MaxStorageMiB: 320,
+			MaxStorageMiB: 448,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -1111,7 +1124,7 @@ func TestRetiredSnapshotHistoricalRunningCaptureAdmission(t *testing.T) {
 			ID:            p.TenantID,
 			Token:         "alice-token",
 			MaxSandboxes:  50,
-			MaxStorageMiB: 319,
+			MaxStorageMiB: 447,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -1159,7 +1172,7 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 			ID:            p.TenantID,
 			Token:         "alice-token",
 			MaxSandboxes:  50,
-			MaxStorageMiB: 384,
+			MaxStorageMiB: 448,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -1197,8 +1210,8 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reopened.Close() })
-	// 64 active disk + 192 checkpoint + 128 admission fits exactly. Cleanup
-	// shares the checkpoint's memory charge, including after restart and replay.
+	// 64 active VM disk + 192 shared checkpoint/backing snapshot + 192 new
+	// pause capture = 448. Cleanup and backing refs do not duplicate the SID.
 	if _, err = reopened.Execute(
 		reopened.ctx,
 		p,
@@ -2277,6 +2290,16 @@ func TestRecoverResourcesRollbackRetriesOnlyProvenStoppedSource(t *testing.T) {
 		SandboxID:  b.ID,
 		SnapshotID: capture.SnapshotID,
 		Shape:      b.Shape,
+	}
+	if err = quotaSnapshot(
+		s.ctx,
+		s.store.db,
+		Operation{ID: "checkpoint", ChargeTenantID: b.TenantID},
+		cp.SnapshotID,
+		cp.Shape,
+		quotaRef{Kind: "active_use", ID: "checkpoint:" + cp.ID},
+	); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = s.store.db.ExecContext(
 		s.ctx,

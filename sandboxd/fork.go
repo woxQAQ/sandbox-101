@@ -67,7 +67,7 @@ func (s *Service) fork(o *Operation) error {
 		s.ctx,
 		s.store.db,
 		o.SnapshotID,
-		o.TenantID,
+		o.ChargeTenantID,
 	); err != nil {
 		return s.rollbackFork(o, err)
 	}
@@ -143,7 +143,7 @@ func (s *Service) rollbackFork(o *Operation, cause error) error {
 		if err == nil {
 			// Persist compensation ownership even for already activated branches.
 			b.State, b.OperationID = "terminated", o.ID
-			err = saveSandbox(s.ctx, s.store.db, b)
+			err = s.saveQuotaSandbox(b)
 			if err == nil {
 				err = s.release(o, &b)
 			}

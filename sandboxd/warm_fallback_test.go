@@ -171,13 +171,28 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 	s, engine, principal, template := warmFallbackFixture(t, true)
 	b := Sandbox{
-		ID:         "recovering",
-		TenantID:   principal.TenantID,
-		State:      "provisioning",
-		TemplateID: template.ID,
-		Shape:      template.Shape,
-		TTLSeconds: 300,
-		Policy:     egress.Policy{Mode: "none"},
+		ID:          "recovering",
+		OperationID: "recovering-claim",
+		TenantID:    principal.TenantID,
+		State:       "provisioning",
+		TemplateID:  template.ID,
+		Shape:       template.Shape,
+		TTLSeconds:  300,
+		Policy:      egress.Policy{Mode: "none"},
+	}
+	admit := Operation{ID: b.OperationID, ChargeTenantID: b.TenantID}
+	if err := quotaSlot(s.ctx, s.store.db, admit, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveQuotaStep(
+		s.ctx,
+		s.store.db,
+		admit,
+		"provision",
+		b.ID,
+		b.Shape.DiskMiB,
+	); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.saveSandboxReference(b); err != nil {
 		t.Fatal(err)
@@ -191,9 +206,11 @@ func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := Operation{
-		ID:      "recovering-claim",
-		IDs:     []string{b.ID},
-		Command: Command{Action: "claim", Template: &template},
+		ID:             "recovering-claim",
+		TenantID:       principal.TenantID,
+		ChargeTenantID: principal.TenantID,
+		IDs:            []string{b.ID},
+		Command:        Command{Action: "claim", Template: &template},
 	}
 	if _, err := s.engine(
 		o,

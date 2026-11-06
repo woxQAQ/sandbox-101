@@ -37,12 +37,13 @@ func (s *Service) retireSnapshotOwnedExcept(
 ) error {
 	var users int
 	if err := s.store.db.QueryRowContext(s.ctx, `SELECT
+ (SELECT count(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=? AND holder_kind IN ('active_use','engine_dependency') AND holder_id NOT LIKE 'backing:%' AND holder_id NOT IN (?,?,?)) +
  (SELECT count(*) FROM sandboxes WHERE id!=? AND json_extract(body,'$.snapshot_id')=?) +
  (SELECT count(*) FROM checkpoints WHERE id!=? AND json_extract(body,'$.snapshot_id')=?) +
  (SELECT count(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=?) +
  (SELECT count(*) FROM warm WHERE snapshot_id=?) +
  (SELECT count(*) FROM operations WHERE id!=? AND status IN ('pending','running') AND
-   (json_extract(body,'$.snapshot_id')=? OR json_extract(body,'$.command.template.snapshot_id')=?))`, excludeSandbox, snapshot, excludeCheckpoint, snapshot, snapshot, snapshot, excludeOperation, snapshot, snapshot).Scan(&users); err != nil {
+   (json_extract(body,'$.snapshot_id')=? OR json_extract(body,'$.command.template.snapshot_id')=?))`, snapshot, "sandbox:"+excludeSandbox, "checkpoint:"+excludeCheckpoint, "operation:"+excludeOperation, excludeSandbox, snapshot, excludeCheckpoint, snapshot, snapshot, snapshot, excludeOperation, snapshot, snapshot).Scan(&users); err != nil {
 		return err
 	}
 	if users > 0 {
@@ -71,11 +72,39 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 	if err = s.retireSnapshotOwned(*o, cp.SnapshotID, "", cp.ID); err != nil {
 		return err
 	}
-	_, err = s.store.db.ExecContext(
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(
 		s.ctx,
 		"DELETE FROM checkpoints WHERE id=?",
 		cp.ID,
-	)
+	); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`UPDATE quota_refs SET holder_kind='cleanup' WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_id=?`,
+		cp.TenantID,
+		cp.SnapshotID,
+		"checkpoint:"+cp.ID,
+	); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if _, err = s.opts.Engine.GetSnapshot(
+		s.ctx,
+		cp.SnapshotID,
+	); isCode(
+		err,
+		api.NotFound,
+	) {
+		return s.reclaimQuota("snapshot", cp.SnapshotID)
+	}
 	return err
 }
 

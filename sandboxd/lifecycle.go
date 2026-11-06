@@ -269,6 +269,39 @@ func (s *Service) claimWarm(t Template, b *Sandbox) error {
 	}
 	b.VMID = vmid
 	b.ProvisionSource = "warm"
+	o := Operation{ID: b.OperationID, ChargeTenantID: b.TenantID}
+	if err = putQuotaResource(
+		s.ctx,
+		tx,
+		quotaResource{
+			Tenant:  b.TenantID,
+			Kind:    "vm_disk",
+			Key:     vmid,
+			Storage: b.Shape.DiskMiB,
+			Source:  o.ID,
+		},
+		quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID},
+	); err != nil {
+		return err
+	}
+	if err = quotaSnapshot(
+		s.ctx,
+		tx,
+		o,
+		t.SnapshotID,
+		b.Shape,
+		quotaRef{Kind: "active_use", ID: "backing:" + vmid},
+	); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
+		b.TenantID,
+		stepKey(o, "provision"),
+	); err != nil {
+		return err
+	}
 	if err = saveSandbox(s.ctx, tx, *b); err != nil {
 		return err
 	}
@@ -302,7 +335,7 @@ func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 	b.Instance = ""
 	b.LastError = cause.Error()
 	b.OperationID = ""
-	_ = saveSandbox(s.ctx, s.store.db, *b)
+	_ = s.saveQuotaSandbox(*b)
 	s.mu.Lock()
 	delete(s.secrets, b.ID)
 	s.mu.Unlock()
@@ -395,13 +428,32 @@ func (s *Service) change(o *Operation) error {
 			)
 		}
 		ownership := s.lockResourceOwnership()
-		_, err = s.store.db.ExecContext(
-			s.ctx,
-			"INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
-			cp.ID,
-			cp.TenantID,
-			encode(cp),
-		)
+		tx, e := s.store.db.BeginTx(s.ctx, nil)
+		if e == nil {
+			e = quotaSnapshot(
+				s.ctx,
+				tx,
+				*o,
+				cp.SnapshotID,
+				cp.Shape,
+				quotaRef{Kind: "active_use", ID: "checkpoint:" + cp.ID},
+			)
+			if e == nil {
+				_, e = tx.ExecContext(
+					s.ctx,
+					"INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+					cp.ID,
+					cp.TenantID,
+					encode(cp),
+				)
+			}
+			if e == nil {
+				e = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+		}
+		err = e
 		ownership()
 		o.Result.Checkpoint = &cp
 	}
@@ -714,6 +766,9 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	if b.VMID != "" {
 		_, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 		if isCode(err, api.NotFound) {
+			if err = s.reclaimQuota("vm_disk", b.VMID); err != nil {
+				return err
+			}
 			b.VMID = ""
 			b.Instance = ""
 		} else if err != nil {
@@ -734,7 +789,7 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	// The durable terminal marker revokes access before touching engine resources.
 	b.State = "terminated"
 	b.OperationID = o.ID
-	if err := saveSandbox(s.ctx, s.store.db, *b); err != nil {
+	if err := s.saveQuotaSandbox(*b); err != nil {
 		return err
 	}
 	if b.VMID != "" {
@@ -772,6 +827,9 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = quotaTerminate(s.ctx, tx, *b); err != nil {
+		return err
+	}
 	if err = saveSandbox(s.ctx, tx, *b); err != nil {
 		return err
 	}
@@ -959,6 +1017,22 @@ func (s *Service) template(o *Operation) error {
 		t.ID,
 		t.TenantID,
 		encode(t),
+	); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`DELETE FROM quota_refs WHERE holder_id=?`,
+		"template:"+t.ID,
+	); err != nil {
+		return err
+	}
+	if err = referenceQuotaSnapshot(
+		s.ctx,
+		tx,
+		t.TenantID,
+		t.SnapshotID,
+		quotaRef{Kind: "active_use", ID: "template:" + t.ID},
 	); err != nil {
 		return err
 	}

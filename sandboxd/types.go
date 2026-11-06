@@ -106,6 +106,7 @@ type Operation struct {
 	ID             string     `json:"id"`
 	Key            string     `json:"key"`
 	TenantID       string     `json:"tenant_id"`
+	ChargeTenantID string     `json:"charge_tenant_id,omitempty"`
 	Hash           string     `json:"-"`
 	Command        Command    `json:"command"`
 	IDs            []string   `json:"resource_ids,omitempty"`
