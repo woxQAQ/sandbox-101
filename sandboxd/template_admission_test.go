@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -435,6 +436,381 @@ func TestTemplateAdmissionPublicationFence(t *testing.T) {
 		"SELECT operation_id FROM template_intents WHERE template_id='rolling'",
 	).Scan(&pointer); err != nil || pointer != v3.OperationID {
 		t.Fatal("empty pointer was not retaken", pointer, err)
+	}
+}
+
+// templateAdmissionState captures durable admission/publication evidence without
+// including its contents in failure reports.
+func templateAdmissionState(t *testing.T, s *Service, f *fakeEngine) []byte {
+	t.Helper()
+	var state []any
+	for _, query := range []string{
+		"SELECT id,tenant,body FROM templates ORDER BY id",
+		"SELECT template_id,tenant_id,operation_id FROM template_intents ORDER BY template_id",
+		"SELECT id,tenant,idem_key,spec_hash,status,body FROM operations ORDER BY id",
+		"SELECT * FROM snapshot_owners ORDER BY snapshot_id",
+	} {
+		rows, err := s.store.db.Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		var table [][]any
+		for rows.Next() {
+			values := make([]any, len(columns))
+			ptrs := make([]any, len(columns))
+			for i := range values {
+				ptrs[i] = &values[i]
+			}
+			if err = rows.Scan(ptrs...); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			table = append(table, values)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = append(state, table)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return encode(append(state, f.calls, f.ops, f.vms, f.snaps))
+}
+
+func TestTemplateAdmissionPublishedOwnerConsistency(t *testing.T) {
+	for _, corruption := range []string{"missing-placeholder", "conflicting-owner"} {
+		t.Run(corruption, func(t *testing.T) {
+			s, f, _, p := fixture(t)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
+			defer cancel()
+			published, err := s.store.template(ctx, "python")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if corruption == "missing-placeholder" {
+				_, err = s.store.db.Exec(
+					"DELETE FROM template_intents WHERE template_id='python'",
+				)
+			} else {
+				published.TenantID = "bob"
+				_, err = s.store.db.Exec(
+					"UPDATE templates SET tenant=?,body=? WHERE id='python'",
+					published.TenantID,
+					encode(published),
+				)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := templateAdmissionState(t, s, f)
+			for _, caller := range []struct {
+				name string
+				p    Principal
+				code api.Code
+			}{
+				{"foreign", Principal{TenantID: "eve"}, api.NotFound},
+				{"root-foreign-target", Principal{Root: true, TenantID: "eve"}, api.NotFound},
+				{"owner", p, api.ManualRecovery},
+				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, api.ManualRecovery},
+			} {
+				for _, action := range []string{"template_build", "template_put"} {
+					_, err = s.Submit(
+						ctx,
+						caller.p,
+						caller.name+action,
+						Command{Action: action, Template: &Template{
+							ID:    "python",
+							Image: published.Image,
+							Shape: published.Shape,
+						}},
+					)
+					if !isCode(err, caller.code) {
+						t.Fatalf(
+							"%s/%s: expected %s, got %v",
+							caller.name,
+							action,
+							caller.code,
+							err,
+						)
+					}
+					if caller.code == api.NotFound &&
+						notFoundError(t, err).Message != "not found" {
+						t.Fatal("foreign response disclosed owner details")
+					}
+					if !bytes.Equal(before, templateAdmissionState(t, s, f)) {
+						t.Fatal(
+							"rejected admission changed durable or engine state",
+						)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestTemplateAdmissionPointerProvenance(t *testing.T) {
+	for _, corruption := range []string{
+		"missing", "unknown-status", "wrong-action", "missing-template", "wrong-template", "wrong-tenant", "wrong-template-owner", "wrong-id", "column-tenant", "column-status", "invalid-body",
+	} {
+		t.Run(corruption, func(t *testing.T) {
+			s, f, _, p := fixture(t)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
+			defer cancel()
+			old, err := s.store.byKey(ctx, p.TenantID, "template")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Corrupt only the durable pointer's evidence; the published
+			// version and permanent reservation remain present.
+			switch corruption {
+			case "missing":
+				_, err = s.store.db.Exec(
+					"UPDATE template_intents SET operation_id='op_missing' WHERE template_id='python'",
+				)
+			case "column-tenant":
+				_, err = s.store.db.Exec(
+					"UPDATE operations SET tenant='bob' WHERE id=?",
+					old.ID,
+				)
+			case "column-status":
+				_, err = s.store.db.Exec(
+					"UPDATE operations SET status='failed' WHERE id=?",
+					old.ID,
+				)
+			case "invalid-body":
+				_, err = s.store.db.Exec(
+					"UPDATE operations SET body='{' WHERE id=?",
+					old.ID,
+				)
+			default:
+				switch corruption {
+				case "unknown-status":
+					old.Status = "unrecognized"
+				case "wrong-action":
+					old.Command.Action = "claim"
+				case "missing-template":
+					old.Command.Template = nil
+				case "wrong-template":
+					old.Command.Template.ID = "other"
+				case "wrong-tenant":
+					old.TenantID = "bob"
+				case "wrong-template-owner":
+					old.Command.Template.TenantID = "bob"
+				case "wrong-id":
+					old.ID = "op_other"
+				}
+				_, err = s.store.db.Exec(
+					"UPDATE operations SET status=?,body=? WHERE idem_key='template'",
+					old.Status,
+					encode(old),
+				)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := templateAdmissionState(t, s, f)
+			for _, caller := range []struct {
+				name string
+				p    Principal
+				code api.Code
+			}{
+				{"foreign", Principal{TenantID: "eve"}, api.NotFound},
+				{"root-foreign", Principal{Root: true, TenantID: "eve"}, api.NotFound},
+				{"owner", p, api.ManualRecovery},
+				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, api.ManualRecovery},
+			} {
+				_, err = s.Submit(
+					ctx,
+					caller.p,
+					caller.name,
+					Command{Action: "template_build", Template: &Template{
+						ID:    "python",
+						Image: "sha256:" + strings.Repeat("2", 64),
+						Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+					}},
+				)
+				if !isCode(err, caller.code) {
+					t.Fatalf(
+						"%s: expected %s, got %v",
+						caller.name,
+						caller.code,
+						err,
+					)
+				}
+				if caller.code == api.NotFound &&
+					notFoundError(t, err).Message != "not found" {
+					t.Fatal("foreign response disclosed pointer details")
+				}
+				if !bytes.Equal(before, templateAdmissionState(t, s, f)) {
+					t.Fatal(
+						"rejected admission changed durable or engine state",
+					)
+				}
+			}
+		})
+	}
+}
+
+// snapshotQueryGate exposes the engine boundary in a real template publication.
+// Embedding the fixture client leaves its keyed engine effects unchanged.
+type snapshotQueryGate struct {
+	api.Client
+
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *snapshotQueryGate) GetSnapshot(
+	ctx context.Context,
+	id string,
+) (api.Snapshot, error) {
+	snap, err := g.Client.GetSnapshot(ctx, id)
+	close(g.entered)
+	select {
+	case <-ctx.Done():
+		return api.Snapshot{}, ctx.Err()
+	case <-g.release:
+		return snap, err
+	}
+}
+
+func TestTemplateAdmissionPublicationOwnershipGate(t *testing.T) {
+	s, f, _, p := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	built, err := s.Execute(
+		ctx,
+		p,
+		"build-golden",
+		Command{Action: "template_build", Template: &Template{
+			ID: "golden", Image: "sha256:" + strings.Repeat("2", 64),
+			Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := &snapshotQueryGate{
+		Client:  f,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s.opts.Engine = gate
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+	update := *built.Template
+	update.TargetWarm = 1
+	op, err := s.Submit(
+		ctx,
+		p,
+		"update-golden",
+		Command{Action: "template_put", Template: &update},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gate.entered:
+	case <-ctx.Done():
+		t.Fatal("publication did not enter snapshot query")
+	}
+	acquired := make(chan func(), 1)
+	go func() { acquired <- s.lockResourceOwnership() }()
+	var ownership func()
+	select {
+	case ownership = <-acquired:
+	case <-time.After(200 * time.Millisecond):
+		release.Do(func() { close(gate.release) })
+		// Drain the waiter so even the RED case cannot strand a guard.
+		select {
+		case ownership = <-acquired:
+			ownership()
+		case <-ctx.Done():
+		}
+		t.Fatal("publication held ownership across an engine query")
+	}
+	var unlock sync.Once
+	t.Cleanup(func() { unlock.Do(ownership) })
+	release.Do(func() { close(gate.release) })
+	done := make(chan error, 1)
+	go func() { _, err := s.Wait(ctx, p, op.ID); done <- err }()
+	select {
+	case err = <-done:
+		t.Fatalf("publication crossed the held ownership guard: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	stored, err := s.store.template(ctx, "golden")
+	if err != nil || stored.TargetWarm != 0 {
+		t.Fatal("publication changed the catalog while ownership was held")
+	}
+	unlock.Do(ownership)
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.store.template(ctx, "golden")
+	if err != nil || stored.TargetWarm != 1 ||
+		stored.SnapshotID != built.Template.SnapshotID {
+		t.Fatal("publication did not finish after ownership was released")
+	}
+}
+
+func TestTemplateAdmissionRootExplicitOwnerUpdate(t *testing.T) {
+	s, f, _, p := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	original, err := s.store.byKey(ctx, p.TenantID, "template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := templateAdmissionState(t, s, f)
+	command := Command{Action: "template_put", Template: &Template{
+		ID: "python", Image: "sha256:" + strings.Repeat("2", 64),
+		Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+	}}
+	for _, tenant := range []string{"", "bob"} {
+		_, err = s.Submit(
+			ctx,
+			Principal{Root: true, TenantID: tenant},
+			"root-wrong-target",
+			command,
+		)
+		if !isCode(err, api.NotFound) {
+			t.Fatalf("root with foreign target admitted: %v", err)
+		}
+	}
+	if !bytes.Equal(before, templateAdmissionState(t, s, f)) {
+		t.Fatal("root target rejection changed state")
+	}
+	root := Principal{Root: true, TenantID: p.TenantID}
+	updated, err := s.Execute(ctx, root, "root-update", command)
+	if err != nil || updated.Template == nil ||
+		updated.Template.TenantID != p.TenantID {
+		t.Fatal("root could not update the explicitly selected owner", err)
+	}
+	again, err := s.Submit(ctx, root, "root-update", command)
+	if err != nil || again.ID != updated.OperationID {
+		t.Fatal("same-key root retry did not deduplicate", err)
+	}
+	retained, err := s.store.operation(ctx, original.ID)
+	if err != nil || !bytes.Equal(encode(original), encode(retained)) {
+		t.Fatal("terminal pointer recycling changed the historical result")
+	}
+	if again.Command.Template == nil ||
+		again.Command.Template.TenantID != p.TenantID {
+		t.Fatal("root update did not record the explicit owner")
 	}
 }
 

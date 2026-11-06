@@ -184,6 +184,8 @@ Agent 在执行多步推理或代码修改时，可随时对沙箱创建 `checkp
 - 检查点记录（`checkpoint_id`、归属租户、对应的 `engine_snapshot_id`、元数据标签）
 - 意图日志与操作幂等表（关联向 `engine` 发起的确定性幂等键）
 
+模板 admission 在同一事务核验永久 owner、已发布模板与当前 operation 的租户和模板身份；仅 `succeeded` / `failed` 的模板操作可让出发布指针。占位缺失、已发布归属冲突或指针来源不一致时保留原数据并要求人工恢复，不从目录推断归属。发布按模板锁、资源归属锁、SQLite 事务的顺序提交，guest / engine 调用在资源归属锁外执行。
+
 ### 确定性幂等键派生
 
 `sandboxd` 调用 `engine` 时，不生成随机请求 ID，而是由上层操作 ID 与步骤名确定性派生 `engine` 幂等键（例如 `sbx-op:<op_id>:step:clone`）。若 `sandboxd` 在调用 `engine` 期间崩溃重启，恢复流程只需用同一派生键向 `engine` 查询或重提，即可找回对应的 `engine` operation 与已创建的 `vm_id` / `snapshot_id`，不会产生孤儿 VM 或重复克隆。

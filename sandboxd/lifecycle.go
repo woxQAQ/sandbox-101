@@ -890,17 +890,9 @@ func (s *Service) template(o *Operation) error {
 			return err
 		}
 	}
-	ownership := s.lockResourceOwnership()
-	defer ownership()
+	// Engine inspection stays outside the ownership guard. The admitted
+	// operation retains the snapshot until its catalog reference is published.
 	if t.SnapshotID != "" {
-		if err := requireSnapshotOwner(
-			s.ctx,
-			s.store.db,
-			t.SnapshotID,
-			t.TenantID,
-		); err != nil {
-			return err
-		}
 		snap, err := s.opts.Engine.GetSnapshot(s.ctx, t.SnapshotID)
 		if err != nil {
 			return err
@@ -920,11 +912,25 @@ func (s *Service) template(o *Operation) error {
 	// admitted with this operation is the only accepted provenance, and it is
 	// verified with all three identities in the same transaction as the
 	// catalog write. A zero match is never an UPSERT fallback.
+	// Lock order is template, then resource ownership, then SQLite transaction.
+	// No guest or engine call can extend this publication critical section.
+	ownership := s.lockResourceOwnership()
+	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if t.SnapshotID != "" {
+		if err = requireSnapshotOwner(
+			s.ctx,
+			tx,
+			t.SnapshotID,
+			t.TenantID,
+		); err != nil {
+			return err
+		}
+	}
 	owner, current, err := templateIntent(s.ctx, tx, t.ID)
 	if err != nil {
 		return err

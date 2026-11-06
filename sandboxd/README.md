@@ -38,6 +38,8 @@ Replace the digest with an already imported engine image. `template_put` registe
 
 The first admission of a template name reserves it permanently to that tenant (`template_intents`): another tenant's submission gets the same 404 as a foreign published name, a second in-flight publication from the owning tenant conflicts, and a failed build keeps the reservation so only the owner retries. Root updates require the explicit owning target tenant and never transfer the reservation. A rolling rebuild keeps serving the previously published snapshot until the new one publishes.
 
+A published template with a missing ownership placeholder or a conflicting tenant requires manual recovery; admission preserves the existing rows and never reconstructs an owner from the published catalog. A publication pointer is reusable only when it references a `succeeded` or `failed` template operation for the same tenant and template. Missing operations, unknown statuses or inconsistent provenance also require manual recovery; foreign tenants still receive the uniform 404. Publication verifies ownership and writes the catalog in one transaction under the resource ownership guard, after guest and engine calls finish.
+
 Claim using `POST /v1/claim`:
 
 ```json

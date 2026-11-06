@@ -668,22 +668,27 @@ func (s *Service) Submit(
 		if e != nil {
 			return o, e
 		}
-		if owner == "" && existing.ID != "" {
-			// A published row without a placeholder still proves ownership.
-			owner = existing.TenantID
-		}
 		// Foreign and missing names share one response; root must name the
 		// owning tenant explicitly and can never transfer the reservation.
-		if owner != "" && owner != p.TenantID {
+		if owner != "" && owner != p.TenantID ||
+			owner == "" && existing.ID != "" &&
+				existing.TenantID != p.TenantID {
 			return o, api.Fail(api.NotFound, "not found")
 		}
+		if existing.ID != "" && (owner == "" || existing.TenantID != owner) {
+			return o, api.Fail(
+				api.ManualRecovery,
+				"published template has missing or conflicting ownership provenance",
+			)
+		}
 		if current != "" {
-			var status string
+			var tenant, status string
+			var body []byte
 			e := tx.QueryRowContext(
 				ctx,
-				"SELECT status FROM operations WHERE id=?",
+				"SELECT tenant,status,body FROM operations WHERE id=?",
 				current,
-			).Scan(&status)
+			).Scan(&tenant, &status, &body)
 			if errors.Is(e, sql.ErrNoRows) {
 				return o, api.Fail(
 					api.ManualRecovery,
@@ -693,13 +698,34 @@ func (s *Service) Submit(
 			if e != nil {
 				return o, e
 			}
-			if status == "pending" || status == "running" {
+			var prior Operation
+			if json.Unmarshal(body, &prior) != nil || prior.ID != current ||
+				tenant != owner || prior.TenantID != owner || prior.Status != status ||
+				(prior.Command.Action != "template_put" && prior.Command.Action != "template_build") ||
+				prior.Command.Template == nil || prior.Command.Template.ID != t.ID ||
+				prior.Command.Template.TenantID != owner {
+				return o, api.Fail(
+					api.ManualRecovery,
+					"template intent operation has inconsistent provenance",
+				)
+			}
+			switch status {
+			case "pending", "running":
 				return o, api.Fail(
 					api.Conflict,
 					"template publication is already in flight",
 				)
+			case "succeeded", "failed":
+				// Recycle only a proven terminal pointer, retaining its result.
+			default:
+				return o, api.Fail(
+					api.ManualRecovery,
+					"template intent operation has an unknown status",
+				)
 			}
-			// A terminal pointer is recycled without touching its result.
+		}
+		if p.TenantID == "" {
+			return o, api.Fail(api.Invalid, "target tenant required")
 		}
 		// The first admission reserves the name permanently for this tenant
 		// and commits the placeholder atomically with the operation.
