@@ -101,10 +101,8 @@ func (s *Service) reap() {
 }
 
 func (s *Service) reconcile() {
-	vms, err := s.opts.Engine.ListVMs(s.ctx)
-	if err != nil {
-		return
-	} // An unavailable query is never an empty inventory.
+	vms, inventoryErr := s.opts.Engine.ListVMs(s.ctx)
+	// An unavailable inventory never prevents revocation of our own proxies.
 	byID := map[string]api.VM{}
 	for _, v := range vms {
 		byID[v.ID] = v
@@ -124,6 +122,34 @@ func (s *Service) reconcile() {
 			continue
 		}
 		v, ok := byID[b.VMID]
+		fence, fenceErr := configFence(s.ctx, s.store.db, b.ID)
+		if fenceErr != nil || fence != "" {
+			// Proxy ownership is local and does not depend on VM verification.
+			// NIC mutation still requires the exact verified instance.
+			s.closeConnections(b.ID)
+			if s.opts.Egress != nil {
+				_ = s.revoke(b.ID)
+			}
+			if !ok || v.Instance != b.Instance {
+				v, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
+				ok = e == nil
+			}
+			if ok && v.Verified && v.Instance == b.Instance {
+				_, _ = api.Wait(s.ctx, s.opts.Engine, api.Request{
+					Key:              "config-fence-off:" + s.epoch + ":" + b.ID + ":" + v.Instance,
+					Action:           "network",
+					VMID:             v.ID,
+					ExpectedInstance: v.Instance,
+					NetworkEnabled:   false,
+				})
+			}
+			unlock()
+			continue
+		}
+		if inventoryErr != nil {
+			unlock()
+			continue
+		}
 		// Inventory could predate a just-finished resume; confirm the current instance under lock.
 		if !ok || v.Instance != b.Instance {
 			v, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
@@ -146,30 +172,6 @@ func (s *Service) reconcile() {
 			continue
 		}
 		if !v.Verified {
-			unlock()
-			continue
-		}
-		fence, fenceErr := configFence(s.ctx, s.store.db, b.ID)
-		if fenceErr != nil || fence != "" {
-			// A fenced (or unverifiable) configuration boundary is never
-			// reactivated by maintenance. Close the data path by proven
-			// instance only; the fence owner keeps the diagnostics.
-			s.closeConnections(b.ID)
-			if s.opts.Egress != nil {
-				_ = s.revoke(b.ID)
-			}
-			_, _ = api.Wait(
-				s.ctx,
-				s.opts.Engine,
-				api.Request{
-					Key: "config-fence-off:" + s.epoch + ":" +
-						b.ID + ":" + v.Instance,
-					Action:           "network",
-					VMID:             v.ID,
-					ExpectedInstance: v.Instance,
-					NetworkEnabled:   false,
-				},
-			)
 			unlock()
 			continue
 		}
@@ -204,6 +206,20 @@ func (s *Service) reconcile() {
 				}
 				if e = s.activate(o, &b, false); e != nil {
 					s.closeConnections(b.ID)
+					b.LastError = "egress policy could not be restored"
+					_ = saveSandbox(s.ctx, s.store.db, b)
+				}
+			} else {
+				// Validate the effective fingerprint through the shared bind
+				// path without resetting the guest or replaying activation.
+				configuration := s.lock("configuration:" + b.ID)
+				if e = s.activationFence(Operation{}, b.ID); e == nil {
+					e = s.bind(s.ctx, b, v.VSockPath)
+				}
+				configuration()
+				if e != nil {
+					s.closeConnections(b.ID)
+					_ = s.revoke(b.ID)
 					b.LastError = "egress policy could not be restored"
 					_ = saveSandbox(s.ctx, s.store.db, b)
 				}

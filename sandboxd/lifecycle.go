@@ -12,19 +12,26 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
-	// A configuration fence admits only the explicit configure operation that
-	// owns it. Rebind, resume and rollback activations must not bypass a
-	// pending or failed configuration boundary.
-	fence, err := configFence(s.ctx, s.store.db, b.ID)
+// activationFence requires configure to own its fence and every other
+// activation to observe no fence. Callers guard publication with configuration:ID.
+func (s *Service) activationFence(o Operation, id string) error {
+	fence, err := configFence(s.ctx, s.store.db, id)
 	if err != nil {
 		return err
 	}
-	if fence != "" && fence != o.ID {
+	if (o.Command.Action == "configure" && fence != o.ID) ||
+		(o.Command.Action != "configure" && fence != "") {
 		return api.Fail(
 			api.Conflict,
-			"sandbox configuration change is pending",
+			"sandbox configuration operation is fenced or superseded",
 		)
+	}
+	return nil
+}
+
+func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
+	if err = s.activationFence(o, b.ID); err != nil {
+		return err
 	}
 	if s.CredentialsMissing(*b) {
 		return api.Fail(
@@ -55,16 +62,29 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 	if err = s.opts.Agent.Info(s.ctx, v); err != nil {
 		return err
 	}
-	if s.opts.Egress != nil {
-		if err = s.bind(s.ctx, *b, v.VSockPath); err != nil {
-			return err
+	// Fence replacement and Bind are serialized, so an old worker cannot
+	// publish after a newer intent was durably admitted.
+	publication := s.lock("configuration:" + b.ID)
+	if err = s.activationFence(o, b.ID); err == nil {
+		if s.opts.Egress != nil {
+			err = s.bind(s.ctx, *b, v.VSockPath)
+		} else if b.Policy.Mode != "none" {
+			err = api.Fail(
+				api.Incompatible,
+				"egress manager required for network mode",
+			)
 		}
-	} else if b.Policy.Mode != "none" {
-		return api.Fail(
-			api.Incompatible,
-			"egress manager required for network mode",
-		)
 	}
+	publication()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			s.closeConnections(b.ID)
+			err = errors.Join(err, s.revoke(b.ID))
+		}
+	}()
 	if err = s.opts.Agent.Activate(
 		s.ctx,
 		v,
@@ -77,9 +97,11 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 			CAPEM:         s.opts.CAPEM,
 		},
 	); err != nil {
-		if s.opts.Egress != nil {
-			err = errors.Join(err, s.revoke(b.ID))
-		}
+		return err
+	}
+	publication = s.lock("configuration:" + b.ID)
+	defer publication()
+	if err = s.activationFence(o, b.ID); err != nil {
 		return err
 	}
 	if b.Policy.Mode == "direct" {
@@ -93,9 +115,6 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 				NetworkEnabled:   true,
 			},
 		); err != nil {
-			if s.opts.Egress != nil {
-				err = errors.Join(err, s.revoke(b.ID))
-			}
 			return err
 		}
 	}
@@ -107,12 +126,7 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 			Add(time.Duration(b.TTLSeconds) * time.Second)
 	}
 	next.State, next.OperationID, next.LastError = "running", "", ""
-	if err := s.commitRunning(o, &next); err != nil {
-		// The new binding was already published; never leave it reachable when
-		// the running delivery cannot be committed.
-		if s.opts.Egress != nil {
-			err = errors.Join(err, s.revoke(b.ID))
-		}
+	if err = s.commitRunning(o, &next); err != nil {
 		return err
 	}
 	*b = next
@@ -337,70 +351,7 @@ func (s *Service) change(o *Operation) error {
 		b.Deadline = time.Now().UTC().Add(time.Duration(ttl) * time.Second)
 		err = saveSandbox(s.ctx, s.store.db, b)
 	case "configure":
-		if b.State != "running" && b.State != "paused" {
-			return api.Fail(
-				api.Conflict,
-				"configuration requires running or paused sandbox",
-			)
-		}
-		if b.State == "running" {
-			// The old data path is revoked before any new intent is published.
-			// A failed revocation keeps the fence and the previous
-			// configuration; the new policy is never reported as delivered.
-			s.closeConnections(b.ID)
-			if err = s.revoke(b.ID); err != nil {
-				s.mu.Lock()
-				delete(s.opSecrets, o.ID)
-				s.mu.Unlock()
-				b.LastError = err.Error()
-				_ = saveSandbox(s.ctx, s.store.db, b)
-				return err
-			}
-		}
-		s.mu.Lock()
-		s.secrets[b.ID] = s.opSecrets[o.ID]
-		delete(s.opSecrets, o.ID)
-		s.mu.Unlock()
-		b.Env = map[string]string{}
-		b.RequiresSecrets = false
-		for k, v := range o.Command.Env {
-			if v.IsSecret() {
-				b.RequiresSecrets = true
-				if v.Inject != nil && v.Inject.Placeholder != "" {
-					b.Env[k] = v.Inject.Placeholder
-				}
-			} else {
-				b.Env[k] = v.Value
-			}
-		}
-		if o.Command.Policy.Mode != "" {
-			b.Policy = o.Command.Policy
-		}
-		if b.State == "running" {
-			if err = saveSandbox(s.ctx, s.store.db, b); err != nil {
-				return err
-			}
-			if err = s.activate(*o, &b, false); err != nil {
-				b.LastError = err.Error()
-				_ = saveSandbox(s.ctx, s.store.db, b)
-				return err
-			}
-		}
-		// Only the matching configure clears its own fence, atomically with
-		// the final persisted state. A late older operation cannot clear a
-		// newer fence.
-		tx, txErr := s.store.db.BeginTx(s.ctx, nil)
-		if txErr != nil {
-			return txErr
-		}
-		defer func() { _ = tx.Rollback() }()
-		if err = saveSandbox(s.ctx, tx, b); err != nil {
-			return err
-		}
-		if err = clearConfigFence(s.ctx, tx, b.ID, o.ID); err != nil {
-			return err
-		}
-		err = tx.Commit()
+		err = s.configure(o, &b)
 	case "checkpoint":
 		cp := Checkpoint{
 			ID:        o.IDs[0],
@@ -456,6 +407,102 @@ func (s *Service) change(o *Operation) error {
 	}
 	o.Result.Sandbox = &b
 	return err
+}
+
+func (s *Service) configure(o *Operation, b *Sandbox) (err error) {
+	defer func() {
+		s.mu.Lock()
+		delete(s.opSecrets, o.ID)
+		s.mu.Unlock()
+	}()
+	configuration := s.lock("configuration:" + b.ID)
+	if err = s.activationFence(*o, b.ID); err != nil {
+		configuration()
+		return err
+	}
+	// Once an owned configure starts, every error closes its data paths.
+	// Read the durable configuration for diagnostics so a failed save never
+	// writes the rejected policy back through LastError handling.
+	defer func() {
+		if err != nil {
+			s.closeConnections(b.ID)
+			err = errors.Join(err, s.revoke(b.ID))
+			if saved, e := getSandbox(s.ctx, s.store.db, b.ID); e == nil {
+				saved.LastError = err.Error()
+				_ = saveSandbox(s.ctx, s.store.db, saved)
+			}
+		}
+	}()
+	if b.State != "running" && b.State != "paused" {
+		configuration()
+		return api.Fail(
+			api.Conflict,
+			"configuration requires running or paused sandbox",
+		)
+	}
+	s.closeConnections(b.ID)
+	if err = s.revoke(b.ID); err != nil {
+		configuration()
+		return err
+	}
+	s.mu.Lock()
+	s.secrets[b.ID] = s.opSecrets[o.ID]
+	s.mu.Unlock()
+	b.Env = map[string]string{}
+	b.RequiresSecrets = false
+	for k, v := range o.Command.Env {
+		if v.IsSecret() {
+			b.RequiresSecrets = true
+			if v.Inject != nil && v.Inject.Placeholder != "" {
+				b.Env[k] = v.Inject.Placeholder
+			}
+		} else {
+			b.Env[k] = v.Value
+		}
+	}
+	if o.Command.Policy.Mode != "" {
+		b.Policy = o.Command.Policy
+	}
+	if b.State == "running" {
+		err = saveSandbox(s.ctx, s.store.db, *b)
+	}
+	configuration()
+	if err != nil {
+		return err
+	}
+	if b.State == "running" {
+		if err = s.activate(*o, b, false); err != nil {
+			return err
+		}
+	}
+	configuration = s.lock("configuration:" + b.ID)
+	defer configuration()
+	if err = s.activationFence(*o, b.ID); err != nil {
+		return err
+	}
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = saveSandbox(s.ctx, tx, *b); err != nil {
+		return err
+	}
+	if err = clearConfigFence(s.ctx, tx, b.ID, o.ID); err != nil {
+		return err
+	}
+	completed := *o
+	completed.Status, completed.Error = "succeeded", nil
+	completed.FinishedAt = time.Now().UTC()
+	completed.Result.Sandbox = b
+	if err = saveOp(s.ctx, tx, completed); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*o = completed
+	return nil
 }
 
 func (s *Service) pause(o *Operation, b *Sandbox) error {

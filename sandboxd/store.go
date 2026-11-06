@@ -368,12 +368,19 @@ func clearConfigFence(
 	e executor,
 	sandboxID, operationID string,
 ) error {
-	_, err := e.ExecContext(
+	res, err := e.ExecContext(
 		ctx,
 		"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?",
 		sandboxID,
 		operationID,
 	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return api.Fail(api.Conflict, "configuration operation was superseded")
+	}
 	return err
 }
 

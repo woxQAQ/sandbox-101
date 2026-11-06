@@ -400,6 +400,12 @@ func (s *Service) Submit(
 		Result:    Result{},
 	}
 	o.Result.OperationID = o.ID
+	// Configuration admission and binding publication share this short guard.
+	// Agent calls never hold it: a newer intent can fence a blocked worker.
+	if c.Action == "configure" {
+		configuration := s.lock("configuration:" + c.SandboxID)
+		defer configuration()
+	}
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(ctx, nil)
@@ -706,6 +712,12 @@ func (s *Service) Submit(
 	}
 	if err = tx.Commit(); err != nil {
 		return o, err
+	}
+	if c.Action == "configure" {
+		// Revoke any binding published by a worker before this admission.
+		// The durable fence prevents that worker from publishing again.
+		s.closeConnections(c.SandboxID)
+		_ = s.revoke(c.SandboxID)
 	}
 	s.mu.Lock()
 	for _, id := range o.IDs {
@@ -1014,6 +1026,15 @@ func (s *Service) engine(
 }
 
 func (s *Service) run(o Operation) {
+	// A retry may carry a stale pending copy after atomic configure delivery.
+	if o.Command.Action == "configure" {
+		current, err := s.store.operation(s.ctx, o.ID)
+		if err != nil || current.Status == "succeeded" ||
+			current.Status == "failed" {
+			return
+		}
+		o = current
+	}
 	o.Status = "running"
 	if err := saveOp(s.ctx, s.store.db, o); err != nil {
 		return
@@ -1039,18 +1060,22 @@ func (s *Service) run(o Operation) {
 	case "refill":
 		err = s.refill(&o)
 	}
-	if s.ctx.Err() != nil {
-		return
-	} // Preserve resumable intent on daemon shutdown.
-	if err != nil {
-		o.Status = "failed"
-		o.Error = internalError(err)
-	} else {
-		o.Status = "succeeded"
-	}
-	o.FinishedAt = time.Now().UTC()
-	if e := saveOp(s.ctx, s.store.db, o); e != nil {
-		return
+	// Configure commits its terminal result with delivery and fence retirement.
+	// A later write must never turn that durable success into a failed intent.
+	if o.Status != "succeeded" {
+		if s.ctx.Err() != nil {
+			return
+		} // Preserve resumable intent on daemon shutdown.
+		if err != nil {
+			o.Status = "failed"
+			o.Error = internalError(err)
+		} else {
+			o.Status = "succeeded"
+		}
+		o.FinishedAt = time.Now().UTC()
+		if e := saveOp(s.ctx, s.store.db, o); e != nil {
+			return
+		}
 	}
 	_ = s.store.audit(
 		s.ctx,

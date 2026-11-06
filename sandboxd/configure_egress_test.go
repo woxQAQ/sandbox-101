@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -319,6 +320,472 @@ func rotatedSecretEnv(value string) map[string]EnvVar {
 				Placeholder: "phantom",
 			},
 		},
+	}
+}
+
+// gateAgent consumes one gate per call. Cleanup always releases a blocked
+// worker, including when an assertion fails before the explicit release.
+func gateAgent(
+	t *testing.T,
+	a *fakeAgent,
+	phase string,
+) (<-chan struct{}, func()) {
+	t.Helper()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	a.mu.Lock()
+	if phase == "info" {
+		a.infoEntered, a.infoGate = entered, release
+	} else {
+		a.activateEntered, a.activateGate = entered, release
+	}
+	a.mu.Unlock()
+	return entered, open
+}
+
+func awaitAgent(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent call did not reach channel gate")
+	}
+}
+
+func awaitWorker(t *testing.T, s *Service, id string) {
+	t.Helper()
+	s.mu.Lock()
+	done := s.active[id]
+	s.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("operation worker did not exit")
+		}
+	}
+}
+
+func TestConfigureEgressPersistenceFailures(t *testing.T) {
+	wide := egress.Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
+	narrow := egress.Policy{
+		Mode:         "relay",
+		AllowedHosts: []string{"other.example"},
+	}
+	for _, stage := range []string{"save_intent", "running_save", "final_save", "fence_delete", "fence_delete_ignored", "operation_result", "commit"} {
+		t.Run(stage, func(t *testing.T) {
+			s, f, agent, p, manager := egressFixture(t)
+			r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
+			before := *r.Sandbox
+			path := proxyHTTPPath(t, s, f, before.ID)
+			held := holdTunnel(t, path, "example.com:443")
+			var published net.Conn
+			var sql string
+			switch stage {
+			case "save_intent":
+				// Fail only publication of the new environment. Diagnostic saves
+				// of the old policy remain possible.
+				sql = `CREATE TRIGGER fail_config BEFORE UPDATE ON sandboxes
+				WHEN json_extract(NEW.body,'$.guest_env.REVISION')='new'
+				BEGIN SELECT RAISE(ABORT,'injected config save failure'); END`
+			case "final_save":
+				// commitRunning performs the first write after Activate; fail
+				// only the second write, in the final delivery transaction.
+				sql = `CREATE TABLE fault_writes(n INTEGER);
+				INSERT INTO fault_writes VALUES(0);
+				CREATE TRIGGER count_config AFTER UPDATE ON sandboxes
+				WHEN json_extract(NEW.body,'$.last_error') IS NULL
+				BEGIN UPDATE fault_writes SET n=n+1; END;
+				CREATE TRIGGER fail_config BEFORE UPDATE ON sandboxes
+				WHEN (SELECT n FROM fault_writes)>0 AND json_extract(NEW.body,'$.last_error') IS NULL
+				BEGIN SELECT RAISE(ABORT,'injected final save failure'); END`
+			case "running_save":
+				sql = `CREATE TRIGGER fail_config BEFORE UPDATE ON sandboxes
+				WHEN json_extract(NEW.body,'$.last_error') IS NULL
+				BEGIN SELECT RAISE(ABORT,'injected final save failure'); END`
+			case "fence_delete":
+				sql = `CREATE TRIGGER fail_config BEFORE DELETE ON configuration_fences
+				BEGIN SELECT RAISE(ABORT,'injected fence retirement failure'); END`
+			case "fence_delete_ignored":
+				sql = `CREATE TRIGGER fail_config BEFORE DELETE ON configuration_fences
+				BEGIN SELECT RAISE(IGNORE); END`
+			case "operation_result":
+				sql = `CREATE TRIGGER fail_config BEFORE UPDATE ON operations
+				WHEN NEW.status='succeeded'
+				BEGIN SELECT RAISE(ABORT,'injected operation result failure'); END`
+			case "commit":
+				// SQLite accepts the DELETE and result writes, then rejects COMMIT
+				// because this deferred foreign key cannot be satisfied.
+				sql = `CREATE TABLE fault_parent(id INTEGER PRIMARY KEY);
+				CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED);
+				CREATE TRIGGER fail_config AFTER DELETE ON configuration_fences
+				BEGIN INSERT INTO fault_child VALUES(1); END`
+			}
+			if stage == "save_intent" {
+				if _, err := s.store.db.Exec(sql); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entered, release := gateAgent(t, agent, "activate")
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				12*time.Second,
+			)
+			defer cancel()
+			command := Command{
+				Action:    "configure",
+				SandboxID: before.ID,
+				Env: map[string]EnvVar{
+					"REVISION": {Value: "new"},
+				},
+				Policy: narrow,
+			}
+			op, err := s.Submit(ctx, p, "configure", command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage != "save_intent" {
+				awaitAgent(t, entered)
+				// The newly published binding really reaches upstream before the
+				// final transaction fails, including an existing CONNECT stream.
+				if status, _ := proxyGet(
+					t,
+					path,
+					"http://other.example/",
+				); status != 200 {
+					t.Fatalf("new binding never served: %d", status)
+				}
+				published = holdTunnel(t, path, "other.example:443")
+				if _, err = s.store.db.Exec(sql); err != nil {
+					t.Fatal(err)
+				}
+			}
+			release()
+			awaitWorker(t, s, op.ID)
+			stored, err := s.Operation(ctx, p, op.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Status != "failed" {
+				t.Errorf(
+					"failed persistence was not recorded as failure: %s",
+					stored.Status,
+				)
+			}
+			// Remove the injected fault before recovery checks. A missing fence
+			// cannot be concealed by leaving a failing DELETE trigger installed.
+			if _, err = s.store.db.Exec(
+				"DROP TRIGGER fail_config",
+			); err != nil {
+				t.Fatal(err)
+			}
+			requireFence(t, s, before.ID, op.ID)
+			b, err := s.Get(ctx, p, before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b.LastError == "" {
+				t.Error("persistence failure lost LastError")
+			}
+			if stage == "save_intent" &&
+				(b.Env["REVISION"] != "" || strings.Join(b.Policy.AllowedHosts, ",") != "example.com") {
+				t.Fatal("failed intent save overwrote old wide configuration")
+			}
+			assertDataPathDead(t, path, held)
+			if published != nil {
+				assertDataPathDead(t, path, published)
+			}
+			requireDataReadyBlocked(t, s, p, before.ID)
+			s.reconcile()
+			assertDataPathDead(t, path, held)
+			restarted := restartEgress(t, s, manager)
+			requireFence(t, restarted, before.ID, op.ID)
+			requireDataReadyBlocked(t, restarted, p, before.ID)
+			restarted.reconcile()
+			assertDataPathDead(t, path, held)
+			after, err := restarted.Get(ctx, p, before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Instance != before.Instance ||
+				after.Epoch != before.Epoch ||
+				!after.Deadline.Equal(before.Deadline) {
+				t.Fatal(
+					"persistence failure recovery changed identity or lease",
+				)
+			}
+			if _, err = restarted.Execute(ctx, p, "retry-new", Command{
+				Action: "configure", SandboxID: before.ID,
+				Env: map[string]EnvVar{}, Policy: narrow,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			requireFence(t, restarted, before.ID, "")
+			// The old operation's idempotency result remains fixed after repair.
+			if _, err = restarted.Execute(
+				ctx,
+				p,
+				"configure",
+				command,
+			); err == nil {
+				t.Fatal("failed operation was changed to success")
+			}
+		})
+	}
+}
+
+func TestConfigureEgressFenceRevokesWithoutVerifiedInventory(t *testing.T) {
+	for _, inventory := range []string{"unverified", "unavailable", "mismatched"} {
+		t.Run(inventory, func(t *testing.T) {
+			s, f, _, p, _ := egressFixture(t)
+			r := claimRelay(
+				t,
+				s,
+				p,
+				"claim",
+				map[string]EnvVar{},
+				egress.Policy{
+					Mode:         "relay",
+					AllowedHosts: []string{"example.com"},
+				},
+			)
+			path := proxyHTTPPath(t, s, f, r.Sandbox.ID)
+			held := holdTunnel(t, path, "example.com:443")
+			// A recovered fence may coexist with a local proxy. Maintenance owns
+			// revocation of that proxy even when it cannot prove VM authority.
+			if err := recordConfigFence(
+				context.Background(),
+				s.store.db,
+				r.Sandbox.ID,
+				"op_crashed",
+			); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			v := f.vms[r.Sandbox.VMID]
+			switch inventory {
+			case "unavailable":
+				f.unavailable = true
+			case "mismatched":
+				v.Instance = "unproven"
+			default:
+				v.Verified = false
+			}
+			f.vms[v.ID] = v
+			calls := len(f.ops)
+			f.mu.Unlock()
+			s.reconcile()
+			assertDataPathDead(t, path, held)
+			f.mu.Lock()
+			afterCalls := len(f.ops)
+			f.mu.Unlock()
+			if afterCalls != calls {
+				t.Fatal("maintenance mutated an unproven engine instance")
+			}
+			requireFence(t, s, r.Sandbox.ID, "op_crashed")
+		})
+	}
+}
+
+func TestConfigureEgressSupersedingFence(t *testing.T) {
+	for _, phase := range []string{"info", "activate"} {
+		t.Run(phase, func(t *testing.T) {
+			s, f, agent, p, _ := egressFixture(t)
+			wide := egress.Policy{
+				Mode:         "relay",
+				AllowedHosts: []string{"example.com"},
+			}
+			narrow := egress.Policy{
+				Mode:         "relay",
+				AllowedHosts: []string{"other.example"},
+			}
+			r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
+			path := proxyHTTPPath(t, s, f, r.Sandbox.ID)
+			held := holdTunnel(t, path, "example.com:443")
+			entered, release := gateAgent(t, agent, phase)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				12*time.Second,
+			)
+			defer cancel()
+			oldCommand := Command{
+				Action:    "configure",
+				SandboxID: r.Sandbox.ID,
+				Env:       map[string]EnvVar{},
+				Policy:    wide,
+			}
+			old, err := s.Submit(ctx, p, "old", oldCommand)
+			if err != nil {
+				t.Fatal(err)
+			}
+			awaitAgent(t, entered)
+			var published net.Conn
+			if phase == "activate" {
+				published = holdTunnel(t, path, "example.com:443")
+			}
+			newEntered, newRelease := gateAgent(t, agent, "info")
+			newOp, err := s.Submit(
+				ctx,
+				p,
+				"new",
+				Command{
+					Action:    "configure",
+					SandboxID: r.Sandbox.ID,
+					Env:       map[string]EnvVar{},
+					Policy:    narrow,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireFence(t, s, r.Sandbox.ID, newOp.ID)
+			assertDataPathDead(t, path, held)
+			if published != nil {
+				assertDataPathDead(t, path, published)
+			}
+			release()
+			if _, err = s.Wait(ctx, p, old.ID); err == nil {
+				t.Error("superseded operation claimed successful delivery")
+			}
+			awaitAgent(t, newEntered)
+			requireFence(t, s, r.Sandbox.ID, newOp.ID)
+			requireDataReadyBlocked(t, s, p, r.Sandbox.ID)
+			assertDataPathDead(t, path, held)
+			newRelease()
+			if _, err = s.Wait(ctx, p, newOp.ID); err != nil {
+				t.Fatal(err)
+			}
+			requireFence(t, s, r.Sandbox.ID, "")
+			if status, _ := proxyGet(
+				t,
+				path,
+				"http://example.com/",
+			); status != 403 {
+				t.Fatalf("old policy reopened: %d", status)
+			}
+			if status, _ := proxyGet(
+				t,
+				path,
+				"http://other.example/",
+			); status != 200 {
+				t.Fatalf("new policy not delivered: %d", status)
+			}
+			if _, err = s.Execute(ctx, p, "old", oldCommand); err == nil {
+				t.Fatal("superseded operation terminal result changed")
+			}
+			after, err := s.Get(ctx, p, r.Sandbox.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Instance != r.Sandbox.Instance ||
+				after.Epoch != r.Sandbox.Epoch ||
+				!after.Deadline.Equal(r.Sandbox.Deadline) {
+				t.Fatal("supersession changed lease or identity")
+			}
+		})
+	}
+}
+
+func TestConfigureEgressStaleQueuedIntentCannotReopen(t *testing.T) {
+	s, f, agent, p, manager := egressFixture(t)
+	wide := egress.Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
+	narrow := egress.Policy{
+		Mode:         "relay",
+		AllowedHosts: []string{"other.example"},
+	}
+	r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
+	path := proxyHTTPPath(t, s, f, r.Sandbox.ID)
+	// A worker that cannot claim its operation leaves a durable queued intent.
+	// Retry it only after a newer actual configure has completed delivery.
+	if _, err := s.store.db.Exec(
+		`CREATE TRIGGER hold_queued BEFORE UPDATE ON operations WHEN NEW.status='running'
+		BEGIN SELECT RAISE(ABORT,'queued worker unavailable'); END`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	staleCommand := Command{
+		Action:    "configure",
+		SandboxID: r.Sandbox.ID,
+		Env:       map[string]EnvVar{},
+		Policy:    wide,
+	}
+	stale, err := s.Submit(ctx, p, "stale", staleCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitWorker(t, s, stale.ID)
+	queued, err := s.Operation(ctx, p, stale.ID)
+	if err != nil || queued.Status != "pending" {
+		t.Fatalf("intent was not queued: %s %v", queued.Status, err)
+	}
+	if _, err = s.store.db.Exec("DROP TRIGGER hold_queued"); err != nil {
+		t.Fatal(err)
+	}
+	winnerEntered, winnerRelease := gateAgent(t, agent, "activate")
+	winner, err := s.Submit(
+		ctx,
+		p,
+		"winner",
+		Command{
+			Action:    "configure",
+			SandboxID: r.Sandbox.ID,
+			Env:       map[string]EnvVar{},
+			Policy:    narrow,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitAgent(t, winnerEntered)
+	requireFence(t, s, r.Sandbox.ID, winner.ID)
+	winnerRelease()
+	if _, err = s.Wait(ctx, p, winner.ID); err != nil {
+		t.Fatal(err)
+	}
+	awaitWorker(t, s, winner.ID)
+	requireFence(t, s, r.Sandbox.ID, "")
+	if _, err = s.Execute(ctx, p, "stale", staleCommand); err == nil {
+		t.Error("stale queued intent succeeded without its own fence")
+	}
+	if status, _ := proxyGet(t, path, "http://example.com/"); status != 403 {
+		t.Fatalf("stale queued policy reopened: %d", status)
+	}
+	if status, _ := proxyGet(t, path, "http://other.example/"); status != 200 {
+		t.Fatalf("new effective policy lost: %d", status)
+	}
+	// A stale in-memory copy must not overwrite the coherent durable success.
+	s.start(winner)
+	awaitWorker(t, s, winner.ID)
+	completed, err := s.Operation(ctx, p, winner.ID)
+	if err != nil || completed.Status != "succeeded" {
+		t.Fatalf(
+			"fixed delivery result was overwritten: %s %v",
+			completed.Status,
+			err,
+		)
+	}
+	restarted := restartEgress(t, s, manager)
+	requireFence(t, restarted, r.Sandbox.ID, "")
+	completed, err = restarted.Operation(ctx, p, winner.ID)
+	if err != nil || completed.Status != "succeeded" {
+		t.Fatalf(
+			"restart lost successful delivery responsibility: %s %v",
+			completed.Status,
+			err,
+		)
+	}
+	if _, err = restarted.DataReady(ctx, p, r.Sandbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := proxyGet(t, path, "http://example.com/"); status != 403 {
+		t.Fatalf("restart reopened old policy: %d", status)
+	}
+	if status, _ := proxyGet(t, path, "http://other.example/"); status != 200 {
+		t.Fatalf("restart lost delivered policy: %d", status)
 	}
 }
 
@@ -736,7 +1203,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		}
 		requireFence(t, s, r.Sandbox.ID, res.OperationID)
 		// A newer admission replaces the fence; the old operation's terminal
-		// clear is a no-op against it.
+		// clear is rejected against it.
 		if err = recordConfigFence(
 			context.Background(),
 			s.store.db,
@@ -750,8 +1217,8 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 			s.store.db,
 			r.Sandbox.ID,
 			res.OperationID,
-		); err != nil {
-			t.Fatal(err)
+		); !isCode(err, api.Conflict) {
+			t.Fatalf("superseded clear was not rejected: %v", err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "op_newer")
 		if err = clearConfigFence(
@@ -900,37 +1367,54 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		}
 	})
 	t.Run("fingerprint_mismatch_rebinds", func(t *testing.T) {
-		s, f, _, p, _ := egressFixture(t)
+		s, f, agent, p, _ := egressFixture(t)
 		r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
 		httpPath := proxyHTTPPath(t, s, f, r.Sandbox.ID)
-		s.mu.Lock()
-		s.bindings[r.Sandbox.ID] = "corrupted"
-		s.mu.Unlock()
-		b, err := s.Get(context.Background(), p, r.Sandbox.ID)
-		if err != nil {
+		held := holdTunnel(t, httpPath, "example.com:443")
+		b := *r.Sandbox
+		b.Policy = narrow
+		if err := saveSandbox(context.Background(), s.store.db, b); err != nil {
 			t.Fatal(err)
 		}
-		v, err := f.GetVM(context.Background(), b.VMID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// A fingerprint mismatch revokes and replaces the binding rather than
-		// trusting the stale record.
-		if err = s.bind(context.Background(), b, v.VSockPath); err != nil {
-			t.Fatal(err)
-		}
-		s.mu.Lock()
-		fingerprint := s.bindings[r.Sandbox.ID]
-		s.mu.Unlock()
-		if fingerprint == "" || fingerprint == "corrupted" {
-			t.Fatal("stale binding fingerprint was trusted")
+		agent.mu.Lock()
+		activations := len(agent.activations)
+		agent.mu.Unlock()
+		// Maintenance must compare the saved effective policy against a
+		// nonempty binding; no explicit bind or activation repairs this test.
+		s.reconcile()
+		if status, _ := proxyGet(
+			t,
+			httpPath,
+			"http://example.com/",
+		); status != 403 {
+			t.Fatalf("maintenance retained old wide authorization: %d", status)
 		}
 		if status, body := proxyGet(
 			t,
 			httpPath,
-			"http://example.com/",
-		); status != 200 || body != "upstream example.com" {
-			t.Fatalf("rebind did not restore service: %d %q", status, body)
+			"http://other.example/",
+		); status != 200 ||
+			body != "upstream other.example" {
+			t.Fatalf("saved policy was not delivered: %d %q", status, body)
+		}
+		_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var one [1]byte
+		if n, err := held.Read(one[:]); n != 0 || err == nil {
+			t.Fatal("old tunnel survived maintenance policy replacement")
+		}
+		agent.mu.Lock()
+		afterActivations := len(agent.activations)
+		agent.mu.Unlock()
+		if afterActivations != activations {
+			t.Fatal("fingerprint repair replayed guest activation")
+		}
+		after, err := s.Get(context.Background(), p, b.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Instance != b.Instance || after.Epoch != b.Epoch ||
+			!after.Deadline.Equal(b.Deadline) {
+			t.Fatal("maintenance changed identity or lease")
 		}
 	})
 }

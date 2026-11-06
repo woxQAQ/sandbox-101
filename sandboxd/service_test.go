@@ -266,22 +266,53 @@ func (f *fakeEngine) count(action string) int {
 }
 
 type fakeAgent struct {
-	mu          sync.Mutex
-	activations []Activation
-	fail        bool
-	failInfo    bool
+	mu              sync.Mutex
+	activations     []Activation
+	fail            bool
+	failInfo        bool
+	infoEntered     chan<- struct{}
+	infoGate        <-chan struct{}
+	activateEntered chan<- struct{}
+	activateGate    <-chan struct{}
 }
 
-func (f *fakeAgent) Info(context.Context, api.VM) error {
+func (f *fakeAgent) Info(ctx context.Context, _ api.VM) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failInfo {
+	entered, gate := f.infoEntered, f.infoGate
+	f.infoEntered, f.infoGate = nil, nil
+	fail := f.failInfo
+	f.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-gate:
+		}
+	}
+	if fail {
 		return errors.New("agent info probe failed")
 	}
 	return nil
 }
 
-func (f *fakeAgent) Activate(_ context.Context, _ api.VM, a Activation) error {
+func (f *fakeAgent) Activate(
+	ctx context.Context,
+	_ api.VM,
+	a Activation,
+) error {
+	f.mu.Lock()
+	entered, gate := f.activateEntered, f.activateGate
+	f.activateEntered, f.activateGate = nil, nil
+	f.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-gate:
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail {

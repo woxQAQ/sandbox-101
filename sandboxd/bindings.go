@@ -34,6 +34,7 @@ func (s *Service) bind(ctx context.Context, b Sandbox, vsockPath string) error {
 		return nil
 	}
 	if current != "" {
+		s.closeConnections(b.ID)
 		if err := s.revoke(b.ID); err != nil {
 			return err
 		}
