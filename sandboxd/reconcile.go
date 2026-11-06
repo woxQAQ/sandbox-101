@@ -225,13 +225,13 @@ func (s *Service) reconcile() {
 				}
 			}
 		} else if s.opts.Egress != nil {
-			// A none policy never retains a residual proxy binding.
-			s.mu.Lock()
-			bound := s.bindings[b.ID] != ""
-			s.mu.Unlock()
-			if bound {
+			// None owns no proxy binding. The manager closes only its own
+			// residual proxy streams; healthy workload relays stay connected.
+			// Revoke even when local fingerprint bookkeeping is absent.
+			if e = s.revoke(b.ID); e != nil {
 				s.closeConnections(b.ID)
-				_ = s.revoke(b.ID)
+				b.LastError = "egress policy could not be revoked"
+				_ = saveSandbox(s.ctx, s.store.db, b)
 			}
 		}
 		unlock()

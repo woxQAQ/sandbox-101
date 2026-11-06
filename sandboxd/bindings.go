@@ -8,10 +8,14 @@ import (
 )
 
 // bind reuses only the exact policy, VM instance and in-memory credential set.
+// None owns no proxy binding; revoke any residual without interrupting workload.
 // The manager itself refuses duplicate Bind calls to avoid silently weakening policy.
 func (s *Service) bind(ctx context.Context, b Sandbox, vsockPath string) error {
 	if s.opts.Egress == nil {
 		return nil
+	}
+	if b.Policy.Mode == "none" {
+		return s.revoke(b.ID)
 	}
 	s.mu.Lock()
 	secrets := s.secrets[b.ID]

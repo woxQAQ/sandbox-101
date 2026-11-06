@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -365,6 +366,487 @@ func awaitWorker(t *testing.T, s *Service, id string) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("operation worker did not exit")
 		}
+	}
+}
+
+// workloadRelayAgent preserves the lifecycle fixture and supplies a separate
+// guest workload stream for the actual Service HTTP Upgrade relay.
+type workloadRelayAgent struct {
+	*fakeAgent
+
+	peers chan net.Conn
+}
+
+func (a *workloadRelayAgent) Connect(
+	ctx context.Context,
+	_ api.VM,
+) (net.Conn, error) {
+	up, peer := net.Pipe()
+	select {
+	case a.peers <- peer:
+		return up, nil
+	case <-ctx.Done():
+		_ = up.Close()
+		_ = peer.Close()
+		return nil, ctx.Err()
+	}
+}
+
+// openWorkloadRelay returns the client and guest endpoints only after the real
+// Service has admitted and tracked both sides. Cleanup joins the hijacked handler.
+func openWorkloadRelay(
+	t *testing.T,
+	s *Service,
+	a *workloadRelayAgent,
+	p Principal,
+	id string,
+) (net.Conn, net.Conn) {
+	t.Helper()
+	done := make(chan struct{})
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			s.relay(w, r, p, id)
+		}),
+	)
+	var client, peer net.Conn
+	started := false
+	t.Cleanup(func() {
+		if client != nil {
+			_ = client.Close()
+		}
+		if peer != nil {
+			_ = peer.Close()
+		} else {
+			select {
+			case pending := <-a.peers:
+				_ = pending.Close()
+			default:
+			}
+		}
+		server.Close()
+		if started {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("workload relay handler did not exit")
+			}
+		}
+	})
+	var err error
+	client, err = net.DialTimeout(
+		"tcp",
+		server.Listener.Addr().String(),
+		2*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = io.WriteString(
+		client,
+		"GET /connect HTTP/1.1\r\nHost: sandbox\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+	started = true
+	response, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil || response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("workload relay upgrade failed: %v %v", response, err)
+	}
+	select {
+	case peer = <-a.peers:
+	case <-time.After(5 * time.Second):
+		t.Fatal("workload guest endpoint missing")
+	}
+	return client, peer
+}
+
+func exchangeWorkload(t *testing.T, client, guest net.Conn) {
+	t.Helper()
+	for _, direction := range []struct {
+		from, to net.Conn
+		payload  string
+	}{{client, guest, "client-to-guest"}, {guest, client, "guest-to-client"}} {
+		_ = direction.from.SetDeadline(time.Now().Add(3 * time.Second))
+		_ = direction.to.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.WriteString(
+			direction.from,
+			direction.payload,
+		); err != nil {
+			t.Fatalf("workload write: %v", err)
+		}
+		data := make([]byte, len(direction.payload))
+		if _, err := io.ReadFull(direction.to, data); err != nil {
+			t.Fatalf("workload read: %v", err)
+		}
+		if string(data) != direction.payload {
+			t.Fatal("workload relay changed bytes")
+		}
+	}
+}
+
+func requireStreamClosed(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var one [1]byte
+	n, err := conn.Read(one[:])
+	var timeout net.Error
+	if n != 0 || err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatalf("revoked stream did not close: bytes=%d error=%v", n, err)
+	}
+}
+
+func TestConfigureEgressNonePolicyKeepsWorkloadConnections(t *testing.T) {
+	for _, scenario := range []string{"claim", "fork", "residual_tracked", "residual_untracked"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f, agent, p, _ := egressFixture(t)
+			a := &workloadRelayAgent{
+				fakeAgent: agent,
+				peers:     make(chan net.Conn, 1),
+			}
+			s.opts.Agent = a
+			r := claimRelay(
+				t,
+				s,
+				p,
+				"claim",
+				map[string]EnvVar{},
+				egress.Policy{Mode: "none"},
+			)
+			before := *r.Sandbox
+			if scenario == "fork" {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					10*time.Second,
+				)
+				defer cancel()
+				fork, err := s.Execute(
+					ctx,
+					p,
+					"fork",
+					Command{
+						Action:    "fork",
+						SandboxID: before.ID,
+						Count:     1,
+						Policy:    egress.Policy{Mode: "none"},
+					},
+				)
+				if err != nil || len(fork.Sandboxes) != 1 {
+					t.Fatalf("fork: %v %v", fork, err)
+				}
+				before = fork.Sandboxes[0]
+			}
+			s.mu.Lock()
+			initialBinding := s.bindings[before.ID] != ""
+			s.mu.Unlock()
+			if initialBinding {
+				t.Error(
+					"healthy none activation created a Service proxy binding",
+				)
+			}
+			if _, bound := s.opts.Egress.(*egress.Manager).Binding(
+				before.ID,
+			); bound {
+				t.Error(
+					"healthy none activation created a Manager proxy binding",
+				)
+			}
+			client, guest := openWorkloadRelay(t, s, a, p, before.ID)
+			exchangeWorkload(t, client, guest)
+			v, err := f.GetVM(context.Background(), before.VMID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := s.opts.Egress.(*egress.Manager)
+			var held net.Conn
+			if strings.HasPrefix(scenario, "residual_") {
+				// Model an actual leftover wide proxy, independently of workload
+				// connections and even when local fingerprint bookkeeping is lost.
+				if err = manager.Revoke(before.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err = manager.Bind(
+					context.Background(),
+					before.ID,
+					before.TenantID,
+					v.VSockPath,
+					egress.Policy{
+						Mode:         "relay",
+						AllowedHosts: []string{"example.com"},
+					},
+					nil,
+				); err != nil {
+					t.Fatal(err)
+				}
+				s.mu.Lock()
+				delete(s.bindings, before.ID)
+				if scenario == "residual_tracked" {
+					s.bindings[before.ID] = "residual"
+				}
+				s.mu.Unlock()
+				held = holdTunnel(t, v.VSockPath+"_2049", "example.com:443")
+			}
+			agent.mu.Lock()
+			activations := len(agent.activations)
+			agent.mu.Unlock()
+			for pass := 1; pass <= 2; pass++ {
+				// Explicit maintenance gates make connection closure deterministic.
+				s.reconcile()
+				t.Logf("completed explicit reconcile pass %d", pass)
+				exchangeWorkload(t, client, guest)
+				if held != nil {
+					assertDataPathDead(t, v.VSockPath+"_2049", held)
+				}
+				s.mu.Lock()
+				bound := s.bindings[before.ID] != ""
+				s.mu.Unlock()
+				if bound {
+					t.Fatal("none retained a Service proxy binding")
+				}
+				if _, bound = manager.Binding(before.ID); bound {
+					t.Fatal("none retained a Manager proxy binding")
+				}
+			}
+			fresh, freshGuest := openWorkloadRelay(t, s, a, p, before.ID)
+			exchangeWorkload(t, fresh, freshGuest)
+			agent.mu.Lock()
+			afterActivations := len(agent.activations)
+			agent.mu.Unlock()
+			if afterActivations != activations {
+				t.Fatal("maintenance replayed guest activation")
+			}
+			after, err := s.Get(context.Background(), p, before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Instance != before.Instance ||
+				after.Epoch != before.Epoch ||
+				!after.Deadline.Equal(before.Deadline) {
+				t.Fatal("maintenance changed identity or lease")
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			for _, op := range f.ops {
+				if op.Request.Action == "network" && op.Request.NetworkEnabled {
+					t.Fatal("none enabled the engine NIC")
+				}
+			}
+		})
+	}
+}
+
+func TestConfigureEgressClosesOldWorkloadConnections(t *testing.T) {
+	wide := egress.Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
+	for _, target := range []string{"none", "narrow", "secret"} {
+		t.Run(target, func(t *testing.T) {
+			s, f, agent, p, _ := egressFixture(t)
+			a := &workloadRelayAgent{
+				fakeAgent: agent,
+				peers:     make(chan net.Conn, 1),
+			}
+			s.opts.Agent = a
+			env, nextEnv := map[string]EnvVar{}, map[string]EnvVar{}
+			policy := egress.Policy{Mode: "none"}
+			switch target {
+			case "narrow":
+				policy = egress.Policy{
+					Mode:         "relay",
+					AllowedHosts: []string{"other.example"},
+				}
+			case "secret":
+				env, nextEnv = rotatedSecretEnv(
+					"unused-old-credential",
+				), rotatedSecretEnv(
+					"unused-new-credential",
+				)
+				policy = wide
+			}
+			r := claimRelay(t, s, p, "claim", env, wide)
+			path := proxyHTTPPath(t, s, f, r.Sandbox.ID)
+			held := holdTunnel(t, path, "example.com:443")
+			client, guest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
+			exchangeWorkload(t, client, guest)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				10*time.Second,
+			)
+			defer cancel()
+			if _, err := s.Execute(
+				ctx,
+				p,
+				"configure",
+				Command{
+					Action:    "configure",
+					SandboxID: r.Sandbox.ID,
+					Env:       nextEnv,
+					Policy:    policy,
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+			requireStreamClosed(t, client)
+			requireStreamClosed(t, held)
+			requireFence(t, s, r.Sandbox.ID, "")
+			if target == "none" {
+				assertDataPathDead(t, path, held)
+			} else {
+				host := "example.com"
+				if target == "narrow" {
+					host = "other.example"
+					if status, _ := proxyGet(
+						t,
+						path,
+						"http://example.com/",
+					); status != http.StatusForbidden {
+						t.Fatalf("old wide permission survived: %d", status)
+					}
+				}
+				if status, _ := proxyGet(
+					t,
+					path,
+					"http://"+host+"/",
+				); status != http.StatusOK {
+					t.Fatalf("new policy not delivered: %d", status)
+				}
+			}
+			fresh, freshGuest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
+			for pass := 0; pass < 2; pass++ {
+				s.reconcile()
+				exchangeWorkload(t, fresh, freshGuest)
+			}
+		})
+	}
+}
+
+func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
+	for _, phase := range []string{"explicit_configure", "none_maintenance"} {
+		t.Run(phase, func(t *testing.T) {
+			s, f, agent, p, _ := egressFixture(t)
+			a := &workloadRelayAgent{
+				fakeAgent: agent,
+				peers:     make(chan net.Conn, 1),
+			}
+			s.opts.Agent = a
+			var fail atomic.Bool
+			fail.Store(true)
+			// Use the actual Manager's retryable teardown error. The installer
+			// models host rule ownership without changing host networking.
+			manager, err := egress.New(
+				egress.Options{
+					InstallDirect: func(context.Context, egress.Binding, egress.Policy) (func() error, error) {
+						return func() error {
+							if fail.Load() {
+								return errors.New("injected teardown failure")
+							}
+							return nil
+						}, nil
+					},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.opts.Egress.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s.opts.Egress = manager
+			t.Cleanup(func() { fail.Store(false) })
+			policy := egress.Policy{Mode: "direct"}
+			if phase == "none_maintenance" {
+				policy.Mode = "none"
+			}
+			r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, policy)
+			before := *r.Sandbox
+			client, guest := openWorkloadRelay(t, s, a, p, before.ID)
+			exchangeWorkload(t, client, guest)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				10*time.Second,
+			)
+			defer cancel()
+			if phase == "none_maintenance" {
+				v, err := f.GetVM(ctx, before.VMID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = manager.Revoke(before.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err = manager.Bind(
+					ctx,
+					before.ID,
+					before.TenantID,
+					v.VSockPath,
+					egress.Policy{Mode: "direct"},
+					nil,
+				); err != nil {
+					t.Fatal(err)
+				}
+				s.mu.Lock()
+				s.bindings[before.ID] = "residual"
+				s.mu.Unlock()
+				s.reconcile()
+			} else {
+				result, err := s.Execute(
+					ctx,
+					p,
+					"configure-fails",
+					Command{
+						Action:    "configure",
+						SandboxID: before.ID,
+						Env:       map[string]EnvVar{},
+						Policy:    egress.Policy{Mode: "none"},
+					},
+				)
+				if err == nil {
+					t.Fatal("configure masked the actual Manager Revoke error")
+				}
+				requireFence(t, s, before.ID, result.OperationID)
+			}
+			requireStreamClosed(t, client)
+			blocked, err := s.Get(ctx, p, before.ID)
+			if err != nil || blocked.LastError == "" ||
+				blocked.Policy.Mode != before.Policy.Mode {
+				t.Fatalf(
+					"revoke failure lost saved policy or diagnostic: %v",
+					err,
+				)
+			}
+			if _, err = s.DataReady(
+				ctx,
+				p,
+				before.ID,
+			); !isCode(
+				err,
+				api.Conflict,
+			) {
+				t.Fatalf("revoke failure admitted workload: %v", err)
+			}
+			if _, bound := manager.Binding(before.ID); !bound {
+				t.Fatal("failed teardown was reported as removed")
+			}
+			fail.Store(false)
+			if _, err = s.Execute(
+				ctx,
+				p,
+				"configure-retry",
+				Command{
+					Action:    "configure",
+					SandboxID: before.ID,
+					Env:       map[string]EnvVar{},
+					Policy:    egress.Policy{Mode: "none"},
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+			requireFence(t, s, before.ID, "")
+			if _, bound := manager.Binding(before.ID); bound {
+				t.Fatal("explicit retry retained proxy ownership")
+			}
+			fresh, freshGuest := openWorkloadRelay(t, s, a, p, before.ID)
+			exchangeWorkload(t, fresh, freshGuest)
+		})
 	}
 }
 
