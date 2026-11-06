@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -1185,4 +1186,347 @@ func TestQuotaLedgerHistoricalHandoffMergesCleanupHolder(t *testing.T) {
 		t.Fatal("duplicate cleanup holder prevented atomic handoff", err)
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)
+}
+
+// Delivery faults leave the strict fixture's deterministic engine receipt intact.
+// An ordinary restore can fail terminally before allocation so compensation owns
+// the single actual restore effect.
+type ledgerRecoveryDeliveryEngine struct {
+	*recoveryTestEngine
+
+	muDelivery          sync.Mutex
+	action              string
+	lost                bool
+	rejectPublicRestore bool
+}
+
+func (f *ledgerRecoveryDeliveryEngine) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	f.muDelivery.Lock()
+	reject := f.rejectPublicRestore && r.Action == "restore" &&
+		!strings.HasPrefix(r.Key, "sbx-op:recovery:")
+	f.muDelivery.Unlock()
+	if reject {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if old, ok := f.ops[r.Key]; ok {
+			return old, nil
+		}
+		o := api.Operation{
+			ID:      r.Key,
+			Key:     r.Key,
+			Request: r,
+			Status:  "failed",
+			Error: &api.Error{
+				Code:    api.Internal,
+				Message: "restore failed before allocation",
+			},
+		}
+		f.ops[r.Key] = o
+		return o, nil
+	}
+	o, err := f.recoveryTestEngine.Submit(ctx, r)
+	f.muDelivery.Lock()
+	defer f.muDelivery.Unlock()
+	if r.Action == f.action && !f.lost && err == nil {
+		f.lost = true
+		return api.Operation{}, api.Fail(
+			api.Unknown,
+			"completed recovery allocation response lost",
+		)
+	}
+	return o, err
+}
+
+func TestQuotaLedgerRecoveryCaptureReconcilesIndependently(t *testing.T) {
+	for _, fault := range []string{"transport", "sqlite"} {
+		for _, order := range []string{"recover-first", "release-first"} {
+			t.Run(fault+"/"+order, func(t *testing.T) {
+				s, f, _, p := recoveryFixture(t)
+				ledgerLimit(t, s, p, 1, 1<<20)
+				b := *claimTest(t, s, p, "source", nil).Sandbox
+				f.control.Lock()
+				f.failNetwork = true
+				f.control.Unlock()
+				actor := p
+				if order == "release-first" {
+					actor = Principal{Root: true, TenantID: "bob"}
+				}
+				result, err := s.Execute(
+					s.ctx,
+					actor,
+					"pause",
+					Command{Action: "pause", SandboxID: b.ID},
+				)
+				if err == nil {
+					t.Fatal("missing initial pause failure")
+				}
+				var original []byte
+				if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+					Scan(&original); err != nil {
+					t.Fatal(err)
+				}
+				f.control.Lock()
+				f.failNetwork = false
+				f.control.Unlock()
+				if fault == "transport" {
+					s.opts.Engine = &ledgerRecoveryDeliveryEngine{
+						recoveryTestEngine: f,
+						action:             "snapshot",
+					}
+				} else if _, err = s.store.db.Exec(`CREATE TRIGGER reject_recovery_capture BEFORE INSERT ON quota_resources WHEN NEW.kind='snapshot' BEGIN SELECT RAISE(FAIL,'ledger write failed after capture'); END`); err != nil {
+					t.Fatal(err)
+				}
+				if err = s.recoverResources(); err == nil {
+					t.Fatal("recovery fault did not execute")
+				}
+				if f.count("snapshot") != 1 {
+					t.Fatal("capture effect was not exactly one")
+				}
+				if got := recoverySandbox(
+					t,
+					s,
+					b.ID,
+				); got.State != "running" ||
+					got.OperationID != "" {
+					t.Fatal("capture failure did not clear lifecycle ownership")
+				}
+				ledgerMoney(t, s, p.TenantID, 1, 256)
+				f.control.Lock()
+				f.findError = api.Fail(api.Unknown, "receipt query unavailable")
+				f.control.Unlock()
+				if err = s.recoverResources(); err == nil {
+					t.Fatal("receipt uncertainty hidden")
+				}
+				ledgerMoney(t, s, p.TenantID, 1, 256)
+				var pending int
+				if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_resources WHERE kind='pending_storage'`).
+					Scan(&pending); err != nil ||
+					pending != 1 {
+					t.Fatal(
+						"unknown capture lost its pending responsibility",
+						err,
+					)
+				}
+				ledgerRejectClaim(t, s, f, p, "unknown-capture")
+				var foreign int
+				if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_resources WHERE tenant_id!=?`, p.TenantID).
+					Scan(&foreign); err != nil ||
+					foreign != 0 {
+					t.Fatal(
+						"recovery charged request tenant instead of resource owner",
+						err,
+					)
+				}
+				if order == "release-first" {
+					ledgerExecute(
+						t,
+						s,
+						p,
+						"release",
+						Command{Action: "release", SandboxID: b.ID},
+					)
+					ledgerMoney(t, s, p.TenantID, 1, 192)
+				}
+				if fault == "sqlite" {
+					if _, err = s.store.db.Exec(
+						`DROP TRIGGER reject_recovery_capture`,
+					); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Reopen while the receipt is still unavailable; the durable descriptor
+				// must survive independently of public state and its operation pointer.
+				s = ledgerRestart(t, s)
+				f.control.Lock()
+				f.findError = nil
+				f.control.Unlock()
+				for i := 0; i < 3; i++ {
+					if err = s.recoverResources(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if order == "recover-first" {
+					ledgerExecute(
+						t,
+						s,
+						p,
+						"release",
+						Command{Action: "release", SandboxID: b.ID},
+					)
+				}
+				s = ledgerRestart(t, s)
+				for i := 0; i < 3; i++ {
+					if err = s.recoverResources(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ledgerMoney(t, s, p.TenantID, 0, 0)
+				snapshots, err := f.ListSnapshots(s.ctx)
+				if err != nil || len(snapshots) != 0 ||
+					f.count("delete") != 1 ||
+					f.count("snapshot") != 1 ||
+					f.count("delete_snapshot") != 1 {
+					t.Fatalf(
+						"cleanup effects: snapshots=%d capture=%d delete=%d delete_snapshot=%d err=%v",
+						len(snapshots),
+						f.count("snapshot"),
+						f.count("delete"),
+						f.count("delete_snapshot"),
+						err,
+					)
+				}
+				var after []byte
+				if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+					Scan(&after); err != nil ||
+					!bytes.Equal(original, after) {
+					t.Fatal("terminal public result changed", err)
+				}
+				ledgerExecute(
+					t,
+					s,
+					p,
+					"after-cleanup",
+					Command{Action: "claim", TemplateID: "python"},
+				)
+			})
+		}
+	}
+}
+
+func TestQuotaLedgerRecoveryRestoreReconcilesIndependently(t *testing.T) {
+	for _, fault := range []string{"transport", "sqlite"} {
+		t.Run(fault, func(t *testing.T) {
+			s, f, _, p := recoveryFixture(t)
+			ledgerLimit(t, s, p, 1, 1<<20)
+			b := *claimTest(t, s, p, "source", nil).Sandbox
+			cp := ledgerExecute(
+				t,
+				s,
+				p,
+				"checkpoint",
+				Command{Action: "checkpoint", SandboxID: b.ID},
+			).Checkpoint
+			adapter := &ledgerRecoveryDeliveryEngine{
+				recoveryTestEngine:  f,
+				rejectPublicRestore: true,
+			}
+			s.opts.Engine = adapter
+			result, err := s.Execute(
+				s.ctx,
+				p,
+				"rollback",
+				Command{
+					Action:       "rollback",
+					SandboxID:    b.ID,
+					CheckpointID: cp.ID,
+				},
+			)
+			if err == nil {
+				t.Fatal("ordinary restore did not fail")
+			}
+			var original []byte
+			if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+				Scan(&original); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "transport" {
+				adapter.action = "restore"
+			} else if _, err = s.store.db.Exec(`CREATE TRIGGER reject_recovery_restore BEFORE INSERT ON quota_resources WHEN NEW.kind='vm_disk' AND NEW.resource_key LIKE '%:restore:%' BEGIN SELECT RAISE(FAIL,'ledger write failed after restore'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.recoverResources(); err == nil {
+				t.Fatal("recovery restore fault did not execute")
+			}
+			if f.count("restore") != 1 {
+				t.Fatal("missing single physical restore")
+			}
+			ledgerMoney(t, s, p.TenantID, 1, 320)
+			f.control.Lock()
+			f.findError = api.Fail(api.Unknown, "receipt query unavailable")
+			f.control.Unlock()
+			if err = s.recoverResources(); err == nil {
+				t.Fatal("receipt uncertainty hidden")
+			}
+			ledgerMoney(t, s, p.TenantID, 1, 320)
+			ledgerRejectClaim(t, s, f, p, "unknown-restore")
+			if fault == "sqlite" {
+				if _, err = s.store.db.Exec(
+					`DROP TRIGGER reject_recovery_restore`,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s = ledgerRestart(t, s)
+			f.control.Lock()
+			f.findError = nil
+			f.control.Unlock()
+			for i := 0; i < 3; i++ {
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.count("restore") != 1 {
+				t.Fatal("receipt caused a second restore")
+			}
+			ledgerMoney(t, s, p.TenantID, 1, 320)
+			// Reclaim the catalog reference first; both independent D versions
+			// and all D+M backing remain billed through actual VM deletion.
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"delete-checkpoint",
+				Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
+			)
+			if _, err = f.GetSnapshot(
+				s.ctx,
+				cp.SnapshotID,
+			); !isCode(
+				err,
+				api.NotFound,
+			) {
+				t.Fatal("snapshot catalog was not physically reclaimed", err)
+			}
+			var disks int
+			if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_resources WHERE kind='vm_disk'`).
+				Scan(&disks); err != nil ||
+				disks != 2 {
+				t.Fatal("independent disk version responsibility lost", err)
+			}
+			ledgerMoney(t, s, p.TenantID, 1, 320)
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"release",
+				Command{Action: "release", SandboxID: b.ID},
+			)
+			s = ledgerRestart(t, s)
+			for i := 0; i < 3; i++ {
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ledgerMoney(t, s, p.TenantID, 0, 0)
+			var after []byte
+			if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+				Scan(&after); err != nil ||
+				!bytes.Equal(original, after) {
+				t.Fatal("terminal rollback result changed", err)
+			}
+			if f.count("restore") != 1 || f.count("delete") != 1 {
+				t.Fatal("restore or VM delete replayed")
+			}
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"after-cleanup",
+				Command{Action: "claim", TemplateID: "python"},
+			)
+		})
+	}
 }

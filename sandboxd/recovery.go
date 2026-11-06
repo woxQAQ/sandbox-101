@@ -13,19 +13,44 @@ import (
 // A failed client intent remains terminal. Compensating work has its own durable
 // intent, and advances its attempt only after a known terminal engine failure.
 type resourceRecovery struct {
-	ID        string `json:"id"`
-	TenantID  string `json:"tenant_id,omitempty"`
-	MemoryMiB int64  `json:"memory_mib,omitempty"`
-	Source    string `json:"source"`
-	Step      string `json:"step,omitempty"`
-	Kind      string `json:"kind"`
-	SandboxID string `json:"sandbox_id,omitempty"`
-	VMID      string `json:"vm_id,omitempty"`
-	Snapshot  string `json:"snapshot_id,omitempty"`
-	Instance  string `json:"instance,omitempty"`
-	Attempt   uint64 `json:"attempt"`
-	Done      bool   `json:"done,omitempty"`
-	LastError string `json:"last_error,omitempty"`
+	ID          string               `json:"id"`
+	TenantID    string               `json:"tenant_id,omitempty"`
+	MemoryMiB   int64                `json:"memory_mib,omitempty"`
+	Source      string               `json:"source"`
+	Step        string               `json:"step,omitempty"`
+	Kind        string               `json:"kind"`
+	SandboxID   string               `json:"sandbox_id,omitempty"`
+	VMID        string               `json:"vm_id,omitempty"`
+	Snapshot    string               `json:"snapshot_id,omitempty"`
+	Instance    string               `json:"instance,omitempty"`
+	Attempt     uint64               `json:"attempt"`
+	Done        bool                 `json:"done,omitempty"`
+	LastError   string               `json:"last_error,omitempty"`
+	Allocation  *recoveryAllocation  `json:"allocation,omitempty"`
+	Allocations []recoveryAllocation `json:"allocations,omitempty"`
+}
+
+// Each allocation freezes its engine identity and billing inputs before dispatch.
+// It outlives sandbox state/operation ownership and every compensation attempt.
+type recoveryAllocation struct {
+	OperationID    string      `json:"operation_id"`
+	TenantID       string      `json:"tenant_id"`
+	ChargeTenantID string      `json:"charge_tenant_id"`
+	SandboxID      string      `json:"sandbox_id"`
+	Shape          api.Shape   `json:"shape"`
+	Step           string      `json:"step"`
+	Kind           string      `json:"kind"`
+	Request        api.Request `json:"request"`
+	Settled        bool        `json:"settled,omitempty"`
+}
+
+func (a recoveryAllocation) operation() Operation {
+	return Operation{
+		ID:             a.OperationID,
+		TenantID:       a.TenantID,
+		ChargeTenantID: a.ChargeTenantID,
+		Status:         "failed",
+	}
 }
 
 func (r resourceRecovery) operation() Operation {
@@ -607,6 +632,13 @@ func (s *Service) finishRecoveryAttempt(
 	steps ...string,
 ) error {
 	if cause == nil {
+		settled, err := s.reconcileRecoveryAllocations(r)
+		if err != nil {
+			return err
+		}
+		if !settled {
+			return s.saveRecovery(*r)
+		}
 		r.Done, r.LastError = true, ""
 	} else {
 		r.LastError = cause.Error()
@@ -653,7 +685,14 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 	if r.Kind == "snapshot" {
 		action = "snapshot"
 	}
-	proof, err := s.findResourceStep(o, r.Step, action)
+	proofOperation := o
+	if r.Allocation != nil {
+		proofOperation = r.Allocation.operation()
+	}
+	proof, err := s.findResourceStep(proofOperation, r.Step, action)
+	if err == nil && proof != nil && r.Allocation != nil {
+		err = r.Allocation.validate(*proof)
+	}
 	if err != nil {
 		return err
 	}
@@ -720,6 +759,13 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 	unlock := s.lock(r.SandboxID)
 	defer unlock()
+	settled, err := s.reconcileRecoveryAllocations(r)
+	if err != nil {
+		return err
+	}
+	if !settled {
+		return nil
+	}
 	b, err := getSandbox(s.ctx, s.store.db, r.SandboxID)
 	if isCode(err, api.NotFound) {
 		return s.finishRecoveryAttempt(r, nil)
@@ -894,9 +940,16 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		}
 		if b.SnapshotID == "" {
 			if err = s.admitQuotaRecovery(
+				r,
 				o,
 				b,
 				"hibernate-snapshot",
+				"snapshot",
+				api.Request{
+					Action:           "snapshot",
+					VMID:             b.VMID,
+					ExpectedInstance: b.Instance,
+				},
 				b.Shape.DiskMiB+b.Shape.MemoryMiB,
 			); err != nil {
 				return err
@@ -1106,9 +1159,17 @@ func (s *Service) recoverRollback(
 			)
 		}
 		if err = s.admitQuotaRecovery(
+			r,
 			o,
 			*b,
 			"rollback-restore",
+			"vm_disk",
+			api.Request{
+				Action:           "restore",
+				VMID:             v.ID,
+				SnapshotID:       cp.SnapshotID,
+				ExpectedInstance: v.Instance,
+			},
 			b.Shape.DiskMiB,
 		); err != nil {
 			return err

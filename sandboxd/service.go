@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -1074,6 +1075,14 @@ func (s *Service) engine(
 	r api.Request,
 ) (api.Operation, error) {
 	r.Key = stepKey(o, step)
+	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
+		return api.Operation{}, err
+	} else if a != nil && !bytes.Equal(encode(a.Request), encode(r)) {
+		return api.Operation{}, api.Fail(
+			api.ManualRecovery,
+			"recovery dispatch does not match frozen allocation request",
+		)
+	}
 	if err := s.requireQuotaReservation(o, step); err != nil {
 		return api.Operation{}, err
 	}

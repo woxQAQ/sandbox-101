@@ -1,10 +1,12 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/woxQAQ/sandbox-engine/api"
 )
@@ -255,6 +257,21 @@ func (s *Service) quotaAllocation(
 	o Operation,
 	step string,
 ) (Sandbox, string, bool, error) {
+	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
+		return Sandbox{}, "", true, err
+	} else if a != nil {
+		if a.ChargeTenantID != o.ChargeTenantID {
+			return Sandbox{}, "", true, api.Fail(
+				api.ManualRecovery,
+				"recovery charge owner mismatch",
+			)
+		}
+		return Sandbox{
+			ID:       a.SandboxID,
+			TenantID: a.ChargeTenantID,
+			Shape:    a.Shape,
+		}, a.Kind, true, nil
+	}
 	var id, kind string
 	switch o.Command.Action {
 	case "claim":
@@ -318,6 +335,15 @@ func (s *Service) acceptQuotaReceipt(
 	request api.Request,
 	receipt api.Operation,
 ) error {
+	a, err := s.quotaRecoveryAllocation(o, step)
+	if err != nil {
+		return err
+	}
+	if a != nil && receipt.Key != "" {
+		if err = a.validate(receipt); err != nil {
+			return err
+		}
+	}
 	b, kind, tracked, err := s.quotaAllocation(o, step)
 	if err != nil || !tracked {
 		return err
@@ -382,6 +408,18 @@ func (s *Service) acceptQuotaReceipt(
 	); err != nil {
 		return err
 	}
+	if a != nil && kind == "snapshot" {
+		if err = putQuotaRef(
+			s.ctx,
+			tx,
+			r.Tenant,
+			kind,
+			key,
+			quotaRef{Kind: "cleanup", ID: "sandbox:" + a.SandboxID},
+		); err != nil {
+			return err
+		}
+	}
 	if !recoveryTerminal(receipt.Status) {
 		if err = putQuotaRef(
 			s.ctx,
@@ -409,7 +447,7 @@ func (s *Service) acceptQuotaReceipt(
 			return err
 		}
 		holder := quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID}
-		if b.State == "terminated" ||
+		if a != nil || b.State == "terminated" ||
 			(recoveryTerminal(o.Status) && b.VMID != receipt.VMID) {
 			holder.Kind = "cleanup"
 		}
@@ -802,41 +840,258 @@ func (s *Service) reserveWarmReplacement(o Operation, b Sandbox) error {
 }
 
 func (s *Service) admitQuotaRecovery(
+	r *resourceRecovery,
 	o Operation,
 	b Sandbox,
-	step string,
+	step, kind string,
+	request api.Request,
 	storage int64,
 ) error {
+	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
+		return api.Fail(
+			api.ManualRecovery,
+			"recovery allocation has no trusted owner",
+		)
+	}
+	request.Key = stepKey(o, step)
+	a := recoveryAllocation{
+		OperationID:    o.ID,
+		TenantID:       o.TenantID,
+		ChargeTenantID: o.ChargeTenantID,
+		SandboxID:      b.ID,
+		Shape:          b.Shape,
+		Step:           step,
+		Kind:           kind,
+		Request:        request,
+	}
+	index := len(r.Allocations)
+	for i, previous := range r.Allocations {
+		if previous.OperationID == o.ID && previous.Step == step {
+			if !bytes.Equal(encode(previous.Request), encode(request)) ||
+				previous.Shape != b.Shape ||
+				previous.ChargeTenantID != o.ChargeTenantID {
+				return api.Fail(
+					api.ManualRecovery,
+					"recovery allocation intent changed",
+				)
+			}
+			if !previous.Settled {
+				return nil
+			}
+			proof, err := s.findResourceStep(o, step, request.Action)
+			if err != nil {
+				return err
+			}
+			if proof != nil {
+				return previous.validate(*proof)
+			}
+			index = i
+		}
+	}
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var n int
-	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`, o.ChargeTenantID, stepKey(o, step)).
-		Scan(&n); err != nil {
+	if err = s.quota(
+		s.ctx,
+		tx,
+		Principal{TenantID: b.TenantID},
+		0,
+		storage,
+	); err != nil {
 		return err
 	}
-	if n == 0 {
-		if err = s.quota(
+	if err = reserveQuotaStep(s.ctx, tx, o, step, b.ID, storage); err != nil {
+		return err
+	}
+	if request.SnapshotID != "" {
+		if err = referenceQuotaSnapshot(
 			s.ctx,
 			tx,
-			Principal{TenantID: b.TenantID},
-			0,
-			storage,
-		); err != nil {
-			return err
-		}
-		if err = reserveQuotaStep(
-			s.ctx,
-			tx,
-			o,
-			step,
-			b.ID,
-			storage,
+			b.TenantID,
+			request.SnapshotID,
+			quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
 		); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	next := *r
+	next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
+	if index == len(next.Allocations) {
+		next.Allocations = append(next.Allocations, a)
+	} else {
+		next.Allocations[index] = a
+	}
+	result, err := tx.ExecContext(
+		s.ctx,
+		"UPDATE resource_recovery SET body=? WHERE id=?",
+		encode(next),
+		r.ID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return api.Fail(
+			api.ManualRecovery,
+			"recovery allocation has no durable responsibility",
+		)
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*r = next
+	return nil
+}
+
+// Recovery billing never reconstructs shape or owner from mutable public state.
+func (s *Service) quotaRecoveryAllocation(
+	o Operation,
+	step string,
+) (*recoveryAllocation, error) {
+	if !strings.HasPrefix(o.ID, "recovery:") {
+		return nil, nil
+	}
+	var raw []byte
+	err := s.store.db.QueryRowContext(s.ctx, `SELECT a.value FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.operation_id')=? AND json_extract(a.value,'$.step')=?`, o.ID, step).
+		Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var a recoveryAllocation
+	if err = json.Unmarshal(raw, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (a recoveryAllocation) validate(proof api.Operation) error {
+	if proof.Key != a.Request.Key ||
+		!bytes.Equal(encode(proof.Request), encode(a.Request)) {
+		return api.Fail(
+			api.ManualRecovery,
+			"recovery receipt does not match frozen allocation request",
+		)
+	}
+	return nil
+}
+
+// Receipt adoption and durable cleanup handoff precede lifecycle ownership checks.
+// A missing receipt after dispatch remains charged; it never becomes a new key.
+func (s *Service) reconcileRecoveryAllocations(
+	r *resourceRecovery,
+) (bool, error) {
+	if len(r.Allocations) == 0 {
+		return true, nil
+	}
+	settled := true
+	for i := range r.Allocations {
+		a := &r.Allocations[i]
+		if a.Settled {
+			continue
+		}
+		o := a.operation()
+		proof, err := s.findResourceStep(o, a.Step, a.Request.Action)
+		if err != nil {
+			return false, err
+		}
+		if proof == nil {
+			var dispatched int
+			if err = s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs WHERE holder_id=?`, "dispatch:"+a.Request.Key).
+				Scan(&dispatched); err != nil {
+				return false, err
+			}
+			if dispatched != 0 {
+				settled = false
+				continue
+			}
+			if _, err = s.store.db.ExecContext(
+				s.ctx,
+				`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
+				a.ChargeTenantID,
+				a.Request.Key,
+			); err != nil {
+				return false, err
+			}
+			if _, err = s.store.db.ExecContext(
+				s.ctx,
+				`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=? AND NOT EXISTS(SELECT 1 FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage')`,
+				"operation:"+o.ID,
+				o.ID,
+			); err != nil {
+				return false, err
+			}
+			a.Settled = true
+			continue
+		}
+		if err = a.validate(*proof); err != nil {
+			return false, err
+		}
+		if !recoveryTerminal(proof.Status) {
+			settled = false
+			continue
+		}
+		if err = s.acceptQuotaReceipt(
+			o,
+			a.Step,
+			a.Request,
+			*proof,
+		); err != nil {
+			return false, err
+		}
+		if a.Kind == "snapshot" && proof.SnapshotID != "" {
+			ownership := s.lockResourceOwnership()
+			err = recordSnapshotOwner(
+				s.ctx,
+				s.store.db,
+				proof.SnapshotID,
+				a.ChargeTenantID,
+				a.OperationID,
+				"captured",
+			)
+			ownership()
+			if err != nil {
+				return false, err
+			}
+			cleanup := resourceRecovery{
+				ID:         "snapshot:" + a.OperationID + ":" + a.Step + ":" + proof.SnapshotID,
+				Source:     r.Source,
+				Step:       a.Step,
+				Kind:       "snapshot",
+				Snapshot:   proof.SnapshotID,
+				TenantID:   a.ChargeTenantID,
+				Allocation: a,
+			}
+			if _, err = s.store.db.ExecContext(
+				s.ctx,
+				`INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING`,
+				cleanup.ID,
+				encode(cleanup),
+			); err != nil {
+				return false, err
+			}
+		}
+		// Restore versions retain vm/sandbox holders until deletion of that VM;
+		// they never authorize deleting a reused VM through an orphan key.
+		if _, err = s.store.db.ExecContext(
+			s.ctx,
+			`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?`,
+			"operation:"+o.ID,
+		); err != nil {
+			return false, err
+		}
+		a.Settled = true
+	}
+	if err := s.saveRecovery(*r); err != nil {
+		return false, err
+	}
+	return settled, nil
 }
