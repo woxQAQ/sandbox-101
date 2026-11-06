@@ -29,6 +29,122 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const TRANSFER_LIMIT: u64 = 1024 * 1024 * 1024;
 
+// Integration-only scheduling is compiled out of the normal agent entirely.
+#[cfg(feature = "filesystem-fixtures")]
+pub mod fixtures {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+
+    static NEXT: Mutex<Option<(PathBuf, Operation)>> = Mutex::new(None);
+
+    pub struct Snapshot {
+        pub path: PathBuf,
+        pub device: u64,
+        pub inode: u64,
+        pub links: u64,
+        pub uid: u32,
+        pub gid: u32,
+    }
+
+    pub struct Fixture {
+        pub scratch: Arc<tempfile::TempDir>,
+        reached: oneshot::Receiver<Snapshot>,
+        release: Option<oneshot::Sender<()>>,
+    }
+
+    pub(crate) struct Operation {
+        pub scratch: Arc<tempfile::TempDir>,
+        reached: oneshot::Sender<Snapshot>,
+        release: oneshot::Receiver<()>,
+    }
+
+    // A registration owns a new private spool and matches exactly one tree pull.
+    pub fn register(target: PathBuf, identity: (u32, u32)) -> Result<Fixture> {
+        let scratch = Arc::new(tempfile::tempdir()?);
+        let name = CString::new(scratch.path().as_os_str().as_bytes())?;
+        ensure!(
+            unsafe { libc::chown(name.as_ptr(), identity.0, identity.1) } == 0,
+            "fixture scratch ownership failed"
+        );
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700))?;
+        let (reached_tx, reached) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        let mut next = NEXT.lock().unwrap();
+        ensure!(next.is_none(), "fixture registration already occupied");
+        *next = Some((
+            target,
+            Operation {
+                scratch: scratch.clone(),
+                reached: reached_tx,
+                release: release_rx,
+            },
+        ));
+        Ok(Fixture {
+            scratch,
+            reached,
+            release: Some(release),
+        })
+    }
+
+    impl Fixture {
+        pub async fn reached(&mut self) -> Result<Snapshot> {
+            Ok((&mut self.reached).await?)
+        }
+        pub fn release(&mut self) {
+            self.release.take();
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let mut next = NEXT.lock().unwrap();
+            if next
+                .as_ref()
+                .is_some_and(|(_, operation)| Arc::ptr_eq(&operation.scratch, &self.scratch))
+            {
+                next.take();
+            }
+        }
+    }
+
+    pub(crate) fn take(target: &Path) -> Option<Operation> {
+        let mut next = NEXT.lock().unwrap();
+        if next.as_ref().is_some_and(|(path, _)| path == target) {
+            next.take().map(|(_, operation)| operation)
+        } else {
+            None
+        }
+    }
+
+    impl Operation {
+        pub async fn checkpoint(self, file: &File) -> Result<()> {
+            let metadata = file.metadata()?;
+            let path = std::fs::read_link(descriptor_path(file))?;
+            let bytes = path.as_os_str().as_bytes();
+            let path = PathBuf::from(OsStr::from_bytes(
+                bytes.strip_suffix(b" (deleted)").unwrap_or(bytes),
+            ));
+            ensure!(
+                path.parent() == Some(self.scratch.path()),
+                "fixture spool escaped scratch"
+            );
+            self.reached
+                .send(Snapshot {
+                    path,
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    links: metadata.nlink(),
+                    uid: metadata.uid(),
+                    gid: metadata.gid(),
+                })
+                .map_err(|_| anyhow::anyhow!("fixture observer closed"))?;
+            let _ = self.release.await;
+            Ok(())
+        }
+    }
+}
+
 pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     let parent = parent(path)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
@@ -252,23 +368,39 @@ pub async fn dispatch(
         }
         "tree_pull" => {
             // Spooling bounds memory and permits a known-safe archive before exposing bytes.
-            let archive = access(identity, || Ok(tempfile::NamedTempFile::new()?)).await?;
-            let archive_path = archive.path().to_owned();
+            #[cfg(feature = "filesystem-fixtures")]
+            let fixture = fixtures::take(&target);
+            #[cfg(feature = "filesystem-fixtures")]
+            let scratch = fixture.as_ref().map(|fixture| fixture.scratch.clone());
+            let mut archive = access(identity, move || {
+                #[cfg(feature = "filesystem-fixtures")]
+                if let Some(scratch) = scratch {
+                    return Ok(tempfile::NamedTempFile::new_in(scratch.path())?.into_file());
+                }
+                Ok(tempfile::NamedTempFile::new()?.into_file())
+            })
+            .await?;
+            let writer = archive.try_clone()?;
             let token = out.cancel.clone();
             access(identity, move || -> Result<()> {
                 let root = open_directory(&target.canonicalize()?)?;
                 public_descriptor(&root, &private, false)?;
-                let writer = OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(&archive_path)?;
                 archive_tree(&root, writer, Some(&private), &token)
             })
             .await?;
-            let mut file = tokio::fs::File::open(archive.path()).await?;
+            #[cfg(feature = "filesystem-fixtures")]
+            if let Some(fixture) = fixture {
+                fixture.checkpoint(&archive).await?;
+            }
+            // Clones share the offset. Rewind only after the archive writer finishes.
+            std::io::Seek::rewind(&mut archive)?;
+            let mut file = tokio::fs::File::from_std(archive);
             let mut buf = vec![0; CHUNK];
             loop {
-                let n = file.read(&mut buf).await?;
+                let n = tokio::select! {
+                    _ = out.cancel.cancelled() => bail!("connection closed"),
+                    result = file.read(&mut buf) => result?,
+                };
                 if n == 0 {
                     break;
                 }
