@@ -1,0 +1,25 @@
+[Unit]
+Description=Sandbox durable microVM engine
+After=network-pre.target
+Before=network.target
+RequiresMountsFor=/var/lib/sandbox-engine
+
+[Service]
+Type=simple
+# Create an environment file with ENGINE_IO_MAX for the actual backing device.
+# For example: ENGINE_IO_MAX="259:0 rbps=268435456 wbps=134217728 riops=20000 wiops=10000"
+EnvironmentFile=/etc/sandbox-engine/engine.env
+ExecStart=/usr/local/bin/engined --config=/etc/sandbox-engine/config.yaml
+RuntimeDirectory=sandbox-engine
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=2
+# VMMs belong to separately provisioned cgroups, and have no parent-death signal.
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

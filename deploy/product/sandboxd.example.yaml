@@ -1,0 +1,17 @@
+# Copy to /etc/sandboxd/config.yaml and pass:
+#   sandboxd --config /etc/sandboxd/config.yaml
+# YAML is one of Viper's supported formats; JSON and TOML also work.
+# Precedence: explicit flags > SANDBOXD_* environment > this file > flag defaults.
+# Keys are flat flag names; e.g. SANDBOXD_ROOT_TOKEN_FILE overrides root-token-file.
+# No file is discovered automatically. SANDBOXD_CONFIG can also select the file.
+state-dir: /var/lib/sandboxd
+engine-socket: /run/sandbox-engine/engine.sock
+listen: 127.0.0.1:7777
+root-token-file: /etc/sandboxd/root-token
+# Enable only for the first start of a fresh product database.
+init: false
+mode: serve
+tls-cert: ""
+tls-key: ""
+# For administrative modes, set mode to backup, restore-backup, or recover and
+# supply backup or recovery-note, using the same flat keys as the flags.

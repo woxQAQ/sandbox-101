@@ -1,0 +1,29 @@
+[Unit]
+Description=Sandbox guest system and product agent
+DefaultDependencies=no
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=sysinit.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/sandbox-agent --uid 1000 --gid 1000
+Restart=on-failure
+RestartSec=250ms
+User=root
+Group=root
+WorkingDirectory=/home/sandbox
+UMask=0077
+# The agent performs native clock/reseed/hostname control; workload children
+# drop groups, uid/gid and gain no new privileges before exec.
+NoNewPrivileges=yes
+LimitNOFILE=4096
+TasksMax=1024
+MemoryMax=256M
+KillMode=control-group
+TimeoutStopSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

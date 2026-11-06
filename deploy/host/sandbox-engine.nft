@@ -1,0 +1,48 @@
+# Owned by the host deployment, loaded before engined admits network access.
+# engined changes only active_ifaces/active_ips. Do not flush these sets during
+# daemon restart; existing VMMs and their network resources remain alive.
+table inet sandbox_engine {
+    set active_ifaces { type ifname; }
+    set active_ips { type ipv4_addr; }
+    set protected_ipv4 {
+        type ipv4_addr
+        flags interval
+        elements = {
+            0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+            169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24,
+            192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15,
+            198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4,
+            240.0.0.0/4
+        }
+    }
+    chain vm_ingress {
+        # Namespace output is denied separately, so this sees forwarded guest
+        # packets only. Addresses are SNATed before host conntrack sees them.
+        meta nfproto != ipv4 drop
+        iifname != @active_ifaces drop
+        ip saddr != @active_ips drop
+        ip daddr @protected_ipv4 drop
+        # A conservative global packet ceiling is an example deployment quota.
+        # Deploy per-VM tc/HTB bandwidth and connection budgets for production.
+        limit rate over 100000/second burst 200000 packets drop
+        accept
+    }
+    chain forward {
+        type filter hook forward priority -100; policy accept;
+        iifname "sb*" jump vm_ingress
+        oifname "sb*" oifname @active_ifaces ip daddr @active_ips ct state established,related accept
+        oifname "sb*" drop
+    }
+    chain input {
+        type filter hook input priority -100; policy accept;
+        iifname "sb*" drop
+    }
+    chain output {
+        type filter hook output priority -100; policy accept;
+        oifname "sb*" oifname != @active_ifaces drop
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr @active_ips oifname != "sb*" masquerade
+    }
+}

@@ -1,0 +1,9 @@
+# Pass this file explicitly before the command:
+#   sandboxctl --config ./sandboxctl.yaml list
+# YAML is one of Viper's supported formats; JSON and TOML also work.
+# Precedence: explicit flags > SANDBOXCTL_* environment > this file > flag defaults.
+# Keys are flat flag names; e.g. SANDBOXCTL_TOKEN_FILE overrides token-file.
+# No file is discovered automatically. SANDBOXCTL_CONFIG can also select the file.
+endpoint: http://127.0.0.1:7777
+token-file: /etc/sandboxd/tenant-token
+# Pass --key for each mutation and reuse it when retrying that same intent.

@@ -1,0 +1,54 @@
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  concurrency: 4
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - misspell
+    - forbidigo
+    - embeddedstructfieldcheck
+  settings:
+    misspell:
+      locale: US
+  exclusions:
+    presets:
+      - common-false-positives
+      - legacy
+    rules:
+      - path: '_test\.go'
+        linters:
+          - errcheck
+      - linters:
+          - forbidigo
+        path: main.go
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - gci
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/woxQAQ)
+      custom-order: true
+    gofumpt:
+      extra:
+        group-params: true
+    goimports:
+      local-prefixes:
+        - github.com/woxQAQ
+    golines:
+      max-len: 80
+      tab-len: 4
+      reformat-tags: true
+      chain-split-dots: true

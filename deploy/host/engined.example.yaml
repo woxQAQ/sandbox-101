@@ -1,0 +1,28 @@
+# Copy to /etc/sandbox-engine/config.yaml and pass:
+#   engined --config /etc/sandbox-engine/config.yaml
+# YAML is one of Viper's supported formats; JSON and TOML also work.
+# Precedence: explicit flags > ENGINE_* environment > this file > flag defaults.
+# Keys are flat flag names; e.g. ENGINE_GC_INTERVAL overrides gc-interval.
+# No file is discovered automatically. ENGINE_CONFIG can also select the file.
+state-dir: /var/lib/sandbox-engine
+socket: /run/sandbox-engine/engine.sock
+mode: serve
+# Enable only for the first start of a fresh state directory.
+init: false
+cloud-hypervisor: /usr/local/libexec/sandbox/cloud-hypervisor
+build-receipt: ""
+cgroup-root: /sys/fs/cgroup/sandbox-vms
+host-policy: /etc/sandbox-engine/host-policy.json
+# Supply the backing-device budget required by your host policy.
+io-max: ""
+vmm-uid: 65534
+vmm-gid: 65534
+max-memory-mib: 0
+max-vcpus: 0
+storage-margin-bytes: 268435456
+gc-dry-run: false
+gc-batch: 16
+# A duration string with units; 0s retains the engine's default interval.
+gc-interval: 0s
+# Administrative modes also accept backup, recovery-note, oci-layout, digest,
+# and materialization using the same flat keys as their command-line flags.

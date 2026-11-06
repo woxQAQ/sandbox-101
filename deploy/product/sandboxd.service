@@ -1,0 +1,26 @@
+[Unit]
+Description=Sandbox product control plane and guest relay
+After=network.target sandbox-engine.service
+Requires=sandbox-engine.service
+RequiresMountsFor=/var/lib/sandboxd /var/lib/sandbox-engine
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sandboxd --config=/etc/sandboxd/config.yaml
+StateDirectory=sandboxd
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+KillMode=control-group
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sandboxd /var/lib/sandbox-engine /run/sandbox-engine
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
