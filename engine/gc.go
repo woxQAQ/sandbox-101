@@ -483,8 +483,8 @@ func (g *gcGraph) load() error {
 	}
 	for id, o := range g.ops {
 		live := !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
-			o.Journal.Lease
-		if o.Operation.Error != nil &&
+			o.Journal.Lease || o.Journal.RestoreBlocked && !o.Journal.RestoreCleaned || o.Journal.BlockedRestoreID != "" && g.vms[o.Operation.VMID].VM.ID != ""
+		if o.Operation.Error != nil && !o.Journal.RestoreCleaned &&
 			o.Operation.Error.Code == api.ManualRecovery {
 			return fmt.Errorf("GC operation requires manual recovery: %s", id)
 		}

@@ -568,7 +568,7 @@ func (g *gcGraph) idle(vm string) error {
 			continue
 		}
 		if !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
-			o.Journal.Lease ||
+			o.Journal.Lease || o.Journal.RestoreBlocked && !o.Journal.RestoreCleaned ||
 			v.VM.OperationID == o.Operation.ID {
 			return fmt.Errorf(
 				"VM has pending or unresolved operation %s",
@@ -794,11 +794,13 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			continue
 		}
 		files := map[string]string{
-			"disk.raw":              "",
-			"disk.raw.pending":      "",
-			"restore/config.json":   "",
-			"restore/state.json":    "",
-			"restore/memory-ranges": "",
+			"disk.raw":                    "",
+			"disk.raw.pending":            "",
+			"restore/config.json":         "",
+			"restore/config.json.pending": "",
+			"restore/state.json.pending":  "",
+			"restore/state.json":          "",
+			"restore/memory-ranges":       "",
 		}
 		dir := v.manifest != nil
 		if dir {

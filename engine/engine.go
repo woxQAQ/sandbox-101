@@ -795,11 +795,47 @@ func (e *Engine) Submit(
 			return api.Operation{}, api.Fail(api.Conflict, "VM deleting")
 		}
 		if v.VM.OperationID != "" {
-			return api.Operation{}, api.Fail(
-				api.Conflict,
-				"VM has an active or unresolved operation: %s",
-				v.VM.OperationID,
-			)
+			var priorBody []byte
+			var prior opRecord
+			if err = tx.QueryRow("SELECT body FROM operations WHERE id=?", v.VM.OperationID).
+				Scan(&priorBody); err != nil {
+				return api.Operation{}, err
+			}
+			if err = json.Unmarshal(priorBody, &prior); err != nil {
+				return api.Operation{}, err
+			}
+			blockedID := prior.Operation.ID
+			if prior.Operation.Request.Action == "delete" {
+				blockedID = prior.Journal.BlockedRestoreID
+			}
+			var blocked opRecord
+			if blockedID == prior.Operation.ID {
+				blocked = prior
+			} else if blockedID != "" {
+				if err = tx.QueryRow("SELECT body FROM operations WHERE id=?", blockedID).
+					Scan(&priorBody); err != nil {
+					return api.Operation{}, err
+				}
+				if err = json.Unmarshal(priorBody, &blocked); err != nil {
+					return api.Operation{}, err
+				}
+			}
+			if r.Action != "delete" || prior.Operation.Status != "failed" ||
+				prior.Operation.VMID != r.VMID ||
+				blocked.Operation.ID != blockedID ||
+				blocked.Operation.VMID != r.VMID ||
+				blocked.Operation.Status != "failed" ||
+				!blocked.Journal.RestoreBlocked ||
+				blocked.Journal.RestoreCleaned ||
+				(blocked.Operation.Request.Action != "restore" && blocked.Operation.Request.Action != "clone") ||
+				r.ExpectedInstance != v.VM.Instance {
+				return api.Operation{}, api.Fail(
+					api.Conflict,
+					"VM has an active or unresolved operation: %s",
+					v.VM.OperationID,
+				)
+			}
+			o.Journal.BlockedRestoreID = blockedID
 		}
 		if r.ExpectedInstance != "" && r.ExpectedInstance != v.VM.Instance {
 			return api.Operation{}, api.Fail(

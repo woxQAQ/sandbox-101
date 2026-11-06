@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -987,5 +988,80 @@ func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
 	if len(r.Retained) == 0 ||
 		!strings.Contains(r.Retained[0].Reason, "inode") {
 		t.Fatalf("replacement not diagnosed: %+v", r)
+	}
+}
+
+func TestGCRetainsBlockedRestoreMaterials(t *testing.T) {
+	for _, boundary := range []string{"restore_candidate_copied", "restore_candidate_synced", "restore_materials_complete", "restore_resources_ready"} {
+		t.Run(boundary, func(t *testing.T) {
+			var armed atomic.Bool
+			e, _ := openGCTest(t, func(step string) error {
+				if armed.Load() && step == boundary {
+					return errors.New("candidate delivery failed")
+				}
+				return nil
+			})
+			_, source := gcSource(t, e)
+			armed.Store(true)
+			op, err := e.Submit(
+				context.Background(),
+				api.Request{
+					Key:        "blocked-clone",
+					Action:     "clone",
+					SnapshotID: source.SnapshotID,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
+				t.Fatalf("clone did not fail: %+v", final)
+			}
+			lock := e.vmLock(op.VMID)
+			lock.Lock()
+			record, err := e.loadOp(context.Background(), op.ID)
+			lock.Unlock()
+			if err != nil || !record.Journal.RestoreBlocked {
+				t.Fatalf("restore not fenced: %+v %v", record.Journal, err)
+			}
+			version := filepath.Dir(record.Journal.Resource.Disk)
+			for _, dry := range []bool{true, false} {
+				report := gcPass(t, e, GCOptions{DryRun: dry})
+				for _, path := range append(report.Candidates, report.Removed...) {
+					if path == version || strings.HasPrefix(path, version+"/") {
+						t.Fatalf(
+							"blocked version became collectible: %+v",
+							report,
+						)
+					}
+				}
+				gcExists(t, version, true)
+			}
+			vm, err := e.GetVM(context.Background(), op.VMID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wait(
+				t,
+				e,
+				api.Request{
+					Key:              "explicit-delete",
+					Action:           "delete",
+					VMID:             op.VMID,
+					ExpectedInstance: vm.Instance,
+				},
+			)
+			gcExists(t, version, false)
+			wait(
+				t,
+				e,
+				api.Request{
+					Key:        "source-delete",
+					Action:     "delete_snapshot",
+					SnapshotID: source.SnapshotID,
+				},
+			)
+			gcPass(t, e, GCOptions{})
+		})
 	}
 }

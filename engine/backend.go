@@ -81,16 +81,21 @@ type snapshotRecord struct {
 	Dir      string       `json:"dir"`
 }
 type journal struct {
-	CaptureBoundary *captureBoundary  `json:"capture_boundary,omitempty"`
-	Materialized    bool              `json:"materialized,omitempty"`
-	CaptureFiles    map[string]string `json:"capture_files,omitempty"`
-	ArtifactsSynced bool              `json:"artifacts_synced,omitempty"`
-	ResumeRequired  bool              `json:"resume_required,omitempty"`
-	Captured        bool              `json:"captured,omitempty"`
-	Resource        *Resource         `json:"resource,omitempty"`
-	Old             *Resource         `json:"old,omitempty"`
-	Lease           bool              `json:"lease,omitempty"`
-	Manifest        *Manifest         `json:"manifest,omitempty"`
+	RestoreDeletion  *gcDeletion       `json:"restore_deletion,omitempty"`
+	RestoreMaterials *restoreMaterials `json:"restore_materials,omitempty"`
+	RestoreBlocked   bool              `json:"restore_blocked,omitempty"`
+	RestoreCleaned   bool              `json:"restore_cleaned,omitempty"`
+	BlockedRestoreID string            `json:"blocked_restore_id,omitempty"`
+	CaptureBoundary  *captureBoundary  `json:"capture_boundary,omitempty"`
+	Materialized     bool              `json:"materialized,omitempty"`
+	CaptureFiles     map[string]string `json:"capture_files,omitempty"`
+	ArtifactsSynced  bool              `json:"artifacts_synced,omitempty"`
+	ResumeRequired   bool              `json:"resume_required,omitempty"`
+	Captured         bool              `json:"captured,omitempty"`
+	Resource         *Resource         `json:"resource,omitempty"`
+	Old              *Resource         `json:"old,omitempty"`
+	Lease            bool              `json:"lease,omitempty"`
+	Manifest         *Manifest         `json:"manifest,omitempty"`
 }
 type opRecord struct {
 	Operation api.Operation `json:"operation"`

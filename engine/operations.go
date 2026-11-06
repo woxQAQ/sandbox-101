@@ -52,6 +52,17 @@ func (e *Engine) execute(id string) {
 			} else {
 				err = e.perform(&o, &v)
 			}
+		} else if a, ok := errors.AsType[*api.Error](err); ok && a.Code == api.NotFound && o.Operation.Request.Action == "delete" && o.Journal.BlockedRestoreID != "" {
+			// The cleanup transaction can commit before the delete response does.
+			// Only the original restore's durable cleanup receipt proves success.
+			blocked, x := e.loadOp(e.ctx, o.Journal.BlockedRestoreID)
+			if x == nil && blocked.Operation.VMID == o.Operation.VMID &&
+				blocked.Operation.Status == "failed" &&
+				blocked.Journal.RestoreBlocked &&
+				blocked.Journal.RestoreCleaned &&
+				!blocked.Journal.Lease {
+				err = nil
+			}
 		}
 	}
 	if errors.Is(err, ErrInterrupted) || e.ctx.Err() != nil {
@@ -63,6 +74,19 @@ func (e *Engine) execute(id string) {
 func (e *Engine) finish(o *opRecord, cause error) error {
 	e.admission.Lock()
 	defer e.admission.Unlock()
+	if cause != nil &&
+		(o.Operation.Request.Action == "restore" || o.Operation.Request.Action == "clone") &&
+		(o.Journal.Resource != nil || !o.Journal.Lease) {
+		// Persist the internal fence before fixing the public terminal response.
+		o.Journal.RestoreBlocked = true
+		if _, err := e.db.Exec(
+			"UPDATE operations SET body=? WHERE id=?",
+			encode(o),
+			o.Operation.ID,
+		); err != nil {
+			return err
+		}
+	}
 	tx, err := e.db.Begin()
 	if err != nil {
 		return err
@@ -86,7 +110,8 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 			return err
 		}
 		if v.VM.OperationID == o.Operation.ID {
-			if !o.Journal.ResumeRequired {
+			if !o.Journal.ResumeRequired && !o.Journal.RestoreBlocked &&
+				o.Journal.BlockedRestoreID == "" {
 				v.VM.OperationID = ""
 			}
 			if cause != nil {
@@ -101,7 +126,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 			}
 		}
 	}
-	if o.Journal.Lease {
+	if o.Journal.Lease && !o.Journal.RestoreBlocked {
 		if _, err = tx.Exec(
 			"DELETE FROM leases WHERE operation=?",
 			o.Operation.ID,
@@ -151,6 +176,9 @@ func (e *Engine) perform(o *opRecord, v *vmRecord) error {
 	case "stop":
 		return e.stop(o, v)
 	case "delete":
+		if o.Journal.BlockedRestoreID != "" {
+			return e.deleteBlockedRestore(o, v)
+		}
 		if err := e.stop(o, v); err != nil {
 			return err
 		}
@@ -734,6 +762,12 @@ func (e *Engine) captureFailure(o *opRecord, r Resource, cause error) error {
 }
 
 func (e *Engine) restore(o *opRecord, v *vmRecord) error {
+	if o.Journal.RestoreBlocked {
+		return api.Fail(
+			api.ManualRecovery,
+			"restore materials blocked; explicit delete required",
+		)
+	}
 	var s snapshotRecord
 	var m Manifest
 	var err error
@@ -831,71 +865,16 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	}
 	r := *o.Journal.Resource
 	if o.Journal.Lease {
-		if err = os.MkdirAll(r.RestoreDir, 0o700); err != nil {
-			return err
-		}
-		for _, name := range []string{"config.json", "state.json"} {
-			dst := filepath.Join(r.RestoreDir, name)
-			if _, x := os.Stat(dst); os.IsNotExist(x) {
-				if err = copyFile(
-					filepath.Join(s.Dir, "ch", name),
-					dst,
-					0o444,
-				); err != nil {
-					return err
-				}
-			}
-		}
-		backing := filepath.Join(r.RestoreDir, "memory-ranges")
-		src := filepath.Join(s.Dir, "ch/memory-ranges")
-		if err = os.Link(
-			src,
-			backing,
-		); err != nil &&
-			!errors.Is(err, os.ErrExist) {
-			return api.Fail(
-				api.Incompatible,
-				"COW requires hardlinks on one filesystem: %v",
-				err,
-			)
-		}
-		a, x := os.Stat(src)
-		if x != nil {
-			return x
-		}
-		b, x := os.Stat(backing)
-		if x != nil {
-			return x
-		}
-		if !os.SameFile(a, b) {
-			return api.Fail(
-				api.ManualRecovery,
-				"candidate backing inode mismatch",
-			)
-		}
-		if _, x = os.Stat(r.Disk); os.IsNotExist(x) {
-			tmp := r.Disk + ".pending"
-			_ = os.Remove(tmp)
-			if err = copyFile(
-				filepath.Join(s.Dir, "disk.raw"),
-				tmp,
-				0o600,
-			); err != nil {
-				return err
-			}
-			if err = os.Rename(tmp, r.Disk); err != nil {
-				return err
-			}
-		}
-		if err = syncTree(filepath.Dir(r.RestoreDir)); err != nil {
-			return err
-		}
-		if err = syncDir(filepath.Dir(filepath.Dir(r.RestoreDir))); err != nil {
+		if err = e.prepareRestoreMaterials(o, s, m); err != nil {
 			return err
 		}
 		if err = e.opts.Backend.Prepare(e.ctx, r); err != nil {
 			return err
 		}
+		if err = e.verifyRestoreMaterials(o, m, true); err != nil {
+			return err
+		}
+		backing := filepath.Join(r.RestoreDir, "memory-ranges")
 		// The immutable hardlink and private copies replace the source-object lease.
 		o.Journal.Lease = false
 		o.Operation.Step = "restore_resources_ready"
@@ -929,11 +908,32 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		}
 		e.admission.Unlock()
 		if x != nil {
+			o.Journal.Lease = true
 			return x
 		}
 		if err = e.saveOp(o, "restore_resources_ready"); err != nil {
 			return err
 		}
+	}
+	obs, err := e.opts.Backend.Inspect(e.ctx, r)
+	if err != nil {
+		return err
+	}
+	if obs.Alive && o.Operation.Step == "restore_resources_ready" {
+		return api.Fail(
+			api.ManualRecovery,
+			"restore candidate in use without launch intent",
+		)
+	}
+	// A live instance may already have modified its private disk after launch.
+	// Never compare those legitimate writes to the delivery digest or recopy it.
+	if err = e.verifyRestoreMaterials(
+		o,
+		m,
+		!obs.Alive &&
+			(o.Operation.Step == "restore_resources_ready" || o.Operation.Step == "restore_launch_intent"),
+	); err != nil {
+		return err
 	}
 	v.Resource = r
 	v.VM.Instance = r.Instance
@@ -949,8 +949,7 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	if err = e.saveVM(*v); err != nil {
 		return err
 	}
-	if o.Operation.Step == "restore_resources_ready" ||
-		o.Operation.Step == "restore_prepare_intent" {
+	if o.Operation.Step == "restore_resources_ready" {
 		if err = e.saveOp(o, "restore_launch_intent"); err != nil {
 			return err
 		}
@@ -1127,6 +1126,10 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			l.Unlock()
 			continue
 		}
+		if x = e.restoreVMFence(&v); x != nil {
+			l.Unlock()
+			return x
+		}
 		obs, x := e.opts.Backend.Inspect(ctx, v.Resource)
 		if x != nil {
 			if obs.Network {
@@ -1172,6 +1175,8 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		if v.VM.OperationID != "" {
 			o, x := e.loadOp(ctx, v.VM.OperationID)
 			if x == nil && terminal(o.Operation.Status) &&
+				!o.Journal.RestoreBlocked &&
+				o.Journal.BlockedRestoreID == "" &&
 				o.Journal.ResumeRequired {
 				if !obs.Alive || !obs.Paused {
 					x = nil
