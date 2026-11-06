@@ -46,7 +46,8 @@ func TestHTTPRoutesAndAuthentication(t *testing.T) {
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
-			if tc.path != "/metrics" && w.Header().Get("Cache-Control") != "no-store" {
+			if tc.path != "/metrics" &&
+				w.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("missing cache protection: %v", w.Header())
 			}
 		})
@@ -57,7 +58,13 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 	s, f, _, _ := fixture(t)
 	h := s.Handler()
 	claim := func(prefer string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPost, "/v1/claim", strings.NewReader(`{"template_id":"python","policy":{"mode":"none"}}`))
+		r := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/claim",
+			strings.NewReader(
+				`{"template_id":"python","policy":{"mode":"none"}}`,
+			),
+		)
 		r.Header.Set("Authorization", "Bearer alice-token")
 		r.Header.Set("Idempotency-Key", "http-claim")
 		r.Header.Set("Prefer", prefer)
@@ -66,10 +73,20 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 		return w
 	}
 	first := claim("respond-async")
-	if first.Code != http.StatusAccepted || !strings.HasPrefix(first.Header().Get("Location"), "/v1/operations/") {
-		t.Fatalf("asynchronous claim: %d %v %s", first.Code, first.Header(), first.Body.String())
+	if first.Code != http.StatusAccepted ||
+		!strings.HasPrefix(first.Header().Get("Location"), "/v1/operations/") {
+		t.Fatalf(
+			"asynchronous claim: %d %v %s",
+			first.Code,
+			first.Header(),
+			first.Body.String(),
+		)
 	}
-	r := httptest.NewRequest(http.MethodGet, first.Header().Get("Location"), nil)
+	r := httptest.NewRequest(
+		http.MethodGet,
+		first.Header().Get("Location"),
+		nil,
+	)
 	r.Header.Set("Authorization", "Bearer alice-token")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -79,18 +96,31 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 	var results [2]Result
 	for i := range results {
 		w := claim("")
-		if err := json.Unmarshal(w.Body.Bytes(), &results[i]); err != nil || w.Code != http.StatusOK || results[i].Sandbox == nil {
+		if err := json.Unmarshal(
+			w.Body.Bytes(),
+			&results[i],
+		); err != nil || w.Code != http.StatusOK ||
+			results[i].Sandbox == nil {
 			t.Fatalf("claim: %d %s decode=%v", w.Code, w.Body.String(), err)
 		}
 	}
-	if results[0].Sandbox.ID != results[1].Sandbox.ID || f.count("create") != 1 {
-		t.Fatalf("claim replay created a new sandbox: %+v creations=%d", results, f.count("create"))
+	if results[0].Sandbox.ID != results[1].Sandbox.ID ||
+		f.count("create") != 1 {
+		t.Fatalf(
+			"claim replay created a new sandbox: %+v creations=%d",
+			results,
+			f.count("create"),
+		)
 	}
 }
 
 func TestHTTPUpgradeRejectsHTTP2BeforeResuming(t *testing.T) {
 	s, f, _, _ := fixture(t)
-	r := httptest.NewRequest(http.MethodGet, "/v1/sandboxes/missing/connect", nil)
+	r := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/sandboxes/missing/connect",
+		nil,
+	)
 	r.Proto, r.ProtoMajor, r.ProtoMinor = "HTTP/2.0", 2, 0
 	r.Header.Set("Authorization", "Bearer alice-token")
 	r.Header.Set("Connection", "Upgrade")
@@ -98,8 +128,18 @@ func TestHTTPUpgradeRejectsHTTP2BeforeResuming(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	var result api.Error
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusUnprocessableEntity || result.Code != api.Incompatible || f.count("clone") != 0 {
-		t.Fatalf("status=%d result=%+v clones=%d decode=%v", w.Code, result, f.count("clone"), err)
+	if err := json.Unmarshal(
+		w.Body.Bytes(),
+		&result,
+	); err != nil || w.Code != http.StatusUnprocessableEntity || result.Code != api.Incompatible ||
+		f.count("clone") != 0 {
+		t.Fatalf(
+			"status=%d result=%+v clones=%d decode=%v",
+			w.Code,
+			result,
+			f.count("clone"),
+			err,
+		)
 	}
 }
 
@@ -112,14 +152,28 @@ func TestHTTPRejectsInvalidJSONBeforeMutation(t *testing.T) {
 		`{"template_id":`,
 		`{"template_id":"` + strings.Repeat("x", 1<<20) + `"}`,
 	} {
-		r := httptest.NewRequest(http.MethodPost, "/v1/claim", strings.NewReader(body))
+		r := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/claim",
+			strings.NewReader(body),
+		)
 		r.Header.Set("Authorization", "Bearer alice-token")
 		r.Header.Set("Idempotency-Key", "invalid-claim")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		var result api.Error
-		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusBadRequest || result.Code != api.Invalid || f.count("create") != 0 {
-			t.Fatalf("status=%d result=%+v creations=%d decode=%v", w.Code, result, f.count("create"), err)
+		if err := json.Unmarshal(
+			w.Body.Bytes(),
+			&result,
+		); err != nil || w.Code != http.StatusBadRequest || result.Code != api.Invalid ||
+			f.count("create") != 0 {
+			t.Fatalf(
+				"status=%d result=%+v creations=%d decode=%v",
+				w.Code,
+				result,
+				f.count("create"),
+				err,
+			)
 		}
 	}
 }

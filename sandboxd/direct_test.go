@@ -13,12 +13,16 @@ import (
 
 type directTestEngine struct {
 	*fakeEngine
+
 	requestMu  sync.Mutex
 	requests   []api.Request
 	failRevoke bool
 }
 
-func (f *directTestEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
+func (f *directTestEngine) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
 	f.requestMu.Lock()
 	f.requests = append(f.requests, r)
 	fail := r.Action == "network_policy" && r.Policy == nil && f.failRevoke
@@ -41,10 +45,19 @@ func (f *directTestEngine) Submit(ctx context.Context, r api.Request) (api.Opera
 	if v.Instance != r.ExpectedInstance {
 		return api.Operation{}, api.Fail(api.Conflict, "instance changed")
 	}
-	o := api.Operation{ID: r.Key, Key: r.Key, VMID: r.VMID, Request: r, Status: "succeeded"}
+	o := api.Operation{
+		ID:      r.Key,
+		Key:     r.Key,
+		VMID:    r.VMID,
+		Request: r,
+		Status:  "succeeded",
+	}
 	if fail || v.NetworkActual {
 		o.Status = "failed"
-		o.Error = &api.Error{Code: api.Conflict, Message: "policy replacement failed"}
+		o.Error = &api.Error{
+			Code:    api.Conflict,
+			Message: "policy replacement failed",
+		}
 	} else {
 		v.NetworkPolicy = r.Policy
 		v.NetworkPolicyInstance = v.Instance
@@ -58,35 +71,86 @@ func TestDirectPolicyActivationAndRetryableRevocation(t *testing.T) {
 	engine := &directTestEngine{fakeEngine: newFakeEngine()}
 	var service *Service
 	ready := make(chan struct{})
-	manager, err := egress.New(egress.Options{InstallDirect: func(ctx context.Context, binding egress.Binding, policy egress.Policy) (func() error, error) {
-		<-ready
-		return service.InstallDirect(ctx, binding, policy)
-	}})
+	manager, err := egress.New(
+		egress.Options{
+			InstallDirect: func(ctx context.Context, binding egress.Binding, policy egress.Policy) (func() error, error) {
+				<-ready
+				return service.InstallDirect(ctx, binding, policy)
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err = Open(Options{StateDir: t.TempDir(), Initialize: true, RootToken: "root-token", Engine: engine, Agent: &fakeAgent{}, Egress: manager, Interval: time.Hour})
+	service, err = Open(
+		Options{
+			StateDir:   t.TempDir(),
+			Initialize: true,
+			RootToken:  "root-token",
+			Engine:     engine,
+			Agent:      &fakeAgent{},
+			Egress:     manager,
+			Interval:   time.Hour,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	close(ready)
 	defer service.Close()
 	principal := Principal{TenantID: "alice"}
-	_, err = service.PutTenant(context.Background(), Principal{Root: true}, Tenant{ID: principal.TenantID, MaxSandboxes: 10, MaxStorageMiB: 10000, Token: "tenant-token"})
+	_, err = service.PutTenant(
+		context.Background(),
+		Principal{Root: true},
+		Tenant{
+			ID:            principal.TenantID,
+			MaxSandboxes:  10,
+			MaxStorageMiB: 10000,
+			Token:         "tenant-token",
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Execute(context.Background(), principal, "template", Command{Action: "template_put", Template: &Template{ID: "test", Image: "sha256:" + strings.Repeat("1", 64), Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64}}})
+	_, err = service.Execute(
+		context.Background(),
+		principal,
+		"template",
+		Command{
+			Action: "template_put",
+			Template: &Template{
+				ID:    "test",
+				Image: "sha256:" + strings.Repeat("1", 64),
+				Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.Execute(context.Background(), principal, "claim", Command{Action: "claim", TemplateID: "test", Policy: egress.Policy{Mode: "direct", AllowedCIDRs: []string{"1.1.1.1/32"}}})
+	result, err := service.Execute(
+		context.Background(),
+		principal,
+		"claim",
+		Command{
+			Action:     "claim",
+			TemplateID: "test",
+			Policy: egress.Policy{
+				Mode:         "direct",
+				AllowedCIDRs: []string{"1.1.1.1/32"},
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	vm, err := engine.GetVM(context.Background(), result.Sandbox.VMID)
-	if err != nil || !vm.NetworkActual || vm.NetworkPolicy == nil || vm.NetworkPolicy.MaxConnections != 256 {
-		t.Fatal("direct activation did not commit the default budget and network state", err)
+	if err != nil || !vm.NetworkActual || vm.NetworkPolicy == nil ||
+		vm.NetworkPolicy.MaxConnections != 256 {
+		t.Fatal(
+			"direct activation did not commit the default budget and network state",
+			err,
+		)
 	}
 	engine.requestMu.Lock()
 	policyAt, enabledAt := -1, -1
@@ -127,7 +191,15 @@ func TestDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 		{Policy: egress.Policy{Mode: "direct"}, Env: map[string]EnvVar{"TOKEN": {Value: "host-only", Guest: &no, Inject: &Injection{Hosts: []string{"example.com"}, Header: "Authorization"}}}},
 	} {
 		command.Action, command.TemplateID = "claim", "python"
-		if _, err := s.Submit(context.Background(), p, newID("invalid-direct"), command); !isCode(err, api.Invalid) {
+		if _, err := s.Submit(
+			context.Background(),
+			p,
+			newID("invalid-direct"),
+			command,
+		); !isCode(
+			err,
+			api.Invalid,
+		) {
 			t.Fatalf("invalid direct request accepted: %v", err)
 		}
 	}

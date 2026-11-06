@@ -21,8 +21,19 @@ func (w *shortWriter) Write(p []byte) (int, error) {
 }
 
 func TestFramingBackToBackAndShortWrites(t *testing.T) {
-	params, _ := structpb.NewStruct(map[string]any{"env": map[string]any{"X": "y"}, "exit_code": float64(0)})
-	frame := &Frame{Id: "one", Method: "exec", Params: params, Data: []byte{0, 1, 2}, Eof: true}
+	params, _ := structpb.NewStruct(
+		map[string]any{
+			"env":       map[string]any{"X": "y"},
+			"exit_code": float64(0),
+		},
+	)
+	frame := &Frame{
+		Id:     "one",
+		Method: "exec",
+		Params: params,
+		Data:   []byte{0, 1, 2},
+		Eof:    true,
+	}
 	var wire shortWriter
 	for range 2 {
 		if err := WriteFrame(&wire, frame); err != nil {
@@ -58,7 +69,10 @@ func TestInvalidAndTruncatedFrames(t *testing.T) {
 			t.Fatalf("accepted invalid wire %x", wire)
 		}
 	}
-	if err := WriteFrame(io.Discard, &Frame{Id: "huge", Data: make([]byte, MaxFrameSize)}); err == nil {
+	if err := WriteFrame(
+		io.Discard,
+		&Frame{Id: "huge", Data: make([]byte, MaxFrameSize)},
+	); err == nil {
 		t.Fatal("accepted oversized encoded frame")
 	}
 }

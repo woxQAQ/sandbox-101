@@ -248,7 +248,9 @@ func (w *erofsWriter) writeBlock0(buf io.Writer) error {
 	if len(w.devices) > 0 {
 		featureIncompat |= disk.FeatureIncompatDeviceTable
 		extraDevices = uint16(len(w.devices))
-		devtSlotOff = uint16((disk.SuperBlockOffset + disk.SizeSuperBlock) / disk.SizeDeviceSlot)
+		devtSlotOff = uint16(
+			(disk.SuperBlockOffset + disk.SizeSuperBlock) / disk.SizeDeviceSlot,
+		)
 	}
 	for _, e := range w.entries {
 		if len(e.chunks) > 0 {
@@ -280,13 +282,21 @@ func (w *erofsWriter) writeBlock0(buf io.Writer) error {
 	// Write device slots right after superblock.
 	for i, blocks := range w.devices {
 		if blocks > math.MaxUint32 {
-			return fmt.Errorf("device %d block count %d exceeds 32-bit limit", i+1, blocks)
+			return fmt.Errorf(
+				"device %d block count %d exceeds 32-bit limit",
+				i+1,
+				blocks,
+			)
 		}
 		devSlot := disk.DeviceSlot{
 			Blocks: uint32(blocks),
 		}
 		devBuf := &bytes.Buffer{}
-		if err := binary.Write(devBuf, binary.LittleEndian, &devSlot); err != nil {
+		if err := binary.Write(
+			devBuf,
+			binary.LittleEndian,
+			&devSlot,
+		); err != nil {
 			return fmt.Errorf("write device slot: %w", err)
 		}
 		off := disk.SuperBlockOffset + disk.SizeSuperBlock + i*disk.SizeDeviceSlot
@@ -309,7 +319,9 @@ func (w *erofsWriter) writeMetadataInodes(buf io.Writer) error {
 
 		expectedOff := int(e.nid) * 32
 		if expectedOff > metaStart {
-			if _, err := buf.Write(w.zeroBuf[:expectedOff-metaStart]); err != nil {
+			if _, err := buf.Write(
+				w.zeroBuf[:expectedOff-metaStart],
+			); err != nil {
 				return err
 			}
 			metaStart = expectedOff
@@ -335,7 +347,8 @@ func (w *erofsWriter) writeMetadataInodes(buf io.Writer) error {
 		// Write trailing data
 		switch e.mode & disk.StatTypeMask {
 		case disk.StatTypeReg:
-			if e.layout == disk.LayoutChunkBased && (e.size > 0 || len(e.chunks) > 0) {
+			if e.layout == disk.LayoutChunkBased &&
+				(e.size > 0 || len(e.chunks) > 0) {
 				// Align the chunk-index map to the chunk-index unit.
 				if e.chunkPad > 0 {
 					if _, err := buf.Write(w.zeroBuf[:e.chunkPad]); err != nil {
@@ -347,19 +360,33 @@ func (w *erofsWriter) writeMetadataInodes(buf io.Writer) error {
 					return fmt.Errorf("write chunks for %s: %w", e.path, err)
 				}
 				metaStart += e.trailingSize
-			} else if e.layout == disk.LayoutFlatInline && e.size > 0 && e.data != nil {
+			} else if e.layout == disk.LayoutFlatInline && e.size > 0 &&
+				e.data != nil {
 				// e.data may be an unbounded reader (e.g. directData from CopyFrom);
 				// limit to e.size bytes to prevent overwriting subsequent metadata.
 				expected := int64(e.size)
-				n, err := io.CopyBuffer(onlyWriter{buf}, io.LimitReader(e.data, expected), w.copyBuf)
+				n, err := io.CopyBuffer(
+					onlyWriter{buf},
+					io.LimitReader(e.data, expected),
+					w.copyBuf,
+				)
 				if c, ok := e.data.(io.Closer); ok {
 					_ = c.Close()
 				}
 				if err != nil {
-					return fmt.Errorf("write inline data for %s: %w", e.path, err)
+					return fmt.Errorf(
+						"write inline data for %s: %w",
+						e.path,
+						err,
+					)
 				}
 				if n != expected {
-					return fmt.Errorf("write inline data for %s: short read: got %d bytes, expected %d", e.path, n, expected)
+					return fmt.Errorf(
+						"write inline data for %s: short read: got %d bytes, expected %d",
+						e.path,
+						n,
+						expected,
+					)
 				}
 				metaStart += int(n)
 			}
@@ -412,7 +439,9 @@ func (w *erofsWriter) writeInode(buf io.Writer, e *erofsEntry) error {
 	switch e.mode & disk.StatTypeMask {
 	case disk.StatTypeReg:
 		if e.layout == disk.LayoutChunkBased {
-			inodeData = disk.LayoutChunkFormatIndexes | uint32(w.entryChunkBits(e))
+			inodeData = disk.LayoutChunkFormatIndexes | uint32(
+				w.entryChunkBits(e),
+			)
 		} else if e.layout == disk.LayoutFlatPlain && e.size > 0 {
 			inodeData = e.dataBlkAddr
 		}
@@ -420,7 +449,10 @@ func (w *erofsWriter) writeInode(buf io.Writer, e *erofsEntry) error {
 		if e.layout == disk.LayoutFlatPlain {
 			inodeData = e.dataBlkAddr
 		}
-	case disk.StatTypeChrdev, disk.StatTypeBlkdev, disk.StatTypeFifo, disk.StatTypeSock:
+	case disk.StatTypeChrdev,
+		disk.StatTypeBlkdev,
+		disk.StatTypeFifo,
+		disk.StatTypeSock:
 		inodeData = e.rdev
 	}
 
@@ -675,7 +707,11 @@ func (w *erofsWriter) writeDataBlocks(out io.Writer) error {
 			if _, ok := e.data.(*os.File); ok {
 				written, err = io.Copy(out, limited)
 			} else {
-				written, err = io.CopyBuffer(onlyWriter{out}, limited, w.copyBuf)
+				written, err = io.CopyBuffer(
+					onlyWriter{out},
+					limited,
+					w.copyBuf,
+				)
 			}
 			if c, ok := e.data.(io.Closer); ok {
 				_ = c.Close()
@@ -684,7 +720,12 @@ func (w *erofsWriter) writeDataBlocks(out io.Writer) error {
 				return fmt.Errorf("write data for %s: %w", e.path, err)
 			}
 			if written != expected {
-				return fmt.Errorf("write data for %s: short read: got %d bytes, expected %d", e.path, written, expected)
+				return fmt.Errorf(
+					"write data for %s: short read: got %d bytes, expected %d",
+					e.path,
+					written,
+					expected,
+				)
 			}
 			n = int(written)
 		case disk.StatTypeDir:

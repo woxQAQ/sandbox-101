@@ -17,6 +17,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
@@ -43,7 +44,10 @@ func (m ImageManifest) Verify(dir, digest string) error {
 	if m.Layout == MergedOCIEROFSLayout {
 		return m.verifyMergedOCI(dir, digest)
 	}
-	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest || m.Architecture != runtime.GOARCH || m.Builder != "" || len(m.Artifacts) != 0 {
+	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest ||
+		m.Architecture != runtime.GOARCH ||
+		m.Builder != "" ||
+		len(m.Artifacts) != 0 {
 		return api.Fail(api.Incompatible, "image format/platform mismatch")
 	}
 	for _, n := range []string{"kernel", "initramfs", "root.erofs"} {
@@ -72,19 +76,24 @@ func (h *countedHash) Write(b []byte) (int, error) {
 	h.bytes += int64(n)
 	return n, e
 }
+
 func shaName(s string) (string, error) {
 	d, err := digest.Parse(s)
 	if err != nil || d.Algorithm() != digest.SHA256 {
-		return "", api.Fail(api.Invalid, "only canonical sha256 OCI descriptors accepted")
+		return "", api.Fail(
+			api.Invalid,
+			"only canonical sha256 OCI descriptors accepted",
+		)
 	}
 	return d.Encoded(), nil
 }
+
 func readBlobJSON(file, want string, v any) error {
 	f, e := os.Open(file)
 	if e != nil {
 		return e
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	b, e := io.ReadAll(io.LimitReader(f, (16<<20)+1))
 	if e != nil {
 		return e
@@ -98,6 +107,7 @@ func readBlobJSON(file, want string, v any) error {
 	}
 	return json.Unmarshal(b, v)
 }
+
 func blob(root, digest string) (string, error) {
 	n, e := shaName(digest)
 	if e != nil {
@@ -116,42 +126,56 @@ func blob(root, digest string) (string, error) {
 	}
 	return p, nil
 }
+
 func tarPath(s string) error {
-	if strings.HasSuffix(s, "/") {
-		s = strings.TrimSuffix(s, "/")
+	if before, ok := strings.CutSuffix(s, "/"); ok {
+		s = before
 	}
 	if s == "" || strings.HasPrefix(s, "/") {
 		return api.Fail(api.Invalid, "unsafe OCI tar path")
 	}
-	for _, part := range strings.Split(s, "/") {
+	for part := range strings.SplitSeq(s, "/") {
 		if part == "" || part == ".." {
 			return api.Fail(api.Invalid, "unsafe OCI tar path")
 		}
 	}
 	return nil
 }
-func validateLayer(file, media, diffID string, maxBytes, maxFiles int64) (int64, int64, error) {
+
+func validateLayer(
+	file, media, diffID string,
+	maxBytes, maxFiles int64,
+) (int64, int64, error) {
 	return validateLayerFor(file, media, diffID, maxBytes, maxFiles, false)
 }
 
-func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merged bool) (int64, int64, error) {
+func validateLayerFor(
+	file, media, diffID string,
+	maxBytes, maxFiles int64,
+	merged bool,
+) (int64, int64, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return 0, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var stream io.Reader = f
 	switch media {
-	case v1.MediaTypeImageLayerGzip, "application/vnd.docker.image.rootfs.diff.tar.gzip":
+	case v1.MediaTypeImageLayerGzip,
+		"application/vnd.docker.image.rootfs.diff.tar.gzip":
 		g, e := gzip.NewReader(f)
 		if e != nil {
 			return 0, 0, e
 		}
-		defer g.Close()
+		defer func() { _ = g.Close() }()
 		stream = g
 	case v1.MediaTypeImageLayer:
 	default:
-		return 0, 0, api.Fail(api.Incompatible, "only uncompressed/gzip OCI layers supported, got %s", media)
+		return 0, 0, api.Fail(
+			api.Incompatible,
+			"only uncompressed/gzip OCI layers supported, got %s",
+			media,
+		)
 	}
 	// Validate the uncompressed digest and tar's complete stream (including padding).
 	hash := newSHA256()
@@ -175,19 +199,27 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 			return 0, 0, e
 		}
 		switch h.Typeflag {
-		case tar.TypeReg, tar.TypeRegA, tar.TypeDir, tar.TypeSymlink:
+		case tar.TypeReg, tar.TypeDir, tar.TypeSymlink:
 		case tar.TypeLink:
 			if e = tarPath(h.Linkname); e != nil {
 				return 0, 0, e
 			}
 		default:
-			return 0, 0, api.Fail(api.Invalid, "unsupported OCI tar special file %q", h.Name)
+			return 0, 0, api.Fail(
+				api.Invalid,
+				"unsupported OCI tar special file %q",
+				h.Name,
+			)
 		}
 		if h.Size < 0 || h.Size > maxBytes-size {
-			return 0, 0, api.Fail(api.Exhausted, "OCI expanded size exceeds bound")
+			return 0, 0, api.Fail(
+				api.Exhausted,
+				"OCI expanded size exceeds bound",
+			)
 		}
 		size += h.Size
-		if strings.HasPrefix(path.Base(h.Name), ".wh.") && (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Size != 0) {
+		if strings.HasPrefix(path.Base(h.Name), ".wh.") &&
+			(h.Typeflag != tar.TypeReg || h.Size != 0) {
 			return 0, 0, api.Fail(api.Invalid, "invalid whiteout marker")
 		}
 		e = validateMergedOCIEntry(h)
@@ -215,7 +247,10 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 // ImportOCI is an offline administrative operation: the caller must hold this
 // Engine's single-writer lock; the CLI opens it itself, so it cannot race a
 // running daemon. Registry download and authentication are intentionally absent.
-func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManifest, error) {
+func (e *Engine) ImportOCI(
+	ctx context.Context,
+	opts ImportOptions,
+) (ImageManifest, error) {
 	// Publication and cache collection share a guard for the entire read/build
 	// interval, including cache hits before the catalog transaction.
 	e.artifacts.Lock()
@@ -230,8 +265,13 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if opts.Materialization == "" {
 		opts.Materialization = LayeredEROFSLayout
 	}
-	if opts.Materialization != LayeredEROFSLayout && opts.Materialization != MergedOCIEROFSLayout {
-		return output, api.Fail(api.Invalid, "unknown image materialization %q", opts.Materialization)
+	if opts.Materialization != LayeredEROFSLayout &&
+		opts.Materialization != MergedOCIEROFSLayout {
+		return output, api.Fail(
+			api.Invalid,
+			"unknown image materialization %q",
+			opts.Materialization,
+		)
 	}
 	merged := opts.Materialization == MergedOCIEROFSLayout
 	name, err := shaName(opts.Digest)
@@ -244,17 +284,23 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if opts.MaxFiles == 0 {
 		opts.MaxFiles = 1000000
 	}
-	if opts.MaxBytes <= 0 || opts.MaxBytes > 1<<40 || opts.MaxFiles <= 0 || opts.MaxFiles > 1<<30 {
+	if opts.MaxBytes <= 0 || opts.MaxBytes > 1<<40 || opts.MaxFiles <= 0 ||
+		opts.MaxFiles > 1<<30 {
 		return output, api.Fail(api.Invalid, "invalid import bounds")
 	}
 	dest := filepath.Join(e.opts.StateDir, "images", name)
 	var published string
-	if err = e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+opts.Digest).Scan(&published); err == nil {
+	if err = e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+opts.Digest).
+		Scan(&published); err == nil {
 		if err = json.Unmarshal([]byte(published), &output); err != nil {
 			return output, err
 		}
 		if output.Layout != opts.Materialization {
-			return output, api.Fail(api.Conflict, "image digest already published with materialization %s", output.Layout)
+			return output, api.Fail(
+				api.Conflict,
+				"image digest already published with materialization %s",
+				output.Layout,
+			)
 		}
 		return output, output.Verify(dest, opts.Digest)
 	}
@@ -282,8 +328,13 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if err = readBlobJSON(manifestPath, opts.Digest, &manifest); err != nil {
 		return output, err
 	}
-	if manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 || len(manifest.Layers) > MaxImageDataDevices {
-		return output, api.Fail(api.Incompatible, "image requires 1..%d layer data backends", MaxImageDataDevices)
+	if manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 ||
+		len(manifest.Layers) > MaxImageDataDevices {
+		return output, api.Fail(
+			api.Incompatible,
+			"image requires 1..%d layer data backends",
+			MaxImageDataDevices,
+		)
 	}
 	configPath, err := blob(source, manifest.Config.Digest.String())
 	if err != nil {
@@ -294,14 +345,26 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 		return output, err
 	}
 	if manifest.Config.Size < 0 || configStat.Size() != manifest.Config.Size {
-		return output, api.Fail(api.Invalid, "OCI config descriptor size mismatch")
+		return output, api.Fail(
+			api.Invalid,
+			"OCI config descriptor size mismatch",
+		)
 	}
 	var config v1.Image
-	if err = readBlobJSON(configPath, manifest.Config.Digest.String(), &config); err != nil {
+	if err = readBlobJSON(
+		configPath,
+		manifest.Config.Digest.String(),
+		&config,
+	); err != nil {
 		return output, err
 	}
-	if config.OS != "linux" || config.Architecture != runtime.GOARCH || config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != len(manifest.Layers) {
-		return output, api.Fail(api.Incompatible, "OCI platform/rootfs mismatch")
+	if config.OS != "linux" || config.Architecture != runtime.GOARCH ||
+		config.RootFS.Type != "layers" ||
+		len(config.RootFS.DiffIDs) != len(manifest.Layers) {
+		return output, api.Fail(
+			api.Incompatible,
+			"OCI platform/rootfs mismatch",
+		)
 	}
 	work := filepath.Join(e.opts.StateDir, "imports", name)
 	owner := "import:" + name
@@ -309,18 +372,27 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	tx, err := e.db.Begin()
 	if err == nil {
 		// Flat per-file block alignment and metadata can exceed tar payload size.
-		err = e.reserve(tx, owner, opts.MaxBytes*4+opts.MaxFiles*8192+(32<<20), 0, 0)
+		err = e.reserve(
+			tx,
+			owner,
+			opts.MaxBytes*4+opts.MaxFiles*8192+(32<<20),
+			0,
+			0,
+		)
 		if err == nil {
 			err = tx.Commit()
 		} else {
-			tx.Rollback()
+			_ = tx.Rollback()
 		}
 	}
 	e.admission.Unlock()
 	if err != nil {
 		return output, err
 	}
-	if err = os.MkdirAll(filepath.Join(work, "input", "blobs", "sha256"), 0700); err != nil {
+	if err = os.MkdirAll(
+		filepath.Join(work, "input", "blobs", "sha256"),
+		0o700,
+	); err != nil {
 		return output, err
 	}
 	if err = writeJSON(filepath.Join(work, "intent.json"), opts); err != nil {
@@ -337,12 +409,15 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 			return x
 		}
 		if st.Size() > maxSize {
-			return api.Fail(api.Exhausted, "OCI input blob exceeds staging bound")
+			return api.Fail(
+				api.Exhausted,
+				"OCI input blob exceeds staging bound",
+			)
 		}
 		n, _ := shaName(digest)
 		dst := filepath.Join(input, "blobs", "sha256", n)
 		if _, x = os.Stat(dst); os.IsNotExist(x) {
-			if x = copyFile(src, dst, 0400); x != nil {
+			if x = copyFile(src, dst, 0o400); x != nil {
 				return x
 			}
 		}
@@ -366,10 +441,16 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	var artifacts []ImageArtifact
 	for i, layer := range manifest.Layers {
 		if layer.Size < 0 || !supportedLayerMedia(layer.MediaType) {
-			return output, api.Fail(api.Incompatible, "only uncompressed/gzip OCI layers with nonnegative sizes are supported")
+			return output, api.Fail(
+				api.Incompatible,
+				"only uncompressed/gzip OCI layers with nonnegative sizes are supported",
+			)
 		}
 		if layer.Size > opts.MaxBytes*2-compressedBytes {
-			return output, api.Fail(api.Exhausted, "OCI compressed input size exceeds staging bound")
+			return output, api.Fail(
+				api.Exhausted,
+				"OCI compressed input size exceeds staging bound",
+			)
 		}
 		compressedBytes += layer.Size
 		diff := config.RootFS.DiffIDs[i].String()
@@ -383,15 +464,30 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 			if err = stage(layer.Digest.String(), opts.MaxBytes*2); err != nil {
 				return output, err
 			}
-			file := filepath.Join(input, "blobs", "sha256", layer.Digest.Encoded())
+			file := filepath.Join(
+				input,
+				"blobs",
+				"sha256",
+				layer.Digest.Encoded(),
+			)
 			st, x := os.Stat(file)
 			if x != nil {
 				return output, x
 			}
 			if st.Size() != layer.Size {
-				return output, api.Fail(api.Invalid, "OCI layer descriptor size mismatch")
+				return output, api.Fail(
+					api.Invalid,
+					"OCI layer descriptor size mismatch",
+				)
 			}
-			n, c, x := validateLayerFor(file, layer.MediaType, diff, opts.MaxBytes-used, opts.MaxFiles-files, true)
+			n, c, x := validateLayerFor(
+				file,
+				layer.MediaType,
+				diff,
+				opts.MaxBytes-used,
+				opts.MaxFiles-files,
+				true,
+			)
 			if x != nil {
 				return output, x
 			}
@@ -408,25 +504,52 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 			if err = stage(layer.Digest.String(), opts.MaxBytes*2); err != nil {
 				return output, err
 			}
-			file := filepath.Join(input, "blobs", "sha256", layer.Digest.Encoded())
+			file := filepath.Join(
+				input,
+				"blobs",
+				"sha256",
+				layer.Digest.Encoded(),
+			)
 			st, statErr := os.Stat(file)
 			if statErr != nil {
 				return output, statErr
 			}
 			if st.Size() != layer.Size {
-				return output, api.Fail(api.Invalid, "OCI layer descriptor size mismatch")
+				return output, api.Fail(
+					api.Invalid,
+					"OCI layer descriptor size mismatch",
+				)
 			}
 			var n, c int64
-			n, c, x = validateLayer(file, layer.MediaType, diff, opts.MaxBytes-used, opts.MaxFiles-files)
+			n, c, x = validateLayer(
+				file,
+				layer.MediaType,
+				diff,
+				opts.MaxBytes-used,
+				opts.MaxFiles-files,
+			)
 			if x == nil {
-				cached, x = buildSharedLayerCache(ctx, e.opts.StateDir, file, layer.MediaType, builder, diff, n, c)
+				cached, x = buildSharedLayerCache(
+					ctx,
+					e.opts.StateDir,
+					file,
+					layer.MediaType,
+					builder,
+					diff,
+					n,
+					c,
+				)
 			}
 		}
 		if x != nil {
 			return output, x
 		}
-		if cached.Bytes > opts.MaxBytes-used || cached.Entries > opts.MaxFiles-files {
-			return output, api.Fail(api.Exhausted, "cached OCI layer exceeds import bounds")
+		if cached.Bytes > opts.MaxBytes-used ||
+			cached.Entries > opts.MaxFiles-files {
+			return output, api.Fail(
+				api.Exhausted,
+				"cached OCI layer exceeds import bounds",
+			)
 		}
 		used += cached.Bytes
 		files += cached.Entries
@@ -442,13 +565,25 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if err = os.RemoveAll(out); err != nil {
 		return output, err
 	}
-	if err = os.Mkdir(out, 0700); err != nil {
+	if err = os.Mkdir(out, 0o700); err != nil {
 		return output, err
 	}
 	if merged {
-		err = materializeMergedOCI(ctx, input, out, opts.Digest, opts.MaxBytes+opts.MaxFiles*4096)
+		err = materializeMergedOCI(
+			ctx,
+			input,
+			out,
+			opts.Digest,
+			opts.MaxBytes+opts.MaxFiles*4096,
+		)
 	} else {
-		err = materializeSharedFsmeta(ctx, e.opts.StateDir, out, artifacts, builder)
+		err = materializeSharedFsmeta(
+			ctx,
+			e.opts.StateDir,
+			out,
+			artifacts,
+			builder,
+		)
 	}
 	if err != nil {
 		return output, err
@@ -457,8 +592,25 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if err != nil {
 		return output, err
 	}
-	meta := ImageArtifact{Role: "fsmeta", Path: filepath.Join("images", name, "fsmeta.erofs"), SHA256: hashes["fsmeta.erofs"], GuestPath: "/sandbox/ro/fsmeta.erofs", Serial: "sandbox-root"}
-	output = ImageManifest{Format: 2, Layout: LayeredEROFSLayout, Digest: opts.Digest, Architecture: runtime.GOARCH, Layers: layerDigests, DiffIDs: diffs, Tools: tools, Files: hashes, Builder: builder, Artifacts: append([]ImageArtifact{meta}, artifacts...)}
+	meta := ImageArtifact{
+		Role:      "fsmeta",
+		Path:      filepath.Join("images", name, "fsmeta.erofs"),
+		SHA256:    hashes["fsmeta.erofs"],
+		GuestPath: "/sandbox/ro/fsmeta.erofs",
+		Serial:    "sandbox-root",
+	}
+	output = ImageManifest{
+		Format:       2,
+		Layout:       LayeredEROFSLayout,
+		Digest:       opts.Digest,
+		Architecture: runtime.GOARCH,
+		Layers:       layerDigests,
+		DiffIDs:      diffs,
+		Tools:        tools,
+		Files:        hashes,
+		Builder:      builder,
+		Artifacts:    append([]ImageArtifact{meta}, artifacts...),
+	}
 	if merged {
 		output.Format, output.Layout, output.Artifacts = 3, MergedOCIEROFSLayout, nil
 	}
@@ -481,14 +633,24 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	}
 	if _, x := os.Lstat(dest); x == nil {
 		var previous ImageManifest
-		if err = readJSON(filepath.Join(dest, "image.json"), &previous); err != nil {
-			return output, api.Fail(api.ManualRecovery, "unpublished image destination cannot be verified")
+		if err = readJSON(
+			filepath.Join(dest, "image.json"),
+			&previous,
+		); err != nil {
+			return output, api.Fail(
+				api.ManualRecovery,
+				"unpublished image destination cannot be verified",
+			)
 		}
 		if err = previous.Verify(dest, opts.Digest); err != nil {
 			return output, err
 		}
 		if previous.Layout != opts.Materialization {
-			return output, api.Fail(api.Conflict, "image digest already materialized with layout %s", previous.Layout)
+			return output, api.Fail(
+				api.Conflict,
+				"image digest already materialized with layout %s",
+				previous.Layout,
+			)
 		}
 		output = previous
 	} else if !os.IsNotExist(x) {
@@ -507,11 +669,19 @@ func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManife
 	if err != nil {
 		return output, err
 	}
-	defer tx.Rollback()
-	if _, err = tx.Exec("INSERT OR REPLACE INTO meta VALUES(?,?)", "image:"+opts.Digest, string(encode(output))); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.Exec(
+		"INSERT OR REPLACE INTO meta VALUES(?,?)",
+		"image:"+opts.Digest,
+		string(encode(output)),
+	); err != nil {
 		return output, err
 	}
-	if _, err = tx.Exec("UPDATE reservations SET owner=? WHERE owner=?", "image:"+name, owner); err != nil {
+	if _, err = tx.Exec(
+		"UPDATE reservations SET owner=? WHERE owner=?",
+		"image:"+name,
+		owner,
+	); err != nil {
 		return output, err
 	}
 	if err = tx.Commit(); err != nil {

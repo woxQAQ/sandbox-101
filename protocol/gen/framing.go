@@ -8,8 +8,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const MaxFrameSize = 8 << 20
-const ChunkSize = 64 << 10
+const (
+	MaxFrameSize = 8 << 20
+	ChunkSize    = 64 << 10
+)
 
 // ReadFrame reads exactly one length-delimited protobuf message. Clean EOF before
 // a prefix is io.EOF; a partial prefix or payload is io.ErrUnexpectedEOF.

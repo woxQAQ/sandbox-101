@@ -49,7 +49,15 @@ func InternalLaunch(specPath string) error {
 	if err != nil {
 		return err
 	}
-	if err = writeJSON(filepath.Join(s.Resource.RunDir, "process.json"), processReceipt{Instance: s.Resource.Instance, PID: pid, StartTime: start, BootID: bootID()}); err != nil {
+	if err = writeJSON(
+		filepath.Join(s.Resource.RunDir, "process.json"),
+		processReceipt{
+			Instance:  s.Resource.Instance,
+			PID:       pid,
+			StartTime: start,
+			BootID:    bootID(),
+		},
+	); err != nil {
 		return err
 	}
 	ns, _, _, _, _, _ := netNames(s.Resource)
@@ -58,23 +66,37 @@ func InternalLaunch(specPath string) error {
 		return err
 	}
 	if err = unix.Setns(netfd, unix.CLONE_NEWNET); err != nil {
-		unix.Close(netfd)
+		_ = unix.Close(netfd)
 		return err
 	}
-	unix.Close(netfd)
-	if err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+	if err = unix.Close(netfd); err != nil {
+		return err
+	}
+	if err = unix.Mount(
+		"",
+		"/",
+		"",
+		unix.MS_REC|unix.MS_PRIVATE,
+		"",
+	); err != nil {
 		return err
 	}
 	// tmpfs prevents access through the mountpoint's old directory entries.
-	if err = unix.Mount("tmpfs", s.Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=16m"); err != nil {
+	if err = unix.Mount(
+		"tmpfs",
+		s.Root,
+		"tmpfs",
+		unix.MS_NOSUID|unix.MS_NODEV,
+		"mode=0755,size=16m",
+	); err != nil {
 		return err
 	}
 	for _, d := range []string{"boot", "images", "sandbox/ro", "disks", "run", "capture", "restore", "dev", "dev/net", "proc", "tmp", "bin"} {
-		if err = os.MkdirAll(filepath.Join(s.Root, d), 0755); err != nil {
+		if err = os.MkdirAll(filepath.Join(s.Root, d), 0o755); err != nil {
 			return err
 		}
 	}
-	if err = os.Chmod(filepath.Join(s.Root, "tmp"), 01777); err != nil {
+	if err = os.Chmod(filepath.Join(s.Root, "tmp"), 0o1777); err != nil {
 		return err
 	}
 	bind := func(src, rel string, ro bool) error {
@@ -84,15 +106,17 @@ func InternalLaunch(specPath string) error {
 			return err
 		}
 		if st.IsDir() {
-			if err = os.MkdirAll(dst, 0755); err != nil {
+			if err = os.MkdirAll(dst, 0o755); err != nil {
 				return err
 			}
 		} else {
-			f, e := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0600)
+			f, e := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o600)
 			if e != nil {
 				return e
 			}
-			f.Close()
+			if e = f.Close(); e != nil {
+				return e
+			}
 		}
 		if err = unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
 			return err
@@ -113,8 +137,11 @@ func InternalLaunch(specPath string) error {
 		{s.Resource.Disk, "disks/upper.raw", false},
 		{filepath.Join(s.Resource.RunDir, "io"), "run", false},
 		{filepath.Join(s.Resource.Dir, "capture"), "capture", false},
-		{"/dev/kvm", "dev/kvm", false}, {"/dev/net/tun", "dev/net/tun", false},
-		{"/dev/null", "dev/null", false}, {"/dev/zero", "dev/zero", false}, {"/dev/urandom", "dev/urandom", false},
+		{"/dev/kvm", "dev/kvm", false},
+		{"/dev/net/tun", "dev/net/tun", false},
+		{"/dev/null", "dev/null", false},
+		{"/dev/zero", "dev/zero", false},
+		{"/dev/urandom", "dev/urandom", false},
 	} {
 		if err = bind(item.src, item.dst, item.ro); err != nil {
 			return fmt.Errorf("bind %s: %w", item.dst, err)
@@ -125,23 +152,37 @@ func InternalLaunch(specPath string) error {
 		return err
 	}
 	for _, binding := range bindings {
-		if err = bind(binding.HostPath, strings.TrimPrefix(binding.GuestPath, "/"), true); err != nil {
+		if err = bind(
+			binding.HostPath,
+			strings.TrimPrefix(binding.GuestPath, "/"),
+			true,
+		); err != nil {
 			return fmt.Errorf("bind image device %s: %w", binding.Serial, err)
 		}
 	}
 	if s.Resource.RestoreDir != "" {
 		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
-			if err = bind(filepath.Join(s.Resource.RestoreDir, name), "restore/"+name, true); err != nil {
+			if err = bind(
+				filepath.Join(s.Resource.RestoreDir, name),
+				"restore/"+name,
+				true,
+			); err != nil {
 				return err
 			}
 		}
 	}
-	if err = unix.Mount("proc", filepath.Join(s.Root, "proc"), "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+	if err = unix.Mount(
+		"proc",
+		filepath.Join(s.Root, "proc"),
+		"proc",
+		unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC,
+		"",
+	); err != nil {
 		return err
 	}
 	// pivot_root removes the old host root from the process's namespace entirely.
 	old := filepath.Join(s.Root, ".oldroot")
-	if err = os.Mkdir(old, 0700); err != nil {
+	if err = os.Mkdir(old, 0o700); err != nil {
 		return err
 	}
 	if err = unix.Chdir(s.Root); err != nil {
@@ -163,7 +204,13 @@ func InternalLaunch(specPath string) error {
 		return err
 	}
 	for cap := 0; cap <= 40; cap++ {
-		if err = unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(cap), 0, 0, 0); err != nil {
+		if err = unix.Prctl(
+			unix.PR_CAPBSET_DROP,
+			uintptr(cap),
+			0,
+			0,
+			0,
+		); err != nil {
 			return err
 		}
 	}
@@ -178,17 +225,35 @@ func InternalLaunch(specPath string) error {
 	}
 	// Go runtime descriptors are CLOEXEC. Explicitly close any accidental inherited
 	// descriptor as well, preserving only stdin/out/err for serial diagnostics.
-	if err = unix.CloseRange(3, ^uint(0), unix.CLOSE_RANGE_CLOEXEC); err != nil {
+	if err = unix.CloseRange(
+		3,
+		^uint(0),
+		unix.CLOSE_RANGE_CLOEXEC,
+	); err != nil {
 		return err
 	}
-	return unix.Exec("/bin/cloud-hypervisor", []string{"cloud-hypervisor", "--api-socket", "/run/api.sock", "--seccomp", "true"}, []string{"PATH=/bin", "RUST_BACKTRACE=1"})
+	return unix.Exec(
+		"/bin/cloud-hypervisor",
+		[]string{
+			"cloud-hypervisor",
+			"--api-socket",
+			"/run/api.sock",
+			"--seccomp",
+			"true",
+		},
+		[]string{"PATH=/bin", "RUST_BACKTRACE=1"},
+	)
 }
 
 func openTapInNamespace(r Resource) (*os.File, error) {
 	// Namespace changes are per-thread. Never return this thread to Go's pool
 	// unless the original namespace was successfully restored.
 	runtime.LockOSThread()
-	original, err := unix.Open("/proc/self/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	original, err := unix.Open(
+		"/proc/self/ns/net",
+		unix.O_RDONLY|unix.O_CLOEXEC,
+		0,
+	)
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, err
@@ -196,14 +261,14 @@ func openTapInNamespace(r Resource) (*os.File, error) {
 	ns, _, _, _, _, _ := netNames(r)
 	target, err := unix.Open("/run/netns/"+ns, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		unix.Close(original)
+		_ = unix.Close(original)
 		runtime.UnlockOSThread()
 		return nil, err
 	}
 	err = unix.Setns(target, unix.CLONE_NEWNET)
-	unix.Close(target)
+	_ = unix.Close(target)
 	if err != nil {
-		unix.Close(original)
+		_ = unix.Close(original)
 		runtime.UnlockOSThread()
 		return nil, err
 	}
@@ -217,23 +282,37 @@ func openTapInNamespace(r Resource) (*os.File, error) {
 		}
 	}
 	restoreErr := unix.Setns(original, unix.CLONE_NEWNET)
-	unix.Close(original)
+	_ = unix.Close(original)
 	if restoreErr != nil {
 		if fd >= 0 {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 		}
-		panic(fmt.Sprintf("cannot restore engine network namespace: %v", restoreErr))
+		panic(
+			fmt.Sprintf(
+				"cannot restore engine network namespace: %v",
+				restoreErr,
+			),
+		)
 	}
 	runtime.UnlockOSThread()
 	if openErr != nil {
 		if fd >= 0 {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 		}
 		return nil, openErr
 	}
 	return os.NewFile(uintptr(fd), "tap0"), nil
 }
 
-func (b *CloudHypervisor) Agent(ctx context.Context, r Resource, restore bool) error {
-	return systemAgent(ctx, filepath.Join(r.RunDir, "io", "vsock"), r.Instance, restore)
+func (b *CloudHypervisor) Agent(
+	ctx context.Context,
+	r Resource,
+	restore bool,
+) error {
+	return systemAgent(
+		ctx,
+		filepath.Join(r.RunDir, "io", "vsock"),
+		r.Instance,
+		restore,
+	)
 }

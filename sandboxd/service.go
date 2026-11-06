@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -41,7 +42,10 @@ type Service struct {
 
 func Open(opts Options) (*Service, error) {
 	if opts.Engine == nil || opts.Agent == nil || opts.RootToken == "" {
-		return nil, api.Fail(api.Invalid, "engine, agent and root token are required")
+		return nil, api.Fail(
+			api.Invalid,
+			"engine, agent and root token are required",
+		)
 	}
 	if opts.MaxTTL <= 0 {
 		opts.MaxTTL = time.Hour
@@ -60,16 +64,27 @@ func Open(opts Options) (*Service, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{opts: opts, store: st, ctx: ctx, cancel: cancel, epoch: newID("daemon_"), locks: map[string]*sync.Mutex{}, active: map[string]chan struct{}{}, secrets: map[string]map[string]egress.Secret{}, opSecrets: map[string]map[string]egress.Secret{}, bindings: map[string]string{}, connections: map[string]map[net.Conn]struct{}{}}
+	s := &Service{
+		opts:        opts,
+		store:       st,
+		ctx:         ctx,
+		cancel:      cancel,
+		epoch:       newID("daemon_"),
+		locks:       map[string]*sync.Mutex{},
+		active:      map[string]chan struct{}{},
+		secrets:     map[string]map[string]egress.Secret{},
+		opSecrets:   map[string]map[string]egress.Secret{},
+		bindings:    map[string]string{},
+		connections: map[string]map[net.Conn]struct{}{},
+	}
 	if err = s.recoverOperations(); err != nil {
 		cancel()
-		st.close()
-		return nil, err
+		return nil, errors.Join(err, st.close())
 	}
-	s.wg.Add(1)
-	go func() { defer s.wg.Done(); s.maintain() }()
+	s.wg.Go(func() { ; s.maintain() })
 	return s, nil
 }
+
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -93,6 +108,7 @@ func (s *Service) Close() error {
 	})
 	return s.closeErr
 }
+
 func (s *Service) lock(id string) func() {
 	s.mu.Lock()
 	m := s.locks[id]
@@ -104,30 +120,52 @@ func (s *Service) lock(id string) func() {
 	m.Lock()
 	return m.Unlock
 }
-func (s *Service) PutTenant(ctx context.Context, p Principal, t Tenant) (Tenant, error) {
+
+func (s *Service) PutTenant(
+	ctx context.Context,
+	p Principal,
+	t Tenant,
+) (Tenant, error) {
 	if !p.Root {
 		return t, api.Fail(api.Conflict, "root access required")
 	}
 	if t.ID == "" || t.MaxSandboxes < 1 || t.MaxStorageMiB < 1 {
-		return t, api.Fail(api.Invalid, "tenant id and positive quotas required")
+		return t, api.Fail(
+			api.Invalid,
+			"tenant id and positive quotas required",
+		)
 	}
 	if t.Token == "" {
 		t.Token = newID("tenant_")
 	}
 	disk := t
 	disk.Token = ""
-	_, err := s.store.db.ExecContext(ctx, "INSERT INTO tenants(id,token_hash,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash,body=excluded.body", t.ID, hashToken(t.Token), encode(disk))
+	_, err := s.store.db.ExecContext(
+		ctx,
+		"INSERT INTO tenants(id,token_hash,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash,body=excluded.body",
+		t.ID,
+		hashToken(t.Token),
+		encode(disk),
+	)
 	return t, err
 }
-func (s *Service) Authenticate(ctx context.Context, token string) (Principal, error) {
+
+func (s *Service) Authenticate(
+	ctx context.Context,
+	token string,
+) (Principal, error) {
 	if token == "" {
 		return Principal{}, api.Fail(api.NotFound, "not found")
 	}
-	if hmac.Equal([]byte(hashToken(token)), []byte(hashToken(s.opts.RootToken))) {
+	if hmac.Equal(
+		[]byte(hashToken(token)),
+		[]byte(hashToken(s.opts.RootToken)),
+	) {
 		return Principal{Root: true, TenantID: "root"}, nil
 	}
 	var id string
-	err := s.store.db.QueryRowContext(ctx, "SELECT id FROM tenants WHERE token_hash=?", hashToken(token)).Scan(&id)
+	err := s.store.db.QueryRowContext(ctx, "SELECT id FROM tenants WHERE token_hash=?", hashToken(token)).
+		Scan(&id)
 	if err == nil {
 		return Principal{TenantID: id}, nil
 	}
@@ -137,7 +175,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	// A token carries an opaque id prefix solely to avoid scanning all sandboxes.
 	if parts := strings.SplitN(token, ".", 2); len(parts) == 2 {
 		b, err := getSandbox(ctx, s.store.db, parts[0])
-		if err == nil && b.State != "terminated" && hmac.Equal([]byte(parts[1]), []byte(s.store.token(b))) {
+		if err == nil && b.State != "terminated" &&
+			hmac.Equal([]byte(parts[1]), []byte(s.store.token(b))) {
 			return Principal{TenantID: b.TenantID, SandboxID: b.ID}, nil
 		}
 		if err != nil && !isCode(err, api.NotFound) {
@@ -146,11 +185,23 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	}
 	return Principal{}, api.Fail(api.NotFound, "not found")
 }
-func (s *Service) issuedToken(b Sandbox) string { return b.ID + "." + s.store.token(b) }
-func visible(p Principal, tenant, id string) bool {
-	return p.Root || (p.TenantID == tenant && (p.SandboxID == "" || p.SandboxID == id))
+
+func (s *Service) issuedToken(
+	b Sandbox,
+) string {
+	return b.ID + "." + s.store.token(b)
 }
-func (s *Service) Get(ctx context.Context, p Principal, id string) (Sandbox, error) {
+
+func visible(p Principal, tenant, id string) bool {
+	return p.Root ||
+		(p.TenantID == tenant && (p.SandboxID == "" || p.SandboxID == id))
+}
+
+func (s *Service) Get(
+	ctx context.Context,
+	p Principal,
+	id string,
+) (Sandbox, error) {
 	b, err := getSandbox(ctx, s.store.db, id)
 	if err != nil {
 		return b, err
@@ -160,6 +211,7 @@ func (s *Service) Get(ctx context.Context, p Principal, id string) (Sandbox, err
 	}
 	return b, nil
 }
+
 func (s *Service) List(ctx context.Context, p Principal) ([]Sandbox, error) {
 	if p.SandboxID != "" {
 		return nil, api.Fail(api.Conflict, "tenant access required")
@@ -176,7 +228,11 @@ func (s *Service) List(ctx context.Context, p Principal) ([]Sandbox, error) {
 	}
 	return out, nil
 }
-func (s *Service) Templates(ctx context.Context, p Principal) ([]Template, error) {
+
+func (s *Service) Templates(
+	ctx context.Context,
+	p Principal,
+) ([]Template, error) {
 	if p.SandboxID != "" {
 		return nil, api.Fail(api.Conflict, "tenant access required")
 	}
@@ -192,28 +248,57 @@ func (s *Service) Templates(ctx context.Context, p Principal) ([]Template, error
 	}
 	return out, nil
 }
-func isCode(err error, c api.Code) bool { var e *api.Error; return errors.As(err, &e) && e.Code == c }
+
+func isCode(
+	err error,
+	c api.Code,
+) bool {
+	var e *api.Error
+	return errors.As(err, &e) && e.Code == c
+}
+
 func (s *Service) ttl(n int64) (int64, error) {
 	if n == 0 {
 		n = 300
 	}
 	if n < 1 || time.Duration(n) > s.opts.MaxTTL/time.Second {
-		return 0, api.Fail(api.Invalid, "ttl_seconds must be between 1 and %d", int64(s.opts.MaxTTL/time.Second))
+		return 0, api.Fail(
+			api.Invalid,
+			"ttl_seconds must be between 1 and %d",
+			int64(s.opts.MaxTTL/time.Second),
+		)
 	}
 	return n, nil
 }
-func splitEnv(env map[string]EnvVar) (map[string]string, map[string]egress.Secret, error) {
+
+func splitEnv(
+	env map[string]EnvVar,
+) (map[string]string, map[string]egress.Secret, error) {
 	visibleEnv := map[string]string{}
 	secrets := map[string]egress.Secret{}
 	for k, v := range env {
-		if k == "" || strings.ContainsAny(k, "=\x00\n") || len(k) > 256 || strings.ContainsRune(v.Value, 0) {
-			return nil, nil, api.Fail(api.Invalid, "invalid environment variable")
+		if k == "" || strings.ContainsAny(k, "=\x00\n") || len(k) > 256 ||
+			strings.ContainsRune(v.Value, 0) {
+			return nil, nil, api.Fail(
+				api.Invalid,
+				"invalid environment variable",
+			)
 		}
 		if v.IsSecret() {
-			if v.Inject == nil || len(v.Inject.Hosts) == 0 || v.Inject.Header == "" || v.Value == "" {
-				return nil, nil, api.Fail(api.Invalid, "host secret requires value, authorized hosts and header")
+			if v.Inject == nil || len(v.Inject.Hosts) == 0 ||
+				v.Inject.Header == "" ||
+				v.Value == "" {
+				return nil, nil, api.Fail(
+					api.Invalid,
+					"host secret requires value, authorized hosts and header",
+				)
 			}
-			secrets[k] = egress.Secret{Value: v.Value, Hosts: v.Inject.Hosts, Header: v.Inject.Header, Placeholder: v.Inject.Placeholder}
+			secrets[k] = egress.Secret{
+				Value:       v.Value,
+				Hosts:       v.Inject.Hosts,
+				Header:      v.Inject.Header,
+				Placeholder: v.Inject.Placeholder,
+			}
 			if v.Inject.Placeholder != "" {
 				visibleEnv[k] = v.Inject.Placeholder
 			}
@@ -223,6 +308,7 @@ func splitEnv(env map[string]EnvVar) (map[string]string, map[string]egress.Secre
 	}
 	return visibleEnv, secrets, nil
 }
+
 func sanitized(c Command) Command {
 	c.Env = cloneEnv(c.Env)
 	for k, v := range c.Env {
@@ -233,25 +319,40 @@ func sanitized(c Command) Command {
 	}
 	return c
 }
+
 func cloneEnv(e map[string]EnvVar) map[string]EnvVar {
 	out := map[string]EnvVar{}
-	for k, v := range e {
-		out[k] = v
-	}
+	maps.Copy(out, e)
 	return out
 }
-func (s *Service) Execute(ctx context.Context, p Principal, key string, c Command) (Result, error) {
+
+func (s *Service) Execute(
+	ctx context.Context,
+	p Principal,
+	key string,
+	c Command,
+) (Result, error) {
 	o, err := s.Submit(ctx, p, key, c)
 	if err != nil {
 		return Result{}, err
 	}
 	return s.Wait(ctx, p, o.ID)
 }
-func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command) (Operation, error) {
+
+func (s *Service) Submit(
+	ctx context.Context,
+	p Principal,
+	key string,
+	c Command,
+) (Operation, error) {
 	if len(key) < 1 || len(key) > 256 {
-		return Operation{}, api.Fail(api.Invalid, "Idempotency-Key required (max 256 bytes)")
+		return Operation{}, api.Fail(
+			api.Invalid,
+			"Idempotency-Key required (max 256 bytes)",
+		)
 	}
-	if p.SandboxID != "" && (c.SandboxID != p.SandboxID || (c.Action != "renew" && c.Action != "release")) {
+	if p.SandboxID != "" &&
+		(c.SandboxID != p.SandboxID || (c.Action != "renew" && c.Action != "release")) {
 		return Operation{}, api.Fail(api.NotFound, "not found")
 	}
 	// HMAC permits comparing retries without persisting credential material or a guessable secret hash.
@@ -261,7 +362,10 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 	old, err := s.store.byKey(ctx, p.TenantID, key)
 	if err == nil {
 		if old.Hash != hash {
-			return old, api.Fail(api.Conflict, "idempotency key has different parameters")
+			return old, api.Fail(
+				api.Conflict,
+				"idempotency key has different parameters",
+			)
 		}
 		if !visible(p, old.TenantID, old.Command.SandboxID) && !p.Root {
 			return Operation{}, api.Fail(api.NotFound, "not found")
@@ -276,7 +380,16 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 	if err != nil {
 		return Operation{}, err
 	}
-	o := Operation{ID: newID("op_"), Key: key, TenantID: p.TenantID, Hash: hash, Command: sanitized(c), Status: "pending", CreatedAt: time.Now().UTC(), Result: Result{}}
+	o := Operation{
+		ID:        newID("op_"),
+		Key:       key,
+		TenantID:  p.TenantID,
+		Hash:      hash,
+		Command:   sanitized(c),
+		Status:    "pending",
+		CreatedAt: time.Now().UTC(),
+		Result:    Result{},
+	}
 	o.Result.OperationID = o.ID
 	ownership := s.lockResourceOwnership()
 	defer ownership()
@@ -284,7 +397,7 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 	if err != nil {
 		return o, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var source Sandbox
 	switch c.Action {
 	case "claim", "fork":
@@ -323,7 +436,12 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 				if !p.Root && cp.TenantID != p.TenantID {
 					return o, api.Fail(api.NotFound, "not found")
 				}
-				source = Sandbox{TenantID: cp.TenantID, SnapshotID: cp.SnapshotID, Shape: cp.Shape, State: "paused"}
+				source = Sandbox{
+					TenantID:   cp.TenantID,
+					SnapshotID: cp.SnapshotID,
+					Shape:      cp.Shape,
+					State:      "paused",
+				}
 				o.Step = "checkpoint_source"
 			} else {
 				source, err = getSandbox(ctx, tx, c.SandboxID)
@@ -334,7 +452,11 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 					return o, api.Fail(api.NotFound, "not found")
 				}
 				if source.State != "running" && source.State != "paused" {
-					return o, api.Fail(api.Conflict, "sandbox cannot fork in %s", source.State)
+					return o, api.Fail(
+						api.Conflict,
+						"sandbox cannot fork in %s",
+						source.State,
+					)
 				}
 			}
 			o.SnapshotID = source.SnapshotID
@@ -350,7 +472,13 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 		if c.Action == "fork" && source.State == "running" {
 			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
 		}
-		if err = s.quota(ctx, tx, p, count, t.Shape.DiskMiB*int64(count)+o.ReservedMiB); err != nil {
+		if err = s.quota(
+			ctx,
+			tx,
+			p,
+			count,
+			t.Shape.DiskMiB*int64(count)+o.ReservedMiB,
+		); err != nil {
 			return o, err
 		}
 		ttl, e := s.ttl(c.TTLSeconds)
@@ -372,13 +500,34 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 			return o, err
 		}
 		for i := 0; i < count; i++ {
-			b := Sandbox{ID: newID("sbx_"), TenantID: p.TenantID, State: "provisioning", TemplateID: t.ID, Shape: t.Shape, TTLSeconds: ttl, OnExpire: expiry, AutoRenew: c.AutoRenew, Env: env, Policy: policy, RequiresSecrets: len(secrets) > 0, Epoch: newID("epoch_"), OperationID: o.ID, CreatedAt: time.Now().UTC()}
+			b := Sandbox{
+				ID:              newID("sbx_"),
+				TenantID:        p.TenantID,
+				State:           "provisioning",
+				TemplateID:      t.ID,
+				Shape:           t.Shape,
+				TTLSeconds:      ttl,
+				OnExpire:        expiry,
+				AutoRenew:       c.AutoRenew,
+				Env:             env,
+				Policy:          policy,
+				RequiresSecrets: len(secrets) > 0,
+				Epoch:           newID("epoch_"),
+				OperationID:     o.ID,
+				CreatedAt:       time.Now().UTC(),
+			}
 			o.IDs = append(o.IDs, b.ID)
 			if err = saveSandbox(ctx, tx, b); err != nil {
 				return o, err
 			}
 		}
-	case "pause", "resume", "release", "renew", "checkpoint", "configure", "rollback":
+	case "pause",
+		"resume",
+		"release",
+		"renew",
+		"checkpoint",
+		"configure",
+		"rollback":
 		source, err = getSandbox(ctx, tx, c.SandboxID)
 		if err != nil {
 			return o, err
@@ -407,7 +556,11 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 		}
 		if c.Action == "checkpoint" {
 			if source.State != "running" && source.State != "paused" {
-				return o, api.Fail(api.Conflict, "sandbox cannot checkpoint in %s", source.State)
+				return o, api.Fail(
+					api.Conflict,
+					"sandbox cannot checkpoint in %s",
+					source.State,
+				)
 			}
 			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
 			if err = s.quota(ctx, tx, p, 0, o.ReservedMiB); err != nil {
@@ -415,7 +568,8 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 			}
 			o.IDs = []string{newID("cp_")}
 		}
-		if c.Action == "pause" && source.State == "running" && source.SnapshotID == "" {
+		if c.Action == "pause" && source.State == "running" &&
+			source.SnapshotID == "" {
 			o.ReservedMiB = source.Shape.MemoryMiB
 			if err = s.quota(ctx, tx, p, 0, o.ReservedMiB); err != nil {
 				return o, err
@@ -423,7 +577,10 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 		}
 		if c.Action == "configure" {
 			if c.Env == nil {
-				return o, api.Fail(api.Invalid, "env is required; an empty object clears environment")
+				return o, api.Fail(
+					api.Invalid,
+					"env is required; an empty object clears environment",
+				)
 			}
 			policy := c.Policy
 			if policy.Mode == "" {
@@ -446,8 +603,17 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 			return o, api.Fail(api.Invalid, "template required")
 		}
 		t := *c.Template
-		if t.ID == "" || t.Shape.VCPUs < 1 || t.Shape.VCPUs > 255 || t.Shape.MemoryMiB < 128 || t.Shape.MemoryMiB > 1<<24 || t.Shape.DiskMiB < 64 || t.Shape.DiskMiB > 1<<30 || t.TargetWarm < 0 || t.TargetWarm > s.opts.MaxWarm {
-			return o, api.Fail(api.Invalid, "invalid template shape or pool target")
+		if t.ID == "" || t.Shape.VCPUs < 1 || t.Shape.VCPUs > 255 ||
+			t.Shape.MemoryMiB < 128 ||
+			t.Shape.MemoryMiB > 1<<24 ||
+			t.Shape.DiskMiB < 64 ||
+			t.Shape.DiskMiB > 1<<30 ||
+			t.TargetWarm < 0 ||
+			t.TargetWarm > s.opts.MaxWarm {
+			return o, api.Fail(
+				api.Invalid,
+				"invalid template shape or pool target",
+			)
 		}
 		existing, e := getTemplateTx(ctx, tx, t.ID)
 		if e == nil && !p.Root && existing.TenantID != p.TenantID {
@@ -461,7 +627,10 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 		if c.Action == "template_put" {
 			t.State = "ready"
 			if t.SnapshotID == "" && t.Image == "" {
-				return o, api.Fail(api.Invalid, "template requires image or snapshot")
+				return o, api.Fail(
+					api.Invalid,
+					"template requires image or snapshot",
+				)
 			}
 		}
 		o.Command.Template = &t
@@ -487,9 +656,15 @@ func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command
 	s.start(o)
 	return o, nil
 }
-func getTemplateTx(ctx context.Context, e executor, id string) (Template, error) {
+
+func getTemplateTx(
+	ctx context.Context,
+	e executor,
+	id string,
+) (Template, error) {
 	var b []byte
-	err := e.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).Scan(&b)
+	err := e.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).
+		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Template{}, api.Fail(api.NotFound, "not found")
 	}
@@ -499,9 +674,15 @@ func getTemplateTx(ctx context.Context, e executor, id string) (Template, error)
 	}
 	return t, err
 }
-func getCheckpointTx(ctx context.Context, e executor, id string) (Checkpoint, error) {
+
+func getCheckpointTx(
+	ctx context.Context,
+	e executor,
+	id string,
+) (Checkpoint, error) {
 	var b []byte
-	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
+	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
+		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Checkpoint{}, api.Fail(api.NotFound, "not found")
 	}
@@ -511,19 +692,31 @@ func getCheckpointTx(ctx context.Context, e executor, id string) (Checkpoint, er
 	}
 	return cp, err
 }
-func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int, storage int64) error {
+
+func (s *Service) quota(
+	ctx context.Context,
+	tx *sql.Tx,
+	p Principal,
+	count int,
+	storage int64,
+) error {
 	if p.Root {
 		return nil
 	}
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).
+		Scan(&raw); err != nil {
 		return api.Fail(api.NotFound, "not found")
 	}
 	var t Tenant
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT body FROM sandboxes WHERE tenant=? AND state!='terminated'", p.TenantID)
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT body FROM sandboxes WHERE tenant=? AND state!='terminated'",
+		p.TenantID,
+	)
 	if err != nil {
 		return err
 	}
@@ -532,13 +725,11 @@ func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int,
 	for rows.Next() {
 		var b []byte
 		if err = rows.Scan(&b); err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 		sb, e := decodeSandbox(b)
 		if e != nil {
-			rows.Close()
-			return e
+			return errors.Join(e, rows.Close())
 		}
 		n++
 		used += sb.Shape.DiskMiB
@@ -546,12 +737,15 @@ func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int,
 			used += sb.Shape.MemoryMiB
 		}
 	}
-	err = rows.Err()
-	rows.Close()
+	err = errors.Join(rows.Err(), rows.Close())
 	if err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT body FROM checkpoints WHERE tenant=?", p.TenantID)
+	rows, err = tx.QueryContext(
+		ctx,
+		"SELECT body FROM checkpoints WHERE tenant=?",
+		p.TenantID,
+	)
 	if err != nil {
 		return err
 	}
@@ -559,22 +753,20 @@ func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int,
 		var b []byte
 		var cp Checkpoint
 		if err = rows.Scan(&b); err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 		if err = json.Unmarshal(b, &cp); err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 		used += cp.Shape.DiskMiB + cp.Shape.MemoryMiB
 	}
-	err = rows.Err()
-	rows.Close()
+	err = errors.Join(rows.Err(), rows.Close())
 	if err != nil {
 		return err
 	}
 	var reserved int64
-	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(CAST(json_extract(body,'$.reserved_mib') AS INTEGER)),0) FROM operations WHERE tenant=? AND status IN ('pending','running')", p.TenantID).Scan(&reserved); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(CAST(json_extract(body,'$.reserved_mib') AS INTEGER)),0) FROM operations WHERE tenant=? AND status IN ('pending','running')", p.TenantID).
+		Scan(&reserved); err != nil {
 		return err
 	}
 	if n+count > t.MaxSandboxes || used+reserved+storage > t.MaxStorageMiB {
@@ -582,6 +774,7 @@ func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int,
 	}
 	return nil
 }
+
 func (s *Service) start(o Operation) {
 	if o.Status == "succeeded" || o.Status == "failed" {
 		return
@@ -605,7 +798,12 @@ func (s *Service) start(o Operation) {
 		s.run(o)
 	}()
 }
-func (s *Service) Wait(ctx context.Context, p Principal, id string) (Result, error) {
+
+func (s *Service) Wait(
+	ctx context.Context,
+	p Principal,
+	id string,
+) (Result, error) {
 	t := time.NewTicker(10 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -629,7 +827,12 @@ func (s *Service) Wait(ctx context.Context, p Principal, id string) (Result, err
 		}
 	}
 }
-func (s *Service) Operation(ctx context.Context, p Principal, id string) (Operation, error) {
+
+func (s *Service) Operation(
+	ctx context.Context,
+	p Principal,
+	id string,
+) (Operation, error) {
 	o, err := s.store.operation(ctx, id)
 	if err != nil {
 		return o, err
@@ -639,6 +842,7 @@ func (s *Service) Operation(ctx context.Context, p Principal, id string) (Operat
 	}
 	return o, nil
 }
+
 func (s *Service) resultTokens(r Result) Result {
 	if r.Sandbox != nil && r.Sandbox.State != "terminated" {
 		r.Tokens = map[string]string{r.Sandbox.ID: s.issuedToken(*r.Sandbox)}
@@ -651,14 +855,21 @@ func (s *Service) resultTokens(r Result) Result {
 	}
 	return r
 }
+
 func (s *Service) setStep(o *Operation, step string) error {
 	o.Step = step
 	return saveOp(s.ctx, s.store.db, *o)
 }
-func (s *Service) engine(o Operation, step string, r api.Request) (api.Operation, error) {
+
+func (s *Service) engine(
+	o Operation,
+	step string,
+	r api.Request,
+) (api.Operation, error) {
 	r.Key = stepKey(o, step)
 	return api.Wait(s.ctx, s.opts.Engine, r)
 }
+
 func (s *Service) run(o Operation) {
 	o.Status = "running"
 	if err := saveOp(s.ctx, s.store.db, o); err != nil {
@@ -670,7 +881,13 @@ func (s *Service) run(o Operation) {
 		err = s.claim(&o)
 	case "fork":
 		err = s.fork(&o)
-	case "pause", "resume", "release", "renew", "checkpoint", "configure", "rollback":
+	case "pause",
+		"resume",
+		"release",
+		"renew",
+		"checkpoint",
+		"configure",
+		"rollback":
 		err = s.change(&o)
 	case "delete_checkpoint":
 		err = s.deleteCheckpoint(&o)
@@ -692,18 +909,29 @@ func (s *Service) run(o Operation) {
 	if e := saveOp(s.ctx, s.store.db, o); e != nil {
 		return
 	}
-	_ = s.store.audit(s.ctx, map[string]any{"action": o.Command.Action, "tenant_id": o.TenantID, "operation_id": o.ID, "status": o.Status})
+	_ = s.store.audit(
+		s.ctx,
+		map[string]any{
+			"action":       o.Command.Action,
+			"tenant_id":    o.TenantID,
+			"operation_id": o.ID,
+			"status":       o.Status,
+		},
+	)
 }
+
 func (s *Service) VM(ctx context.Context, b Sandbox) (api.VM, error) {
 	v, err := s.opts.Engine.GetVM(ctx, b.VMID)
 	if err != nil {
 		return v, err
 	}
-	if v.Instance != b.Instance || v.Phase != "running" || !v.AgentReady || !v.Verified {
+	if v.Instance != b.Instance || v.Phase != "running" || !v.AgentReady ||
+		!v.Verified {
 		return v, api.Fail(api.Conflict, "engine VM is not verified ready")
 	}
 	return v, nil
 }
+
 func (s *Service) closeConnections(id string) {
 	s.mu.Lock()
 	var connections []net.Conn
@@ -716,6 +944,7 @@ func (s *Service) closeConnections(id string) {
 		_ = c.Close()
 	}
 }
+
 func (s *Service) track(id string, c net.Conn) func() {
 	s.mu.Lock()
 	if s.connections[id] == nil {
@@ -725,10 +954,13 @@ func (s *Service) track(id string, c net.Conn) func() {
 	s.mu.Unlock()
 	return func() { s.mu.Lock(); delete(s.connections[id], c); s.mu.Unlock() }
 }
+
 func (s *Service) CredentialsMissing(b Sandbox) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return b.RequiresSecrets && len(s.secrets[b.ID]) == 0
 }
-func (s *Service) Drain()         { s.mu.Lock(); s.draining = true; s.mu.Unlock() }
+
+func (s *Service) Drain() { s.mu.Lock(); s.draining = true; s.mu.Unlock() }
+
 func (s *Service) String() string { return fmt.Sprintf("sandboxd(%s)", s.opts.StateDir) }

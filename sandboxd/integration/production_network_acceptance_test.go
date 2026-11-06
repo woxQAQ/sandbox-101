@@ -23,11 +23,18 @@ import (
 // These public addresses exist only on the fresh outer namespace's loopback.
 // Every probe crosses the real guest virtio/TAP, namespace policy and SNAT;
 // the namespace has no external interface or route to the actual Internet.
-func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, ec *engineclient.Client, artifacts, image string) {
+func productionGuestTCP(
+	t *testing.T,
+	ctx context.Context,
+	client *sdk.Client,
+	ec *engineclient.Client,
+	artifacts, image string,
+) {
 	t.Helper()
 	const allowed, denied = "93.184.216.34", "93.184.216.35"
 	for _, address := range []string{allowed, denied} {
-		if out, err := exec.CommandContext(ctx, "ip", "addr", "add", address+"/32", "dev", "lo").CombinedOutput(); err != nil {
+		if out, err := exec.CommandContext(ctx, "ip", "addr", "add", address+"/32", "dev", "lo").
+			CombinedOutput(); err != nil {
 			t.Fatalf("private loopback TCP target: %v: %s", err, out)
 		}
 	}
@@ -61,16 +68,37 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 		}
 	}()
 	defer func() { listener.Close(); <-serverDone }()
-	_, err = client.PutTemplate(ctx, "tcp-template", sandboxd.Template{ID: "production-tcp", Image: image, Shape: api.Shape{VCPUs: 1, MemoryMiB: microVMMemoryMiB(t), DiskMiB: 512}}, false)
+	_, err = client.PutTemplate(
+		ctx,
+		"tcp-template",
+		sandboxd.Template{
+			ID:    "production-tcp",
+			Image: image,
+			Shape: api.Shape{
+				VCPUs:     1,
+				MemoryMiB: microVMMemoryMiB(t),
+				DiskMiB:   512,
+			},
+		},
+		false,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var owned []string
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		cleanup, cancel := context.WithTimeout(
+			context.Background(),
+			time.Minute,
+		)
 		defer cancel()
 		for _, id := range owned {
-			if _, err := client.Change(cleanup, id, "tcp-release-"+id, sandboxd.Command{Action: "release"}); err != nil {
+			if _, err := client.Change(
+				cleanup,
+				id,
+				"tcp-release-"+id,
+				sandboxd.Command{Action: "release"},
+			); err != nil {
 				t.Errorf("release TCP sandbox: %v", err)
 			}
 		}
@@ -82,7 +110,16 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 			policy.AllowedCIDRs = []string{allowed + "/32"}
 			policy.MaxConnections = 16
 		}
-		result, err := client.Claim(ctx, "tcp-claim-"+key, sandboxd.Command{Action: "claim", TemplateID: "production-tcp", TTLSeconds: 600, Policy: policy})
+		result, err := client.Claim(
+			ctx,
+			"tcp-claim-"+key,
+			sandboxd.Command{
+				Action:     "claim",
+				TemplateID: "production-tcp",
+				TTLSeconds: 600,
+				Policy:     policy,
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,8 +131,17 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 		t.Helper()
 		// The supplied guest's /bin/sh is real Bash. Locate its existing coreutils
 		// timeout through /bin/cat; no guest binary or network operation is mocked.
-		script := fmt.Sprintf("exec 9<>/dev/tcp/%s/%d; printf '%s\\n' >&9; IFS= read -r reply <&9; test \"$reply\" = 'reply-%s'", address, port, stage, stage)
-		command := fmt.Sprintf("tool=$(/bin/readlink /bin/cat); if \"${tool%%/*}/timeout\" 4 /bin/sh -c '%s'; then printf allowed; else printf blocked; fi", strings.ReplaceAll(script, "'", "'\\''"))
+		script := fmt.Sprintf(
+			"exec 9<>/dev/tcp/%s/%d; printf '%s\\n' >&9; IFS= read -r reply <&9; test \"$reply\" = 'reply-%s'",
+			address,
+			port,
+			stage,
+			stage,
+		)
+		command := fmt.Sprintf(
+			"tool=$(/bin/readlink /bin/cat); if \"${tool%%/*}/timeout\" 4 /bin/sh -c '%s'; then printf allowed; else printf blocked; fi",
+			strings.ReplaceAll(script, "'", "'\\''"),
+		)
 		got := productionExec(t, ctx, client, sandbox.ID, command)
 		if got != map[bool]string{true: "allowed", false: "blocked"}[want] {
 			t.Fatalf("actual guest TCP %s: got %q allowed=%v", stage, got, want)
@@ -112,17 +158,24 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 			}
 			return
 		}
-		if !vm.NetworkActual || !vm.NetworkEnabled || vm.NetworkPolicyInstance != vm.Instance {
-			t.Fatalf("allowed TCP has no verified current direct policy: %+v", vm)
+		if !vm.NetworkActual || !vm.NetworkEnabled ||
+			vm.NetworkPolicyInstance != vm.Instance {
+			t.Fatalf(
+				"allowed TCP has no verified current direct policy: %+v",
+				vm,
+			)
 		}
 		select {
 		case event := <-observed:
-			if event.Stage != stage || !strings.HasPrefix(event.RemoteIP, "10.200.") {
+			if event.Stage != stage ||
+				!strings.HasPrefix(event.RemoteIP, "10.200.") {
 				t.Fatalf("TCP did not cross owned SNAT: %+v", event)
 			}
 			proof = append(proof, event)
 		case <-time.After(time.Second):
-			t.Fatal("guest reported TCP success without a real listener observation")
+			t.Fatal(
+				"guest reported TCP success without a real listener observation",
+			)
 		}
 	}
 	direct := claim("direct", "direct")
@@ -130,19 +183,38 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 	probe(direct, "denied-cidr", denied, false)
 	none := claim("none", "none")
 	probe(none, "none-policy", allowed, false)
-	if _, err := client.Change(ctx, none.ID, "tcp-release-none", sandboxd.Command{Action: "release"}); err != nil {
+	if _, err := client.Change(
+		ctx,
+		none.ID,
+		"tcp-release-none",
+		sandboxd.Command{Action: "release"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	owned = owned[:1]
-	forked, err := client.Change(ctx, direct.ID, "tcp-fork", sandboxd.Command{Action: "fork", Count: 1})
+	forked, err := client.Change(
+		ctx,
+		direct.ID,
+		"tcp-fork",
+		sandboxd.Command{Action: "fork", Count: 1},
+	)
 	if err != nil || len(forked.Sandboxes) != 1 {
-		t.Fatalf("capture/fork for real TCP rebind: %+v: %v", forked.Sandboxes, err)
+		t.Fatalf(
+			"capture/fork for real TCP rebind: %+v: %v",
+			forked.Sandboxes,
+			err,
+		)
 	}
 	branch := forked.Sandboxes[0]
 	owned = append(owned, branch.ID)
 	probe(branch, "fork", allowed, true)
 	probe(branch, "fork-denied", denied, false)
-	if _, err := client.Change(ctx, direct.ID, "tcp-pause", sandboxd.Command{Action: "pause"}); err != nil {
+	if _, err := client.Change(
+		ctx,
+		direct.ID,
+		"tcp-pause",
+		sandboxd.Command{Action: "pause"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	// Connecting performs the actual product auto-resume and instance rebind.
@@ -158,5 +230,7 @@ func productionGuestTCP(t *testing.T, ctx context.Context, client *sdk.Client, e
 		t.Fatal(err)
 	}
 	productionArtifact(t, artifacts, "guest-tcp.json", data)
-	t.Log("real guest virtio/TAP + policy + SNAT TCP passed for source, fork and resume; denied CIDR and none policy blocked")
+	t.Log(
+		"real guest virtio/TAP + policy + SNAT TCP passed for source, fork and resume; denied CIDR and none policy blocked",
+	)
 }

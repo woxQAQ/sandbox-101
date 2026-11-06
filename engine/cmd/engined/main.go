@@ -19,6 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	// The launcher becomes CH in this very process, after kernel-enforced scope
 	// placement. This flag is an implementation detail, never a bypass of checks.
@@ -32,7 +33,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
 	defer cancel()
 	output := func(v any) error { enc := json.NewEncoder(os.Stdout); enc.SetIndent("", "  "); return enc.Encode(v) }
 	switch cfg.Mode {
@@ -53,19 +58,43 @@ func run() error {
 	default:
 		return fmt.Errorf("unsupported --mode %s", cfg.Mode)
 	}
-	if cfg.VMMUID == 0 || cfg.VMMGID == 0 || uint64(cfg.VMMUID) > 1<<32-1 || uint64(cfg.VMMGID) > 1<<32-1 {
+	if cfg.VMMUID == 0 || cfg.VMMGID == 0 || uint64(cfg.VMMUID) > 1<<32-1 ||
+		uint64(cfg.VMMGID) > 1<<32-1 {
 		return fmt.Errorf("VMM UID/GID must be nonzero 32-bit IDs")
 	}
-	backend := engine.NewCloudHypervisor(engine.CloudOptions{Binary: cfg.CloudHypervisor, BuildReceipt: cfg.BuildReceipt, CgroupRoot: cfg.CgroupRoot, HostPolicy: cfg.HostPolicy, UID: uint32(cfg.VMMUID), GID: uint32(cfg.VMMGID), IOMax: cfg.IOMax})
-	defer backend.Close()
-	e, err := engine.Open(engine.Options{StateDir: cfg.StateDir, Init: cfg.Init, Backend: backend, SafetyBytes: cfg.StorageMarginBytes, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxVCPUs: cfg.MaxVCPUs, GCInterval: cfg.GCInterval})
+	backend := engine.NewCloudHypervisor(
+		engine.CloudOptions{
+			Binary:       cfg.CloudHypervisor,
+			BuildReceipt: cfg.BuildReceipt,
+			CgroupRoot:   cfg.CgroupRoot,
+			HostPolicy:   cfg.HostPolicy,
+			UID:          uint32(cfg.VMMUID),
+			GID:          uint32(cfg.VMMGID),
+			IOMax:        cfg.IOMax,
+		},
+	)
+	defer func() { _ = backend.Close() }()
+	e, err := engine.Open(
+		engine.Options{
+			StateDir:     cfg.StateDir,
+			Init:         cfg.Init,
+			Backend:      backend,
+			SafetyBytes:  cfg.StorageMarginBytes,
+			MaxMemoryMiB: cfg.MaxMemoryMiB,
+			MaxVCPUs:     cfg.MaxVCPUs,
+			GCInterval:   cfg.GCInterval,
+		},
+	)
 	if err != nil {
 		return err
 	}
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	switch cfg.Mode {
 	case "gc":
-		r, collectErr := e.CollectGarbage(ctx, engine.GCOptions{DryRun: cfg.GCDryRun, MaxArtifacts: cfg.GCBatch})
+		r, collectErr := e.CollectGarbage(
+			ctx,
+			engine.GCOptions{DryRun: cfg.GCDryRun, MaxArtifacts: cfg.GCBatch},
+		)
 		if err = output(r); err != nil {
 			return err
 		}
@@ -74,7 +103,14 @@ func run() error {
 		if cfg.OCILayout == "" || cfg.Digest == "" {
 			return fmt.Errorf("--oci-layout and --digest required")
 		}
-		m, err := e.ImportOCI(ctx, engine.ImportOptions{Layout: cfg.OCILayout, Digest: cfg.Digest, Materialization: cfg.Materialization})
+		m, err := e.ImportOCI(
+			ctx,
+			engine.ImportOptions{
+				Layout:          cfg.OCILayout,
+				Digest:          cfg.Digest,
+				Materialization: cfg.Materialization,
+			},
+		)
 		if err != nil {
 			return err
 		}
@@ -91,7 +127,7 @@ func run() error {
 	}
 	// Exclusive state ownership is established before stale socket cleanup. Only
 	// socket files in our private socket directory are eligible for removal.
-	if err = os.MkdirAll(filepath.Dir(cfg.Socket), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(cfg.Socket), 0o700); err != nil {
 		return err
 	}
 	if info, x := os.Lstat(cfg.Socket); x == nil {

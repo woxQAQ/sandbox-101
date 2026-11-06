@@ -34,9 +34,20 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 		}
 		if err == nil {
 			if b.Instance != "" && b.Instance != v.Instance {
-				return api.Fail(api.Conflict, "rejected warm instance changed; cleanup requires review")
+				return api.Fail(
+					api.Conflict,
+					"rejected warm instance changed; cleanup requires review",
+				)
 			}
-			if _, err = s.engine(o, "warm-reject:"+b.ID, api.Request{Action: "delete", VMID: b.VMID, ExpectedInstance: v.Instance}); err != nil {
+			if _, err = s.engine(
+				o,
+				"warm-reject:"+b.ID,
+				api.Request{
+					Action:           "delete",
+					VMID:             b.VMID,
+					ExpectedInstance: v.Instance,
+				},
+			); err != nil {
 				return err
 			}
 		}

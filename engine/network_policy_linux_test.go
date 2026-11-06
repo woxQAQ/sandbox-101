@@ -7,7 +7,12 @@ import (
 
 func TestNetworkPolicyRulesDefaultDenyAndSharedBudget(t *testing.T) {
 	baseline := renderNetworkPolicy(nil)
-	if strings.Contains(baseline, "jump egress") || strings.Contains(baseline, "ct state") || !strings.Contains(baseline, "hook forward priority filter; policy drop") {
+	if strings.Contains(baseline, "jump egress") ||
+		strings.Contains(baseline, "ct state") ||
+		!strings.Contains(
+			baseline,
+			"hook forward priority filter; policy drop",
+		) {
 		t.Fatalf("baseline permits forwarding: %s", baseline)
 	}
 	p := directPolicy()
@@ -30,10 +35,17 @@ func TestNetworkPolicyRulesDefaultDenyAndSharedBudget(t *testing.T) {
 			t.Errorf("missing mandatory denied prefix %s", denied)
 		}
 	}
-	if strings.Count(rules, "ct count over") != 1 || strings.Count(rules, "jump budget") != 2 {
+	if strings.Count(rules, "ct count over") != 1 ||
+		strings.Count(rules, "jump budget") != 2 {
 		t.Fatal("outbound and reply packets do not share one connection budget")
 	}
-	if strings.Index(rules, "ip daddr @denied drop") > strings.Index(rules, "jump budget") {
+	if strings.Index(
+		rules,
+		"ip daddr @denied drop",
+	) > strings.Index(
+		rules,
+		"jump budget",
+	) {
 		t.Fatal("destination deny checks follow forwarding admission")
 	}
 }

@@ -50,7 +50,11 @@ func Load(flags *pflag.FlagSet, prefix string, out any) error {
 				return fmt.Errorf("config %q: unknown key %q", path, key)
 			}
 			if value == nil {
-				return fmt.Errorf("config %q: key %q must not be null", path, key)
+				return fmt.Errorf(
+					"config %q: key %q must not be null",
+					path,
+					key,
+				)
 			}
 		}
 		if err := v.MergeConfigMap(values); err != nil {
@@ -82,7 +86,11 @@ func exactNumber(from, to reflect.Type, data any) (any, error) {
 	switch from.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		text = strconv.FormatInt(value.Int(), 10)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64:
 		text = strconv.FormatUint(value.Uint(), 10)
 	case reflect.Float32, reflect.Float64:
 		text = strconv.FormatFloat(value.Float(), 'f', -1, from.Bits())

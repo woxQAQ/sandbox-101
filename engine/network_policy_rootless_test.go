@@ -34,9 +34,23 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
 	dir := t.TempDir()
-	r := Resource{VMID: "kernel-acceptance", Instance: "current-instance", Dir: dir, NetworkToken: "kernel-acceptance", Slot: 2}
-	b := &CloudHypervisor{opts: CloudOptions{UID: 0, HostPolicy: filepath.Join(dir, "host-policy.json")}}
-	if err := writeJSON(b.opts.HostPolicy, HostPolicy{Version: 1, StorageQuota: true, NetworkQuotas: true}); err != nil {
+	r := Resource{
+		VMID:         "kernel-acceptance",
+		Instance:     "current-instance",
+		Dir:          dir,
+		NetworkToken: "kernel-acceptance",
+		Slot:         2,
+	}
+	b := &CloudHypervisor{
+		opts: CloudOptions{
+			UID:        0,
+			HostPolicy: filepath.Join(dir, "host-policy.json"),
+		},
+	}
+	if err := writeJSON(
+		b.opts.HostPolicy,
+		HostPolicy{Version: 1, StorageQuota: true, NetworkQuotas: true},
+	); err != nil {
 		t.Fatal(err)
 	}
 	rootlessWrite(t, "/proc/sys/net/ipv4/ip_forward", "1")
@@ -54,7 +68,22 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	// Keep the production-created namespace, uplink, NAT and ownership receipt;
 	// replace its TAP endpoint with a local kernel peer carrying guest packets.
 	rootlessCommand(t, "ip", "-n", ns, "link", "del", "tap0")
-	rootlessCommand(t, "ip", "-n", ns, "link", "add", "tap0", "type", "veth", "peer", "name", "eth0", "netns", guest)
+	rootlessCommand(
+		t,
+		"ip",
+		"-n",
+		ns,
+		"link",
+		"add",
+		"tap0",
+		"type",
+		"veth",
+		"peer",
+		"name",
+		"eth0",
+		"netns",
+		guest,
+	)
 	for _, args := range [][]string{
 		{"-n", ns, "link", "set", "tap0", "alias", netAlias(r)},
 		{"-n", ns, "link", "set", "tap0", "address", "02:00:00:00:00:01"},
@@ -96,7 +125,12 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	probe := func(ip string, allow bool) {
 		t.Helper()
-		rootlessNetworkProbe(t, guest, net.JoinHostPort(ip, fmt.Sprint(port)), allow)
+		rootlessNetworkProbe(
+			t,
+			guest,
+			net.JoinHostPort(ip, fmt.Sprint(port)),
+			allow,
+		)
 	}
 	links := func(up bool) {
 		t.Helper()
@@ -111,15 +145,43 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 			// This helper is used only for the unfiltered baseline and the
 			// accidental-link-up revocation probe. Recreate routes removed by
 			// link-down so missing topology cannot masquerade as an nft drop.
-			rootlessCommand(t, "ip", "-n", ns, "route", "replace", "default", "via", hostIP, "dev", "uplink", "onlink")
-			rootlessCommand(t, "ip", "route", "replace", mapped+"/32", "via", peerIP, "dev", host, "onlink")
+			rootlessCommand(
+				t,
+				"ip",
+				"-n",
+				ns,
+				"route",
+				"replace",
+				"default",
+				"via",
+				hostIP,
+				"dev",
+				"uplink",
+				"onlink",
+			)
+			rootlessCommand(
+				t,
+				"ip",
+				"route",
+				"replace",
+				mapped+"/32",
+				"via",
+				peerIP,
+				"dev",
+				host,
+				"onlink",
+			)
 		}
 	}
 	checkDown := func() {
 		t.Helper()
 		up, err := b.networkInspect(ctx, r)
 		if err != nil || up {
-			t.Fatalf("owned interfaces did not fail closed: active=%v error=%v", up, err)
+			t.Fatalf(
+				"owned interfaces did not fail closed: active=%v error=%v",
+				up,
+				err,
+			)
 		}
 	}
 	// First prove each local route, service and return path is usable. Otherwise
@@ -130,13 +192,27 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		probe(ip, true)
 	}
 	if err := b.Network(ctx, r, false); err != nil {
-		t.Logf("actual host links: %s", rootlessCommand(t, "ip", "-j", "link", "show"))
-		t.Logf("actual namespace links: %s", rootlessCommand(t, "ip", "-n", ns, "-j", "link", "show"))
+		t.Logf(
+			"actual host links: %s",
+			rootlessCommand(t, "ip", "-j", "link", "show"),
+		)
+		t.Logf(
+			"actual namespace links: %s",
+			rootlessCommand(t, "ip", "-n", ns, "-j", "link", "show"),
+		)
 		t.Fatal(err)
 	}
 	checkDown()
-	policy := &api.NetworkPolicy{Version: 1, AllowedCIDRs: []string{"1.1.1.1/32"}, MaxConnections: 64}
-	rootlessArtifact(t, "network-policy.nft", []byte(renderNetworkPolicy(policy)))
+	policy := &api.NetworkPolicy{
+		Version:        1,
+		AllowedCIDRs:   []string{"1.1.1.1/32"},
+		MaxConnections: 64,
+	}
+	rootlessArtifact(
+		t,
+		"network-policy.nft",
+		[]byte(renderNetworkPolicy(policy)),
+	)
 	if err := b.InstallNetworkPolicy(ctx, r, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -152,17 +228,44 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		probe(ip, false)
 		probe(targets[0], true)
 	}
-	rootlessWantError(t, b.InstallNetworkPolicy(ctx, r, nil), "policy revocation while interfaces are active", api.Conflict)
+	rootlessWantError(
+		t,
+		b.InstallNetworkPolicy(ctx, r, nil),
+		"policy revocation while interfaces are active",
+		api.Conflict,
+	)
 	if err := b.VerifyNetworkPolicy(ctx, r, policy); err != nil {
-		t.Fatalf("traffic changed the stateless enforcement fingerprint: %v", err)
+		t.Fatalf(
+			"traffic changed the stateless enforcement fingerprint: %v",
+			err,
+		)
 	}
-	rootlessArtifact(t, "network-ruleset.json", rootlessCommand(t, "ip", "netns", "exec", ns, "nft", "-j", "-s", "list", "ruleset"))
+	rootlessArtifact(
+		t,
+		"network-ruleset.json",
+		rootlessCommand(
+			t,
+			"ip",
+			"netns",
+			"exec",
+			ns,
+			"nft",
+			"-j",
+			"-s",
+			"list",
+			"ruleset",
+		),
+	)
 	if err := b.Network(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
 	checkDown()
 	probe(targets[0], false)
-	broad := &api.NetworkPolicy{Version: 1, AllowedCIDRs: []string{"0.0.0.0/0"}, MaxConnections: 64}
+	broad := &api.NetworkPolicy{
+		Version:        1,
+		AllowedCIDRs:   []string{"0.0.0.0/0"},
+		MaxConnections: 64,
+	}
 	if err := b.InstallNetworkPolicy(ctx, r, broad); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +279,11 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	if err := b.Network(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
-	limited := &api.NetworkPolicy{Version: 1, AllowedCIDRs: []string{"0.0.0.0/0"}, MaxConnections: 2}
+	limited := &api.NetworkPolicy{
+		Version:        1,
+		AllowedCIDRs:   []string{"0.0.0.0/0"},
+		MaxConnections: 2,
+	}
 	if err := b.InstallNetworkPolicy(ctx, r, limited); err != nil {
 		t.Fatal(err)
 	}
@@ -185,12 +292,28 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	}
 	// Hold two real connections: the kernel can retire completed TCP flows from
 	// ct count before their conntrack entries expire.
-	holder := rootlessNetworkFlows(t, guest, []string{net.JoinHostPort(targets[0], fmt.Sprint(port)), net.JoinHostPort(targets[1], fmt.Sprint(port))})
+	holder := rootlessNetworkFlows(
+		t,
+		guest,
+		[]string{
+			net.JoinHostPort(targets[0], fmt.Sprint(port)),
+			net.JoinHostPort(targets[1], fmt.Sprint(port)),
+		},
+	)
 	probe(targets[0], false)
 	if err := b.VerifyNetworkPolicy(ctx, r, limited); err != nil {
-		t.Fatalf("flow accounting changed the stateless enforcement fingerprint: %v", err)
+		t.Fatalf(
+			"flow accounting changed the stateless enforcement fingerprint: %v",
+			err,
+		)
 	}
-	rootlessArtifact(t, "network-flow-budget.txt", []byte("max_connections=2; two concurrent TCP echoes across distinct public destinations succeeded; third TCP handshake denied while both connections remained open\n"))
+	rootlessArtifact(
+		t,
+		"network-flow-budget.txt",
+		[]byte(
+			"max_connections=2; two concurrent TCP echoes across distinct public destinations succeeded; third TCP handshake denied while both connections remained open\n",
+		),
+	)
 	holder.release(t)
 	if out, err := holder.wait(); err != nil {
 		t.Fatalf("bounded TCP flow holder: %v: %s", err, out)
@@ -204,7 +327,12 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	if err := b.VerifyNetworkPolicy(ctx, r, nil); err != nil {
 		t.Fatal(err)
 	}
-	rootlessWantError(t, b.Network(ctx, r, true), "activation with revoked policy", api.Conflict)
+	rootlessWantError(
+		t,
+		b.Network(ctx, r, true),
+		"activation with revoked policy",
+		api.Conflict,
+	)
 	checkDown()
 	// Revocation must also drop real packets if interfaces are accidentally up.
 	links(true)
@@ -217,21 +345,53 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	}
 	stale := r
 	stale.Instance = "later-instance"
-	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, stale, policy), "stale instance receipt verification", api.Conflict)
-	rootlessWantError(t, b.Network(ctx, stale, true), "stale instance activation", api.Conflict)
+	rootlessWantError(
+		t,
+		b.VerifyNetworkPolicy(ctx, stale, policy),
+		"stale instance receipt verification",
+		api.Conflict,
+	)
+	rootlessWantError(
+		t,
+		b.Network(ctx, stale, true),
+		"stale instance activation",
+		api.Conflict,
+	)
 	checkDown()
 	// Also exercise the engine-level committed-instance helper without a fake
 	// backend. It must reject a stale commit before consulting kernel permission.
 	e := &Engine{opts: Options{Backend: b}}
-	v := &vmRecord{Resource: stale, VM: api.VM{Instance: stale.Instance, NetworkPolicy: policy, NetworkPolicyInstance: r.Instance}}
-	rootlessWantError(t, e.verifyNetworkPolicy(ctx, v), "stale engine policy commit", api.Conflict)
+	v := &vmRecord{
+		Resource: stale,
+		VM: api.VM{
+			Instance:              stale.Instance,
+			NetworkPolicy:         policy,
+			NetworkPolicyInstance: r.Instance,
+		},
+	}
+	rootlessWantError(
+		t,
+		e.verifyNetworkPolicy(ctx, v),
+		"stale engine policy commit",
+		api.Conflict,
+	)
 	if err := b.Network(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	probe(targets[0], true)
 	rootlessNFT(t, ns, "insert rule inet engine_policy forward accept\n")
-	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, r, policy), "kernel ruleset tampering", api.Unknown)
-	rootlessWantError(t, b.Network(ctx, r, true), "tampered rules activation", api.Unknown)
+	rootlessWantError(
+		t,
+		b.VerifyNetworkPolicy(ctx, r, policy),
+		"kernel ruleset tampering",
+		api.Unknown,
+	)
+	rootlessWantError(
+		t,
+		b.Network(ctx, r, true),
+		"tampered rules activation",
+		api.Unknown,
+	)
 	checkDown()
 	probe(targets[0], false)
 	if err := b.networkRemove(ctx, r); err != nil {
@@ -241,7 +401,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		t.Fatalf("owned namespace anchor remains: %v", err)
 	}
 	rootlessCommand(t, "ip", "netns", "del", guest)
-	t.Logf("real TCP echoes=%d; verified public allowlist, private/metadata deny under /0, shared two-flow saturation, link disable, nil-policy revoke, instance binding, ruleset tamper fail-closed and owned cleanup", received.Load())
+	t.Logf(
+		"real TCP echoes=%d; verified public allowlist, private/metadata deny under /0, shared two-flow saturation, link disable, nil-policy revoke, instance binding, ruleset tamper fail-closed and owned cleanup",
+		received.Load(),
+	)
 }
 
 func rootlessWantError(t *testing.T, err error, label string, code api.Code) {
@@ -278,28 +441,105 @@ func rootlessNetworkProbe(t *testing.T, ns, target string, allow bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns, exe, "-test.run=^TestKernelIsolationRootlessProbe$", "-test.timeout=3s")
-	cmd.Env = append(os.Environ(), rootlessChildEnv+"=probe", "SANDBOX_KERNEL_PROBE_TARGET="+target, fmt.Sprintf("SANDBOX_KERNEL_PROBE_ALLOW=%t", allow), "GOMAXPROCS=1")
+	cmd := exec.CommandContext(
+		ctx,
+		"ip",
+		"netns",
+		"exec",
+		ns,
+		exe,
+		"-test.run=^TestKernelIsolationRootlessProbe$",
+		"-test.timeout=3s",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		rootlessChildEnv+"=probe",
+		"SANDBOX_KERNEL_PROBE_TARGET="+target,
+		fmt.Sprintf("SANDBOX_KERNEL_PROBE_ALLOW=%t", allow),
+		"GOMAXPROCS=1",
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Logf("guest addresses: %s", rootlessCommand(t, "ip", "-n", ns, "-j", "addr", "show"))
-		t.Logf("guest routes: %s", rootlessCommand(t, "ip", "-n", ns, "-j", "route", "show", "table", "all"))
-		t.Logf("router routes: %s", rootlessCommand(t, "ip", "-n", "sbe-kernel-acceptance", "-j", "route", "show", "table", "all"))
-		t.Logf("outer routes: %s", rootlessCommand(t, "ip", "-j", "route", "show", "table", "all"))
-		t.Logf("router nft rules: %s", rootlessCommand(t, "ip", "netns", "exec", "sbe-kernel-acceptance", "nft", "list", "ruleset"))
+		t.Logf(
+			"guest addresses: %s",
+			rootlessCommand(t, "ip", "-n", ns, "-j", "addr", "show"),
+		)
+		t.Logf(
+			"guest routes: %s",
+			rootlessCommand(
+				t,
+				"ip",
+				"-n",
+				ns,
+				"-j",
+				"route",
+				"show",
+				"table",
+				"all",
+			),
+		)
+		t.Logf(
+			"router routes: %s",
+			rootlessCommand(
+				t,
+				"ip",
+				"-n",
+				"sbe-kernel-acceptance",
+				"-j",
+				"route",
+				"show",
+				"table",
+				"all",
+			),
+		)
+		t.Logf(
+			"outer routes: %s",
+			rootlessCommand(t, "ip", "-j", "route", "show", "table", "all"),
+		)
+		t.Logf(
+			"router nft rules: %s",
+			rootlessCommand(
+				t,
+				"ip",
+				"netns",
+				"exec",
+				"sbe-kernel-acceptance",
+				"nft",
+				"list",
+				"ruleset",
+			),
+		)
 		t.Fatalf("TCP probe %s allow=%v: %v: %s", target, allow, err, out)
 	}
 	t.Logf("real TCP %s allowed=%v", target, allow)
 }
 
-func rootlessNetworkFlows(t *testing.T, ns string, targets []string) *rootlessOwnedProcess {
+func rootlessNetworkFlows(
+	t *testing.T,
+	ns string,
+	targets []string,
+) *rootlessOwnedProcess {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns, exe, "-test.run=^TestKernelIsolationRootlessFlowHolder$", "-test.timeout=9s")
-	cmd.Env = append(os.Environ(), rootlessChildEnv+"=flow-holder", "SANDBOX_KERNEL_FLOW_TARGETS="+strings.Join(targets, ","), "GOMAXPROCS=1")
+	cmd := exec.CommandContext(
+		ctx,
+		"ip",
+		"netns",
+		"exec",
+		ns,
+		exe,
+		"-test.run=^TestKernelIsolationRootlessFlowHolder$",
+		"-test.timeout=9s",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		rootlessChildEnv+"=flow-holder",
+		"SANDBOX_KERNEL_FLOW_TARGETS="+strings.Join(targets, ","),
+		"GOMAXPROCS=1",
+	)
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -315,7 +555,12 @@ func rootlessNetworkFlows(t *testing.T, ns string, targets []string) *rootlessOw
 		cancel()
 		t.Fatal(err)
 	}
-	owned := &rootlessOwnedProcess{cmd: cmd, input: input, output: bufio.NewReader(output), cancel: cancel}
+	owned := &rootlessOwnedProcess{
+		cmd:    cmd,
+		input:  input,
+		output: bufio.NewReader(output),
+		cancel: cancel,
+	}
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil {
 			_ = cmd.Process.Kill()
@@ -323,7 +568,10 @@ func rootlessNetworkFlows(t *testing.T, ns string, targets []string) *rootlessOw
 		}
 		cancel()
 	})
-	if ready, err := owned.output.ReadString('\n'); err != nil || ready != "ready\n" {
+	if ready, err := owned.output.ReadString(
+		'\n',
+	); err != nil ||
+		ready != "ready\n" {
 		t.Fatalf("TCP connections did not become ready: %q: %v", ready, err)
 	}
 	return owned
@@ -345,7 +593,11 @@ func TestKernelIsolationRootlessFlowHolder(t *testing.T) {
 			t.Fatal(err)
 		}
 		var echo [4]byte
-		if _, err := io.ReadFull(conn, echo[:]); err != nil || string(echo[:]) != "nft!" {
+		if _, err := io.ReadFull(
+			conn,
+			echo[:],
+		); err != nil ||
+			string(echo[:]) != "nft!" {
 			t.Fatalf("held flow echo=%q error=%v", echo, err)
 		}
 		_ = conn.SetDeadline(time.Time{})
@@ -368,7 +620,11 @@ func TestKernelIsolationRootlessProbe(t *testing.T) {
 		// retransmission. Allow one retransmit while keeping every probe bounded.
 		dialTimeout = 1500 * time.Millisecond
 	}
-	conn, err := net.DialTimeout("tcp4", os.Getenv("SANDBOX_KERNEL_PROBE_TARGET"), dialTimeout)
+	conn, err := net.DialTimeout(
+		"tcp4",
+		os.Getenv("SANDBOX_KERNEL_PROBE_TARGET"),
+		dialTimeout,
+	)
 	if !allow {
 		if err == nil {
 			_ = conn.Close()
@@ -385,7 +641,11 @@ func TestKernelIsolationRootlessProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	var echo [4]byte
-	if _, err := io.ReadFull(conn, echo[:]); err != nil || string(echo[:]) != "nft!" {
+	if _, err := io.ReadFull(
+		conn,
+		echo[:],
+	); err != nil ||
+		string(echo[:]) != "nft!" {
 		t.Fatalf("echo=%q error=%v", echo, err)
 	}
 }

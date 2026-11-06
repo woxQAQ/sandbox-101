@@ -16,19 +16,34 @@ import (
 
 type fixture struct {
 	api.Client
+
 	request api.Request
 }
 
-func (f *fixture) Submit(_ context.Context, r api.Request) (api.Operation, error) {
+func (f *fixture) Submit(
+	_ context.Context,
+	r api.Request,
+) (api.Operation, error) {
 	f.request = r
-	return api.Operation{ID: "op-1", Key: r.Key, Request: r, Status: "running"}, nil
+	return api.Operation{
+		ID:      "op-1",
+		Key:     r.Key,
+		Request: r,
+		Status:  "running",
+	}, nil
 }
+
 func (f *fixture) GetVM(context.Context, string) (api.VM, error) {
 	return api.VM{}, api.Fail(api.NotFound, "absent")
 }
+
 func (f *fixture) ListVMs(context.Context) ([]api.VM, error) {
-	return []api.VM{{ID: "vm-1", Phase: "stopped"}, {ID: "vm-2", Phase: "running"}}, nil
+	return []api.VM{
+		{ID: "vm-1", Phase: "stopped"},
+		{ID: "vm-2", Phase: "running"},
+	}, nil
 }
+
 func TestUDSRoundTripAndTypedErrors(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "engine.sock")
 	l, err := net.Listen("unix", socket)
@@ -36,7 +51,7 @@ func TestUDSRoundTripAndTypedErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if err = os.Chmod(socket, 0600); err != nil {
+	if err = os.Chmod(socket, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f := &fixture{}
@@ -45,7 +60,14 @@ func TestUDSRoundTripAndTypedErrors(t *testing.T) {
 	defer s.Close()
 	c := client.New(socket)
 	defer c.Close()
-	op, err := c.Submit(context.Background(), api.Request{Key: "key with /? unicode 世界", Action: "start", VMID: "vm-1"})
+	op, err := c.Submit(
+		context.Background(),
+		api.Request{
+			Key:    "key with /? unicode 世界",
+			Action: "start",
+			VMID:   "vm-1",
+		},
+	)
 	if err != nil || op.ID != "op-1" || f.request.Key != op.Key {
 		t.Fatalf("submit %+v %v", op, err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/spf13/pflag"
+
 	"github.com/woxQAQ/sandbox-engine/config"
 )
 
@@ -16,7 +17,11 @@ func parseConfig(args []string) (commandConfig, []string, error) {
 	f := pflag.NewFlagSet("sandboxctl", pflag.ContinueOnError)
 	// Stop at the command, preserving guest arguments such as -c and --help.
 	f.SetInterspersed(false)
-	f.String("config", "", "configuration file (YAML, JSON, TOML or another Viper-supported format)")
+	f.String(
+		"config",
+		"",
+		"configuration file (YAML, JSON, TOML or another Viper-supported format)",
+	)
 	f.String("endpoint", "http://127.0.0.1:7777", "sandboxd endpoint")
 	f.String("token-file", "", "file containing tenant, sandbox or root token")
 	f.String("key", "", "persistent Idempotency-Key for mutations")

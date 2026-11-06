@@ -10,11 +10,16 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
-func systemAgent(ctx context.Context, socket, instance string, restore bool) error {
+func systemAgent(
+	ctx context.Context,
+	socket, instance string,
+	restore bool,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	call := func(method string, params map[string]any, data []byte) error {
@@ -22,7 +27,11 @@ func systemAgent(ctx context.Context, socket, instance string, restore bool) err
 		var reader *bufio.Reader
 		var err error
 		for {
-			conn, err = (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
+			conn, err = (&net.Dialer{Timeout: time.Second}).DialContext(
+				ctx,
+				"unix",
+				socket,
+			)
 			if err == nil {
 				deadline, _ := ctx.Deadline()
 				_ = conn.SetDeadline(deadline)
@@ -34,14 +43,15 @@ func systemAgent(ctx context.Context, socket, instance string, restore bool) err
 					var line []byte
 					line, err = reader.ReadSlice('\n')
 					if err == nil {
-						if len(line) > 128 || !strings.HasPrefix(string(line), "OK ") {
-							conn.Close()
+						if len(line) > 128 ||
+							!strings.HasPrefix(string(line), "OK ") {
+							_ = conn.Close()
 							return fmt.Errorf("vsock handshake rejected")
 						}
 						break
 					}
 				}
-				conn.Close()
+				_ = conn.Close()
 			}
 			t := time.NewTimer(50 * time.Millisecond)
 			select {
@@ -51,13 +61,22 @@ func systemAgent(ctx context.Context, socket, instance string, restore bool) err
 			case <-t.C:
 			}
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		p, err := structpb.NewStruct(params)
 		if err != nil {
 			return err
 		}
 		id := instance + "/" + newID("sys-")
-		if err = protocol.WriteFrame(conn, &protocol.Frame{Id: id, Method: method, Params: p, Data: data, Eof: true}); err != nil {
+		if err = protocol.WriteFrame(
+			conn,
+			&protocol.Frame{
+				Id:     id,
+				Method: method,
+				Params: p,
+				Data:   data,
+				Eof:    true,
+			},
+		); err != nil {
 			return err
 		}
 		frame, err := protocol.ReadFrame(reader)
@@ -71,7 +90,9 @@ func systemAgent(ctx context.Context, socket, instance string, restore bool) err
 			return fmt.Errorf("agent %s: %s", method, frame.Error)
 		}
 		if method == "ping" {
-			if frame.Params == nil || frame.Params.Fields["protocol"].GetNumberValue() != 1 || frame.Params.Fields["portal"].GetStringValue() != "system" {
+			if frame.Params == nil ||
+				frame.Params.Fields["protocol"].GetNumberValue() != 1 ||
+				frame.Params.Fields["portal"].GetStringValue() != "system" {
 				return fmt.Errorf("incompatible system agent portal")
 			}
 		}
@@ -89,7 +110,14 @@ func systemAgent(ctx context.Context, socket, instance string, restore bool) err
 			return err
 		}
 		now := time.Now()
-		if err := call("clock_sync", map[string]any{"unix_seconds": float64(now.Unix()), "nanoseconds": float64(now.Nanosecond())}, nil); err != nil {
+		if err := call(
+			"clock_sync",
+			map[string]any{
+				"unix_seconds": float64(now.Unix()),
+				"nanoseconds":  float64(now.Nanosecond()),
+			},
+			nil,
+		); err != nil {
 			return err
 		}
 	}

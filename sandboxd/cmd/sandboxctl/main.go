@@ -22,20 +22,27 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	cfg, args, err := parseConfig(os.Args[1:])
 	if err != nil {
 		return err
 	}
 	if len(args) == 0 || cfg.TokenFile == "" {
-		return errors.New("usage: sandboxctl --token-file FILE [--key KEY] {list|get ID|claim|template|change ID|exec ID COMMAND...}; JSON commands on stdin")
+		return errors.New(
+			"usage: sandboxctl --token-file FILE [--key KEY] {list|get ID|claim|template|change ID|exec ID COMMAND...}; JSON commands on stdin",
+		)
 	}
 	raw, err := os.ReadFile(cfg.TokenFile)
 	if err != nil {
 		return err
 	}
 	client := sdk.New(cfg.Endpoint, strings.TrimSpace(string(raw)))
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
 	defer cancel()
 	printJSON := func(v any) error { out := json.NewEncoder(os.Stdout); out.SetIndent("", "  "); return out.Encode(v) }
 	readCommand := func() (sandboxd.Command, error) {
@@ -69,7 +76,9 @@ func run() error {
 		return printJSON(v)
 	case "claim", "template", "change":
 		if cfg.Key == "" {
-			return errors.New("--key is required; reuse it when retrying this intent")
+			return errors.New(
+				"--key is required; reuse it when retrying this intent",
+			)
 		}
 		c, err := readCommand()
 		if err != nil {
@@ -83,7 +92,12 @@ func run() error {
 			if c.Template == nil {
 				return errors.New("template field is required")
 			}
-			result, err = client.PutTemplate(ctx, cfg.Key, *c.Template, c.Action == "template_build")
+			result, err = client.PutTemplate(
+				ctx,
+				cfg.Key,
+				*c.Template,
+				c.Action == "template_build",
+			)
 		case "change":
 			if len(args) != 2 {
 				return errors.New("change requires sandbox ID")
@@ -102,7 +116,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// One argument is a shell program; multiple arguments preserve their boundaries.
 		command := args[2]
 		if len(args) > 3 {

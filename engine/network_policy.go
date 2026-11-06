@@ -22,19 +22,33 @@ func validateNetworkPolicy(p *api.NetworkPolicy) error {
 		return nil
 	}
 	if p.Version != 1 || p.MaxConnections < 1 || p.MaxConnections > 65535 {
-		return api.Fail(api.Invalid, "network policy requires version 1 and max_connections in 1..65535")
+		return api.Fail(
+			api.Invalid,
+			"network policy requires version 1 and max_connections in 1..65535",
+		)
 	}
 	if len(p.AllowedHosts) != 0 {
-		return api.Fail(api.Incompatible, "direct policy cannot enforce allowed_hosts; use relay or an explicit IPv4 CIDR policy")
+		return api.Fail(
+			api.Incompatible,
+			"direct policy cannot enforce allowed_hosts; use relay or an explicit IPv4 CIDR policy",
+		)
 	}
 	if len(p.AllowedCIDRs) > 256 {
-		return api.Fail(api.Invalid, "at most 256 direct IPv4 prefixes are supported")
+		return api.Fail(
+			api.Invalid,
+			"at most 256 direct IPv4 prefixes are supported",
+		)
 	}
 	seen := make(map[netip.Prefix]bool)
 	for _, raw := range p.AllowedCIDRs {
 		prefix, err := netip.ParsePrefix(raw)
-		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.String() != raw {
-			return api.Fail(api.Invalid, "direct destination must be a canonical IPv4 CIDR: %q", raw)
+		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() ||
+			prefix.String() != raw {
+			return api.Fail(
+				api.Invalid,
+				"direct destination must be a canonical IPv4 CIDR: %q",
+				raw,
+			)
 		}
 		if seen[prefix] {
 			return api.Fail(api.Invalid, "duplicate direct CIDR: %s", raw)
@@ -43,7 +57,11 @@ func validateNetworkPolicy(p *api.NetworkPolicy) error {
 		for _, denied := range directDeniedCIDRs {
 			d := netip.MustParsePrefix(denied)
 			if prefix.Bits() >= d.Bits() && d.Contains(prefix.Addr()) {
-				return api.Fail(api.Invalid, "direct CIDR is private, reserved or metadata: %s", raw)
+				return api.Fail(
+					api.Invalid,
+					"direct CIDR is private, reserved or metadata: %s",
+					raw,
+				)
 			}
 		}
 	}
@@ -51,22 +69,34 @@ func validateNetworkPolicy(p *api.NetworkPolicy) error {
 }
 
 func (e *Engine) verifyNetworkPolicy(ctx context.Context, v *vmRecord) error {
-	if v.VM.NetworkPolicy == nil || v.VM.Instance == "" || v.Resource.Instance != v.VM.Instance || v.VM.NetworkPolicyInstance != v.VM.Instance {
-		return api.Fail(api.Conflict, "direct activation requires a committed policy for the current instance")
+	if v.VM.NetworkPolicy == nil || v.VM.Instance == "" ||
+		v.Resource.Instance != v.VM.Instance ||
+		v.VM.NetworkPolicyInstance != v.VM.Instance {
+		return api.Fail(
+			api.Conflict,
+			"direct activation requires a committed policy for the current instance",
+		)
 	}
 	if err := validateNetworkPolicy(v.VM.NetworkPolicy); err != nil {
 		return err
 	}
 	b, ok := e.opts.Backend.(NetworkPolicyBackend)
 	if !ok {
-		return api.Fail(api.Incompatible, "backend cannot verify direct network policy")
+		return api.Fail(
+			api.Incompatible,
+			"backend cannot verify direct network policy",
+		)
 	}
 	return b.VerifyNetworkPolicy(ctx, v.Resource, v.VM.NetworkPolicy)
 }
 
 // failClosed preserves the diagnostic and attempts shutdown even when process or
 // policy inspection failed. Network(false) independently verifies link ownership.
-func (e *Engine) failClosed(ctx context.Context, v *vmRecord, cause error) error {
+func (e *Engine) failClosed(
+	ctx context.Context,
+	v *vmRecord,
+	cause error,
+) error {
 	err := e.opts.Backend.Network(ctx, v.Resource, false)
 	v.VM.NetworkEnabled = false
 	if err == nil {
@@ -84,11 +114,17 @@ func (e *Engine) installNetworkPolicy(o *opRecord, v *vmRecord) error {
 		return err
 	}
 	if v.VM.NetworkEnabled || obs.Network {
-		return api.Fail(api.Conflict, "disable all VM interfaces before replacing or revoking direct policy")
+		return api.Fail(
+			api.Conflict,
+			"disable all VM interfaces before replacing or revoking direct policy",
+		)
 	}
 	b, ok := e.opts.Backend.(NetworkPolicyBackend)
 	if !ok {
-		return api.Fail(api.Incompatible, "backend cannot install direct network policy")
+		return api.Fail(
+			api.Incompatible,
+			"backend cannot install direct network policy",
+		)
 	}
 	// Invalidate the previous durable permission before touching the kernel. A
 	// crash between the nft transaction and publication cannot enable old rules.
@@ -129,7 +165,14 @@ func (e *Engine) setNetwork(o *opRecord, v *vmRecord) error {
 			return err
 		}
 		if !obs.Alive || v.VM.Phase != "running" || !v.VM.AgentReady {
-			return e.failClosed(e.ctx, v, api.Fail(api.Conflict, "network requires a verified running VM with agent collaboration complete"))
+			return e.failClosed(
+				e.ctx,
+				v,
+				api.Fail(
+					api.Conflict,
+					"network requires a verified running VM with agent collaboration complete",
+				),
+			)
 		}
 		if err := e.verifyNetworkPolicy(e.ctx, v); err != nil {
 			return e.failClosed(e.ctx, v, err)

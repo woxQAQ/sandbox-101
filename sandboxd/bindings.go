@@ -38,7 +38,14 @@ func (s *Service) bind(ctx context.Context, b Sandbox, vsockPath string) error {
 			return err
 		}
 	}
-	if err := s.opts.Egress.Bind(ctx, b.ID, b.TenantID, vsockPath, b.Policy, secrets); err != nil {
+	if err := s.opts.Egress.Bind(
+		ctx,
+		b.ID,
+		b.TenantID,
+		vsockPath,
+		b.Policy,
+		secrets,
+	); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -46,6 +53,7 @@ func (s *Service) bind(ctx context.Context, b Sandbox, vsockPath string) error {
 	s.mu.Unlock()
 	return nil
 }
+
 func (s *Service) revoke(id string) error {
 	if s.opts.Egress == nil {
 		return nil
@@ -58,6 +66,7 @@ func (s *Service) revoke(id string) error {
 	s.mu.Unlock()
 	return nil
 }
+
 func (s *Service) Audit(ctx context.Context, event egress.AuditEvent) error {
 	return s.store.audit(ctx, event)
 }

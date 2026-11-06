@@ -53,7 +53,14 @@ func Run(cmd *exec.Cmd) (string, error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
+		return string(
+				output,
+			), fmt.Errorf(
+				"%q failed with error %q: %w",
+				command,
+				string(output),
+				err,
+			)
 	}
 
 	return string(output), nil
@@ -73,8 +80,17 @@ func UninstallCertManager() {
 		"cert-manager-controller",
 	}
 	for _, lease := range kubeSystemLeases {
-		cmd = exec.Command("kubectl", "delete", "lease", lease,
-			"-n", "kube-system", "--ignore-not-found", "--force", "--grace-period=0")
+		cmd = exec.Command(
+			"kubectl",
+			"delete",
+			"lease",
+			lease,
+			"-n",
+			"kube-system",
+			"--ignore-not-found",
+			"--force",
+			"--grace-period=0",
+		)
 		if _, err := Run(cmd); err != nil {
 			warnError(err)
 		}
@@ -90,10 +106,16 @@ func InstallCertManager() error {
 	}
 	// Wait for cert-manager-webhook to be ready, which can take time if cert-manager
 	// was re-installed after uninstalling on a cluster.
-	cmd = exec.Command("kubectl", "wait", "deployment.apps/cert-manager-webhook",
-		"--for", "condition=Available",
-		"--namespace", "cert-manager",
-		"--timeout", "5m",
+	cmd = exec.Command(
+		"kubectl",
+		"wait",
+		"deployment.apps/cert-manager-webhook",
+		"--for",
+		"condition=Available",
+		"--namespace",
+		"cert-manager",
+		"--timeout",
+		"5m",
 	)
 
 	_, err := Run(cmd)
@@ -167,7 +189,10 @@ func GetNonEmptyLines(output string) []string {
 func GetProjectDir() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
-		return wd, fmt.Errorf("failed to get current working directory: %w", err)
+		return wd, fmt.Errorf(
+			"failed to get current working directory: %w",
+			err,
+		)
 	}
 	wd = strings.ReplaceAll(wd, "/test/e2e", "")
 	return wd, nil
@@ -186,7 +211,10 @@ func UncommentCode(filename, target, prefix string) error {
 
 	idx := strings.Index(strContent, target)
 	if idx < 0 {
-		return fmt.Errorf("unable to find the code %q to be uncommented", target)
+		return fmt.Errorf(
+			"unable to find the code %q to be uncommented",
+			target,
+		)
 	}
 
 	out := new(bytes.Buffer)
@@ -200,7 +228,9 @@ func UncommentCode(filename, target, prefix string) error {
 		return nil
 	}
 	for {
-		if _, err = out.WriteString(strings.TrimPrefix(scanner.Text(), prefix)); err != nil {
+		if _, err = out.WriteString(
+			strings.TrimPrefix(scanner.Text(), prefix),
+		); err != nil {
 			return fmt.Errorf("failed to write to output: %w", err)
 		}
 		// Avoid writing a newline in case the previous line was the last in target.
@@ -218,7 +248,7 @@ func UncommentCode(filename, target, prefix string) error {
 
 	// false positive
 	// nolint:gosec
-	if err = os.WriteFile(filename, out.Bytes(), 0644); err != nil {
+	if err = os.WriteFile(filename, out.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("failed to write file %q: %w", filename, err)
 	}
 

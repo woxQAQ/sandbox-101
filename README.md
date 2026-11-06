@@ -13,9 +13,12 @@ Use Linux with Go compatible with the module go directives, Rust, protoc and GNU
 ```sh
 make build
 make test check test-race
+make lint
 make integration
 make smoke
 ```
+
+The repository root is a Go workspace, not a module. `make lint` checks all four modules in `go.work` using explicit package patterns; `make lint-fix` also applies automatic fixes. Running `golangci-lint run ./...` or `go fix ./...` at the root fails because `./...` does not expand to the workspace modules.
 
 Binaries are written to `bin/{engined,sandboxd,sandboxctl}`. `make integration` launches the Rust agent fixture and exercises exec, file transfer, HTTP Upgrade, raw forwarding and Preview through the Go service and SDK. `make smoke` launches the actual daemons and CLI in temporary private state, verifies control-plane traffic and restart idempotency, and takes an offline metadata backup. It does not boot a VM.
 

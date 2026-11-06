@@ -14,7 +14,7 @@ func (s *Service) refillBackoff(template string, now time.Time) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	failures := 0
 	var latest time.Time
 	for rows.Next() {

@@ -14,8 +14,14 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 	for _, name := range []string{"valid", "missing", "unaligned", "spanning", "overlap", "file-offset", "virtio-mem", "zone", "short-file", "empty"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			mappings := []cowRAMMapping{{GPA: 0, Size: page, ZoneID: "mem0"}, {GPA: 4 * page, Size: page, ZoneID: "mem0"}}
-			ranges := []cowMemoryRange{{GPA: 0, Length: page}, {GPA: 4 * page, Length: page}}
+			mappings := []cowRAMMapping{
+				{GPA: 0, Size: page, ZoneID: "mem0"},
+				{GPA: 4 * page, Size: page, ZoneID: "mem0"},
+			}
+			ranges := []cowMemoryRange{
+				{GPA: 0, Length: page},
+				{GPA: 4 * page, Length: page},
+			}
 			length := 2 * page
 			switch name {
 			case "unaligned":
@@ -35,16 +41,32 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 			case "empty":
 				ranges = nil
 			}
-			state := map[string]any{"memory_ranges": map[string]any{"data": ranges}, "guest_ram_mappings": mappings, "boot_ram": 2 * page, "current_ram": 2 * page}
+			state := map[string]any{
+				"memory_ranges":      map[string]any{"data": ranges},
+				"guest_ram_mappings": mappings,
+				"boot_ram":           2 * page,
+				"current_ram":        2 * page,
+			}
 			stateJSON, err := json.Marshal(state)
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot := map[string]any{"snapshots": map[string]any{"memory-manager": map[string]any{"snapshot_data": map[string]any{"state": string(stateJSON)}}}}
+			snapshot := map[string]any{
+				"snapshots": map[string]any{
+					"memory-manager": map[string]any{
+						"snapshot_data": map[string]any{
+							"state": string(stateJSON),
+						},
+					},
+				},
+			}
 			if name == "missing" {
 				snapshot = map[string]any{"snapshots": map[string]any{}}
 			}
-			if err = writeJSON(filepath.Join(dir, "state.json"), snapshot); err != nil {
+			if err = writeJSON(
+				filepath.Join(dir, "state.json"),
+				snapshot,
+			); err != nil {
 				t.Fatal(err)
 			}
 			file, err := os.Create(filepath.Join(dir, "memory-ranges"))
@@ -94,7 +116,13 @@ func TestCOWActualMappingsRequireCompletePrivateBacking(t *testing.T) {
 				if name == "partial" {
 					length /= 2
 				}
-				mapping, err := unix.Mmap(int(file.Fd()), 0, length, unix.PROT_READ|unix.PROT_WRITE, flags)
+				mapping, err := unix.Mmap(
+					int(file.Fd()),
+					0,
+					length,
+					unix.PROT_READ|unix.PROT_WRITE,
+					flags,
+				)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -102,7 +130,11 @@ func TestCOWActualMappingsRequireCompletePrivateBacking(t *testing.T) {
 				mapping[0] = 42
 				if name == "private" {
 					var original [1]byte
-					if _, err = file.ReadAt(original[:], 0); err != nil || original[0] != 0 {
+					if _, err = file.ReadAt(
+						original[:],
+						0,
+					); err != nil ||
+						original[0] != 0 {
 						t.Fatal("private write changed retained backing", err)
 					}
 				}

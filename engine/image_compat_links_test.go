@@ -36,23 +36,69 @@ func TestActualMergedOCIOrderedEntries(t *testing.T) {
 func TestActualMergedOCIForwardHardlinkRefusal(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
-	entries := append(bootLayerEntries(), hardEntry("alias", "target"), fileEntry("target", "data"))
-	image := putOCIManifest(t, layout, "forward", []ociLayerFixture{putOCILayer(t, layout, entries, false)})
+	entries := append(
+		bootLayerEntries(),
+		hardEntry("alias", "target"),
+		fileEntry("target", "data"),
+	)
+	image := putOCIManifest(
+		t,
+		layout,
+		"forward",
+		[]ociLayerFixture{putOCILayer(t, layout, entries, false)},
+	)
 	e := openTest(t, t.TempDir(), newTestBackend(), true, nil)
 	defer e.Close()
-	_, err := e.ImportOCI(context.Background(), ImportOptions{Layout: layout, Digest: image, Materialization: MergedOCIEROFSLayout, MaxBytes: 4 << 20, MaxFiles: 1000})
-	if err == nil || !strings.Contains(err.Error(), "link: no such file or directory") {
-		t.Fatalf("expected explicit native umoci forward-hardlink failure: %v", err)
+	_, err := e.ImportOCI(
+		context.Background(),
+		ImportOptions{
+			Layout:          layout,
+			Digest:          image,
+			Materialization: MergedOCIEROFSLayout,
+			MaxBytes:        4 << 20,
+			MaxFiles:        1000,
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "link: no such file or directory") {
+		t.Fatalf(
+			"expected explicit native umoci forward-hardlink failure: %v",
+			err,
+		)
 	}
 	var count int
-	if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).Scan(&count); err != nil || count != 0 {
+	if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).
+		Scan(&count); err != nil ||
+		count != 0 {
 		t.Fatalf("failed unpack published an image: %d %v", count, err)
 	}
 }
 
 func TestActualMergedOCISymlinkHardlinkAndConfinement(t *testing.T) {
-	base := append(bootLayerEntries(), tarEntry{header: tar.Header{Name: "sym", Typeflag: tar.TypeSymlink, Linkname: "/guest/target", Mode: 0777}}, fileEntry("victim", "unchanged"))
-	top := []tarEntry{hardEntry("alias", "sym"), {header: tar.Header{Name: "escape", Typeflag: tar.TypeSymlink, Linkname: "/work", Mode: 0777}}, fileEntry("escape/victim", "inside guest")}
+	base := append(
+		bootLayerEntries(),
+		tarEntry{
+			header: tar.Header{
+				Name:     "sym",
+				Typeflag: tar.TypeSymlink,
+				Linkname: "/guest/target",
+				Mode:     0o777,
+			},
+		},
+		fileEntry("victim", "unchanged"),
+	)
+	top := []tarEntry{
+		hardEntry("alias", "sym"),
+		{
+			header: tar.Header{
+				Name:     "escape",
+				Typeflag: tar.TypeSymlink,
+				Linkname: "/work",
+				Mode:     0o777,
+			},
+		},
+		fileEntry("escape/victim", "inside guest"),
+	}
 	e, _, m := importMergedFixture(t, base, top)
 	tree := extractMergedManifest(t, e, m)
 	for _, name := range []string{"sym", "alias"} {
@@ -66,10 +112,23 @@ func TestActualMergedOCISymlinkHardlinkAndConfinement(t *testing.T) {
 	if a == nil || b == nil || !os.SameFile(a, b) {
 		t.Fatal("symlink hardlink identity lost")
 	}
-	if data, err := os.ReadFile(filepath.Join(tree, "victim")); err != nil || string(data) != "unchanged" {
+	if data, err := os.ReadFile(
+		filepath.Join(tree, "victim"),
+	); err != nil ||
+		string(data) != "unchanged" {
 		t.Fatalf("symlink parent escaped root: %q %v", data, err)
 	}
-	if data, err := os.ReadFile(filepath.Join(e.opts.StateDir, "imports", m.Digest[7:], "output", "victim")); !os.IsNotExist(err) {
+	if data, err := os.ReadFile(
+		filepath.Join(
+			e.opts.StateDir,
+			"imports",
+			m.Digest[7:],
+			"output",
+			"victim",
+		),
+	); !os.IsNotExist(
+		err,
+	) {
 		t.Fatalf("symlink parent wrote builder workspace: %q %v", data, err)
 	}
 }

@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 	"github.com/woxQAQ/sandboxd"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const MaxFrame = 8 << 20
@@ -35,10 +36,10 @@ func Dial(ctx context.Context, path string, port int) (net.Conn, error) {
 		deadline = d
 	}
 	_ = c.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { c.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	if _, err = fmt.Fprintf(c, "CONNECT %d\n", port); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	// No agent frame can arrive until our first request. Read exactly the bounded handshake.
@@ -46,7 +47,7 @@ func Dial(ctx context.Context, path string, port int) (net.Conn, error) {
 	var b [1]byte
 	for len(line) < 128 {
 		if _, err = io.ReadFull(c, b[:]); err != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, err
 		}
 		line = append(line, b[0])
@@ -54,16 +55,18 @@ func Dial(ctx context.Context, path string, port int) (net.Conn, error) {
 			break
 		}
 	}
-	if !strings.HasPrefix(string(line), "OK ") || len(line) == 128 || line[len(line)-1] != '\n' {
-		c.Close()
+	if !strings.HasPrefix(string(line), "OK ") || len(line) == 128 ||
+		line[len(line)-1] != '\n' {
+		_ = c.Close()
 		return nil, errors.New("invalid CH vsock handshake")
 	}
 	if err = c.SetDeadline(time.Time{}); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	return c, nil
 }
+
 func Write(w io.Writer, f *pb.Frame) error {
 	b, err := proto.Marshal(f)
 	if err != nil {
@@ -79,6 +82,7 @@ func Write(w io.Writer, f *pb.Frame) error {
 	}
 	return writeAll(w, b)
 }
+
 func writeAll(w io.Writer, b []byte) error {
 	for len(b) > 0 {
 		n, err := w.Write(b)
@@ -92,6 +96,7 @@ func writeAll(w io.Writer, b []byte) error {
 	}
 	return nil
 }
+
 func Read(r io.Reader) (*pb.Frame, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
@@ -111,6 +116,7 @@ func Read(r io.Reader) (*pb.Frame, error) {
 	}
 	return f, nil
 }
+
 func Request(id, method string, params map[string]any) (*pb.Frame, error) {
 	p, err := structpb.NewStruct(params)
 	if err != nil {
@@ -118,13 +124,20 @@ func Request(id, method string, params map[string]any) (*pb.Frame, error) {
 	}
 	return &pb.Frame{Id: id, Method: method, Params: p, Eof: true}, nil
 }
-func rpc(ctx context.Context, v api.VM, port int, method string, params map[string]any) (map[string]any, error) {
+
+func rpc(
+	ctx context.Context,
+	v api.VM,
+	port int,
+	method string,
+	params map[string]any,
+) (map[string]any, error) {
 	c, err := Dial(ctx, v.VSockPath, port)
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close()
-	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer func() { _ = c.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	f, err := Request("host", method, params)
 	if err != nil {
@@ -146,13 +159,25 @@ func rpc(ctx context.Context, v api.VM, port int, method string, params map[stri
 			if method == "exec" {
 				switch r.Params.AsMap()["error_code"] {
 				case "result_unknown":
-					return nil, api.Fail(api.Unknown, "guest exec result unknown; do not retry under a new key")
+					return nil, api.Fail(
+						api.Unknown,
+						"guest exec result unknown; do not retry under a new key",
+					)
 				case "exec_in_progress":
-					return nil, api.Fail(api.Conflict, "guest exec is in progress; retain the same exec_key")
+					return nil, api.Fail(
+						api.Conflict,
+						"guest exec is in progress; retain the same exec_key",
+					)
 				case "exec_key_conflict":
-					return nil, api.Fail(api.Conflict, "guest exec_key has different parameters")
+					return nil, api.Fail(
+						api.Conflict,
+						"guest exec_key has different parameters",
+					)
 				case "exec_ledger_capacity_exhausted":
-					return nil, api.Fail(api.Exhausted, "guest exec ledger admission capacity exhausted")
+					return nil, api.Fail(
+						api.Exhausted,
+						"guest exec ledger admission capacity exhausted",
+					)
 				}
 			}
 			return nil, fmt.Errorf("guest %s: %s", method, r.Error)
@@ -166,6 +191,7 @@ func rpc(ctx context.Context, v api.VM, port int, method string, params map[stri
 		}
 	}
 }
+
 func (c *Client) Info(ctx context.Context, v api.VM) error {
 	p, err := rpc(ctx, v, 2048, "info", map[string]any{})
 	if err != nil {
@@ -176,14 +202,33 @@ func (c *Client) Info(ctx context.Context, v api.VM) error {
 	}
 	return nil
 }
-func (c *Client) Activate(ctx context.Context, v api.VM, a sandboxd.Activation) error {
+
+func (c *Client) Activate(
+	ctx context.Context,
+	v api.VM,
+	a sandboxd.Activation,
+) error {
 	env := map[string]any{}
 	for k, v := range a.Env {
 		env[k] = v
 	}
-	_, err := rpc(ctx, v, 2046, "activate", map[string]any{"sandbox_id": a.SandboxID, "hostname": a.Hostname, "reset_identity": a.ResetIdentity, "env": env, "network": a.Network, "ca_pem": a.CAPEM})
+	_, err := rpc(
+		ctx,
+		v,
+		2046,
+		"activate",
+		map[string]any{
+			"sandbox_id":     a.SandboxID,
+			"hostname":       a.Hostname,
+			"reset_identity": a.ResetIdentity,
+			"env":            env,
+			"network":        a.Network,
+			"ca_pem":         a.CAPEM,
+		},
+	)
 	return err
 }
+
 func (c *Client) PrepareTemplate(ctx context.Context, v api.VM) error {
 	p, err := rpc(ctx, v, 2046, "prepare_template", map[string]any{})
 	if err != nil {
@@ -194,50 +239,77 @@ func (c *Client) PrepareTemplate(ctx context.Context, v api.VM) error {
 	}
 	return nil
 }
-func (c *Client) Exec(ctx context.Context, v api.VM, execKey, command string) error {
+
+func (c *Client) Exec(
+	ctx context.Context,
+	v api.VM,
+	execKey, command string,
+) error {
 	if execKey == "" {
 		return errors.New("guest warmup requires an explicit exec_key")
 	}
-	p, err := rpc(ctx, v, 2048, "exec", map[string]any{"command": command, "exec_key": execKey})
+	p, err := rpc(
+		ctx,
+		v,
+		2048,
+		"exec",
+		map[string]any{"command": command, "exec_key": execKey},
+	)
 	if err != nil {
-		var terminal *api.Error
-		if errors.As(err, &terminal) {
+		if _, ok := errors.AsType[*api.Error](err); ok {
 			return err
 		}
-		return api.Fail(api.Unknown, "guest exec completion unconfirmed; retain the same exec_key: %v", err)
+		return api.Fail(
+			api.Unknown,
+			"guest exec completion unconfirmed; retain the same exec_key: %v",
+			err,
+		)
 	}
 	if p["result_state"] != "completed" {
-		return api.Fail(api.Unknown, "guest did not confirm a durable keyed exec result")
+		return api.Fail(
+			api.Unknown,
+			"guest did not confirm a durable keyed exec result",
+		)
 	}
 	if _, ok := p["exit_code"].(float64); !ok {
-		return api.Fail(api.Unknown, "guest keyed exec result omitted exit_code")
+		return api.Fail(
+			api.Unknown,
+			"guest keyed exec result omitted exit_code",
+		)
 	}
 	if code := p["exit_code"].(float64); code != 0 {
 		return fmt.Errorf("guest warmup failed: exit_code=%v", p["exit_code"])
 	}
 	return nil
 }
+
 func (c *Client) Connect(ctx context.Context, v api.VM) (net.Conn, error) {
 	return Dial(ctx, v.VSockPath, 2048)
 }
-func (c *Client) Forward(ctx context.Context, v api.VM, port int) (net.Conn, error) {
+
+func (c *Client) Forward(
+	ctx context.Context,
+	v api.VM,
+	port int,
+) (net.Conn, error) {
 	conn, err := c.Connect(ctx, v)
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	f, err := Request("forward", "port_forward", map[string]any{"port": port})
 	if err == nil {
 		err = Write(conn, f)
 	}
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	r, err := Read(conn)
-	if err != nil || r.Error != "" || r.Id != f.Id || r.Params.AsMap()["ready"] != true {
-		conn.Close()
+	if err != nil || r.Error != "" || r.Id != f.Id ||
+		r.Params.AsMap()["ready"] != true {
+		_ = conn.Close()
 		return nil, errors.New("guest port forward failed")
 	}
 	return conn, nil
@@ -246,6 +318,7 @@ func (c *Client) Forward(ctx context.Context, v api.VM, port int) (net.Conn, err
 // BufferedConn preserves bytes already received with an HTTP Upgrade response.
 type BufferedConn struct {
 	net.Conn
+
 	Reader *bufio.Reader
 }
 

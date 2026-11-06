@@ -13,13 +13,21 @@ import (
 // newMetaReader returns an at() function backed by an eagerly-read
 // metadata buffer plus an on-demand block cache for data blocks
 // outside the metadata region.
-func newMetaReader(ra io.ReaderAt, metaStart, totalBytes int64, blockSize int) func(int64) []byte {
+func newMetaReader(
+	ra io.ReaderAt,
+	metaStart, totalBytes int64,
+	blockSize int,
+) func(int64) []byte {
 	metaSize := totalBytes - metaStart
 	if metaSize <= 0 {
 		return func(int64) []byte { return nil }
 	}
 	metaBuf := make([]byte, metaSize)
-	if n, err := ra.ReadAt(metaBuf, metaStart); err != nil || int64(n) != metaSize {
+	if n, err := ra.ReadAt(
+		metaBuf,
+		metaStart,
+	); err != nil ||
+		int64(n) != metaSize {
 		return func(int64) []byte { return nil }
 	}
 
@@ -68,7 +76,10 @@ type imgQEntry struct {
 // buffer. This reduces thousands of syscalls to a single ReadAt.
 // hardlinks is the current CopyFrom call's (Dev, Ino) → fsInode map, used to
 // detect additional names that refer to a source inode already seen.
-func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode) error {
+func (fsys *Writer) copyFromImage(
+	img *image,
+	hardlinks map[hardlinkKey]*fsInode,
+) error {
 	metaStart := img.metaStartPos()
 	totalBytes := int64(img.sb.Blocks) << img.sb.BlkSizeBits
 	if totalBytes <= 0 {
@@ -107,11 +118,14 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 		// Merge mode: process whiteout markers.
 		if fsys.copyMerge && cur.path != "/" {
 			base := path.Base(cur.path)
-			if len(base) > len(whiteoutPrefix) && base[:len(whiteoutPrefix)] == whiteoutPrefix {
+			if len(base) > len(whiteoutPrefix) &&
+				base[:len(whiteoutPrefix)] == whiteoutPrefix {
 				if base == opaqueWhiteout {
 					fsys.removeChildren(path.Dir(cur.path))
 				} else {
-					target := path.Dir(cur.path) + "/" + base[len(whiteoutPrefix):]
+					target := path.Dir(
+						cur.path,
+					) + "/" + base[len(whiteoutPrefix):]
 					if path.Dir(cur.path) == "/" {
 						target = "/" + base[len(whiteoutPrefix):]
 					}
@@ -153,7 +167,11 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 
 		if compact {
 			var ino disk.InodeCompact
-			if _, err := binary.Decode(buf[:disk.SizeInodeCompact], binary.LittleEndian, &ino); err != nil {
+			if _, err := binary.Decode(
+				buf[:disk.SizeInodeCompact],
+				binary.LittleEndian,
+				&ino,
+			); err != nil {
 				return fmt.Errorf("decode compact inode %d: %w", cur.nid, err)
 			}
 			mode = ino.Mode
@@ -168,7 +186,11 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 			icSize = disk.SizeInodeCompact
 		} else {
 			var ino disk.InodeExtended
-			if _, err := binary.Decode(buf[:disk.SizeInodeExtended], binary.LittleEndian, &ino); err != nil {
+			if _, err := binary.Decode(
+				buf[:disk.SizeInodeExtended],
+				binary.LittleEndian,
+				&ino,
+			); err != nil {
 				return fmt.Errorf("decode extended inode %d: %w", cur.nid, err)
 			}
 			mode = ino.Mode
@@ -186,14 +208,21 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 		// Parse xattr area.
 		xattrSize := 0
 		if xcnt > 0 {
-			xattrSize = int(xcnt-1)*disk.SizeXattrEntry + disk.SizeXattrBodyHeader
+			xattrSize = int(
+				xcnt-1,
+			)*disk.SizeXattrEntry + disk.SizeXattrBodyHeader
 		}
 		var xattrs map[string]string
 		if xattrSize > 0 {
 			xattrAddr := inodeAddr + int64(icSize)
 			xb := at(xattrAddr)
 			if len(xb) >= xattrSize {
-				xattrs = parseXattrsFromBuf(xb[:xattrSize], at, sharedXattrOff, img.getLongPrefix)
+				xattrs = parseXattrsFromBuf(
+					xb[:xattrSize],
+					at,
+					sharedXattrOff,
+					img.getLongPrefix,
+				)
 			}
 		}
 
@@ -254,8 +283,15 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 							dirData = d[:dirSize]
 						} else {
 							dirData = make([]byte, dirSize)
-							if _, err := img.meta.ReadAt(dirData, dataAddr); err != nil {
-								return fmt.Errorf("read dir data for nid %d: %w", cur.nid, err)
+							if _, err := img.meta.ReadAt(
+								dirData,
+								dataAddr,
+							); err != nil {
+								return fmt.Errorf(
+									"read dir data for nid %d: %w",
+									cur.nid,
+									err,
+								)
 							}
 						}
 					case disk.LayoutFlatInline:
@@ -265,7 +301,13 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 						}
 					}
 					if dirData != nil {
-						fsys.parseDirBlock(dirData, dirSize, blockSize, cur.path, &queue)
+						fsys.parseDirBlock(
+							dirData,
+							dirSize,
+							blockSize,
+							cur.path,
+							&queue,
+						)
 					}
 				}
 
@@ -274,8 +316,15 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 					var linkData []byte
 					if layout == disk.LayoutFlatPlain {
 						linkData = make([]byte, size)
-						if _, err := img.meta.ReadAt(linkData, int64(idata)<<blkBits); err != nil {
-							return fmt.Errorf("read symlink data for nid %d: %w", cur.nid, err)
+						if _, err := img.meta.ReadAt(
+							linkData,
+							int64(idata)<<blkBits,
+						); err != nil {
+							return fmt.Errorf(
+								"read symlink data for nid %d: %w",
+								cur.nid,
+								err,
+							)
 						}
 					} else {
 						linkData = at(trailingAddr)
@@ -293,7 +342,13 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 						if chunkAddr%8 != 0 {
 							chunkAddr = (chunkAddr + 7) & ^int64(7)
 						}
-						ino.chunks = fsys.parseChunks(at(chunkAddr), chunkFmt, size, blkBits, img.deviceIDMask)
+						ino.chunks = fsys.parseChunks(
+							at(chunkAddr),
+							chunkFmt,
+							size,
+							blkBits,
+							img.deviceIDMask,
+						)
 						ino.contiguous = true
 					}
 				}
@@ -332,7 +387,12 @@ func (fsys *Writer) copyFromImage(img *image, hardlinks map[hardlinkKey]*fsInode
 
 // parseDirBlock extracts directory entries from dirent data and enqueues
 // child inodes for BFS traversal.
-func (fsys *Writer) parseDirBlock(data []byte, dirSize, blockSize int, parentPath string, queue *[]imgQEntry) {
+func (fsys *Writer) parseDirBlock(
+	data []byte,
+	dirSize, blockSize int,
+	parentPath string,
+	queue *[]imgQEntry,
+) {
 	pos := 0
 	for pos < dirSize {
 		blockEnd := pos + blockSize
@@ -357,7 +417,11 @@ func (fsys *Writer) parseDirBlock(data []byte, dirSize, blockSize int, parentPat
 
 			var nameEnd int
 			if i < nEntries-1 {
-				nameEnd = int(binary.LittleEndian.Uint16(blk[(i+1)*disk.SizeDirent+8 : (i+1)*disk.SizeDirent+10]))
+				nameEnd = int(
+					binary.LittleEndian.Uint16(
+						blk[(i+1)*disk.SizeDirent+8 : (i+1)*disk.SizeDirent+10],
+					),
+				)
 			} else {
 				nameEnd = len(blk)
 			}
@@ -387,7 +451,13 @@ func (fsys *Writer) parseDirBlock(data []byte, dirSize, blockSize int, parentPat
 }
 
 // parseChunks extracts chunk index entries from an in-memory buffer.
-func (fsys *Writer) parseChunks(data []byte, chunkFmt uint16, fileSize uint64, blkBits uint8, deviceIDMask uint16) []builder.Chunk {
+func (fsys *Writer) parseChunks(
+	data []byte,
+	chunkFmt uint16,
+	fileSize uint64,
+	blkBits uint8,
+	deviceIDMask uint16,
+) []builder.Chunk {
 	chunkBits := blkBits + uint8(chunkFmt&disk.LayoutChunkFormatBits)
 	nchunks := int((fileSize-1)>>chunkBits) + 1
 	blocksPerChunk := 1 << (chunkBits - blkBits)
@@ -430,13 +500,22 @@ func (fsys *Writer) parseChunks(data []byte, chunkFmt uint16, fileSize uint64, b
 // parseXattrsFromBuf parses xattr entries from an in-memory buffer.
 // at provides on-demand access to the shared xattr block at sharedOff.
 // longPrefix resolves long xattr prefix indexes (NameIndex with high bit set).
-func parseXattrsFromBuf(buf []byte, at func(int64) []byte, sharedOff int64, longPrefix func(uint8) (string, error)) map[string]string {
+func parseXattrsFromBuf(
+	buf []byte,
+	at func(int64) []byte,
+	sharedOff int64,
+	longPrefix func(uint8) (string, error),
+) map[string]string {
 	if len(buf) < disk.SizeXattrBodyHeader {
 		return nil
 	}
 
 	var xh disk.XattrHeader
-	if _, err := binary.Decode(buf[:disk.SizeXattrBodyHeader], binary.LittleEndian, &xh); err != nil {
+	if _, err := binary.Decode(
+		buf[:disk.SizeXattrBodyHeader],
+		binary.LittleEndian,
+		&xh,
+	); err != nil {
 		return nil
 	}
 	pos := disk.SizeXattrBodyHeader
@@ -456,7 +535,11 @@ func parseXattrsFromBuf(buf []byte, at func(int64) []byte, sharedOff int64, long
 			continue
 		}
 		var xe disk.XattrEntry
-		if _, err := binary.Decode(sharedBlock[:disk.SizeXattrEntry], binary.LittleEndian, &xe); err != nil {
+		if _, err := binary.Decode(
+			sharedBlock[:disk.SizeXattrEntry],
+			binary.LittleEndian,
+			&xe,
+		); err != nil {
 			continue
 		}
 		entryLen := int(xe.NameLen) + int(xe.ValueLen)
@@ -472,7 +555,11 @@ func parseXattrsFromBuf(buf []byte, at func(int64) []byte, sharedOff int64, long
 	// Parse inline xattr entries.
 	for pos+disk.SizeXattrEntry <= len(buf) {
 		var xe disk.XattrEntry
-		if _, err := binary.Decode(buf[pos:pos+disk.SizeXattrEntry], binary.LittleEndian, &xe); err != nil {
+		if _, err := binary.Decode(
+			buf[pos:pos+disk.SizeXattrEntry],
+			binary.LittleEndian,
+			&xe,
+		); err != nil {
 			break
 		}
 		pos += disk.SizeXattrEntry
@@ -502,7 +589,11 @@ func parseXattrsFromBuf(buf []byte, at func(int64) []byte, sharedOff int64, long
 
 // xattrName builds the full xattr name from an entry and its raw name bytes.
 // longPrefix resolves long prefix indexes when the high bit of NameIndex is set.
-func xattrName(xe disk.XattrEntry, rawName []byte, longPrefix func(uint8) (string, error)) string {
+func xattrName(
+	xe disk.XattrEntry,
+	rawName []byte,
+	longPrefix func(uint8) (string, error),
+) string {
 	var prefix string
 	if xe.NameIndex&0x80 != 0 {
 		// Long prefix: high bit set, low 7 bits index the prefix table.

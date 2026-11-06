@@ -14,9 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
+
+	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 type store struct {
@@ -27,7 +28,7 @@ type store struct {
 }
 
 func openStore(dir string, initialize bool) (*store, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	info, err := os.Lstat(dir)
@@ -35,23 +36,38 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, api.Fail(api.Invalid, "state directory must be a directory, not a symlink")
+		return nil, api.Fail(
+			api.Invalid,
+			"state directory must be a directory, not a symlink",
+		)
 	}
-	if err = os.Chmod(dir, 0700); err != nil {
+	if err = os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "writer.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := os.OpenFile(
+		filepath.Join(dir, "writer.lock"),
+		os.O_CREATE|os.O_RDWR,
+		0o600,
+	)
 	if err != nil {
 		return nil, err
 	}
 	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, api.Fail(api.Conflict, "another sandboxd owns state directory")
+		_ = lock.Close()
+		return nil, api.Fail(
+			api.Conflict,
+			"another sandboxd owns state directory",
+		)
 	}
 	s := &store{lock: lock}
-	fail := func(e error) (*store, error) { s.close(); return nil, e }
+	fail := func(e error) (*store, error) { return nil, errors.Join(e, s.close()) }
 	if _, e := os.Lstat(filepath.Join(dir, "RECOVERY_REQUIRED")); e == nil {
-		return fail(api.Fail(api.ManualRecovery, "product metadata was restored; review engine inventory and acknowledge the recovery point"))
+		return fail(
+			api.Fail(
+				api.ManualRecovery,
+				"product metadata was restored; review engine inventory and acknowledge the recovery point",
+			),
+		)
 	} else if !os.IsNotExist(e) {
 		return fail(e)
 	}
@@ -60,17 +76,31 @@ func openStore(dir string, initialize bool) (*store, error) {
 	fresh := os.IsNotExist(err)
 	if fresh {
 		if !initialize {
-			return fail(api.Fail(api.ManualRecovery, "database missing; use --init only for a new installation"))
+			return fail(
+				api.Fail(
+					api.ManualRecovery,
+					"database missing; use --init only for a new installation",
+				),
+			)
 		}
 		if _, e := os.Stat(filepath.Join(dir, "initialized")); e == nil {
-			return fail(api.Fail(api.ManualRecovery, "database lost; preserve state and restore a consistent backup"))
+			return fail(
+				api.Fail(
+					api.ManualRecovery,
+					"database lost; preserve state and restore a consistent backup",
+				),
+			)
 		}
 	} else if err != nil {
 		return fail(err)
 	} else if initialize {
-		return fail(api.Fail(api.Conflict, "database already exists; omit --init"))
+		return fail(
+			api.Fail(api.Conflict, "database already exists; omit --init"),
+		)
 	} else if !databaseInfo.Mode().IsRegular() {
-		return fail(api.Fail(api.ManualRecovery, "database must be a regular file"))
+		return fail(
+			api.Fail(api.ManualRecovery, "database must be a regular file"),
+		)
 	}
 	keyPath := filepath.Join(dir, "node.key")
 	key, err := os.ReadFile(keyPath)
@@ -83,28 +113,46 @@ func openStore(dir string, initialize bool) (*store, error) {
 			return fail(err)
 		}
 	} else if err != nil {
-		return fail(api.Fail(api.ManualRecovery, "node key missing or unreadable"))
+		return fail(
+			api.Fail(api.ManualRecovery, "node key missing or unreadable"),
+		)
 	}
 	if len(key) != 32 {
 		return fail(api.Fail(api.ManualRecovery, "invalid node key"))
 	}
 	s.key = key
-	s.db, err = sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=foreign_keys(ON)")
+	s.db, err = sql.Open(
+		"sqlite",
+		path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=foreign_keys(ON)",
+	)
 	if err != nil {
 		return fail(err)
 	}
 	s.db.SetMaxOpenConns(1)
 	var integrity string
-	if err = s.db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
-		return fail(api.Fail(api.ManualRecovery, "database integrity check failed: %v %s", err, integrity))
+	if err = s.db.QueryRow("PRAGMA quick_check").
+		Scan(&integrity); err != nil ||
+		integrity != "ok" {
+		return fail(
+			api.Fail(
+				api.ManualRecovery,
+				"database integrity check failed: %v %s",
+				err,
+				integrity,
+			),
+		)
 	}
-	if err = os.Chmod(path, 0600); err != nil {
+	if err = os.Chmod(path, 0o600); err != nil {
 		return fail(err)
 	}
 	if !fresh {
 		var version int
-		if err = s.db.QueryRow("SELECT version FROM version").Scan(&version); err != nil || version != 1 {
-			return fail(api.Fail(api.Incompatible, "unsupported database schema"))
+		if err = s.db.QueryRow("SELECT version FROM version").
+			Scan(&version); err != nil ||
+			version != 1 {
+			return fail(
+				api.Fail(api.Incompatible, "unsupported database schema"),
+			)
 		}
 	}
 	_, err = s.db.Exec(`
@@ -122,10 +170,15 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return fail(err)
 	}
 	var version int
-	if err = s.db.QueryRow("SELECT version FROM version").Scan(&version); err != nil || version != 1 {
+	if err = s.db.QueryRow("SELECT version FROM version").
+		Scan(&version); err != nil ||
+		version != 1 {
 		return fail(api.Fail(api.Incompatible, "unsupported database schema"))
 	}
-	if err = atomicFile(filepath.Join(dir, "initialized"), []byte("sandboxd schema 1\n")); err != nil {
+	if err = atomicFile(
+		filepath.Join(dir, "initialized"),
+		[]byte("sandboxd schema 1\n"),
+	); err != nil {
 		return fail(err)
 	}
 	if err = s.verifyJournal(context.Background()); err != nil {
@@ -133,23 +186,25 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	return s, nil
 }
+
 func (s *store) close() error {
+	var err error
 	if s.db != nil {
-		s.db.Close()
+		err = s.db.Close()
 	}
 	if s.lock != nil {
-		unix.Flock(int(s.lock.Fd()), unix.LOCK_UN)
-		return s.lock.Close()
+		err = errors.Join(err, s.lock.Close())
 	}
-	return nil
+	return err
 }
+
 func atomicFile(path string, b []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".publish-")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	if err = f.Chmod(0600); err == nil {
+	defer func() { _ = os.Remove(f.Name()) }()
+	if err = f.Chmod(0o600); err == nil {
 		_, err = f.Write(b)
 	}
 	if err == nil {
@@ -169,13 +224,13 @@ func atomicFile(path string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	return errors.Join(d.Sync(), d.Close())
 }
 
 // diskSandbox intentionally contains only guest-visible values. Host secrets never reach SQLite.
 type diskSandbox struct {
 	Sandbox
+
 	Env map[string]string `json:"guest_env"`
 }
 
@@ -186,6 +241,7 @@ func encode(v any) []byte {
 	}
 	return b
 }
+
 func decodeSandbox(b []byte) (Sandbox, error) {
 	var d diskSandbox
 	err := json.Unmarshal(b, &d)
@@ -199,12 +255,21 @@ type executor interface {
 }
 
 func saveSandbox(ctx context.Context, e executor, b Sandbox) error {
-	_, err := e.ExecContext(ctx, "INSERT INTO sandboxes(id,tenant,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body", b.ID, b.TenantID, b.State, encode(diskSandbox{b, b.Env}))
+	_, err := e.ExecContext(
+		ctx,
+		"INSERT INTO sandboxes(id,tenant,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body",
+		b.ID,
+		b.TenantID,
+		b.State,
+		encode(diskSandbox{b, b.Env}),
+	)
 	return err
 }
+
 func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 	var b []byte
-	err := e.QueryRowContext(ctx, "SELECT body FROM sandboxes WHERE id=?", id).Scan(&b)
+	err := e.QueryRowContext(ctx, "SELECT body FROM sandboxes WHERE id=?", id).
+		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Sandbox{}, api.Fail(api.NotFound, "not found")
 	}
@@ -213,14 +278,26 @@ func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 	}
 	return decodeSandbox(b)
 }
+
 func saveOp(ctx context.Context, e executor, o Operation) error {
-	_, err := e.ExecContext(ctx, "INSERT INTO operations(id,tenant,idem_key,spec_hash,status,body) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,body=excluded.body", o.ID, o.TenantID, o.Key, o.Hash, o.Status, encode(o))
+	_, err := e.ExecContext(
+		ctx,
+		"INSERT INTO operations(id,tenant,idem_key,spec_hash,status,body) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,body=excluded.body",
+		o.ID,
+		o.TenantID,
+		o.Key,
+		o.Hash,
+		o.Status,
+		encode(o),
+	)
 	return err
 }
+
 func (s *store) operation(ctx context.Context, id string) (Operation, error) {
 	var b []byte
 	var hash string
-	err := s.db.QueryRowContext(ctx, "SELECT body,spec_hash FROM operations WHERE id=?", id).Scan(&b, &hash)
+	err := s.db.QueryRowContext(ctx, "SELECT body,spec_hash FROM operations WHERE id=?", id).
+		Scan(&b, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Operation{}, api.Fail(api.NotFound, "not found")
 	}
@@ -231,9 +308,14 @@ func (s *store) operation(ctx context.Context, id string) (Operation, error) {
 	}
 	return o, err
 }
-func (s *store) byKey(ctx context.Context, tenant, key string) (Operation, error) {
+
+func (s *store) byKey(
+	ctx context.Context,
+	tenant, key string,
+) (Operation, error) {
 	var id string
-	err := s.db.QueryRowContext(ctx, "SELECT id FROM operations WHERE tenant=? AND idem_key=?", tenant, key).Scan(&id)
+	err := s.db.QueryRowContext(ctx, "SELECT id FROM operations WHERE tenant=? AND idem_key=?", tenant, key).
+		Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Operation{}, api.Fail(api.NotFound, "not found")
 	}
@@ -242,12 +324,16 @@ func (s *store) byKey(ctx context.Context, tenant, key string) (Operation, error
 	}
 	return s.operation(ctx, id)
 }
+
 func (s *store) sandboxes(ctx context.Context) ([]Sandbox, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT body FROM sandboxes ORDER BY id")
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT body FROM sandboxes ORDER BY id",
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Sandbox{}
 	for rows.Next() {
 		var raw []byte
@@ -262,12 +348,16 @@ func (s *store) sandboxes(ctx context.Context) ([]Sandbox, error) {
 	}
 	return out, rows.Err()
 }
+
 func (s *store) templates(ctx context.Context) ([]Template, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT body FROM templates ORDER BY id")
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT body FROM templates ORDER BY id",
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Template{}
 	for rows.Next() {
 		var b []byte
@@ -282,9 +372,11 @@ func (s *store) templates(ctx context.Context) ([]Template, error) {
 	}
 	return out, rows.Err()
 }
+
 func (s *store) template(ctx context.Context, id string) (Template, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).
+		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Template{}, api.Fail(api.NotFound, "not found")
 	}
@@ -294,9 +386,11 @@ func (s *store) template(ctx context.Context, id string) (Template, error) {
 	}
 	return t, err
 }
+
 func (s *store) checkpoint(ctx context.Context, id string) (Checkpoint, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
+		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Checkpoint{}, api.Fail(api.NotFound, "not found")
 	}
@@ -306,15 +400,28 @@ func (s *store) checkpoint(ctx context.Context, id string) (Checkpoint, error) {
 	}
 	return cp, err
 }
+
 func (s *store) sign(parts ...string) string {
 	h := hmac.New(sha256.New, s.key)
 	for _, p := range parts {
-		fmt.Fprintf(h, "%d:%s", len(p), p)
+		_, _ = fmt.Fprintf(h, "%d:%s", len(p), p)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
-func hashToken(v string) string         { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
-func (s *store) token(b Sandbox) string { return s.sign("sandbox-token-v1", b.ID, b.TenantID, b.Epoch) }
+
+func hashToken(
+	v string,
+) string {
+	h := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(h[:])
+}
+
+func (s *store) token(
+	b Sandbox,
+) string {
+	return s.sign("sandbox-token-v1", b.ID, b.TenantID, b.Epoch)
+}
+
 func (s *store) audit(ctx context.Context, event any) error {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
@@ -322,9 +429,10 @@ func (s *store) audit(ctx context.Context, event any) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var prev string
-	err = tx.QueryRowContext(ctx, "SELECT hash FROM journal ORDER BY seq DESC LIMIT 1").Scan(&prev)
+	err = tx.QueryRowContext(ctx, "SELECT hash FROM journal ORDER BY seq DESC LIMIT 1").
+		Scan(&prev)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -332,18 +440,27 @@ func (s *store) audit(ctx context.Context, event any) error {
 		Time  time.Time `json:"time"`
 		Event any       `json:"event"`
 	}{time.Now().UTC(), event})
-	_, err = tx.ExecContext(ctx, "INSERT INTO journal(body,hash) VALUES(?,?)", body, s.sign("journal-v1", prev, string(body)))
+	_, err = tx.ExecContext(
+		ctx,
+		"INSERT INTO journal(body,hash) VALUES(?,?)",
+		body,
+		s.sign("journal-v1", prev, string(body)),
+	)
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
 }
+
 func (s *store) verifyJournal(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, "SELECT body,hash FROM journal ORDER BY seq")
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT body,hash FROM journal ORDER BY seq",
+	)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	prev := ""
 	for rows.Next() {
 		var b []byte
@@ -351,8 +468,14 @@ func (s *store) verifyJournal(ctx context.Context) error {
 		if err = rows.Scan(&b, &hash); err != nil {
 			return err
 		}
-		if !hmac.Equal([]byte(hash), []byte(s.sign("journal-v1", prev, string(b)))) {
-			return api.Fail(api.ManualRecovery, "audit journal verification failed")
+		if !hmac.Equal(
+			[]byte(hash),
+			[]byte(s.sign("journal-v1", prev, string(b))),
+		) {
+			return api.Fail(
+				api.ManualRecovery,
+				"audit journal verification failed",
+			)
 		}
 		prev = hash
 	}

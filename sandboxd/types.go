@@ -59,7 +59,7 @@ type Sandbox struct {
 	ProvisionSource string            `json:"provision_source,omitempty"`
 	Shape           api.Shape         `json:"shape"`
 	Deadline        time.Time         `json:"deadline"`
-	PausedUntil     time.Time         `json:"paused_until,omitempty"`
+	PausedUntil     time.Time         `json:"paused_until"`
 	TTLSeconds      int64             `json:"ttl_seconds"`
 	OnExpire        string            `json:"on_expire"`
 	AutoRenew       bool              `json:"auto_renew"`
@@ -89,7 +89,7 @@ type Command struct {
 	TTLSeconds    int64             `json:"ttl_seconds,omitempty"`
 	OnExpire      string            `json:"on_expire,omitempty"`
 	AutoRenew     bool              `json:"auto_renew,omitempty"`
-	LeaseDeadline time.Time         `json:"lease_deadline,omitempty"`
+	LeaseDeadline time.Time         `json:"lease_deadline"`
 	Env           map[string]EnvVar `json:"env,omitempty"`
 	Policy        egress.Policy     `json:"policy"`
 	Count         int               `json:"count,omitempty"`
@@ -118,7 +118,7 @@ type Operation struct {
 	Result         Result     `json:"result"`
 	Error          *api.Error `json:"error,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
-	FinishedAt     time.Time  `json:"finished_at,omitempty"`
+	FinishedAt     time.Time  `json:"finished_at"`
 }
 type Activation struct {
 	SandboxID     string
@@ -137,7 +137,14 @@ type Agent interface {
 	Forward(context.Context, api.VM, int) (net.Conn, error)
 }
 type Egress interface {
-	Bind(context.Context, string, string, string, egress.Policy, map[string]egress.Secret) error
+	Bind(
+		context.Context,
+		string,
+		string,
+		string,
+		egress.Policy,
+		map[string]egress.Secret,
+	) error
 	Revoke(string) error
 	Close() error
 }
@@ -162,10 +169,16 @@ func newID(prefix string) string {
 	}
 	return prefix + hex.EncodeToString(b[:])
 }
-func stepKey(op Operation, step string) string { return "sbx-op:" + op.ID + ":step:" + step }
+
+func stepKey(
+	op Operation,
+	step string,
+) string {
+	return "sbx-op:" + op.ID + ":step:" + step
+}
+
 func internalError(err error) *api.Error {
-	var e *api.Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*api.Error](err); ok {
 		return e
 	}
 	return &api.Error{Code: api.Internal, Message: fmt.Sprint(err)}

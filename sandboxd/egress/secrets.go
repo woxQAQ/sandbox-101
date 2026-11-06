@@ -27,10 +27,20 @@ func compileSecrets(secrets map[string]Secret) ([]credential, error) {
 	var out []credential
 	for _, key := range keys {
 		s := secrets[key]
-		if s.Value == "" || len(s.Value) > 16384 || strings.ContainsAny(s.Value, "\r\n\x00") || strings.ContainsAny(s.Placeholder, "\r\n\x00") || len(s.Placeholder) > 16384 || len(s.Hosts) == 0 || !validHeader(s.Header) {
+		if s.Value == "" || len(s.Value) > 16384 ||
+			strings.ContainsAny(s.Value, "\r\n\x00") ||
+			strings.ContainsAny(s.Placeholder, "\r\n\x00") ||
+			len(s.Placeholder) > 16384 ||
+			len(s.Hosts) == 0 ||
+			!validHeader(s.Header) {
 			return nil, errors.New("egress: invalid credential configuration")
 		}
-		c := credential{value: s.Value, hosts: make(map[string]struct{}), header: textproto.CanonicalMIMEHeaderKey(s.Header), placeholder: s.Placeholder}
+		c := credential{
+			value:       s.Value,
+			hosts:       make(map[string]struct{}),
+			header:      textproto.CanonicalMIMEHeaderKey(s.Header),
+			placeholder: s.Placeholder,
+		}
 		for _, h := range s.Hosts {
 			h, err := canonicalHost(h)
 			if err != nil {
@@ -42,7 +52,9 @@ func compileSecrets(secrets map[string]Secret) ([]credential, error) {
 			if c.header == other.header {
 				for h := range c.hosts {
 					if _, ok := other.hosts[h]; ok {
-						return nil, errors.New("egress: overlapping credential headers")
+						return nil, errors.New(
+							"egress: overlapping credential headers",
+						)
 					}
 				}
 			}
@@ -57,12 +69,26 @@ func validHeader(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", c)) {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
+			(c < '0' || c > '9') &&
+			!strings.ContainsRune("!#$%&'*+-.^_`|~", c) {
 			return false
 		}
 	}
 	switch strings.ToLower(s) {
-	case "host", "connection", "proxy-connection", "proxy-authorization", "proxy-authenticate", "content-length", "transfer-encoding", "trailer", "upgrade", "te", "keep-alive", "expect", "accept-encoding":
+	case "host",
+		"connection",
+		"proxy-connection",
+		"proxy-authorization",
+		"proxy-authenticate",
+		"content-length",
+		"transfer-encoding",
+		"trailer",
+		"upgrade",
+		"te",
+		"keep-alive",
+		"expect",
+		"accept-encoding":
 		return false
 	}
 	return true
@@ -80,12 +106,16 @@ func (b *binding) validatePlaceholders(r *http.Request, host string) error {
 		if s.placeholder == "" {
 			continue
 		}
-		if strings.Contains(r.URL.String(), s.placeholder) || strings.Contains(r.URL.Path, s.placeholder) || strings.Contains(query, s.placeholder) || strings.Contains(r.Host, s.placeholder) {
+		if strings.Contains(r.URL.String(), s.placeholder) ||
+			strings.Contains(r.URL.Path, s.placeholder) ||
+			strings.Contains(query, s.placeholder) ||
+			strings.Contains(r.Host, s.placeholder) {
 			return ErrDenied
 		}
 		for k, vs := range r.Header {
 			for _, v := range vs {
-				if strings.Contains(v, s.placeholder) && (!allowed || r.URL.Scheme != "https" || !strings.EqualFold(k, s.header)) {
+				if strings.Contains(v, s.placeholder) &&
+					(!allowed || r.URL.Scheme != "https" || !strings.EqualFold(k, s.header)) {
 					return ErrDenied
 				}
 			}
@@ -100,7 +130,11 @@ func (b *binding) inject(r *http.Request, host string) error {
 		if _, ok := s.hosts[host]; !ok || r.URL.Scheme != "https" {
 			continue
 		}
-		if s.placeholder != "" && !strings.Contains(strings.Join(r.Header.Values(s.header), ", "), s.placeholder) {
+		if s.placeholder != "" &&
+			!strings.Contains(
+				strings.Join(r.Header.Values(s.header), ", "),
+				s.placeholder,
+			) {
 			continue
 		}
 		matches = append(matches, s)
@@ -116,7 +150,11 @@ func (b *binding) inject(r *http.Request, host string) error {
 	for _, s := range matches {
 		value := s.value
 		if s.placeholder != "" {
-			value = strings.ReplaceAll(strings.Join(r.Header.Values(s.header), ", "), s.placeholder, s.value)
+			value = strings.ReplaceAll(
+				strings.Join(r.Header.Values(s.header), ", "),
+				s.placeholder,
+				s.value,
+			)
 		}
 		r.Header.Set(s.header, value)
 	}
@@ -134,7 +172,10 @@ func (b *binding) scrubResponse(resp *http.Response) *http.Response {
 	for _, s := range b.secrets {
 		values = append(values, s.value)
 	}
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	sort.Slice(
+		values,
+		func(i, j int) bool { return len(values[i]) > len(values[j]) },
+	)
 	scrub := func(s string) string {
 		for _, v := range values {
 			s = strings.ReplaceAll(s, v, "[redacted]")
@@ -150,16 +191,27 @@ func (b *binding) scrubResponse(resp *http.Response) *http.Response {
 		}
 	}
 	// Arbitrary compressed responses cannot be inspected safely as plaintext.
-	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
+	if encoding := resp.Header.Get(
+		"Content-Encoding",
+	); encoding != "" &&
+		!strings.EqualFold(encoding, "identity") {
 		_ = resp.Body.Close()
-		return deniedResponse(resp.Request, http.StatusBadGateway, "egress: encoded response denied\n")
+		return deniedResponse(
+			resp.Request,
+			http.StatusBadGateway,
+			"egress: encoded response denied\n",
+		)
 	}
 	resp.Status = scrub(resp.Status)
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Trailer")
 	resp.ContentLength = -1
 	resp.Trailer = nil
-	resp.Body = &redactingBody{source: resp.Body, values: values, done: func() { resp.Trailer = nil }}
+	resp.Body = &redactingBody{
+		source: resp.Body,
+		values: values,
+		done:   func() { resp.Trailer = nil },
+	}
 	return resp
 }
 
@@ -179,6 +231,7 @@ func (r *redactingBody) Close() error {
 	}
 	return err
 }
+
 func (r *redactingBody) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil

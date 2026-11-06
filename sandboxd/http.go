@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
@@ -43,48 +44,87 @@ func (s *Service) Handler() http.Handler {
 				return
 			}
 		}
-		writeJSON(c.Writer, 405, &api.Error{Code: api.Invalid, Message: "method not allowed"})
+		writeJSON(
+			c.Writer,
+			405,
+			&api.Error{Code: api.Invalid, Message: "method not allowed"},
+		)
 	})
-	router.Match([]string{http.MethodGet, http.MethodHead}, "/healthz", func(c *gin.Context) {
-		writeJSON(c.Writer, 200, map[string]string{"status": "ok"})
-	})
-	router.Match([]string{http.MethodGet, http.MethodHead}, "/metrics", s.authenticate, s.metrics)
+	router.Match(
+		[]string{http.MethodGet, http.MethodHead},
+		"/healthz",
+		func(c *gin.Context) {
+			writeJSON(c.Writer, 200, map[string]string{"status": "ok"})
+		},
+	)
+	router.Match(
+		[]string{http.MethodGet, http.MethodHead},
+		"/metrics",
+		s.authenticate,
+		s.metrics,
+	)
 	router.Any("/preview/*path", gin.WrapF(s.preview))
 	v1 := router.Group("/v1", s.authenticate)
 	v1.POST("/tenants", s.putTenant)
 	v1.POST("/drain", func(c *gin.Context) {
 		if !c.MustGet("principal").(Principal).Root {
-			writeJSON(c.Writer, 403, &api.Error{Code: "forbidden", Message: "root access required"})
+			writeJSON(
+				c.Writer,
+				403,
+				&api.Error{Code: "forbidden", Message: "root access required"},
+			)
 			return
 		}
 		s.Drain()
 		writeJSON(c.Writer, 200, map[string]bool{"draining": true})
 	})
 	v1.GET("/sandboxes", func(c *gin.Context) {
-		v, err := s.List(c.Request.Context(), c.MustGet("principal").(Principal))
+		v, err := s.List(
+			c.Request.Context(),
+			c.MustGet("principal").(Principal),
+		)
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/templates", func(c *gin.Context) {
-		v, err := s.Templates(c.Request.Context(), c.MustGet("principal").(Principal))
+		v, err := s.Templates(
+			c.Request.Context(),
+			c.MustGet("principal").(Principal),
+		)
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/checkpoints", func(c *gin.Context) {
-		v, err := s.Checkpoints(c.Request.Context(), c.MustGet("principal").(Principal))
+		v, err := s.Checkpoints(
+			c.Request.Context(),
+			c.MustGet("principal").(Principal),
+		)
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/sandboxes/:id", func(c *gin.Context) {
-		v, err := s.Get(c.Request.Context(), c.MustGet("principal").(Principal), c.Param("id"))
+		v, err := s.Get(
+			c.Request.Context(),
+			c.MustGet("principal").(Principal),
+			c.Param("id"),
+		)
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/operations/:id", func(c *gin.Context) {
-		v, err := s.Operation(c.Request.Context(), c.MustGet("principal").(Principal), c.Param("id"))
+		v, err := s.Operation(
+			c.Request.Context(),
+			c.MustGet("principal").(Principal),
+			c.Param("id"),
+		)
 		if err == nil {
 			v.Result = s.resultTokens(v.Result)
 		}
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) {
-		s.relay(c.Writer, c.Request, c.MustGet("principal").(Principal), c.Param("id"))
+		s.relay(
+			c.Writer,
+			c.Request,
+			c.MustGet("principal").(Principal),
+			c.Param("id"),
+		)
 	})
 	v1.POST("/claim", func(c *gin.Context) {
 		s.mutate(c, "claim", "", "")
@@ -119,7 +159,11 @@ func (s *Service) authenticate(c *gin.Context) {
 
 func (s *Service) metrics(c *gin.Context) {
 	if !c.MustGet("principal").(Principal).Root {
-		writeJSON(c.Writer, 403, &api.Error{Code: "forbidden", Message: "root access required"})
+		writeJSON(
+			c.Writer,
+			403,
+			&api.Error{Code: "forbidden", Message: "root access required"},
+		)
 		return
 	}
 	bs, err := s.store.sandboxes(c.Request.Context())
@@ -133,14 +177,25 @@ func (s *Service) metrics(c *gin.Context) {
 	}
 	c.Header("Content-Type", "text/plain; version=0.0.4")
 	for _, state := range []string{"provisioning", "running", "pausing", "paused", "resuming", "failed", "terminated"} {
-		fmt.Fprintf(c.Writer, "sandboxd_sandboxes{state=%q} %d\n", state, counts[state])
+		if _, err := fmt.Fprintf(
+			c.Writer,
+			"sandboxd_sandboxes{state=%q} %d\n",
+			state,
+			counts[state],
+		); err != nil {
+			return
+		}
 	}
 }
 
 func (s *Service) putTenant(c *gin.Context) {
 	p := c.MustGet("principal").(Principal)
 	if !p.Root {
-		writeJSON(c.Writer, 403, &api.Error{Code: "forbidden", Message: "root access required"})
+		writeJSON(
+			c.Writer,
+			403,
+			&api.Error{Code: "forbidden", Message: "root access required"},
+		)
 		return
 	}
 	var t Tenant
@@ -155,6 +210,7 @@ func (s *Service) putTenant(c *gin.Context) {
 		writeJSON(c.Writer, 201, t)
 	}
 }
+
 func (s *Service) principal(r *http.Request) (Principal, error) {
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {
@@ -166,12 +222,14 @@ func (s *Service) principal(r *http.Request) (Principal, error) {
 	}
 	return p, err
 }
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
 func writeError(w http.ResponseWriter, err error) {
 	var e *api.Error
 	if !errors.As(err, &e) {
@@ -195,6 +253,7 @@ func writeError(w http.ResponseWriter, err error) {
 	}
 	writeJSON(w, status, e)
 }
+
 func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	d := json.NewDecoder(r.Body)
@@ -208,7 +267,11 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	}
 	return nil
 }
-func (s *Service) mutate(c *gin.Context, action, sandboxID, checkpointID string) {
+
+func (s *Service) mutate(
+	c *gin.Context,
+	action, sandboxID, checkpointID string,
+) {
 	w, r := c.Writer, c.Request
 	p := c.MustGet("principal").(Principal)
 	var command Command
@@ -245,6 +308,7 @@ func (s *Service) mutate(c *gin.Context, action, sandboxID, checkpointID string)
 	result, err := s.Wait(r.Context(), p, o.ID)
 	respond(w, result, err)
 }
+
 func respond(w http.ResponseWriter, v any, err error) {
 	if err != nil {
 		writeError(w, err)
@@ -252,9 +316,23 @@ func respond(w http.ResponseWriter, v any, err error) {
 	}
 	writeJSON(w, 200, v)
 }
-func (s *Service) relay(w http.ResponseWriter, r *http.Request, p Principal, id string) {
-	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		writeJSON(w, 426, &api.Error{Code: api.Invalid, Message: "Connection: Upgrade and Upgrade: sandbox-v1 required"})
+
+func (s *Service) relay(
+	w http.ResponseWriter,
+	r *http.Request,
+	p Principal,
+	id string,
+) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") ||
+		!hasToken(r.Header.Get("Connection"), "upgrade") {
+		writeJSON(
+			w,
+			426,
+			&api.Error{
+				Code:    api.Invalid,
+				Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
+			},
+		)
 		return
 	}
 	if r.ProtoMajor != 1 {
@@ -292,14 +370,14 @@ func (s *Service) relay(w http.ResponseWriter, r *http.Request, p Principal, id 
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		up.Close()
+		_ = up.Close()
 		unlock()
 		writeError(w, api.Fail(api.Incompatible, "HTTP/1.1 Upgrade required"))
 		return
 	}
 	down, rw, err := hj.Hijack()
 	if err != nil {
-		up.Close()
+		_ = up.Close()
 		unlock()
 		return
 	}
@@ -308,9 +386,11 @@ func (s *Service) relay(w http.ResponseWriter, r *http.Request, p Principal, id 
 	unlock()
 	defer untrackUp()
 	defer untrackDown()
-	defer up.Close()
-	defer down.Close()
-	if _, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n"); err != nil {
+	defer func() { _ = up.Close() }()
+	defer func() { _ = down.Close() }()
+	if _, err = rw.WriteString(
+		"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n",
+	); err != nil {
 		return
 	}
 	if err = rw.Flush(); err != nil {
@@ -327,22 +407,24 @@ func (s *Service) relay(w http.ResponseWriter, r *http.Request, p Principal, id 
 	}
 	relayBytes(down, up)
 }
+
 func hasToken(value, want string) bool {
-	for _, v := range strings.Split(value, ",") {
+	for v := range strings.SplitSeq(value, ",") {
 		if strings.EqualFold(strings.TrimSpace(v), want) {
 			return true
 		}
 	}
 	return false
 }
+
 func relayBytes(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	copyOne := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
 		if h, ok := dst.(interface{ CloseWrite() error }); ok {
-			h.CloseWrite()
+			_ = h.CloseWrite()
 		} else {
-			dst.Close()
+			_ = dst.Close()
 		}
 		done <- struct{}{}
 	}
@@ -351,19 +433,22 @@ func relayBytes(a, b net.Conn) {
 	<-done
 	<-done
 }
-func (s *Service) enforceLease(id string, done <-chan struct{}, conns ...net.Conn) {
+
+func (s *Service) enforceLease(
+	id string,
+	done <-chan struct{},
+	conns ...net.Conn,
+) {
 	for {
 		b, err := getSandbox(s.ctx, s.store.db, id)
-		if err != nil || b.State != "running" || !time.Now().Before(b.Deadline) {
+		if err != nil || b.State != "running" ||
+			!time.Now().Before(b.Deadline) {
 			for _, c := range conns {
-				c.Close()
+				_ = c.Close()
 			}
 			return
 		}
-		delay := time.Until(b.Deadline)
-		if delay > time.Second {
-			delay = time.Second
-		}
+		delay := min(time.Until(b.Deadline), time.Second)
 		timer := time.NewTimer(delay)
 		select {
 		case <-done:
@@ -372,7 +457,7 @@ func (s *Service) enforceLease(id string, done <-chan struct{}, conns ...net.Con
 		case <-s.ctx.Done():
 			timer.Stop()
 			for _, c := range conns {
-				c.Close()
+				_ = c.Close()
 			}
 			return
 		case <-timer.C:
@@ -388,7 +473,13 @@ type previewCapability struct {
 	Expires int64  `json:"x"`
 }
 
-func (s *Service) PreviewURL(ctx context.Context, p Principal, id string, port int, ttl time.Duration) (string, error) {
+func (s *Service) PreviewURL(
+	ctx context.Context,
+	p Principal,
+	id string,
+	port int,
+	ttl time.Duration,
+) (string, error) {
 	b, err := s.Get(ctx, p, id)
 	if err != nil {
 		return "", err
@@ -397,7 +488,10 @@ func (s *Service) PreviewURL(ctx context.Context, p Principal, id string, port i
 		return "", api.Fail(api.Conflict, "sandbox not available")
 	}
 	if port < 1 || port > 65535 || ttl <= 0 {
-		return "", api.Fail(api.Invalid, "valid port and positive duration required")
+		return "", api.Fail(
+			api.Invalid,
+			"valid port and positive duration required",
+		)
 	}
 	exp := time.Now().Add(ttl)
 	if exp.After(b.Deadline) {
@@ -408,34 +502,54 @@ func (s *Service) PreviewURL(ctx context.Context, p Principal, id string, port i
 	}
 	cap := previewCapability{b.ID, b.TenantID, b.Epoch, port, exp.Unix()}
 	body := base64.RawURLEncoding.EncodeToString(encode(cap))
-	return "/preview/" + body + "." + s.store.sign("preview-v1", body) + "/", nil
+	return "/preview/" + body + "." + s.store.sign(
+		"preview-v1",
+		body,
+	) + "/", nil
 }
-func (s *Service) createPreview(w http.ResponseWriter, r *http.Request, p Principal, id string) {
+
+func (s *Service) createPreview(
+	w http.ResponseWriter,
+	r *http.Request,
+	p Principal,
+	id string,
+) {
 	port, _ := strconv.Atoi(r.URL.Query().Get("port"))
 	ttl, _ := strconv.ParseInt(r.URL.Query().Get("ttl_seconds"), 10, 64)
 	if ttl == 0 {
 		ttl = 300
 	}
-	u, err := s.PreviewURL(r.Context(), p, id, port, time.Duration(ttl)*time.Second)
+	u, err := s.PreviewURL(
+		r.Context(),
+		p,
+		id,
+		port,
+		time.Duration(ttl)*time.Second,
+	)
 	respond(w, map[string]string{"url": u}, err)
 }
+
 func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/preview/")
 	captext, tail, _ := strings.Cut(path, "/")
 	body, sig, ok := strings.Cut(captext, ".")
-	if !ok || !hmac.Equal([]byte(sig), []byte(s.store.sign("preview-v1", body))) {
+	if !ok ||
+		!hmac.Equal([]byte(sig), []byte(s.store.sign("preview-v1", body))) {
 		writeError(w, api.Fail(api.NotFound, "not found"))
 		return
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(body)
 	var cap previewCapability
-	if err != nil || json.Unmarshal(raw, &cap) != nil || cap.Port < 1 || cap.Port > 65535 || time.Now().Unix() >= cap.Expires {
+	if err != nil || json.Unmarshal(raw, &cap) != nil || cap.Port < 1 ||
+		cap.Port > 65535 ||
+		time.Now().Unix() >= cap.Expires {
 		writeError(w, api.Fail(api.NotFound, "not found"))
 		return
 	}
 	p := Principal{TenantID: cap.Tenant, SandboxID: cap.Sandbox}
 	b, err := s.Get(r.Context(), p, cap.Sandbox)
-	if err != nil || b.Epoch != cap.Epoch || b.State == "terminated" || cap.Expires > b.Deadline.Unix() {
+	if err != nil || b.Epoch != cap.Epoch || b.State == "terminated" ||
+		cap.Expires > b.Deadline.Unix() {
 		writeError(w, api.Fail(api.NotFound, "not found"))
 		return
 	}
@@ -444,46 +558,71 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		unlock := s.lock(b.ID)
-		defer unlock()
-		current, e := s.Get(ctx, p, b.ID)
-		if e != nil {
-			return nil, e
-		}
-		if current.State != "running" || !time.Now().Before(current.Deadline) {
-			return nil, api.Fail(api.Conflict, "lease inactive")
-		}
-		vm, e := s.VM(ctx, current)
-		if e != nil {
-			return nil, e
-		}
-		c, e := s.opts.Agent.Forward(ctx, vm, cap.Port)
-		if e != nil {
-			return nil, e
-		}
-		return s.trackedConnection(current.ID, c), nil
-	}}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			unlock := s.lock(b.ID)
+			defer unlock()
+			current, e := s.Get(ctx, p, b.ID)
+			if e != nil {
+				return nil, e
+			}
+			if current.State != "running" ||
+				!time.Now().Before(current.Deadline) {
+				return nil, api.Fail(api.Conflict, "lease inactive")
+			}
+			vm, e := s.VM(ctx, current)
+			if e != nil {
+				return nil, e
+			}
+			c, e := s.opts.Agent.Forward(ctx, vm, cap.Port)
+			if e != nil {
+				return nil, e
+			}
+			return s.trackedConnection(current.ID, c), nil
+		},
+	}
 	defer transport.CloseIdleConnections()
-	proxy := &httputil.ReverseProxy{Transport: transport, Rewrite: func(pr *httputil.ProxyRequest) {
-		pr.SetURL(&url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(cap.Port))})
-		pr.Out.URL.Path = "/" + tail
-		pr.Out.URL.RawPath = ""
-		pr.Out.Header.Del("Authorization")
-		pr.Out.Header.Del("Cookie")
-		pr.SetXForwarded()
-	}, ModifyResponse: func(response *http.Response) error {
-		response.Header.Set("Referrer-Policy", "no-referrer")
-		return nil
-	}, ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		writeJSON(w, 502, &api.Error{Code: api.Internal, Message: "preview upstream unavailable"})
-	}}
+	proxy := &httputil.ReverseProxy{
+		Transport: transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(
+				&url.URL{
+					Scheme: "http",
+					Host: net.JoinHostPort(
+						"127.0.0.1",
+						strconv.Itoa(cap.Port),
+					),
+				},
+			)
+			pr.Out.URL.Path = "/" + tail
+			pr.Out.URL.RawPath = ""
+			pr.Out.Header.Del("Authorization")
+			pr.Out.Header.Del("Cookie")
+			pr.SetXForwarded()
+		},
+		ModifyResponse: func(response *http.Response) error {
+			response.Header.Set("Referrer-Policy", "no-referrer")
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			writeJSON(
+				w,
+				502,
+				&api.Error{
+					Code:    api.Internal,
+					Message: "preview upstream unavailable",
+				},
+			)
+		},
+	}
 	proxy.ServeHTTP(w, r)
 }
 
 type trackedConn struct {
 	net.Conn
+
 	remove func()
 	done   chan struct{}
 	once   chan struct{}
@@ -498,14 +637,21 @@ func (c *trackedConn) Close() error {
 	}
 	return c.Conn.Close()
 }
+
 func (c *trackedConn) CloseWrite() error {
 	if v, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return v.CloseWrite()
 	}
 	return nil
 }
+
 func (s *Service) trackedConnection(id string, c net.Conn) net.Conn {
-	t := &trackedConn{Conn: c, remove: s.track(id, c), done: make(chan struct{}), once: make(chan struct{}, 1)}
+	t := &trackedConn{
+		Conn:   c,
+		remove: s.track(id, c),
+		done:   make(chan struct{}),
+		once:   make(chan struct{}, 1),
+	}
 	go s.enforceLease(id, t.done, c)
 	return t
 }

@@ -16,15 +16,19 @@ func (b *binding) listenUnix(path string) (net.Listener, error) {
 	info, err := os.Lstat(path)
 	if err == nil {
 		owner := b.manager.opts.RecoverStaleSocket
-		if info.Mode()&os.ModeSocket == 0 || owner == nil || !owner(b.info, path, info) {
+		if info.Mode()&os.ModeSocket == 0 || owner == nil ||
+			!owner(b.info, path, info) {
 			return nil, errors.New("egress: proxy path already exists")
 		}
 		c, dialErr := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if c != nil {
 			_ = c.Close()
 		}
-		if !errors.Is(dialErr, syscall.ECONNREFUSED) && !errors.Is(dialErr, os.ErrNotExist) {
-			return nil, errors.New("egress: proxy socket is active or inaccessible")
+		if !errors.Is(dialErr, syscall.ECONNREFUSED) &&
+			!errors.Is(dialErr, os.ErrNotExist) {
+			return nil, errors.New(
+				"egress: proxy socket is active or inaccessible",
+			)
 		}
 		current, err := os.Lstat(path)
 		if err == nil {
@@ -57,15 +61,16 @@ func (b *binding) listenUnix(path string) (net.Listener, error) {
 		return nil, errors.New("egress: cannot open proxy socket identity")
 	}
 	anchor := os.NewFile(uintptr(fd), "proxy-socket")
-	defer anchor.Close()
+	defer func() { _ = anchor.Close() }()
 	current, err := anchor.Stat()
-	if err != nil || current.Mode()&os.ModeSocket == 0 || !os.SameFile(info, current) {
+	if err != nil || current.Mode()&os.ModeSocket == 0 ||
+		!os.SameFile(info, current) {
 		_ = owned.Close()
 		return nil, errors.New("egress: proxy socket identity changed")
 	}
 	// proc's descriptor link targets this exact inode even if the directory entry
 	// changes. O_NOFOLLOW above prevents chmod of a replacement symlink target.
-	if err = os.Chmod("/proc/self/fd/"+strconv.Itoa(fd), 0600); err != nil {
+	if err = os.Chmod("/proc/self/fd/"+strconv.Itoa(fd), 0o600); err != nil {
 		_ = owned.Close()
 		return nil, errors.New("egress: cannot secure proxy socket")
 	}
@@ -75,7 +80,10 @@ func (b *binding) listenUnix(path string) (net.Listener, error) {
 			return nil, errors.New("egress: cannot grant VMM proxy access")
 		}
 	}
-	if current, err = os.Lstat(path); err != nil || !os.SameFile(info, current) {
+	if current, err = os.Lstat(
+		path,
+	); err != nil ||
+		!os.SameFile(info, current) {
 		_ = owned.Close()
 		return nil, errors.New("egress: proxy socket identity changed")
 	}
@@ -86,6 +94,7 @@ func (b *binding) listenUnix(path string) (net.Listener, error) {
 // the inode also avoids removing a replacement socket during normal teardown.
 type ownedListener struct {
 	net.Listener
+
 	path string
 	info os.FileInfo
 	once sync.Once
@@ -95,7 +104,10 @@ type ownedListener struct {
 func (l *ownedListener) Close() error {
 	l.once.Do(func() {
 		l.err = l.Listener.Close()
-		if current, err := os.Lstat(l.path); err == nil && os.SameFile(l.info, current) {
+		if current, err := os.Lstat(
+			l.path,
+		); err == nil &&
+			os.SameFile(l.info, current) {
 			if err := os.Remove(l.path); err != nil {
 				l.err = errors.Join(l.err, err)
 			}

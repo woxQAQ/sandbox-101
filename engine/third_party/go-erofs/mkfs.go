@@ -337,7 +337,7 @@ func (fsys *Writer) Chown(name string, uid, gid int) error {
 
 // Chtimes sets the access and modification times on the named path.
 // EROFS only stores mtime; atime is retained for read-back before Close.
-func (fsys *Writer) Chtimes(name string, atime time.Time, mtime time.Time) error {
+func (fsys *Writer) Chtimes(name string, atime, mtime time.Time) error {
 	if fsys.wErr != nil {
 		return fsys.wErr
 	}
@@ -440,125 +440,131 @@ func (fsys *Writer) CopyFrom(src fs.FS, opts ...CopyOpt) error {
 		fsys.buildTime = bt.BuildTime()
 		fsys.hasBuildTime = true
 	}
-	return fs.WalkDir(src, ".", func(fpath string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", fpath, err)
-		}
-
-		// Normalize path to absolute
-		p := "/" + fpath
-		if fpath == "." {
-			p = "/"
-		}
-
-		// Merge mode: process whiteout markers.
-		if fsys.copyMerge && p != "/" {
-			base := path.Base(p)
-			if strings.HasPrefix(base, whiteoutPrefix) {
-				if base == opaqueWhiteout {
-					// Opaque directory: remove all prior children of parent.
-					fsys.removeChildren(path.Dir(p))
-				} else {
-					// File whiteout: remove the named entry.
-					target := path.Join(path.Dir(p), base[len(whiteoutPrefix):])
-					fsys.remove(target)
-				}
-				return nil
-			}
-		}
-
-		// Extract extended metadata from Sys().
-		var be *builder.Entry
-		switch sys := info.Sys().(type) {
-		case *builder.Entry:
-			be = sys
-		case *Stat:
-			// EROFS image source: convert *Stat to *builder.Entry. Ino is the
-			// NID within the source image; it is only unique per image, but
-			// that's fine since the hardlinks map used for hard-link
-			// detection below is created fresh for each CopyFrom call.
-			be = &builder.Entry{
-				UID:     sys.UID,
-				GID:     sys.GID,
-				Mtime:   sys.Mtime,
-				MtimeNs: sys.MtimeNs,
-				Nlink:   uint32(sys.Nlink),
-				Rdev:    sys.Rdev,
-				Xattrs:  sys.Xattrs,
-				Ino:     uint64(sys.Ino),
-			}
-		}
-
-		// For regular files, get a data reader.
-		if info.Mode().IsRegular() && info.Size() > 0 && (be == nil || be.Data == nil) {
-			// In metadata-only mode, data is referenced via chunk indexes
-			// from the source — no need to open the file.
-			if fsys.copyMetadataOnly {
-				if be == nil {
-					be = entryFromSys(info)
-					if be == nil {
-						be = &builder.Entry{}
-					}
-				}
-				// Generate chunks from DataRange if available.
-				if len(be.Chunks) == 0 {
-					if dr, ok := info.(dataRanger); ok {
-						if ranges := dr.DataRange(); len(ranges) > 0 {
-							chunks, err := fsys.chunksFromRanges(ranges, info.Size())
-							if err != nil {
-								return fmt.Errorf("chunksFromRanges %s: %w", p, err)
-							}
-							be.Chunks = chunks
-							// Contiguous: a single non-hole range whose total-size
-							// invariant is satisfied (guaranteed by chunksFromRanges)
-							// means the file is fully covered by one contiguous extent.
-							be.Contiguous = len(ranges) == 1 && ranges[0].Offset != holeOffset
-						}
-					}
-				}
-				return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
-			}
-			// For EROFS sources, use direct SectionReader (bypasses
-			// block-at-a-time reader for contiguous flat-plain data).
-			if srcImg, ok := src.(*image); ok {
-				if st, ok := info.Sys().(*Stat); ok {
-					f := file{img: srcImg, nid: uint64(st.Ino)}
-					if ino, err := f.readInfo(); err == nil {
-						if dr := srcImg.openDirect(ino); dr != nil {
-							if be == nil {
-								be = &builder.Entry{}
-							}
-							be.Data = dr
-							return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
-						}
-					}
-				}
-			}
-			f, err := src.Open(fpath)
+	return fs.WalkDir(
+		src,
+		".",
+		func(fpath string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return fmt.Errorf("open %s: %w", fpath, err)
+				return err
 			}
-			if be == nil {
-				be = entryFromSys(info)
-				if be == nil {
-					be = &builder.Entry{}
+
+			info, err := d.Info()
+			if err != nil {
+				return fmt.Errorf("stat %s: %w", fpath, err)
+			}
+
+			// Normalize path to absolute
+			p := "/" + fpath
+			if fpath == "." {
+				p = "/"
+			}
+
+			// Merge mode: process whiteout markers.
+			if fsys.copyMerge && p != "/" {
+				base := path.Base(p)
+				if strings.HasPrefix(base, whiteoutPrefix) {
+					if base == opaqueWhiteout {
+						// Opaque directory: remove all prior children of parent.
+						fsys.removeChildren(path.Dir(p))
+					} else {
+						// File whiteout: remove the named entry.
+						target := path.Join(
+							path.Dir(p),
+							base[len(whiteoutPrefix):],
+						)
+						fsys.remove(target)
+					}
+					return nil
 				}
 			}
-			be.Data = f.(io.Reader)
-			return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
-		}
 
-		// For symlinks without LinkTarget, read via ReadLink interface.
-		if info.Mode()&fs.ModeSymlink != 0 && (be == nil || be.LinkTarget == "") {
-			if rl, ok := src.(readLinker); ok {
-				target, err := rl.ReadLink(fpath)
+			// Extract extended metadata from Sys().
+			var be *builder.Entry
+			switch sys := info.Sys().(type) {
+			case *builder.Entry:
+				be = sys
+			case *Stat:
+				// EROFS image source: convert *Stat to *builder.Entry. Ino is the
+				// NID within the source image; it is only unique per image, but
+				// that's fine since the hardlinks map used for hard-link
+				// detection below is created fresh for each CopyFrom call.
+				be = &builder.Entry{
+					UID:     sys.UID,
+					GID:     sys.GID,
+					Mtime:   sys.Mtime,
+					MtimeNs: sys.MtimeNs,
+					Nlink:   uint32(sys.Nlink),
+					Rdev:    sys.Rdev,
+					Xattrs:  sys.Xattrs,
+					Ino:     uint64(sys.Ino),
+				}
+			}
+
+			// For regular files, get a data reader.
+			if info.Mode().IsRegular() && info.Size() > 0 &&
+				(be == nil || be.Data == nil) {
+				// In metadata-only mode, data is referenced via chunk indexes
+				// from the source — no need to open the file.
+				if fsys.copyMetadataOnly {
+					if be == nil {
+						be = entryFromSys(info)
+						if be == nil {
+							be = &builder.Entry{}
+						}
+					}
+					// Generate chunks from DataRange if available.
+					if len(be.Chunks) == 0 {
+						if dr, ok := info.(dataRanger); ok {
+							if ranges := dr.DataRange(); len(ranges) > 0 {
+								chunks, err := fsys.chunksFromRanges(
+									ranges,
+									info.Size(),
+								)
+								if err != nil {
+									return fmt.Errorf(
+										"chunksFromRanges %s: %w",
+										p,
+										err,
+									)
+								}
+								be.Chunks = chunks
+								// Contiguous: a single non-hole range whose total-size
+								// invariant is satisfied (guaranteed by chunksFromRanges)
+								// means the file is fully covered by one contiguous extent.
+								be.Contiguous = len(ranges) == 1 &&
+									ranges[0].Offset != holeOffset
+							}
+						}
+					}
+					return fsys.add(
+						p,
+						&entryFileInfo{info: info, sys: be},
+						hardlinks,
+					)
+				}
+				// For EROFS sources, use direct SectionReader (bypasses
+				// block-at-a-time reader for contiguous flat-plain data).
+				if srcImg, ok := src.(*image); ok {
+					if st, ok := info.Sys().(*Stat); ok {
+						f := file{img: srcImg, nid: uint64(st.Ino)}
+						if ino, err := f.readInfo(); err == nil {
+							if dr := srcImg.openDirect(ino); dr != nil {
+								if be == nil {
+									be = &builder.Entry{}
+								}
+								be.Data = dr
+								return fsys.add(
+									p,
+									&entryFileInfo{info: info, sys: be},
+									hardlinks,
+								)
+							}
+						}
+					}
+				}
+				f, err := src.Open(fpath)
 				if err != nil {
-					return fmt.Errorf("readlink %s: %w", fpath, err)
+					return fmt.Errorf("open %s: %w", fpath, err)
 				}
 				if be == nil {
 					be = entryFromSys(info)
@@ -566,33 +572,68 @@ func (fsys *Writer) CopyFrom(src fs.FS, opts ...CopyOpt) error {
 						be = &builder.Entry{}
 					}
 				}
-				be.LinkTarget = target
-				return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
+				be.Data = f.(io.Reader)
+				return fsys.add(
+					p,
+					&entryFileInfo{info: info, sys: be},
+					hardlinks,
+				)
 			}
-		}
 
-		// For directories, ensure nlink >= 2.
-		if info.Mode().IsDir() {
-			if be == nil {
-				be = entryFromSys(info)
-				if be == nil {
-					be = &builder.Entry{Nlink: 2}
+			// For symlinks without LinkTarget, read via ReadLink interface.
+			if info.Mode()&fs.ModeSymlink != 0 &&
+				(be == nil || be.LinkTarget == "") {
+				if rl, ok := src.(readLinker); ok {
+					target, err := rl.ReadLink(fpath)
+					if err != nil {
+						return fmt.Errorf("readlink %s: %w", fpath, err)
+					}
+					if be == nil {
+						be = entryFromSys(info)
+						if be == nil {
+							be = &builder.Entry{}
+						}
+					}
+					be.LinkTarget = target
+					return fsys.add(
+						p,
+						&entryFileInfo{info: info, sys: be},
+						hardlinks,
+					)
 				}
 			}
-			if be.Nlink < 2 {
-				be.Nlink = 2
-			}
-			return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
-		}
 
-		// General case: devices, fifos, sockets, etc.
-		// Wrap in entryFileInfo when be was extracted from Sys()
-		// so that add() sees the metadata.
-		if be != nil {
-			return fsys.add(p, &entryFileInfo{info: info, sys: be}, hardlinks)
-		}
-		return fsys.add(p, info, hardlinks)
-	})
+			// For directories, ensure nlink >= 2.
+			if info.Mode().IsDir() {
+				if be == nil {
+					be = entryFromSys(info)
+					if be == nil {
+						be = &builder.Entry{Nlink: 2}
+					}
+				}
+				if be.Nlink < 2 {
+					be.Nlink = 2
+				}
+				return fsys.add(
+					p,
+					&entryFileInfo{info: info, sys: be},
+					hardlinks,
+				)
+			}
+
+			// General case: devices, fifos, sockets, etc.
+			// Wrap in entryFileInfo when be was extracted from Sys()
+			// so that add() sees the metadata.
+			if be != nil {
+				return fsys.add(
+					p,
+					&entryFileInfo{info: info, sys: be},
+					hardlinks,
+				)
+			}
+			return fsys.add(p, info, hardlinks)
+		},
+	)
 }
 
 // --- Writer finalization ---
@@ -615,7 +656,9 @@ func (fsys *Writer) Close() error {
 
 	if fsys.dataFile != nil {
 		// Fill in the reserved device slot 0 with the actual block count.
-		blocks := (fsys.dataOff + int64(fsys.blockSize) - 1) / int64(fsys.blockSize)
+		blocks := (fsys.dataOff + int64(fsys.blockSize) - 1) / int64(
+			fsys.blockSize,
+		)
 		fsys.devices[0] = uint64(blocks)
 	}
 
@@ -685,13 +728,25 @@ func (fsys *Writer) Open(name string) (fs.File, error) {
 
 	case disk.StatTypeReg:
 		if !ino.fileClosed {
-			return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("file not yet closed for writing")}
+			return nil, &fs.PathError{
+				Op:   "open",
+				Path: name,
+				Err:  fmt.Errorf("file not yet closed for writing"),
+			}
 		}
 		var sr *io.SectionReader
 		if fsys.dataFile != nil {
-			sr = io.NewSectionReader(fsys.dataFile, ino.dataStartOff, int64(ino.size))
+			sr = io.NewSectionReader(
+				fsys.dataFile,
+				ino.dataStartOff,
+				int64(ino.size),
+			)
 		} else if fsys.spool != nil && ino.size > 0 {
-			sr = io.NewSectionReader(fsys.spool, ino.dataStartOff, int64(ino.size))
+			sr = io.NewSectionReader(
+				fsys.spool,
+				ino.dataStartOff,
+				int64(ino.size),
+			)
 		}
 		return &readFile{entry: entry, reader: sr}, nil
 
@@ -718,7 +773,11 @@ func (fsys *Writer) ReadLink(name string) (string, error) {
 		return "", err
 	}
 	if entry.ino.mode&disk.StatTypeMask != disk.StatTypeSymlink {
-		return "", &fs.PathError{Op: "readlink", Path: cleanPath(name), Err: fs.ErrInvalid}
+		return "", &fs.PathError{
+			Op:   "readlink",
+			Path: cleanPath(name),
+			Err:  fs.ErrInvalid,
+		}
 	}
 	return entry.ino.linkTarget, nil
 }
@@ -784,7 +843,11 @@ func (fsys *Writer) Remove(name string) error {
 	}
 	name = cleanPath(name)
 	if name == "/" {
-		return &fs.PathError{Op: "remove", Path: name, Err: fmt.Errorf("cannot remove root")}
+		return &fs.PathError{
+			Op:   "remove",
+			Path: name,
+			Err:  fmt.Errorf("cannot remove root"),
+		}
 	}
 
 	e, err := fsys.resolveEntry("remove", name)
@@ -794,7 +857,11 @@ func (fsys *Writer) Remove(name string) error {
 	if e.ino.mode&disk.StatTypeMask == disk.StatTypeDir {
 		for _, c := range e.children {
 			if !c.removed {
-				return &fs.PathError{Op: "remove", Path: name, Err: ErrDirNotEmpty}
+				return &fs.PathError{
+					Op:   "remove",
+					Path: name,
+					Err:  ErrDirNotEmpty,
+				}
 			}
 		}
 	}
@@ -820,7 +887,11 @@ func (fsys *Writer) RemoveAll(name string) error {
 	}
 	name = cleanPath(name)
 	if name == "/" {
-		return &fs.PathError{Op: "removeall", Path: name, Err: fmt.Errorf("cannot remove root")}
+		return &fs.PathError{
+			Op:   "removeall",
+			Path: name,
+			Err:  fmt.Errorf("cannot remove root"),
+		}
 	}
 
 	_, err := fsys.resolveEntry("removeall", name)
@@ -1085,7 +1156,7 @@ func cleanPath(p string) string {
 
 // fixParentNids sets the parent NID in the ".." dirent for all directories.
 // This must be called after planLayout has assigned NIDs.
-func fixParentNids(e *erofsEntry, parent *erofsEntry) {
+func fixParentNids(e, parent *erofsEntry) {
 	e.parentNid = parent.nid
 	for _, c := range e.children {
 		if c.mode&disk.StatTypeMask == disk.StatTypeDir {
@@ -1132,12 +1203,15 @@ func (fi *writerFileInfo) Size() int64  { return int64(fi.entry.ino.size) }
 func (fi *writerFileInfo) Mode() fs.FileMode {
 	return disk.EroFSModeToGoFileMode(fi.entry.ino.mode)
 }
+
 func (fi *writerFileInfo) ModTime() time.Time {
 	return time.Unix(int64(fi.entry.ino.mtime), int64(fi.entry.ino.mtimeNs))
 }
+
 func (fi *writerFileInfo) IsDir() bool {
 	return fi.entry.ino.mode&disk.StatTypeMask == disk.StatTypeDir
 }
+
 func (fi *writerFileInfo) Sys() any {
 	ino := fi.entry.ino
 	var xattrs map[string]string
@@ -1241,7 +1315,11 @@ func (d *readDir) Stat() (fs.FileInfo, error) {
 }
 
 func (d *readDir) Read([]byte) (int, error) {
-	return 0, &fs.PathError{Op: "read", Path: d.entry.path, Err: fmt.Errorf("is a directory")}
+	return 0, &fs.PathError{
+		Op:   "read",
+		Path: d.entry.path,
+		Err:  fmt.Errorf("is a directory"),
+	}
 }
 
 func (d *readDir) Close() error {
@@ -1301,10 +1379,12 @@ type dirEntry struct {
 }
 
 func (de *dirEntry) Name() string { return path.Base(de.entry.path) }
-func (de *dirEntry) IsDir() bool  { return de.entry.ino.mode&disk.StatTypeMask == disk.StatTypeDir }
+
+func (de *dirEntry) IsDir() bool { return de.entry.ino.mode&disk.StatTypeMask == disk.StatTypeDir }
 func (de *dirEntry) Type() fs.FileMode {
 	return disk.EroFSModeToGoFileMode(de.entry.ino.mode).Type()
 }
+
 func (de *dirEntry) Info() (fs.FileInfo, error) { return &writerFileInfo{entry: de.entry}, nil }
 
 // add adds a single entry. Mode and Size come from info; extended metadata
@@ -1312,7 +1392,11 @@ func (de *dirEntry) Info() (fs.FileInfo, error) { return &writerFileInfo{entry: 
 // platform-specific stat types as a fallback for plain fs.FS sources.
 // hardlinks is the current CopyFrom call's (Dev, Ino) → fsInode map, used to
 // detect additional names that refer to a source inode already seen.
-func (fsys *Writer) add(p string, info fs.FileInfo, hardlinks map[hardlinkKey]*fsInode) error {
+func (fsys *Writer) add(
+	p string,
+	info fs.FileInfo,
+	hardlinks map[hardlinkKey]*fsInode,
+) error {
 	p = cleanPath(p)
 	mode := goModeToUnixMode(info.Mode())
 	size := uint64(info.Size())
@@ -1573,7 +1657,8 @@ func (fsys *Writer) buildErofsTree(policy mtimePolicy) *erofsEntry {
 		cur := queue[0]
 		queue = queue[1:]
 
-		if !cur.fs.ino.nlinkSet && cur.fs.ino.mode&disk.StatTypeMask == disk.StatTypeDir {
+		if !cur.fs.ino.nlinkSet &&
+			cur.fs.ino.mode&disk.StatTypeMask == disk.StatTypeDir {
 			cur.er.nlink = entryNlink(cur.fs)
 		}
 
@@ -1625,7 +1710,11 @@ func (fsys *Writer) fsToErofs(entry *fsEntry) *erofsEntry {
 		if ino.directData != nil {
 			data = ino.directData
 		} else if fsys.spool != nil {
-			data = io.NewSectionReader(fsys.spool, ino.spoolOff, int64(ino.size))
+			data = io.NewSectionReader(
+				fsys.spool,
+				ino.spoolOff,
+				int64(ino.size),
+			)
 		}
 	}
 
@@ -1654,17 +1743,29 @@ func (fsys *Writer) fsToErofs(entry *fsEntry) *erofsEntry {
 // value, it returns an error. Safe to call multiple times with the same value.
 func (fsys *Writer) setBlockSize(n int) error {
 	if n < minBlockSize || n > maxBlockSize {
-		return fmt.Errorf("mkfs: invalid block size %d: must be between %d and %d", n, minBlockSize, maxBlockSize)
+		return fmt.Errorf(
+			"mkfs: invalid block size %d: must be between %d and %d",
+			n,
+			minBlockSize,
+			maxBlockSize,
+		)
 	}
 	if bits.OnesCount(uint(n)) != 1 {
-		return fmt.Errorf("mkfs: invalid block size %d: must be a power of two", n)
+		return fmt.Errorf(
+			"mkfs: invalid block size %d: must be a power of two",
+			n,
+		)
 	}
 	if fsys.blockSize == 0 {
 		fsys.blockSize = n
 		return nil
 	}
 	if fsys.blockSize != n {
-		return fmt.Errorf("mkfs: block size conflict: already %d, requested %d", fsys.blockSize, n)
+		return fmt.Errorf(
+			"mkfs: block size conflict: already %d, requested %d",
+			fsys.blockSize,
+			n,
+		)
 	}
 	return nil
 }
@@ -1711,7 +1812,10 @@ func (fsys *Writer) zeroPad() []byte {
 //   - For data entries: r.Offset >= 0 and block-aligned; r.Device == 0.
 //   - For non-final data entries: r.Size must be a multiple of blockSize.
 //     The final entry may have a partial last block to match the file tail.
-func (fsys *Writer) chunksFromRanges(ranges []DataRange, fileSize int64) ([]builder.Chunk, error) {
+func (fsys *Writer) chunksFromRanges(
+	ranges []DataRange,
+	fileSize int64,
+) ([]builder.Chunk, error) {
 	blockSize := uint64(fsys.resolveBlockSize())
 
 	// Validate total coverage first.
@@ -1720,19 +1824,32 @@ func (fsys *Writer) chunksFromRanges(ranges []DataRange, fileSize int64) ([]buil
 		total += r.Size
 	}
 	if total != fileSize {
-		return nil, fmt.Errorf("DataRange total size %d does not match file size %d", total, fileSize)
+		return nil, fmt.Errorf(
+			"DataRange total size %d does not match file size %d",
+			total,
+			fileSize,
+		)
 	}
 
 	last := len(ranges) - 1
 	var chunks []builder.Chunk
 	for i, r := range ranges {
 		if r.Size <= 0 {
-			return nil, fmt.Errorf("DataRange[%d]: non-positive Size %d", i, r.Size)
+			return nil, fmt.Errorf(
+				"DataRange[%d]: non-positive Size %d",
+				i,
+				r.Size,
+			)
 		}
 		// Non-final entries must be block-aligned in size; the final entry may
 		// end mid-block to match the file tail.
 		if i < last && uint64(r.Size)%blockSize != 0 {
-			return nil, fmt.Errorf("DataRange[%d]: non-final Size %d is not block-aligned (block size %d)", i, r.Size, blockSize)
+			return nil, fmt.Errorf(
+				"DataRange[%d]: non-final Size %d is not block-aligned (block size %d)",
+				i,
+				r.Size,
+				blockSize,
+			)
 		}
 		if r.Offset == holeOffset {
 			// Hole: emit NullPhysicalBlock chunks covering the hole span.
@@ -1751,16 +1868,29 @@ func (fsys *Writer) chunksFromRanges(ranges []DataRange, fileSize int64) ([]buil
 			continue
 		}
 		if r.Offset < 0 {
-			return nil, fmt.Errorf("DataRange[%d]: negative Offset %d", i, r.Offset)
+			return nil, fmt.Errorf(
+				"DataRange[%d]: negative Offset %d",
+				i,
+				r.Offset,
+			)
 		}
 		if uint64(r.Offset)%blockSize != 0 {
-			return nil, fmt.Errorf("DataRange[%d]: Offset %d is not block-aligned (block size %d)", i, r.Offset, blockSize)
+			return nil, fmt.Errorf(
+				"DataRange[%d]: Offset %d is not block-aligned (block size %d)",
+				i,
+				r.Offset,
+				blockSize,
+			)
 		}
 		// Non-EROFS sources register exactly one device via DeviceBlocks();
 		// only Device=0 is valid. Device=0xFFFF would also wrap deviceID to 0
 		// (the primary image), producing an invalid mapping.
 		if r.Device != 0 {
-			return nil, fmt.Errorf("DataRange[%d]: Device %d out of range (source declared one device, only Device=0 is valid)", i, r.Device)
+			return nil, fmt.Errorf(
+				"DataRange[%d]: Device %d out of range (source declared one device, only Device=0 is valid)",
+				i,
+				r.Device,
+			)
 		}
 		deviceID := r.Device + 1
 		startBlock := uint64(r.Offset) / blockSize
@@ -1852,7 +1982,9 @@ func (f *File) closeDataFile() error {
 
 	// Compute chunks from the start offset and written bytes.
 	startBlock := uint64(f.dataStartOff) / uint64(f.fs.resolveBlockSize())
-	totalBlocks := (uint64(f.written) + uint64(f.fs.resolveBlockSize()) - 1) / uint64(f.fs.resolveBlockSize())
+	totalBlocks := (uint64(f.written) + uint64(f.fs.resolveBlockSize()) - 1) / uint64(
+		f.fs.resolveBlockSize(),
+	)
 
 	for totalBlocks > 0 {
 		count := totalBlocks

@@ -43,12 +43,35 @@ func rootlessRun(t *testing.T, mode string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "unshare", "--user", "--map-root-user", "--net", "--mount", "--pid", "--fork", "--kill-child=KILL", "--mount-proc", "--propagation", "private", "--", exe, "-test.run=^"+t.Name()+"$", "-test.v", "-test.timeout=65s")
+	cmd := exec.CommandContext(
+		ctx,
+		"unshare",
+		"--user",
+		"--map-root-user",
+		"--net",
+		"--mount",
+		"--pid",
+		"--fork",
+		"--kill-child=KILL",
+		"--mount-proc",
+		"--propagation",
+		"private",
+		"--",
+		exe,
+		"-test.run=^"+t.Name()+"$",
+		"-test.v",
+		"-test.timeout=65s",
+	)
 	cmd.Env = append(env, rootlessChildEnv+"="+mode, "GOMAXPROCS=2")
 	out, err := cmd.CombinedOutput()
 	t.Logf("private namespace acceptance:\n%s", out)
 	if err != nil {
-		t.Fatalf("real kernel %s acceptance failed: %v (context: %v)", mode, err, ctx.Err())
+		t.Fatalf(
+			"real kernel %s acceptance failed: %v (context: %v)",
+			mode,
+			err,
+			ctx.Err(),
+		)
 	}
 	return false
 }
@@ -59,7 +82,13 @@ func rootlessRequireNamespaces(t *testing.T) {
 		parent := os.Getenv("SANDBOX_KERNEL_PARENT_" + strings.ToUpper(ns))
 		current, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil || parent == "" || current == parent {
-			t.Fatalf("refusing kernel allocation without a new %s namespace: parent=%q current=%q error=%v", ns, parent, current, err)
+			t.Fatalf(
+				"refusing kernel allocation without a new %s namespace: parent=%q current=%q error=%v",
+				ns,
+				parent,
+				current,
+				err,
+			)
 		}
 	}
 }
@@ -74,16 +103,31 @@ func rootlessPrivateRun(t *testing.T) {
 			paths = append(paths, resolved)
 		}
 	}
-	if err := os.Setenv("PATH", strings.Join(paths, string(os.PathListSeparator))); err != nil {
+	if err := os.Setenv(
+		"PATH",
+		strings.Join(paths, string(os.PathListSeparator)),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+	if err := unix.Mount(
+		"",
+		"/",
+		"",
+		unix.MS_REC|unix.MS_PRIVATE,
+		"",
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Mount("tmpfs", "/run", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m"); err != nil {
+	if err := unix.Mount(
+		"tmpfs",
+		"/run",
+		"tmpfs",
+		unix.MS_NOSUID|unix.MS_NODEV,
+		"mode=0755,size=4m",
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir("/run/netns", 0755); err != nil {
+	if err := os.Mkdir("/run/netns", 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -131,7 +175,7 @@ func rootlessArtifact(t *testing.T, name string, data []byte) {
 	if !filepath.IsAbs(dir) {
 		t.Fatal("acceptance artifact directory must be absolute")
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

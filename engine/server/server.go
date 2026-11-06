@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
@@ -28,7 +29,9 @@ func Handler(client api.Client) http.Handler {
 	v1 := router.Group("/v1")
 	v1.POST("/operations", func(c *gin.Context) {
 		var req api.Request
-		d := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
+		d := json.NewDecoder(
+			http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20),
+		)
 		d.DisallowUnknownFields()
 		err := d.Decode(&req)
 		if err == nil {
@@ -105,24 +108,34 @@ func respond(c *gin.Context, result any, err error) {
 // name alone. engined's exclusive writer lock permits its explicit stale-socket
 // cleanup before calling this function.
 func Serve(ctx context.Context, socket string, c api.Client) error {
-	if err := os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		return err
 	}
 	l, err := net.Listen("unix", socket)
 	if err != nil {
 		return err
 	}
-	defer l.Close()
-	if err = os.Chmod(socket, 0600); err != nil {
+	defer func() { _ = l.Close() }()
+	if err = os.Chmod(socket, 0o600); err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: Handler(c), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	srv := &http.Server{
+		Handler:           Handler(c),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdown, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
 		case <-done:

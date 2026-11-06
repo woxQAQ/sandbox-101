@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,7 +19,10 @@ import (
 )
 
 func (g *gcGraph) relations() error {
-	rows, err := g.e.db.QueryContext(g.ctx, "SELECT snapshot,operation FROM leases")
+	rows, err := g.e.db.QueryContext(
+		g.ctx,
+		"SELECT snapshot,operation FROM leases",
+	)
 	if err != nil {
 		return err
 	}
@@ -27,8 +32,13 @@ func (g *gcGraph) relations() error {
 			break
 		}
 		o, ok := g.ops[operation]
-		if _, exists := g.snapshots[snapshot]; !ok || !exists || !o.Journal.Lease || o.Operation.Request.SnapshotID != snapshot {
-			err = fmt.Errorf("GC lease root missing or inconsistent: %s", operation)
+		if _, exists := g.snapshots[snapshot]; !ok || !exists ||
+			!o.Journal.Lease ||
+			o.Operation.Request.SnapshotID != snapshot {
+			err = fmt.Errorf(
+				"GC lease root missing or inconsistent: %s",
+				operation,
+			)
 			break
 		}
 		g.roots[g.snapshots[snapshot].Dir] = true
@@ -36,7 +46,7 @@ func (g *gcGraph) relations() error {
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
+	err = errors.Join(err, rows.Close())
 	if err != nil {
 		return err
 	}
@@ -45,7 +55,9 @@ func (g *gcGraph) relations() error {
 	for id, o := range g.ops {
 		if o.Journal.Lease {
 			var snapshot string
-			if err = g.e.db.QueryRowContext(g.ctx, "SELECT snapshot FROM leases WHERE operation=?", id).Scan(&snapshot); err != nil || snapshot != o.Operation.Request.SnapshotID {
+			if err = g.e.db.QueryRowContext(g.ctx, "SELECT snapshot FROM leases WHERE operation=?", id).
+				Scan(&snapshot); err != nil ||
+				snapshot != o.Operation.Request.SnapshotID {
 				return fmt.Errorf("GC journal lease root missing: %s", id)
 			}
 		}
@@ -60,7 +72,10 @@ func (g *gcGraph) relations() error {
 			break
 		}
 		v, ok := g.versions[filepath.Dir(filepath.Dir(path))]
-		if _, exists := g.vms[vm]; !ok || !exists || v.resource.VMID != vm || path != filepath.Join(v.resource.RestoreDir, "memory-ranges") || v.manifest == nil || v.manifest.Files["ch/memory-ranges"] != digest {
+		if _, exists := g.vms[vm]; !ok || !exists || v.resource.VMID != vm ||
+			path != filepath.Join(v.resource.RestoreDir, "memory-ranges") ||
+			v.manifest == nil ||
+			v.manifest.Files["ch/memory-ranges"] != digest {
 			err = fmt.Errorf("GC backing ownership missing: %s", path)
 			break
 		}
@@ -69,7 +84,7 @@ func (g *gcGraph) relations() error {
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
+	err = errors.Join(err, rows.Close())
 	if err != nil {
 		return err
 	}
@@ -78,9 +93,13 @@ func (g *gcGraph) relations() error {
 			path := filepath.Join(r.RestoreDir, "memory-ranges")
 			// Before handoff the source lease protects a candidate whose backing
 			// registration does not exist yet. Every current VM backing must exist.
-			if v, ok := g.vms[r.VMID]; ok && v.Resource.RestoreDir == r.RestoreDir {
+			if v, ok := g.vms[r.VMID]; ok &&
+				v.Resource.RestoreDir == r.RestoreDir {
 				if g.backing[path] == "" {
-					return fmt.Errorf("GC current VM backing root missing: %s", path)
+					return fmt.Errorf(
+						"GC current VM backing root missing: %s",
+						path,
+					)
 				}
 				if err = g.path(path, false); err != nil {
 					return err
@@ -92,7 +111,7 @@ func (g *gcGraph) relations() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var owner string
 		if err = rows.Scan(&owner); err != nil {
@@ -127,7 +146,9 @@ func (g *gcGraph) catalog() error {
 			switch key {
 			case "identity", "epoch", "schema", "backup_point":
 			case "recovery_note":
-				err = fmt.Errorf("GC fenced by restored history; ownership requires manual review")
+				err = fmt.Errorf(
+					"GC fenced by restored history; ownership requires manual review",
+				)
 			default:
 				err = fmt.Errorf("GC unknown metadata root: %s", key)
 			}
@@ -139,12 +160,19 @@ func (g *gcGraph) catalog() error {
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
+	err = errors.Join(err, rows.Close())
 	if err != nil {
 		return err
 	}
 	for digest, m := range g.images {
-		if err = g.verifyImage(m, filepath.Join(g.e.opts.StateDir, "images", strings.TrimPrefix(digest, "sha256:"))); err != nil {
+		if err = g.verifyImage(
+			m,
+			filepath.Join(
+				g.e.opts.StateDir,
+				"images",
+				strings.TrimPrefix(digest, "sha256:"),
+			),
+		); err != nil {
 			return err
 		}
 	}
@@ -155,7 +183,10 @@ func (g *gcGraph) catalog() error {
 	}
 	for _, s := range g.snapshots {
 		if _, ok := g.images[s.Snapshot.Config.Image]; !ok {
-			return fmt.Errorf("GC snapshot image catalog root missing: %s", s.Snapshot.ID)
+			return fmt.Errorf(
+				"GC snapshot image catalog root missing: %s",
+				s.Snapshot.ID,
+			)
 		}
 	}
 	for _, o := range g.ops {
@@ -176,8 +207,16 @@ func (g *gcGraph) verifyImage(m ImageManifest, dir string) error {
 	if err := g.path(filepath.Join(dir, "image.json"), false); err != nil {
 		return err
 	}
-	if err := gcReadJSON(filepath.Join(dir, "image.json"), &disk); err != nil || !reflect.DeepEqual(m, disk) {
-		return fmt.Errorf("GC image manifest root missing/corrupt: %s: %v", dir, err)
+	if err := gcReadJSON(
+		filepath.Join(dir, "image.json"),
+		&disk,
+	); err != nil ||
+		!reflect.DeepEqual(m, disk) {
+		return fmt.Errorf(
+			"GC image manifest root missing/corrupt: %s: %v",
+			dir,
+			err,
+		)
 	}
 	required := []string{"kernel", "initramfs", "root.erofs"}
 	if m.Layout == LayeredEROFSLayout {
@@ -206,15 +245,28 @@ func (g *gcGraph) verifyImage(m ImageManifest, dir string) error {
 			if err := g.verifyCache(m.Builder, a.DiffID); err != nil {
 				return err
 			}
-			if err := g.immutable(g.e.opts.StateDir, a.Path, a.SHA256); err != nil {
+			if err := g.immutable(
+				g.e.opts.StateDir,
+				a.Path,
+				a.SHA256,
+			); err != nil {
 				return err
 			}
-			if err := g.immutable(g.e.opts.StateDir, filepath.Join(filepath.Dir(a.Path), "layer.json"), a.CacheSHA256); err != nil {
+			if err := g.immutable(
+				g.e.opts.StateDir,
+				filepath.Join(filepath.Dir(a.Path), "layer.json"),
+				a.CacheSHA256,
+			); err != nil {
 				return err
 			}
 			layers = append(layers, filepath.Join(g.e.opts.StateDir, a.Path))
 		}
-		return verifyImageDeviceTable(filepath.Join(dir, "fsmeta.erofs"), layers, m.DiffIDs, m.sharedLayered())
+		return verifyImageDeviceTable(
+			filepath.Join(dir, "fsmeta.erofs"),
+			layers,
+			m.DiffIDs,
+			m.sharedLayered(),
+		)
 	}
 	return nil
 }
@@ -258,8 +310,15 @@ func (g *gcGraph) inventory() error {
 					// Interrupted publications remain roots even before catalog
 					// admission; import is the only way to publish them.
 					var m ImageManifest
-					if err = gcReadJSON(filepath.Join(p, "image.json"), &m); err != nil || m.Digest != "sha256:"+entry.Name() {
-						return fmt.Errorf("GC unknown unpublished image root: %s", p)
+					if err = gcReadJSON(
+						filepath.Join(p, "image.json"),
+						&m,
+					); err != nil ||
+						m.Digest != "sha256:"+entry.Name() {
+						return fmt.Errorf(
+							"GC unknown unpublished image root: %s",
+							p,
+						)
 					}
 					if err = g.verifyImage(m, p); err != nil {
 						return err
@@ -269,18 +328,28 @@ func (g *gcGraph) inventory() error {
 				var opts ImportOptions
 				if _, pending := g.deletions[p]; pending {
 					if _, ok := g.images["sha256:"+entry.Name()]; !ok {
-						return fmt.Errorf("GC import deletion catalog root missing: %s", p)
+						return fmt.Errorf(
+							"GC import deletion catalog root missing: %s",
+							p,
+						)
 					}
 					continue
 				}
-				if err = gcReadJSON(filepath.Join(p, "intent.json"), &opts); err != nil || opts.Digest != "sha256:"+entry.Name() {
+				if err = gcReadJSON(
+					filepath.Join(p, "intent.json"),
+					&opts,
+				); err != nil ||
+					opts.Digest != "sha256:"+entry.Name() {
 					return fmt.Errorf("GC unknown import ownership: %s", p)
 				}
 				if _, err = shaName(opts.Digest); err != nil {
 					return err
 				}
 				if _, ok := g.images[opts.Digest]; !ok {
-					return fmt.Errorf("GC incomplete import retained as recovery root: %s", p)
+					return fmt.Errorf(
+						"GC incomplete import retained as recovery root: %s",
+						p,
+					)
 				}
 				g.imports[p] = opts
 			}
@@ -289,13 +358,18 @@ func (g *gcGraph) inventory() error {
 	for _, s := range g.snapshots {
 		found := false
 		for _, o := range g.ops {
-			if o.Operation.Request.Action == "snapshot" && o.Operation.SnapshotID == s.Snapshot.ID && o.Operation.VMID == s.Snapshot.SourceVMID {
+			if o.Operation.Request.Action == "snapshot" &&
+				o.Operation.SnapshotID == s.Snapshot.ID &&
+				o.Operation.VMID == s.Snapshot.SourceVMID {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("GC snapshot operation ownership missing: %s", s.Snapshot.ID)
+			return fmt.Errorf(
+				"GC snapshot operation ownership missing: %s",
+				s.Snapshot.ID,
+			)
 		}
 	}
 	return nil
@@ -315,7 +389,10 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 			continue
 		case "versions", "disks", "capture", "runs":
 		default:
-			return fmt.Errorf("GC unknown VM resource: %s", filepath.Join(v.Resource.Dir, entry.Name()))
+			return fmt.Errorf(
+				"GC unknown VM resource: %s",
+				filepath.Join(v.Resource.Dir, entry.Name()),
+			)
 		}
 		p := filepath.Join(v.Resource.Dir, entry.Name())
 		if !entry.IsDir() {
@@ -335,12 +412,15 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 				_, known = g.versions[strings.TrimSuffix(path, ".pending")]
 			case "capture":
 				o, ok := g.ops[child.Name()]
-				known = ok && o.Operation.VMID == v.VM.ID && o.Operation.Request.Action == "snapshot" && o.Journal.Resource != nil
+				known = ok && o.Operation.VMID == v.VM.ID &&
+					o.Operation.Request.Action == "snapshot" &&
+					o.Journal.Resource != nil
 			case "runs":
 				known = v.Resource.RunDir == path
 				for _, o := range g.ops {
 					for _, r := range []*Resource{o.Journal.Old, o.Journal.Resource} {
-						known = known || r != nil && r.VMID == v.VM.ID && r.RunDir == path
+						known = known ||
+							r != nil && r.VMID == v.VM.ID && r.RunDir == path
 					}
 				}
 			}
@@ -356,7 +436,8 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 func (g *gcGraph) path(path string, dir bool) error {
 	base := g.e.opts.StateDir
 	rel, err := filepath.Rel(base, path)
-	if err != nil || filepath.Clean(path) != path || rel == ".." || strings.HasPrefix(rel, "../") {
+	if err != nil || filepath.Clean(path) != path || rel == ".." ||
+		strings.HasPrefix(rel, "../") {
 		return fmt.Errorf("GC path outside state: %s", path)
 	}
 	current := base
@@ -387,7 +468,9 @@ func (g *gcGraph) path(path string, dir bool) error {
 }
 
 func (g *gcGraph) immutable(root, rel, want string) error {
-	if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || rel == "." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "\\") {
+	if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || rel == "." ||
+		strings.HasPrefix(rel, "../") ||
+		strings.Contains(rel, "\\") {
 		return fmt.Errorf("GC unsafe artifact path")
 	}
 	path := filepath.Join(root, rel)
@@ -398,7 +481,7 @@ func (g *gcGraph) immutable(root, rel, want string) error {
 	if err != nil {
 		return err
 	}
-	if st.Mode().Perm()&0222 != 0 || st.Size() == 0 {
+	if st.Mode().Perm()&0o222 != 0 || st.Size() == 0 {
 		return fmt.Errorf("GC mutable/empty immutable artifact: %s", path)
 	}
 	got, err := gcDigest(g.ctx, path)
@@ -409,8 +492,9 @@ func (g *gcGraph) immutable(root, rel, want string) error {
 }
 
 type gcReader struct {
-	ctx context.Context
 	io.Reader
+
+	ctx context.Context
 }
 
 func (r gcReader) Read(p []byte) (int, error) {
@@ -425,9 +509,9 @@ func gcDigest(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
-	if _, err = io.Copy(h, gcReader{ctx, f}); err != nil {
+	if _, err = io.Copy(h, gcReader{Reader: f, ctx: ctx}); err != nil {
 		return "", err
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
@@ -448,17 +532,29 @@ func (g *gcGraph) verifyCache(builder, diff string) error {
 	if err := gcReadJSON(filepath.Join(path, "layer.json"), &c); err != nil {
 		return err
 	}
-	if c.Format != 1 || (c.Profile != layerProfile && c.Profile != sharedLayerProfile) || c.Builder != builder || c.DiffID != diff || c.Bytes < 0 || c.Entries < 0 {
+	if c.Format != 1 ||
+		(c.Profile != layerProfile && c.Profile != sharedLayerProfile) ||
+		c.Builder != builder ||
+		c.DiffID != diff ||
+		c.Bytes < 0 ||
+		c.Entries < 0 {
 		return fmt.Errorf("GC unknown layer ownership receipt: %s", path)
 	}
 	if _, err := shaName(c.SHA256); err != nil {
 		return err
 	}
 	st, err := os.Stat(filepath.Join(path, "layer.json"))
-	if err != nil || st.Mode().Perm()&0222 != 0 {
-		return fmt.Errorf("GC cache ownership receipt is not immutable: %s", path)
+	if err != nil || st.Mode().Perm()&0o222 != 0 {
+		return fmt.Errorf(
+			"GC cache ownership receipt is not immutable: %s",
+			path,
+		)
 	}
-	return g.immutable(g.e.opts.StateDir, filepath.Join(dir, "layer.erofs"), c.SHA256)
+	return g.immutable(
+		g.e.opts.StateDir,
+		filepath.Join(dir, "layer.erofs"),
+		c.SHA256,
+	)
 }
 
 func (g *gcGraph) idle(vm string) error {
@@ -471,8 +567,13 @@ func (g *gcGraph) idle(vm string) error {
 		if o.Operation.VMID != vm {
 			continue
 		}
-		if !terminal(o.Operation.Status) || o.Journal.ResumeRequired || o.Journal.Lease || v.VM.OperationID == o.Operation.ID {
-			return fmt.Errorf("VM has pending or unresolved operation %s", o.Operation.ID)
+		if !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
+			o.Journal.Lease ||
+			v.VM.OperationID == o.Operation.ID {
+			return fmt.Errorf(
+				"VM has pending or unresolved operation %s",
+				o.Operation.ID,
+			)
 		}
 		for _, r := range []*Resource{o.Journal.Old, o.Journal.Resource} {
 			if r != nil {
@@ -488,10 +589,17 @@ func (g *gcGraph) idle(vm string) error {
 		seen[r.Instance] = true
 		obs, err := g.e.opts.Backend.Inspect(g.ctx, r)
 		if err != nil {
-			return fmt.Errorf("instance %s ownership uncertain: %w", r.Instance, err)
+			return fmt.Errorf(
+				"instance %s ownership uncertain: %w",
+				r.Instance,
+				err,
+			)
 		}
 		if obs.Alive {
-			return fmt.Errorf("instance %s still alive; retained until readers exit", r.Instance)
+			return fmt.Errorf(
+				"instance %s still alive; retained until readers exit",
+				r.Instance,
+			)
 		}
 	}
 	return nil
@@ -499,7 +607,9 @@ func (g *gcGraph) idle(vm string) error {
 
 func (g *gcGraph) reachable(path string) bool {
 	for root := range g.roots {
-		if path == root || strings.HasPrefix(root, path+string(filepath.Separator)) || strings.HasPrefix(path, root+string(filepath.Separator)) {
+		if path == root ||
+			strings.HasPrefix(root, path+string(filepath.Separator)) ||
+			strings.HasPrefix(path, root+string(filepath.Separator)) {
 			return true
 		}
 	}
@@ -530,11 +640,17 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			paths, err = g.ownedFiles(path, files, dir)
 		}
 		if err != nil {
-			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, err.Error()},
+			)
 			return nil
 		}
 		if err = gcLocalReaders(paths); err != nil {
-			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, err.Error()},
+			)
 			return nil
 		}
 		report.Candidates = append(report.Candidates, path)
@@ -570,7 +686,10 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		rel, _ := filepath.Rel(g.e.opts.StateDir, path)
 		parts := strings.Split(rel, string(filepath.Separator))
 		if g.reachable(path) || g.layers[rel] {
-			report.Retained = append(report.Retained, GCIssue{path, "deletion intent has a durable reader root"})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, "deletion intent has a durable reader root"},
+			)
 			continue
 		}
 		var retire func() error
@@ -579,7 +698,9 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			if _, present := g.vms[parts[1]]; !present {
 				deleted := false
 				for _, o := range g.ops {
-					deleted = deleted || o.Operation.VMID == parts[1] && o.Operation.Request.Action == "delete" && o.Operation.Status == "succeeded"
+					deleted = deleted ||
+						o.Operation.VMID == parts[1] && o.Operation.Request.Action == "delete" &&
+							o.Operation.Status == "succeeded"
 				}
 				if _, err := os.Lstat(path); deleted && os.IsNotExist(err) {
 					if !opts.DryRun {
@@ -592,23 +713,36 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 				}
 			}
 			if err := g.idle(parts[1]); err != nil {
-				report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+				report.Retained = append(
+					report.Retained,
+					GCIssue{path, err.Error()},
+				)
 				continue
 			}
 			if parts[2] != "capture" {
 				v, ok := g.versions[strings.TrimSuffix(path, ".pending")]
 				if !ok {
-					return fmt.Errorf("GC deletion lost version ownership: %s", path)
+					return fmt.Errorf(
+						"GC deletion lost version ownership: %s",
+						path,
+					)
 				}
 				retire = func() error { return g.retireVersion(v) }
 			} else {
 				o, ok := g.ops[parts[3]]
-				if !ok || o.Operation.VMID != parts[1] || o.Operation.Request.Action != "snapshot" || !terminal(o.Operation.Status) || o.Journal.ResumeRequired {
-					return fmt.Errorf("GC deletion lost capture ownership: %s", path)
+				if !ok || o.Operation.VMID != parts[1] ||
+					o.Operation.Request.Action != "snapshot" ||
+					!terminal(o.Operation.Status) ||
+					o.Journal.ResumeRequired {
+					return fmt.Errorf(
+						"GC deletion lost capture ownership: %s",
+						path,
+					)
 				}
 			}
 		case "imports":
-			if _, ok := g.images["sha256:"+parts[1]]; !ok || !g.reservations["image:"+parts[1]] {
+			if _, ok := g.images["sha256:"+parts[1]]; !ok ||
+				!g.reservations["image:"+parts[1]] {
 				return fmt.Errorf("GC deletion lost import ownership: %s", path)
 			}
 		case "layer-cache":
@@ -630,10 +764,19 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			continue // VM deletion owns its directory; never recreate lost authority.
 		}
 		if err := g.idle(v.resource.VMID); err != nil {
-			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, err.Error()},
+			)
 			continue
 		}
-		files := map[string]string{"disk.raw": "", "disk.raw.pending": "", "restore/config.json": "", "restore/state.json": "", "restore/memory-ranges": ""}
+		files := map[string]string{
+			"disk.raw":              "",
+			"disk.raw.pending":      "",
+			"restore/config.json":   "",
+			"restore/state.json":    "",
+			"restore/memory-ranges": "",
+		}
 		dir := v.manifest != nil
 		if dir {
 			for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
@@ -642,18 +785,31 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		} else {
 			files = map[string]string{"": ""}
 		}
-		if err := apply(path, files, dir, func() error { return g.retireVersion(v) }); err != nil {
+		if err := apply(
+			path,
+			files,
+			dir,
+			func() error { return g.retireVersion(v) },
+		); err != nil {
 			return err
 		}
 		if !dir {
-			if err := apply(path+".pending", map[string]string{"": ""}, false, nil); err != nil {
+			if err := apply(
+				path+".pending",
+				map[string]string{"": ""},
+				false,
+				nil,
+			); err != nil {
 				return err
 			}
 		}
 	}
 	for _, id := range gcSortedKeys(g.ops) {
 		o := g.ops[id]
-		if o.Operation.Request.Action != "snapshot" || !terminal(o.Operation.Status) || o.Journal.ResumeRequired || o.Journal.Resource == nil {
+		if o.Operation.Request.Action != "snapshot" ||
+			!terminal(o.Operation.Status) ||
+			o.Journal.ResumeRequired ||
+			o.Journal.Resource == nil {
 			continue
 		}
 		path := filepath.Join(o.Journal.Resource.Dir, "capture", id)
@@ -661,10 +817,24 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			continue
 		}
 		if err := g.idle(o.Operation.VMID); err != nil {
-			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, err.Error()},
+			)
 			continue
 		}
-		if err := apply(path, map[string]string{"manifest.json": "", "disk.raw": "", "ch/config.json": "", "ch/state.json": "", "ch/memory-ranges": ""}, true, nil); err != nil {
+		if err := apply(
+			path,
+			map[string]string{
+				"manifest.json":    "",
+				"disk.raw":         "",
+				"ch/config.json":   "",
+				"ch/state.json":    "",
+				"ch/memory-ranges": "",
+			},
+			true,
+			nil,
+		); err != nil {
 			return err
 		}
 	}
@@ -672,7 +842,10 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		opts := g.imports[path]
 		files, err := g.importFiles(path, opts)
 		if err != nil {
-			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, err.Error()},
+			)
 			continue
 		}
 		if err = apply(path, files, true, nil); err != nil {
@@ -693,11 +866,17 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 	for _, builder := range builders {
 		parent := filepath.Join(cache, builder.Name())
 		if !builder.IsDir() {
-			report.Retained = append(report.Retained, GCIssue{parent, "unknown cache owner"})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{parent, "unknown cache owner"},
+			)
 			continue
 		}
 		if _, err = shaName("sha256:" + builder.Name()); err != nil {
-			report.Retained = append(report.Retained, GCIssue{parent, "unknown builder identity"})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{parent, "unknown builder identity"},
+			)
 			continue
 		}
 		layers, err := os.ReadDir(parent)
@@ -710,11 +889,22 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			if g.layers[rel] || resumed[path] {
 				continue
 			}
-			if err = g.verifyCache("sha256:"+builder.Name(), "sha256:"+layer.Name()); err != nil {
-				report.Retained = append(report.Retained, GCIssue{path, err.Error()})
+			if err = g.verifyCache(
+				"sha256:"+builder.Name(),
+				"sha256:"+layer.Name(),
+			); err != nil {
+				report.Retained = append(
+					report.Retained,
+					GCIssue{path, err.Error()},
+				)
 				continue
 			}
-			if err = apply(path, map[string]string{"layer.erofs": "", "layer.json": ""}, true, nil); err != nil {
+			if err = apply(
+				path,
+				map[string]string{"layer.erofs": "", "layer.json": ""},
+				true,
+				nil,
+			); err != nil {
 				return err
 			}
 		}
@@ -723,19 +913,30 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 }
 
 func (g *gcGraph) retireVersion(v gcVersion) error {
-	if v.resource.RestoreDir == "" || g.backing[filepath.Join(v.resource.RestoreDir, "memory-ranges")] == "" && !g.reservations[v.resource.VMID+":"+v.owner] {
+	if v.resource.RestoreDir == "" ||
+		g.backing[filepath.Join(v.resource.RestoreDir, "memory-ranges")] == "" &&
+			!g.reservations[v.resource.VMID+":"+v.owner] {
 		return nil
 	}
 	tx, err := g.e.db.BeginTx(g.ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if v.resource.RestoreDir != "" {
-		if _, err = tx.ExecContext(g.ctx, "DELETE FROM backing WHERE vm=? AND path=?", v.resource.VMID, filepath.Join(v.resource.RestoreDir, "memory-ranges")); err != nil {
+		if _, err = tx.ExecContext(
+			g.ctx,
+			"DELETE FROM backing WHERE vm=? AND path=?",
+			v.resource.VMID,
+			filepath.Join(v.resource.RestoreDir, "memory-ranges"),
+		); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(g.ctx, "DELETE FROM reservations WHERE owner=?", v.resource.VMID+":"+v.owner); err != nil {
+		if _, err = tx.ExecContext(
+			g.ctx,
+			"DELETE FROM reservations WHERE owner=?",
+			v.resource.VMID+":"+v.owner,
+		); err != nil {
 			return err
 		}
 	}
@@ -745,14 +946,20 @@ func (g *gcGraph) retireVersion(v gcVersion) error {
 	return g.e.checkpoint()
 }
 
-func (g *gcGraph) importFiles(path string, opts ImportOptions) (map[string]string, error) {
+func (g *gcGraph) importFiles(
+	path string,
+	opts ImportOptions,
+) (map[string]string, error) {
 	m := g.images[opts.Digest]
 	materialization := opts.Materialization
 	if materialization == "" {
 		materialization = LayeredEROFSLayout
 	}
-	if materialization != m.Layout || !g.reservations["image:"+opts.Digest[7:]] {
-		return nil, fmt.Errorf("completed import ownership/reservation mismatch")
+	if materialization != m.Layout ||
+		!g.reservations["image:"+opts.Digest[7:]] {
+		return nil, fmt.Errorf(
+			"completed import ownership/reservation mismatch",
+		)
 	}
 	files := map[string]string{"intent.json": ""}
 	input := filepath.Join(path, "input", "blobs", "sha256")
@@ -787,7 +994,11 @@ func (g *gcGraph) importFiles(path string, opts ImportOptions) (map[string]strin
 // ownedFiles is an exact allowlist, not recursive deletion authority. A journal
 // proves its canonical version path; a verified receipt proves cache contents.
 // Unexpected names, symlinks, special files and mounts retain the entire object.
-func (g *gcGraph) ownedFiles(path string, allowed map[string]string, dir bool) ([]string, error) {
+func (g *gcGraph) ownedFiles(
+	path string,
+	allowed map[string]string,
+	dir bool,
+) ([]string, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return nil, nil // Retry after a crash between unlink and metadata retirement.
 	}
@@ -804,33 +1015,40 @@ func (g *gcGraph) ownedFiles(path string, allowed map[string]string, dir bool) (
 		}
 	}
 	paths := []string{}
-	err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err = g.ctx.Err(); err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(path, p)
-		if d.IsDir() {
-			if !dirs[rel] {
-				return fmt.Errorf("unknown directory retained: %s", p)
+	err := filepath.WalkDir(
+		path,
+		func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
+			if err = g.ctx.Err(); err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(path, p)
+			if d.IsDir() {
+				if !dirs[rel] {
+					return fmt.Errorf("unknown directory retained: %s", p)
+				}
+				return nil
+			}
+			want, ok := allowed[rel]
+			if !ok || !d.Type().IsRegular() {
+				return fmt.Errorf("unknown artifact retained: %s", p)
+			}
+			if want != "" {
+				got, err := gcDigest(g.ctx, p)
+				if err != nil || got != want {
+					return fmt.Errorf(
+						"artifact identity unconfirmed: %s: %v",
+						p,
+						err,
+					)
+				}
+			}
+			paths = append(paths, p)
 			return nil
-		}
-		want, ok := allowed[rel]
-		if !ok || !d.Type().IsRegular() {
-			return fmt.Errorf("unknown artifact retained: %s", p)
-		}
-		if want != "" {
-			got, err := gcDigest(g.ctx, p)
-			if err != nil || got != want {
-				return fmt.Errorf("artifact identity unconfirmed: %s: %v", p, err)
-			}
-		}
-		paths = append(paths, p)
-		return nil
-	})
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -839,8 +1057,17 @@ func (g *gcGraph) ownedFiles(path string, allowed map[string]string, dir bool) (
 	if err != nil {
 		return nil, err
 	}
-	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
-	for _, line := range strings.Split(string(mounts), "\n") {
+	unescape := strings.NewReplacer(
+		`\040`,
+		" ",
+		`\011`,
+		"\t",
+		`\012`,
+		"\n",
+		`\134`,
+		`\`,
+	)
+	for line := range strings.SplitSeq(string(mounts), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 5 {
 			mount := unescape.Replace(f[4])
@@ -869,13 +1096,14 @@ func gcLocalReaders(paths []string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(string(maps), "\n") {
+	for line := range strings.SplitSeq(string(maps), "\n") {
 		// Some overlay filesystems expose different stat/proc device identities.
 		// A recorded pathname still proves use, and must never be ignored merely
 		// because a device/inode comparison cannot establish equivalence.
 		for _, path := range paths {
 			escaped := strings.ReplaceAll(path, "\n", `\012`)
-			if strings.HasSuffix(line, " "+escaped) || strings.HasSuffix(line, " "+escaped+" (deleted)") {
+			if strings.HasSuffix(line, " "+escaped) ||
+				strings.HasSuffix(line, " "+escaped+" (deleted)") {
 				return fmt.Errorf("artifact still mapped by engine process")
 			}
 		}
@@ -909,7 +1137,12 @@ func gcLocalReaders(paths []string) error {
 			return err
 		}
 		s := st.Sys().(*syscall.Stat_t)
-		key := fmt.Sprintf("%x:%x:%d", unix.Major(uint64(s.Dev)), unix.Minor(uint64(s.Dev)), s.Ino)
+		key := fmt.Sprintf(
+			"%x:%x:%d",
+			unix.Major(uint64(s.Dev)),
+			unix.Minor(uint64(s.Dev)),
+			s.Ino,
+		)
 		if inodes[key] {
 			return fmt.Errorf("artifact still open by engine process")
 		}
@@ -923,7 +1156,7 @@ func (g *gcGraph) removeFiles(path string, files []string, dir bool) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	for _, file := range files {
 		if err = g.ctx.Err(); err != nil {
 			return err
@@ -943,27 +1176,33 @@ func (g *gcGraph) removeFiles(path string, files []string, dir bool) error {
 	}
 	if dir {
 		var dirs []string
-		if err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-			if os.IsNotExist(err) {
+		if err = filepath.WalkDir(
+			path,
+			func(p string, d os.DirEntry, err error) error {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if !d.IsDir() {
+					return fmt.Errorf(
+						"unexpected artifact appeared during GC: %s",
+						p,
+					)
+				}
+				dirs = append(dirs, p)
 				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() {
-				return fmt.Errorf("unexpected artifact appeared during GC: %s", p)
-			}
-			dirs = append(dirs, p)
-			return nil
-		}); err != nil {
+			},
+		); err != nil {
 			return err
 		}
-		for i := len(dirs) - 1; i >= 0; i-- {
-			rel, _ := filepath.Rel(g.e.opts.StateDir, dirs[i])
+		for _, dir := range slices.Backward(dirs) {
+			rel, _ := filepath.Rel(g.e.opts.StateDir, dir)
 			if err = root.Remove(rel); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			if err = syncDir(filepath.Dir(dirs[i])); err != nil {
+			if err = syncDir(filepath.Dir(dir)); err != nil {
 				return err
 			}
 		}

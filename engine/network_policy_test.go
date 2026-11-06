@@ -22,6 +22,7 @@ type testPolicyState struct {
 
 type policyTestBackend struct {
 	*testBackend
+
 	policyMu     sync.Mutex
 	policies     map[string]testPolicyState
 	installs     int
@@ -31,9 +32,17 @@ type policyTestBackend struct {
 }
 
 func newPolicyTestBackend() *policyTestBackend {
-	return &policyTestBackend{testBackend: newTestBackend(), policies: map[string]testPolicyState{}}
+	return &policyTestBackend{
+		testBackend: newTestBackend(),
+		policies:    map[string]testPolicyState{},
+	}
 }
-func (b *policyTestBackend) InstallNetworkPolicy(ctx context.Context, r Resource, p *api.NetworkPolicy) error {
+
+func (b *policyTestBackend) InstallNetworkPolicy(
+	ctx context.Context,
+	r Resource,
+	p *api.NetworkPolicy,
+) error {
 	if r.VMID == b.gateVM && b.gate != nil {
 		select {
 		case <-b.gate:
@@ -54,18 +63,28 @@ func (b *policyTestBackend) InstallNetworkPolicy(ctx context.Context, r Resource
 	b.policyMu.Lock()
 	defer b.policyMu.Unlock()
 	old := b.policies[r.VMID]
-	if old.Valid && old.Instance == r.Instance && reflect.DeepEqual(old.Policy, p) {
+	if old.Valid && old.Instance == r.Instance &&
+		reflect.DeepEqual(old.Policy, p) {
 		return nil
 	}
 	var copy *api.NetworkPolicy
 	if err = json.Unmarshal(encode(p), &copy); err != nil {
 		return err
 	}
-	b.policies[r.VMID] = testPolicyState{Instance: r.Instance, Policy: copy, Valid: true}
+	b.policies[r.VMID] = testPolicyState{
+		Instance: r.Instance,
+		Policy:   copy,
+		Valid:    true,
+	}
 	b.installs++
 	return nil
 }
-func (b *policyTestBackend) VerifyNetworkPolicy(_ context.Context, r Resource, p *api.NetworkPolicy) error {
+
+func (b *policyTestBackend) VerifyNetworkPolicy(
+	_ context.Context,
+	r Resource,
+	p *api.NetworkPolicy,
+) error {
 	b.policyMu.Lock()
 	defer b.policyMu.Unlock()
 	s := b.policies[r.VMID]
@@ -74,7 +93,12 @@ func (b *policyTestBackend) VerifyNetworkPolicy(_ context.Context, r Resource, p
 	}
 	return nil
 }
-func (b *policyTestBackend) Network(ctx context.Context, r Resource, enable bool) error {
+
+func (b *policyTestBackend) Network(
+	ctx context.Context,
+	r Resource,
+	enable bool,
+) error {
 	if !enable {
 		b.policyMu.Lock()
 		err := b.disableError
@@ -96,37 +120,89 @@ func (b *policyTestBackend) Network(ctx context.Context, r Resource, enable bool
 	}
 	return b.testBackend.Network(ctx, r, enable)
 }
-func openPolicyTest(t *testing.T, dir string, b *policyTestBackend, init bool, fault func(string) error) *Engine {
+
+func openPolicyTest(
+	t *testing.T,
+	dir string,
+	b *policyTestBackend,
+	init bool,
+	fault func(string) error,
+) *Engine {
 	t.Helper()
-	if err := os.Chmod(dir, 0700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	e, err := Open(Options{StateDir: dir, Init: init, Backend: b, SafetyBytes: 1, MaxMemoryMiB: 8192, MaxVCPUs: 64, ReconcileInterval: time.Hour, Fault: fault})
+	e, err := Open(
+		Options{
+			StateDir:          dir,
+			Init:              init,
+			Backend:           b,
+			SafetyBytes:       1,
+			MaxMemoryMiB:      8192,
+			MaxVCPUs:          64,
+			ReconcileInterval: time.Hour,
+			Fault:             fault,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return e
 }
+
 func startPolicyVM(t *testing.T, e *Engine, key string) api.VM {
 	t.Helper()
-	create := wait(t, e, api.Request{Key: key + ":create", Action: "create", Config: config()})
-	wait(t, e, api.Request{Key: key + ":start", Action: "start", VMID: create.VMID})
+	create := wait(
+		t,
+		e,
+		api.Request{Key: key + ":create", Action: "create", Config: config()},
+	)
+	wait(
+		t,
+		e,
+		api.Request{Key: key + ":start", Action: "start", VMID: create.VMID},
+	)
 	vm, err := e.GetVM(context.Background(), create.VMID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return vm
 }
+
 func directPolicy() *api.NetworkPolicy {
-	return &api.NetworkPolicy{Version: 1, AllowedCIDRs: []string{"1.1.1.1/32"}, MaxConnections: 256}
+	return &api.NetworkPolicy{
+		Version:        1,
+		AllowedCIDRs:   []string{"1.1.1.1/32"},
+		MaxConnections: 256,
+	}
 }
+
 func policyRequest(vm api.VM, key string, p *api.NetworkPolicy) api.Request {
-	return api.Request{Key: key, Action: "network_policy", VMID: vm.ID, ExpectedInstance: vm.Instance, Policy: p}
+	return api.Request{
+		Key:              key,
+		Action:           "network_policy",
+		VMID:             vm.ID,
+		ExpectedInstance: vm.Instance,
+		Policy:           p,
+	}
 }
+
 func networkRequest(vm api.VM, key string, on bool) api.Request {
-	return api.Request{Key: key, Action: "network", VMID: vm.ID, ExpectedInstance: vm.Instance, NetworkEnabled: on}
+	return api.Request{
+		Key:              key,
+		Action:           "network",
+		VMID:             vm.ID,
+		ExpectedInstance: vm.Instance,
+		NetworkEnabled:   on,
+	}
 }
-func requirePolicyFailure(t *testing.T, e *Engine, request api.Request, code api.Code) {
+
+func requirePolicyFailure(
+	t *testing.T,
+	e *Engine,
+	request api.Request,
+	code api.Code,
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -181,7 +257,12 @@ func TestNetworkPolicyActivationReplacementAndRevocation(t *testing.T) {
 	e := openPolicyTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
 	vm := startPolicyVM(t, e, "vm")
-	requirePolicyFailure(t, e, networkRequest(vm, "baseline-on", true), api.Conflict)
+	requirePolicyFailure(
+		t,
+		e,
+		networkRequest(vm, "baseline-on", true),
+		api.Conflict,
+	)
 	p := directPolicy()
 	install := policyRequest(vm, "policy", p)
 	original := wait(t, e, install)
@@ -202,10 +283,21 @@ func TestNetworkPolicyActivationReplacementAndRevocation(t *testing.T) {
 		t.Fatalf("identical installation changed kernel policy: %d", installs)
 	}
 	wait(t, e, networkRequest(vm, "on", true))
-	requirePolicyFailure(t, e, policyRequest(vm, "replace-on", &changed), api.Conflict)
-	requirePolicyFailure(t, e, policyRequest(vm, "revoke-on", nil), api.Conflict)
+	requirePolicyFailure(
+		t,
+		e,
+		policyRequest(vm, "replace-on", &changed),
+		api.Conflict,
+	)
+	requirePolicyFailure(
+		t,
+		e,
+		policyRequest(vm, "revoke-on", nil),
+		api.Conflict,
+	)
 	actual, _ := e.GetVM(context.Background(), vm.ID)
-	if !actual.NetworkActual || !actual.NetworkEnabled || actual.NetworkPolicy.MaxConnections != 256 {
+	if !actual.NetworkActual || !actual.NetworkEnabled ||
+		actual.NetworkPolicy.MaxConnections != 256 {
 		t.Fatalf("failed replacement changed active policy: %+v", actual)
 	}
 	wait(t, e, networkRequest(vm, "off", false))
@@ -216,7 +308,12 @@ func TestNetworkPolicyActivationReplacementAndRevocation(t *testing.T) {
 	wait(t, e, revoke)
 	wait(t, e, revoke)
 	wait(t, e, policyRequest(vm, "revoke-again", nil))
-	requirePolicyFailure(t, e, networkRequest(vm, "on-revoked", true), api.Conflict)
+	requirePolicyFailure(
+		t,
+		e,
+		networkRequest(vm, "on-revoked", true),
+		api.Conflict,
+	)
 }
 
 func TestNetworkPolicyRestartVerifiesRulesAndFailsClosed(t *testing.T) {
@@ -252,18 +349,26 @@ func TestNetworkPolicyRestartVerifiesRulesAndFailsClosed(t *testing.T) {
 			defer e.Close()
 			actual, _ := e.GetVM(context.Background(), vm.ID)
 			if corrupt == "none" {
-				if !actual.NetworkActual || !actual.Verified || actual.Instance != vm.Instance {
-					t.Fatalf("verified running policy lost during reopen: %+v", actual)
+				if !actual.NetworkActual || !actual.Verified ||
+					actual.Instance != vm.Instance {
+					t.Fatalf(
+						"verified running policy lost during reopen: %+v",
+						actual,
+					)
 				}
 			} else {
-				if actual.NetworkActual || actual.NetworkEnabled || actual.Verified || actual.BlockedReason == "" {
+				if actual.NetworkActual || actual.NetworkEnabled ||
+					actual.Verified ||
+					actual.BlockedReason == "" {
 					t.Fatalf("unknown policy not closed: %+v", actual)
 				}
 				b.mu.Lock()
 				up := b.states[vm.Instance].Network
 				b.mu.Unlock()
 				if up {
-					t.Fatal("only metadata closed; effective network remains on")
+					t.Fatal(
+						"only metadata closed; effective network remains on",
+					)
 				}
 			}
 		})
@@ -300,7 +405,8 @@ func TestNetworkPolicyShutdownFailureRemainsVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual, _ := e.GetVM(context.Background(), vm.ID)
-	if !actual.NetworkActual || actual.NetworkEnabled || actual.Verified || actual.BlockedReason == "" {
+	if !actual.NetworkActual || actual.NetworkEnabled || actual.Verified ||
+		actual.BlockedReason == "" {
 		t.Fatalf("shutdown failure concealed active interfaces: %+v", actual)
 	}
 	b.policyMu.Lock()
@@ -327,7 +433,10 @@ func TestNetworkPolicyInstallCrashRecovery(t *testing.T) {
 				return nil
 			})
 			vm := startPolicyVM(t, e, "vm")
-			op, err := e.Submit(context.Background(), policyRequest(vm, "policy", directPolicy()))
+			op, err := e.Submit(
+				context.Background(),
+				policyRequest(vm, "policy", directPolicy()),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -367,7 +476,10 @@ func TestNetworkPolicyActivationCrashRecovery(t *testing.T) {
 				vm := startPolicyVM(t, e, "vm")
 				wait(t, e, policyRequest(vm, "policy", directPolicy()))
 				armed.Store(true)
-				op, err := e.Submit(context.Background(), networkRequest(vm, "on", true))
+				op, err := e.Submit(
+					context.Background(),
+					networkRequest(vm, "on", true),
+				)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -385,11 +497,20 @@ func TestNetworkPolicyActivationCrashRecovery(t *testing.T) {
 				done := awaitStatus(t, e, op.ID)
 				actual, _ := e.GetVM(context.Background(), vm.ID)
 				if staleRules {
-					if done.Status != "failed" || actual.NetworkActual || actual.NetworkEnabled {
-						t.Fatalf("resumed activation with stale rules: %+v %+v", done, actual)
+					if done.Status != "failed" || actual.NetworkActual ||
+						actual.NetworkEnabled {
+						t.Fatalf(
+							"resumed activation with stale rules: %+v %+v",
+							done,
+							actual,
+						)
 					}
 				} else if done.Status != "succeeded" || !actual.NetworkActual {
-					t.Fatalf("verified activation did not resume: %+v %+v", done, actual)
+					t.Fatalf(
+						"verified activation did not resume: %+v %+v",
+						done,
+						actual,
+					)
 				}
 			})
 		}
@@ -409,17 +530,62 @@ func TestNetworkPolicyInstancePreconditions(t *testing.T) {
 	requirePolicyFailure(t, e, missing, api.Invalid)
 	wait(t, e, policyRequest(vm, "old-policy", directPolicy()))
 	wait(t, e, networkRequest(vm, "old-on", true))
-	wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.ID, ExpectedInstance: vm.Instance})
-	wait(t, e, api.Request{Key: "restart", Action: "start", VMID: vm.ID, ExpectedInstance: vm.Instance})
+	wait(
+		t,
+		e,
+		api.Request{
+			Key:              "stop",
+			Action:           "stop",
+			VMID:             vm.ID,
+			ExpectedInstance: vm.Instance,
+		},
+	)
+	wait(
+		t,
+		e,
+		api.Request{
+			Key:              "restart",
+			Action:           "start",
+			VMID:             vm.ID,
+			ExpectedInstance: vm.Instance,
+		},
+	)
 	current, _ := e.GetVM(context.Background(), vm.ID)
-	if current.Instance == vm.Instance || current.NetworkEnabled || current.NetworkActual || current.NetworkPolicy != nil {
+	if current.Instance == vm.Instance || current.NetworkEnabled ||
+		current.NetworkActual ||
+		current.NetworkPolicy != nil {
 		t.Fatalf("fresh instance inherited old permission: %+v", current)
 	}
-	requirePolicyFailure(t, e, networkRequest(vm, "stale-on", true), api.Conflict)
-	requirePolicyFailure(t, e, networkRequest(vm, "stale-off", false), api.Conflict)
-	requirePolicyFailure(t, e, policyRequest(vm, "stale-policy", directPolicy()), api.Conflict)
-	requirePolicyFailure(t, e, policyRequest(vm, "stale-revoke", nil), api.Conflict)
-	requirePolicyFailure(t, e, networkRequest(current, "new-on-without-policy", true), api.Conflict)
+	requirePolicyFailure(
+		t,
+		e,
+		networkRequest(vm, "stale-on", true),
+		api.Conflict,
+	)
+	requirePolicyFailure(
+		t,
+		e,
+		networkRequest(vm, "stale-off", false),
+		api.Conflict,
+	)
+	requirePolicyFailure(
+		t,
+		e,
+		policyRequest(vm, "stale-policy", directPolicy()),
+		api.Conflict,
+	)
+	requirePolicyFailure(
+		t,
+		e,
+		policyRequest(vm, "stale-revoke", nil),
+		api.Conflict,
+	)
+	requirePolicyFailure(
+		t,
+		e,
+		networkRequest(current, "new-on-without-policy", true),
+		api.Conflict,
+	)
 	wait(t, e, policyRequest(current, "current-policy", directPolicy()))
 	wait(t, e, networkRequest(current, "current-on", true))
 	// Replaying a completed old request must not reapply effects to this instance.
@@ -440,7 +606,10 @@ func TestNetworkPolicyStaleExecutionAfterAcceptance(t *testing.T) {
 		return nil
 	})
 	vm := startPolicyVM(t, e, "vm")
-	op, err := e.Submit(context.Background(), policyRequest(vm, "policy", directPolicy()))
+	op, err := e.Submit(
+		context.Background(),
+		policyRequest(vm, "policy", directPolicy()),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,20 +646,36 @@ func TestNetworkPolicyDoesNotSerializeOtherVMs(t *testing.T) {
 	e := openPolicyTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
 	a := startPolicyVM(t, e, "a")
-	snapshot := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: a.ID})
+	snapshot := wait(
+		t,
+		e,
+		api.Request{Key: "snapshot", Action: "snapshot", VMID: a.ID},
+	)
 	b.gateVM = a.ID
 	b.gate = make(chan struct{})
-	op, err := e.Submit(context.Background(), policyRequest(a, "a-policy", directPolicy()))
+	op, err := e.Submit(
+		context.Background(),
+		policyRequest(a, "a-policy", directPolicy()),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	awaitStep(t, e, op.ID, "network_policy_intent")
-	cloned := wait(t, e, api.Request{Key: "clone", Action: "clone", SnapshotID: snapshot.SnapshotID})
+	cloned := wait(
+		t,
+		e,
+		api.Request{
+			Key:        "clone",
+			Action:     "clone",
+			SnapshotID: snapshot.SnapshotID,
+		},
+	)
 	other, err := e.GetVM(context.Background(), cloned.VMID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other.NetworkPolicy != nil || other.NetworkEnabled || other.NetworkActual {
+	if other.NetworkPolicy != nil || other.NetworkEnabled ||
+		other.NetworkActual {
 		t.Fatal("clone inherited policy or enabled network")
 	}
 	wait(t, e, policyRequest(other, "b-policy", directPolicy()))

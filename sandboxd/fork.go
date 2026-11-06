@@ -38,14 +38,25 @@ func (s *Service) fork(o *Operation) error {
 			case "paused":
 				o.SnapshotID = source.SnapshotID
 			case "running":
-				snap, err := s.engine(*o, "fork-snapshot", api.Request{Action: "snapshot", VMID: source.VMID, ExpectedInstance: source.Instance})
+				snap, err := s.engine(
+					*o,
+					"fork-snapshot",
+					api.Request{
+						Action:           "snapshot",
+						VMID:             source.VMID,
+						ExpectedInstance: source.Instance,
+					},
+				)
 				if err != nil {
 					return s.rollbackFork(o, err)
 				}
 				o.SnapshotID = snap.SnapshotID
 				o.OwnedSnapshot = true
 			default:
-				return s.rollbackFork(o, api.Fail(api.Conflict, "source is not forkable"))
+				return s.rollbackFork(
+					o,
+					api.Fail(api.Conflict, "source is not forkable"),
+				)
 			}
 		}
 		if err := s.saveOperationReference(*o); err != nil {
@@ -69,7 +80,11 @@ func (s *Service) fork(o *Operation) error {
 			}
 			if err == nil && b.State != "running" {
 				if b.VMID == "" {
-					vm, e := s.engine(*o, "fork-clone:"+id, api.Request{Action: "clone", SnapshotID: o.SnapshotID})
+					vm, e := s.engine(
+						*o,
+						"fork-clone:"+id,
+						api.Request{Action: "clone", SnapshotID: o.SnapshotID},
+					)
 					b.VMID = vm.VMID
 					if saveErr := s.saveSandboxReference(b); saveErr != nil {
 						err = saveErr
@@ -104,6 +119,7 @@ func (s *Service) fork(o *Operation) error {
 	o.Result.Sandboxes = branches
 	return nil
 }
+
 func (s *Service) rollbackFork(o *Operation, cause error) error {
 	if s.ctx.Err() != nil {
 		return cause

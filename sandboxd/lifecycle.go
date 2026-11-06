@@ -14,7 +14,10 @@ import (
 
 func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 	if s.CredentialsMissing(*b) {
-		return api.Fail(api.Conflict, "host credentials must be supplied again after daemon restart")
+		return api.Fail(
+			api.Conflict,
+			"host credentials must be supplied again after daemon restart",
+		)
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
@@ -24,7 +27,16 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 		return api.Fail(api.Conflict, "engine VM is not verified ready")
 	}
 	// Network is disabled even for a recovered activation. Product policy always precedes enable.
-	if _, err = s.engine(o, "network-off:"+b.ID, api.Request{Action: "network", VMID: v.ID, ExpectedInstance: v.Instance, NetworkEnabled: false}); err != nil {
+	if _, err = s.engine(
+		o,
+		"network-off:"+b.ID,
+		api.Request{
+			Action:           "network",
+			VMID:             v.ID,
+			ExpectedInstance: v.Instance,
+			NetworkEnabled:   false,
+		},
+	); err != nil {
 		return err
 	}
 	if err = s.opts.Agent.Info(s.ctx, v); err != nil {
@@ -35,31 +47,57 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 			return err
 		}
 	} else if b.Policy.Mode != "none" {
-		return api.Fail(api.Incompatible, "egress manager required for network mode")
+		return api.Fail(
+			api.Incompatible,
+			"egress manager required for network mode",
+		)
 	}
-	if err = s.opts.Agent.Activate(s.ctx, v, Activation{SandboxID: b.ID, Hostname: strings.ReplaceAll(b.ID, "_", "-"), ResetIdentity: reset, Env: b.Env, Network: b.Policy.Mode, CAPEM: s.opts.CAPEM}); err != nil {
+	if err = s.opts.Agent.Activate(
+		s.ctx,
+		v,
+		Activation{
+			SandboxID:     b.ID,
+			Hostname:      strings.ReplaceAll(b.ID, "_", "-"),
+			ResetIdentity: reset,
+			Env:           b.Env,
+			Network:       b.Policy.Mode,
+			CAPEM:         s.opts.CAPEM,
+		},
+	); err != nil {
 		if s.opts.Egress != nil {
-			s.revoke(b.ID)
+			err = errors.Join(err, s.revoke(b.ID))
 		}
 		return err
 	}
 	if b.Policy.Mode == "direct" {
-		if _, err = s.engine(o, "network-on:"+b.ID, api.Request{Action: "network", VMID: v.ID, ExpectedInstance: v.Instance, NetworkEnabled: true}); err != nil {
+		if _, err = s.engine(
+			o,
+			"network-on:"+b.ID,
+			api.Request{
+				Action:           "network",
+				VMID:             v.ID,
+				ExpectedInstance: v.Instance,
+				NetworkEnabled:   true,
+			},
+		); err != nil {
 			if s.opts.Egress != nil {
-				s.revoke(b.ID)
+				err = errors.Join(err, s.revoke(b.ID))
 			}
 			return err
 		}
 	}
 	b.Instance = v.Instance
 	if b.State != "running" {
-		b.Deadline = time.Now().UTC().Add(time.Duration(b.TTLSeconds) * time.Second)
+		b.Deadline = time.Now().
+			UTC().
+			Add(time.Duration(b.TTLSeconds) * time.Second)
 	}
 	b.State = "running"
 	b.OperationID = ""
 	b.LastError = ""
 	return saveSandbox(s.ctx, s.store.db, *b)
 }
+
 func (s *Service) claim(o *Operation) error {
 	id := o.IDs[0]
 	unlock := s.lock(id)
@@ -116,9 +154,27 @@ func (s *Service) claim(o *Operation) error {
 		}
 		var op api.Operation
 		if t.SnapshotID != "" {
-			op, err = s.engine(*o, "provision", api.Request{Action: "clone", SnapshotID: t.SnapshotID})
+			op, err = s.engine(
+				*o,
+				"provision",
+				api.Request{Action: "clone", SnapshotID: t.SnapshotID},
+			)
 		} else {
-			op, err = s.engine(*o, "provision", api.Request{Action: "create", Config: &api.Config{Image: t.Image, Shape: t.Shape, Labels: map[string]string{"sandboxd": "sandbox", "sandbox_id": b.ID}}})
+			op, err = s.engine(
+				*o,
+				"provision",
+				api.Request{
+					Action: "create",
+					Config: &api.Config{
+						Image: t.Image,
+						Shape: t.Shape,
+						Labels: map[string]string{
+							"sandboxd":   "sandbox",
+							"sandbox_id": b.ID,
+						},
+					},
+				},
+			)
 		}
 		b.VMID = op.VMID
 		if saveErr := s.saveSandboxReference(b); saveErr != nil {
@@ -129,7 +185,11 @@ func (s *Service) claim(o *Operation) error {
 		}
 	}
 	if t.SnapshotID == "" {
-		if _, err = s.engine(*o, "start", api.Request{Action: "start", VMID: b.VMID}); err != nil {
+		if _, err = s.engine(
+			*o,
+			"start",
+			api.Request{Action: "start", VMID: b.VMID},
+		); err != nil {
 			return s.failProvision(*o, &b, err)
 		}
 	}
@@ -139,6 +199,7 @@ func (s *Service) claim(o *Operation) error {
 	o.Result.Sandbox = &b
 	return nil
 }
+
 func (s *Service) claimWarm(t Template, b *Sandbox) error {
 	unlock := s.lockResourceOwnership()
 	defer unlock()
@@ -146,16 +207,21 @@ func (s *Service) claimWarm(t Template, b *Sandbox) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var vmid string
-	err = tx.QueryRowContext(s.ctx, "SELECT vm_id FROM warm WHERE template_id=? AND snapshot_id=? ORDER BY created_at LIMIT 1", t.ID, t.SnapshotID).Scan(&vmid)
+	err = tx.QueryRowContext(s.ctx, "SELECT vm_id FROM warm WHERE template_id=? AND snapshot_id=? ORDER BY created_at LIMIT 1", t.ID, t.SnapshotID).
+		Scan(&vmid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(s.ctx, "DELETE FROM warm WHERE vm_id=?", vmid); err != nil {
+	if _, err = tx.ExecContext(
+		s.ctx,
+		"DELETE FROM warm WHERE vm_id=?",
+		vmid,
+	); err != nil {
 		return err
 	}
 	b.VMID = vmid
@@ -178,7 +244,11 @@ func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 		}
 	}
 	if b.VMID != "" {
-		if _, err := s.engine(o, "failed-delete:"+b.ID, api.Request{Action: "delete", VMID: b.VMID}); err != nil {
+		if _, err := s.engine(
+			o,
+			"failed-delete:"+b.ID,
+			api.Request{Action: "delete", VMID: b.VMID},
+		); err != nil {
 			b.LastError = "provisioning failed; cleanup pending: " + err.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
 			return err
@@ -195,6 +265,7 @@ func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 	s.mu.Unlock()
 	return cause
 }
+
 func (s *Service) change(o *Operation) error {
 	unlock := s.lock(o.Command.SandboxID)
 	defer unlock()
@@ -207,7 +278,8 @@ func (s *Service) change(o *Operation) error {
 		if b.State == "paused" {
 			deadline = b.PausedUntil
 		}
-		if !deadline.Equal(o.Command.LeaseDeadline) || time.Now().Before(deadline) {
+		if !deadline.Equal(o.Command.LeaseDeadline) ||
+			time.Now().Before(deadline) {
 			o.Result.Sandbox = &b
 			return nil
 		}
@@ -237,7 +309,10 @@ func (s *Service) change(o *Operation) error {
 		err = saveSandbox(s.ctx, s.store.db, b)
 	case "configure":
 		if b.State != "running" && b.State != "paused" {
-			return api.Fail(api.Conflict, "configuration requires running or paused sandbox")
+			return api.Fail(
+				api.Conflict,
+				"configuration requires running or paused sandbox",
+			)
 		}
 		s.mu.Lock()
 		s.secrets[b.ID] = s.opSecrets[o.ID]
@@ -272,28 +347,54 @@ func (s *Service) change(o *Operation) error {
 			err = saveSandbox(s.ctx, s.store.db, b)
 		}
 	case "checkpoint":
-		cp := Checkpoint{ID: o.IDs[0], TenantID: b.TenantID, SandboxID: b.ID, Shape: b.Shape, CreatedAt: o.CreatedAt}
+		cp := Checkpoint{
+			ID:        o.IDs[0],
+			TenantID:  b.TenantID,
+			SandboxID: b.ID,
+			Shape:     b.Shape,
+			CreatedAt: o.CreatedAt,
+		}
 		// A sleeping source already owns an immutable capture. Its product references
 		// keep that engine snapshot alive without starting another VM.
-		if b.State == "paused" {
+		switch b.State {
+		case "paused":
 			cp.SnapshotID = b.SnapshotID
-		} else if b.State == "running" {
-			snap, e := s.engine(*o, "checkpoint-capture", api.Request{Action: "snapshot", VMID: b.VMID, ExpectedInstance: b.Instance})
+		case "running":
+			snap, e := s.engine(
+				*o,
+				"checkpoint-capture",
+				api.Request{
+					Action:           "snapshot",
+					VMID:             b.VMID,
+					ExpectedInstance: b.Instance,
+				},
+			)
 			if e != nil {
 				return e
 			}
 			cp.SnapshotID = snap.SnapshotID
-		} else {
-			return api.Fail(api.Conflict, "sandbox cannot checkpoint in %s", b.State)
+		default:
+			return api.Fail(
+				api.Conflict,
+				"sandbox cannot checkpoint in %s",
+				b.State,
+			)
 		}
 		ownership := s.lockResourceOwnership()
-		_, err = s.store.db.ExecContext(s.ctx, "INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", cp.ID, cp.TenantID, encode(cp))
+		_, err = s.store.db.ExecContext(
+			s.ctx,
+			"INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+			cp.ID,
+			cp.TenantID,
+			encode(cp),
+		)
 		ownership()
 		o.Result.Checkpoint = &cp
 	}
 	o.Result.Sandbox = &b
 	return err
 }
+
 func (s *Service) pause(o *Operation, b *Sandbox) error {
 	if b.State == "paused" {
 		return nil
@@ -312,17 +413,38 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 			return err
 		}
 	}
-	if _, err := s.engine(*o, "pause-network", api.Request{Action: "network", VMID: b.VMID, ExpectedInstance: b.Instance, NetworkEnabled: false}); err != nil {
+	if _, err := s.engine(
+		*o,
+		"pause-network",
+		api.Request{
+			Action:           "network",
+			VMID:             b.VMID,
+			ExpectedInstance: b.Instance,
+			NetworkEnabled:   false,
+		},
+	); err != nil {
 		return err
 	}
 	if b.SnapshotID == "" {
-		snap, err := s.engine(*o, "hibernate-snapshot", api.Request{Action: "snapshot", VMID: b.VMID, ExpectedInstance: b.Instance})
+		snap, err := s.engine(
+			*o,
+			"hibernate-snapshot",
+			api.Request{
+				Action:           "snapshot",
+				VMID:             b.VMID,
+				ExpectedInstance: b.Instance,
+			},
+		)
 		if err != nil {
 			b.State = "running"
 			b.OperationID = ""
 			b.LastError = err.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
-			restoreErr := s.activate(Operation{ID: o.ID + ":rollback"}, b, false)
+			restoreErr := s.activate(
+				Operation{ID: o.ID + ":rollback"},
+				b,
+				false,
+			)
 			if restoreErr != nil {
 				b.LastError = "pause failed; network remains blocked: " + restoreErr.Error()
 				_ = saveSandbox(s.ctx, s.store.db, *b)
@@ -334,7 +456,15 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 			return err
 		}
 	}
-	if _, err := s.engine(*o, "hibernate-delete", api.Request{Action: "delete", VMID: b.VMID, ExpectedInstance: b.Instance}); err != nil {
+	if _, err := s.engine(
+		*o,
+		"hibernate-delete",
+		api.Request{
+			Action:           "delete",
+			VMID:             b.VMID,
+			ExpectedInstance: b.Instance,
+		},
+	); err != nil {
 		return err
 	}
 	b.State = "paused"
@@ -344,6 +474,7 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 	b.OperationID = ""
 	return saveSandbox(s.ctx, s.store.db, *b)
 }
+
 func (s *Service) resume(o *Operation, b *Sandbox) error {
 	if b.State == "running" {
 		return s.finishResume(o, b)
@@ -352,7 +483,10 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		return api.Fail(api.Conflict, "sandbox cannot resume in %s", b.State)
 	}
 	if s.CredentialsMissing(*b) {
-		return api.Fail(api.Conflict, "host credentials must be supplied again after daemon restart")
+		return api.Fail(
+			api.Conflict,
+			"host credentials must be supplied again after daemon restart",
+		)
 	}
 	b.State = "resuming"
 	b.OperationID = o.ID
@@ -360,7 +494,11 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		return err
 	}
 	if b.VMID == "" {
-		op, err := s.engine(*o, "resume-clone", api.Request{Action: "clone", SnapshotID: b.SnapshotID})
+		op, err := s.engine(
+			*o,
+			"resume-clone",
+			api.Request{Action: "clone", SnapshotID: b.SnapshotID},
+		)
 		b.VMID = op.VMID
 		if saveErr := s.saveSandboxReference(*b); saveErr != nil {
 			return saveErr
@@ -378,9 +516,13 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 	}
 	if err := s.activate(*o, b, false); err != nil {
 		if s.opts.Egress != nil {
-			s.revoke(b.ID)
+			err = errors.Join(err, s.revoke(b.ID))
 		}
-		if _, cleanup := s.engine(*o, "resume-rollback", api.Request{Action: "delete", VMID: b.VMID}); cleanup != nil {
+		if _, cleanup := s.engine(
+			*o,
+			"resume-rollback",
+			api.Request{Action: "delete", VMID: b.VMID},
+		); cleanup != nil {
 			b.LastError = "resume failed; cleanup pending: " + cleanup.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
 			return cleanup
@@ -396,6 +538,7 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 	}
 	return s.finishResume(o, b)
 }
+
 func (s *Service) finishResume(o *Operation, b *Sandbox) error {
 	if b.SnapshotID == "" {
 		return nil
@@ -407,6 +550,7 @@ func (s *Service) finishResume(o *Operation, b *Sandbox) error {
 	b.PausedUntil = time.Time{}
 	return saveSandbox(s.ctx, s.store.db, *b)
 }
+
 func (s *Service) release(o *Operation, b *Sandbox) error {
 	s.closeConnections(b.ID)
 	if s.opts.Egress != nil {
@@ -421,7 +565,15 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 		return err
 	}
 	if b.VMID != "" {
-		if _, err := s.engine(*o, "release-vm", api.Request{Action: "delete", VMID: b.VMID, ExpectedInstance: b.Instance}); err != nil {
+		if _, err := s.engine(
+			*o,
+			"release-vm",
+			api.Request{
+				Action:           "delete",
+				VMID:             b.VMID,
+				ExpectedInstance: b.Instance,
+			},
+		); err != nil {
 			return err
 		}
 		b.VMID = ""
@@ -442,17 +594,36 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	s.mu.Unlock()
 	return saveSandbox(s.ctx, s.store.db, *b)
 }
+
 func (s *Service) template(o *Operation) error {
 	t := *o.Command.Template
 	unlock := s.lock("template:" + t.ID)
 	defer unlock()
 	if o.Command.Action == "template_build" {
-		v, err := s.engine(*o, "build-create", api.Request{Action: "create", Config: &api.Config{Image: t.Image, Shape: t.Shape, Labels: map[string]string{"sandboxd": "build", "operation_id": o.ID}}})
+		v, err := s.engine(
+			*o,
+			"build-create",
+			api.Request{
+				Action: "create",
+				Config: &api.Config{
+					Image: t.Image,
+					Shape: t.Shape,
+					Labels: map[string]string{
+						"sandboxd":     "build",
+						"operation_id": o.ID,
+					},
+				},
+			},
+		)
 		if err != nil {
 			return err
 		}
 		if o.SnapshotID == "" {
-			if _, err = s.engine(*o, "build-start", api.Request{Action: "start", VMID: v.VMID}); err != nil {
+			if _, err = s.engine(
+				*o,
+				"build-start",
+				api.Request{Action: "start", VMID: v.VMID},
+			); err != nil {
 				return err
 			}
 			vm, err := s.opts.Engine.GetVM(s.ctx, v.VMID)
@@ -465,13 +636,21 @@ func (s *Service) template(o *Operation) error {
 			if t.Warmup != "" {
 				// Guest execution results cannot be inferred after a crash. Record its start before dispatch.
 				if o.Step == "warmup_inflight" {
-					return api.Fail(api.Unknown, "template warmup result unknown; submit a new build intent")
+					return api.Fail(
+						api.Unknown,
+						"template warmup result unknown; submit a new build intent",
+					)
 				}
 				if o.Step != "warmup_done" {
 					if err = s.setStep(o, "warmup_inflight"); err != nil {
 						return err
 					}
-					if err = s.opts.Agent.Exec(s.ctx, vm, "sbx-op:"+o.ID+":step:template-warmup", t.Warmup); err != nil {
+					if err = s.opts.Agent.Exec(
+						s.ctx,
+						vm,
+						"sbx-op:"+o.ID+":step:template-warmup",
+						t.Warmup,
+					); err != nil {
 						return err
 					}
 					if err = s.setStep(o, "warmup_done"); err != nil {
@@ -479,13 +658,31 @@ func (s *Service) template(o *Operation) error {
 					}
 				}
 			}
-			if err = s.opts.Agent.Activate(s.ctx, vm, Activation{SandboxID: "template-" + t.ID, Hostname: "sandbox-template", ResetIdentity: true, Env: map[string]string{}, Network: "none"}); err != nil {
+			if err = s.opts.Agent.Activate(
+				s.ctx,
+				vm,
+				Activation{
+					SandboxID:     "template-" + t.ID,
+					Hostname:      "sandbox-template",
+					ResetIdentity: true,
+					Env:           map[string]string{},
+					Network:       "none",
+				},
+			); err != nil {
 				return err
 			}
 			if err = s.opts.Agent.PrepareTemplate(s.ctx, vm); err != nil {
 				return err
 			}
-			snap, err := s.engine(*o, "build-snapshot", api.Request{Action: "snapshot", VMID: vm.ID, ExpectedInstance: vm.Instance})
+			snap, err := s.engine(
+				*o,
+				"build-snapshot",
+				api.Request{
+					Action:           "snapshot",
+					VMID:             vm.ID,
+					ExpectedInstance: vm.Instance,
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -495,7 +692,11 @@ func (s *Service) template(o *Operation) error {
 			}
 		}
 		t.SnapshotID = o.SnapshotID
-		if _, err = s.engine(*o, "build-delete", api.Request{Action: "delete", VMID: v.VMID}); err != nil {
+		if _, err = s.engine(
+			*o,
+			"build-delete",
+			api.Request{Action: "delete", VMID: v.VMID},
+		); err != nil {
 			return err
 		}
 	}
@@ -507,18 +708,32 @@ func (s *Service) template(o *Operation) error {
 			return err
 		}
 		if !snap.Published || snap.Deleting || snap.Config.Shape != t.Shape {
-			return api.Fail(api.Incompatible, "template snapshot shape or publication does not match")
+			return api.Fail(
+				api.Incompatible,
+				"template snapshot shape or publication does not match",
+			)
 		}
 		if t.Image == "" {
 			t.Image = snap.Config.Image
 		}
 	}
 	t.State = "ready"
-	_, err := s.store.db.ExecContext(s.ctx, "INSERT INTO templates(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant,body=excluded.body", t.ID, t.TenantID, encode(t))
+	_, err := s.store.db.ExecContext(
+		s.ctx,
+		"INSERT INTO templates(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant,body=excluded.body",
+		t.ID,
+		t.TenantID,
+		encode(t),
+	)
 	o.Result.Template = &t
 	return err
 }
-func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbox, error) {
+
+func (s *Service) DataReady(
+	ctx context.Context,
+	p Principal,
+	id string,
+) (Sandbox, error) {
 	// Serialize admission before choosing a durable resume attempt. Explicit resume
 	// operations still converge under the sandbox lock in change.
 	admit := s.lock("auto-resume:" + id)
@@ -528,8 +743,15 @@ func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbo
 		return b, err
 	}
 	if b.State == "paused" || b.State == "resuming" {
-		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(b.ResumeAttempt)
-		_, err = s.Execute(ctx, Principal{TenantID: b.TenantID}, key, Command{Action: "resume", SandboxID: id})
+		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(
+			b.ResumeAttempt,
+		)
+		_, err = s.Execute(
+			ctx,
+			Principal{TenantID: b.TenantID},
+			key,
+			Command{Action: "resume", SandboxID: id},
+		)
 		if err != nil {
 			return b, err
 		}
@@ -544,14 +766,19 @@ func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbo
 		return b, api.Fail(api.Conflict, "sandbox lease is not active")
 	}
 	if s.CredentialsMissing(b) {
-		return b, api.Fail(api.Conflict, "host credentials must be supplied again after daemon restart")
+		return b, api.Fail(
+			api.Conflict,
+			"host credentials must be supplied again after daemon restart",
+		)
 	}
 	if s.opts.Egress != nil && b.Policy.Mode != "none" {
 		s.mu.Lock()
 		bound := s.bindings[b.ID] != ""
 		s.mu.Unlock()
 		if !bound {
-			o := Operation{ID: "rebind:" + s.epoch + ":" + b.ID + ":" + b.Instance}
+			o := Operation{
+				ID: "rebind:" + s.epoch + ":" + b.ID + ":" + b.Instance,
+			}
 			if err = s.activate(o, &b, false); err != nil {
 				return b, err
 			}
@@ -561,10 +788,15 @@ func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbo
 		return b, api.Fail(api.Conflict, "sandbox is blocked: %s", b.LastError)
 	}
 	if !time.Now().Before(b.Deadline) {
-		return b, api.Fail(api.Conflict, "sandbox lease expired during activation")
+		return b, api.Fail(
+			api.Conflict,
+			"sandbox lease expired during activation",
+		)
 	}
 	if b.AutoRenew {
-		b.Deadline = time.Now().UTC().Add(time.Duration(b.TTLSeconds) * time.Second)
+		b.Deadline = time.Now().
+			UTC().
+			Add(time.Duration(b.TTLSeconds) * time.Second)
 		if err = saveSandbox(ctx, s.store.db, b); err != nil {
 			return b, err
 		}
@@ -573,15 +805,21 @@ func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbo
 }
 
 // StoreCheckpointList returns only records the caller owns.
-func (s *Service) Checkpoints(ctx context.Context, p Principal) ([]Checkpoint, error) {
+func (s *Service) Checkpoints(
+	ctx context.Context,
+	p Principal,
+) ([]Checkpoint, error) {
 	if p.SandboxID != "" {
 		return nil, api.Fail(api.Conflict, "tenant access required")
 	}
-	rows, err := s.store.db.QueryContext(ctx, "SELECT body FROM checkpoints ORDER BY id")
+	rows, err := s.store.db.QueryContext(
+		ctx,
+		"SELECT body FROM checkpoints ORDER BY id",
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Checkpoint{}
 	for rows.Next() {
 		var raw []byte

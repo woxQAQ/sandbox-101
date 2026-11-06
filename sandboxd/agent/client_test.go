@@ -61,7 +61,11 @@ func TestExecRequiresAndTransmitsExplicitKey(t *testing.T) {
 				if err == nil {
 					requests <- frame
 					if test.params != nil {
-						response, requestErr := Request(frame.Id, "exec", test.params)
+						response, requestErr := Request(
+							frame.Id,
+							"exec",
+							test.params,
+						)
 						err = requestErr
 						if err == nil {
 							response.Error = test.error
@@ -71,10 +75,18 @@ func TestExecRequiresAndTransmitsExplicitKey(t *testing.T) {
 				}
 				done <- err
 			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
 			defer cancel()
 			client := &Client{}
-			err = client.Exec(ctx, api.VM{VSockPath: path}, "sbx-op:operation:step:warmup", "printf warm")
+			err = client.Exec(
+				ctx,
+				api.VM{VSockPath: path},
+				"sbx-op:operation:step:warmup",
+				"printf warm",
+			)
 			if test.code == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -89,12 +101,19 @@ func TestExecRequiresAndTransmitsExplicitKey(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := <-requests
-			if request.Method != "exec" || !request.Eof || request.Params.AsMap()["exec_key"] != "sbx-op:operation:step:warmup" || request.Params.AsMap()["command"] != "printf warm" {
+			if request.Method != "exec" || !request.Eof ||
+				request.Params.AsMap()["exec_key"] != "sbx-op:operation:step:warmup" ||
+				request.Params.AsMap()["command"] != "printf warm" {
 				t.Fatalf("incorrect keyed warmup request: %+v", request)
 			}
 		})
 	}
-	if err := (&Client{}).Exec(context.Background(), api.VM{}, "", "true"); err == nil {
+	if err := (&Client{}).Exec(
+		context.Background(),
+		api.VM{},
+		"",
+		"true",
+	); err == nil {
 		t.Fatal("empty exec_key was accepted")
 	}
 }

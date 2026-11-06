@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 ROOT := $(abspath .)
 GO_MODULES := engine protocol/gen sandboxd
+GO_WORK_PACKAGES := ./engine/... ./operator/... ./protocol/gen/... ./sandboxd/...
 GUEST_TARGET ?= x86_64-unknown-linux-musl
 GUEST_ARTIFACT_DIR ?=
 IMAGE_TAG ?= sandbox-guest:local
@@ -11,7 +12,7 @@ KERNEL_ARTIFACTS_DIR ?= $(ROOT)/build/kernel-isolation-acceptance
 PRODUCTION_OCI_LAYOUT ?=
 PRODUCTION_ARTIFACTS_DIR ?= $(ROOT)/build/production-acceptance
 
-.PHONY: all build test test-race check fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e
+.PHONY: all build test test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e
 all: build
 
 build:
@@ -32,6 +33,12 @@ check:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module vet ./...; done
 	cargo fmt --all -- --check
 	cargo clippy --locked --workspace --all-targets -- -D warnings
+
+lint:
+	golangci-lint run $(GO_WORK_PACKAGES)
+
+lint-fix:
+	golangci-lint run --fix $(GO_WORK_PACKAGES)
 
 fmt:
 	gofmt -w $$(rg --files engine sandboxd protocol/gen -g '*.go' -g '!sandbox.pb.go' -g '!**/third_party/**')

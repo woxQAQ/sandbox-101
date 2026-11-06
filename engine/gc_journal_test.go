@@ -21,14 +21,30 @@ func TestGCDeletionJournalRetiresAfterExplicitVMDeletion(t *testing.T) {
 	})
 	vm, _, _ := gcStoppedRestore(t, e)
 	interrupt = true
-	if _, err := e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
+	if _, err := e.CollectGarbage(
+		context.Background(),
+		GCOptions{},
+	); !errors.Is(
+		err,
+		ErrInterrupted,
+	) {
 		t.Fatal("missing deletion intent interruption", err)
 	}
 	interrupt = false
-	wait(t, e, api.Request{Key: "delete-after-gc-interruption", Action: "delete", VMID: vm.VMID})
+	wait(
+		t,
+		e,
+		api.Request{
+			Key:    "delete-after-gc-interruption",
+			Action: "delete",
+			VMID:   vm.VMID,
+		},
+	)
 	gcPass(t, e, GCOptions{})
 	var n int
-	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").Scan(&n); err != nil || n != 0 {
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").
+		Scan(&n); err != nil ||
+		n != 0 {
 		t.Fatal("completed explicit deletion left a GC journal", n, err)
 	}
 }
@@ -46,7 +62,13 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e.artifacts.Lock()
 	e.opts.Fault = interrupt
 	e.artifacts.Unlock()
-	if _, err := e.CollectGarbage(context.Background(), GCOptions{MaxArtifacts: 1}); !errors.Is(err, ErrInterrupted) {
+	if _, err := e.CollectGarbage(
+		context.Background(),
+		GCOptions{MaxArtifacts: 1},
+	); !errors.Is(
+		err,
+		ErrInterrupted,
+	) {
 		t.Fatal("import cleanup did not interrupt after unlink", err)
 	}
 	work := filepath.Join(e.opts.StateDir, "imports", image.Digest[7:])
@@ -59,7 +81,18 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 		if err := old.Close(); err != nil {
 			t.Fatal(err)
 		}
-		next, err := Open(Options{StateDir: old.opts.StateDir, Backend: newTestBackend(), SafetyBytes: 1, MaxMemoryMiB: 8192, MaxVCPUs: 64, ReconcileInterval: time.Hour, GCInterval: time.Hour, Fault: fault})
+		next, err := Open(
+			Options{
+				StateDir:          old.opts.StateDir,
+				Backend:           newTestBackend(),
+				SafetyBytes:       1,
+				MaxMemoryMiB:      8192,
+				MaxVCPUs:          64,
+				ReconcileInterval: time.Hour,
+				GCInterval:        time.Hour,
+				Fault:             fault,
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,17 +102,40 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e = reopen(e, nil)
 	gcPass(t, e, GCOptions{})
 	gcExists(t, work, false)
-	orphan := putOCILayer(t, layout, []tarEntry{fileEntry("orphan-restart", "data")}, false)
+	orphan := putOCILayer(
+		t,
+		layout,
+		[]tarEntry{fileEntry("orphan-restart", "data")},
+		false,
+	)
 	input, err := blob(layout, orphan.descriptor.Digest.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = buildLayerCache(context.Background(), e.opts.StateDir, input, orphan.descriptor.MediaType, image.Builder, orphan.diff.String(), 10240, 1); err != nil {
+	if _, err = buildLayerCache(
+		context.Background(),
+		e.opts.StateDir,
+		input,
+		orphan.descriptor.MediaType,
+		image.Builder,
+		orphan.diff.String(),
+		10240,
+		1,
+	); err != nil {
 		t.Fatal(err)
 	}
 	e = reopen(e, interrupt)
-	cache := filepath.Join(e.opts.StateDir, filepath.Dir(layerRelativePath(image.Builder, orphan.diff.String())))
-	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
+	cache := filepath.Join(
+		e.opts.StateDir,
+		filepath.Dir(layerRelativePath(image.Builder, orphan.diff.String())),
+	)
+	if _, err = e.CollectGarbage(
+		context.Background(),
+		GCOptions{},
+	); !errors.Is(
+		err,
+		ErrInterrupted,
+	) {
 		t.Fatal("cache cleanup did not interrupt after unlink", err)
 	}
 	gcExists(t, filepath.Join(cache, "layer.erofs"), false)
@@ -87,7 +143,10 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e = reopen(e, nil)
 	gcPass(t, e, GCOptions{})
 	gcExists(t, cache, false)
-	if err = image.Verify(filepath.Join(e.opts.StateDir, "images", image.Digest[7:]), image.Digest); err != nil {
+	if err = image.Verify(
+		filepath.Join(e.opts.StateDir, "images", image.Digest[7:]),
+		image.Digest,
+	); err != nil {
 		t.Fatal("deletion replay broke the published image", err)
 	}
 }

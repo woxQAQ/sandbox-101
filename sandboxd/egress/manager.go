@@ -154,7 +154,12 @@ func New(opts Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{opts: opts, ca: ca, caPEM: pem, bindings: make(map[string]*binding)}, nil
+	return &Manager{
+		opts:     opts,
+		ca:       ca,
+		caPEM:    pem,
+		bindings: make(map[string]*binding),
+	}, nil
 }
 
 // CACertPEM returns only the public CA certificate. Install it in the guest
@@ -164,7 +169,12 @@ func (m *Manager) CACertPEM() []byte { return append([]byte(nil), m.caPEM...) }
 // Bind is synchronous: success means both relay sockets, or direct host rules,
 // are installed. ctx covers installation, not the lifetime of the binding.
 // To change a policy, Revoke first. Existing bindings are never silently reused.
-func (m *Manager) Bind(ctx context.Context, sandboxID, tenantID, vsockPath string, policy Policy, secrets map[string]Secret) error {
+func (m *Manager) Bind(
+	ctx context.Context,
+	sandboxID, tenantID, vsockPath string,
+	policy Policy,
+	secrets map[string]Secret,
+) error {
 	if sandboxID == "" || tenantID == "" {
 		return errors.New("egress: missing identity")
 	}
@@ -197,9 +207,24 @@ func (m *Manager) Bind(ctx context.Context, sandboxID, tenantID, vsockPath strin
 		return errors.New("egress: sandbox already bound")
 	}
 	bctx, cancel := context.WithCancel(context.Background())
-	b := &binding{info: Binding{SandboxID: sandboxID, TenantID: tenantID, Mode: p.mode, VSockPath: vsockPath}, manager: m, policy: p, secrets: creds, ctx: bctx, cancel: cancel, conns: make(map[*trackedConn]struct{})}
-	if p.mode == "relay" {
-		if !filepath.IsAbs(vsockPath) || filepath.Clean(vsockPath) != vsockPath {
+	b := &binding{
+		info: Binding{
+			SandboxID: sandboxID,
+			TenantID:  tenantID,
+			Mode:      p.mode,
+			VSockPath: vsockPath,
+		},
+		manager: m,
+		policy:  p,
+		secrets: creds,
+		ctx:     bctx,
+		cancel:  cancel,
+		conns:   make(map[*trackedConn]struct{}),
+	}
+	switch p.mode {
+	case "relay":
+		if !filepath.IsAbs(vsockPath) ||
+			filepath.Clean(vsockPath) != vsockPath {
 			cancel()
 			return errors.New("egress: absolute clean vsock path required")
 		}
@@ -214,7 +239,7 @@ func (m *Manager) Bind(ctx context.Context, sandboxID, tenantID, vsockPath strin
 		}
 		b.startHTTP()
 		b.startSOCKS()
-	} else if p.mode == "direct" {
+	case "direct":
 		b.cleanup, err = m.opts.InstallDirect(ctx, b.info, copyPolicy(policy))
 		if err != nil {
 			_ = b.close()
@@ -288,7 +313,10 @@ func (b *binding) close() error {
 		b.mu.Unlock()
 		for _, ln := range b.listeners {
 			if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				b.closeErr = errors.Join(b.closeErr, errors.New("egress: proxy socket teardown failed"))
+				b.closeErr = errors.Join(
+					b.closeErr,
+					errors.New("egress: proxy socket teardown failed"),
+				)
 			}
 		}
 		if b.server != nil {
@@ -306,7 +334,10 @@ func (b *binding) close() error {
 	// for another Revoke; closing streams is once-only, removing host rules is retryable.
 	if b.cleanup != nil {
 		if err := b.cleanup(); err != nil {
-			return errors.Join(b.closeErr, errors.New("egress: direct host policy teardown failed"))
+			return errors.Join(
+				b.closeErr,
+				errors.New("egress: direct host policy teardown failed"),
+			)
 		}
 		b.cleanup = nil
 	}
@@ -324,7 +355,15 @@ func (b *binding) audit(host, method, action, reason string) error {
 		}
 		return s
 	}
-	event := AuditEvent{Time: time.Now().UTC(), SandboxID: scrub(b.info.SandboxID), TenantID: scrub(b.info.TenantID), Host: scrub(host), Method: scrub(method), Action: action, Reason: reason}
+	event := AuditEvent{
+		Time:      time.Now().UTC(),
+		SandboxID: scrub(b.info.SandboxID),
+		TenantID:  scrub(b.info.TenantID),
+		Host:      scrub(host),
+		Method:    scrub(method),
+		Action:    action,
+		Reason:    reason,
+	}
 	if opts.AuditRecord != nil {
 		if err := opts.AuditRecord(event); err != nil {
 			return ErrAudit
@@ -338,6 +377,7 @@ func (b *binding) audit(host, method, action, reason string) error {
 // Every accepted and upstream socket remains tracked after HTTP hijacking.
 type trackedConn struct {
 	net.Conn
+
 	b       *binding
 	inbound bool
 	once    sync.Once
@@ -349,6 +389,7 @@ func (c *trackedConn) CloseWrite() error {
 	}
 	return c.Close()
 }
+
 func (c *trackedConn) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(func() {
@@ -361,6 +402,7 @@ func (c *trackedConn) Close() error {
 	})
 	return err
 }
+
 func (b *binding) track(c net.Conn, inbound bool) (*trackedConn, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -383,6 +425,7 @@ func (b *binding) track(c net.Conn, inbound bool) (*trackedConn, error) {
 // Deadlines are refreshed per I/O, including hijacked MITM and SOCKS streams.
 type idleConn struct {
 	net.Conn
+
 	timeout       time.Duration
 	mu            sync.Mutex
 	readDeadline  time.Time
@@ -396,18 +439,21 @@ func earlierDeadline(explicit time.Time, timeout time.Duration) time.Time {
 	}
 	return idle
 }
+
 func (c *idleConn) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()
 	}
-	return c.Conn.Close()
+	return c.Close()
 }
+
 func (c *idleConn) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	_ = c.Conn.SetReadDeadline(earlierDeadline(c.readDeadline, c.timeout))
 	c.mu.Unlock()
 	return c.Conn.Read(p)
 }
+
 func (c *idleConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	_ = c.Conn.SetWriteDeadline(earlierDeadline(c.writeDeadline, c.timeout))
@@ -423,12 +469,14 @@ func (c *idleConn) SetReadDeadline(t time.Time) error {
 	c.readDeadline = t
 	return c.Conn.SetReadDeadline(earlierDeadline(t, c.timeout))
 }
+
 func (c *idleConn) SetWriteDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.writeDeadline = t
 	return c.Conn.SetWriteDeadline(earlierDeadline(t, c.timeout))
 }
+
 func (c *idleConn) SetDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -438,6 +486,7 @@ func (c *idleConn) SetDeadline(t time.Time) error {
 
 type guardedListener struct {
 	net.Listener
+
 	b *binding
 }
 
@@ -447,7 +496,10 @@ func (l guardedListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		t, err := l.b.track(&idleConn{Conn: c, timeout: l.b.manager.opts.IdleTimeout}, true)
+		t, err := l.b.track(
+			&idleConn{Conn: c, timeout: l.b.manager.opts.IdleTimeout},
+			true,
+		)
 		if err == nil {
 			return t, nil
 		}

@@ -10,7 +10,13 @@ import (
 
 func TestProductBackupRestorationRequiresReview(t *testing.T) {
 	s, _, _, p := fixture(t)
-	r := claimTest(t, s, p, "claim", map[string]EnvVar{"VISIBLE": {Value: "preserved"}})
+	r := claimTest(
+		t,
+		s,
+		p,
+		"claim",
+		map[string]EnvVar{"VISIBLE": {Value: "preserved"}},
+	)
 	destination := filepath.Join(t.TempDir(), "backup")
 	point, err := s.Backup(context.Background(), destination)
 	if err != nil {
@@ -27,7 +33,10 @@ func TestProductBackupRestorationRequiresReview(t *testing.T) {
 	if _, err = openStore(restored, false); !isCode(err, api.ManualRecovery) {
 		t.Fatal("restored metadata silently started", err)
 	}
-	if err = AcknowledgeStateRecovery(restored, "Reviewed engine inventory and operation history at this backup point"); err != nil {
+	if err = AcknowledgeStateRecovery(
+		restored,
+		"Reviewed engine inventory and operation history at this backup point",
+	); err != nil {
 		t.Fatal(err)
 	}
 	st, err := openStore(restored, false)

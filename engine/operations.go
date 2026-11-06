@@ -45,7 +45,10 @@ func (e *Engine) execute(id string) {
 			} else if want := o.Operation.Request.ExpectedInstance; want != "" && want != v.VM.Instance {
 				err = api.Fail(api.Conflict, "running instance changed")
 			} else if action := o.Operation.Request.Action; (action == "network" || action == "network_policy") && (o.Operation.Request.ExpectedInstance == "" || v.Resource.Instance != v.VM.Instance) {
-				err = api.Fail(api.Conflict, "network operation lacks a matching resource instance")
+				err = api.Fail(
+					api.Conflict,
+					"network operation lacks a matching resource instance",
+				)
 			} else {
 				err = e.perform(&o, &v)
 			}
@@ -56,6 +59,7 @@ func (e *Engine) execute(id string) {
 	}
 	_ = e.finish(&o, err)
 }
+
 func (e *Engine) finish(o *opRecord, cause error) error {
 	e.admission.Lock()
 	defer e.admission.Unlock()
@@ -63,7 +67,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if cause != nil {
 		o.Operation.Status = "failed"
 		o.Operation.Error = asAPI(cause)
@@ -73,7 +77,10 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	o.Operation.UpdatedAt = time.Now().UTC()
 	var vb []byte
-	if o.Operation.VMID != "" && tx.QueryRow("SELECT body FROM vms WHERE id=?", o.Operation.VMID).Scan(&vb) == nil {
+	if o.Operation.VMID != "" &&
+		tx.QueryRow("SELECT body FROM vms WHERE id=?", o.Operation.VMID).
+			Scan(&vb) ==
+			nil {
 		var v vmRecord
 		if err = json.Unmarshal(vb, &v); err != nil {
 			return err
@@ -85,18 +92,30 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 			if cause != nil {
 				v.VM.BlockedReason = cause.Error()
 			}
-			if _, err = tx.Exec("UPDATE vms SET body=? WHERE id=?", encode(v), v.VM.ID); err != nil {
+			if _, err = tx.Exec(
+				"UPDATE vms SET body=? WHERE id=?",
+				encode(v),
+				v.VM.ID,
+			); err != nil {
 				return err
 			}
 		}
 	}
 	if o.Journal.Lease {
-		if _, err = tx.Exec("DELETE FROM leases WHERE operation=?", o.Operation.ID); err != nil {
+		if _, err = tx.Exec(
+			"DELETE FROM leases WHERE operation=?",
+			o.Operation.ID,
+		); err != nil {
 			return err
 		}
 		o.Journal.Lease = false
 	}
-	if _, err = tx.Exec("UPDATE operations SET status=?,body=? WHERE id=?", o.Operation.Status, encode(o), o.Operation.ID); err != nil {
+	if _, err = tx.Exec(
+		"UPDATE operations SET status=?,body=? WHERE id=?",
+		o.Operation.Status,
+		encode(o),
+		o.Operation.ID,
+	); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -104,6 +123,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	return e.checkpoint()
 }
+
 func (e *Engine) perform(o *opRecord, v *vmRecord) error {
 	switch o.Operation.Request.Action {
 	case "create":
@@ -152,11 +172,18 @@ func (e *Engine) perform(o *opRecord, v *vmRecord) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
-		if _, err = tx.Exec("DELETE FROM backing WHERE vm=?", v.VM.ID); err != nil {
+		defer func() { _ = tx.Rollback() }()
+		if _, err = tx.Exec(
+			"DELETE FROM backing WHERE vm=?",
+			v.VM.ID,
+		); err != nil {
 			return err
 		}
-		if _, err = tx.Exec("DELETE FROM reservations WHERE owner=? OR owner LIKE ?", v.VM.ID, v.VM.ID+":%"); err != nil {
+		if _, err = tx.Exec(
+			"DELETE FROM reservations WHERE owner=? OR owner LIKE ?",
+			v.VM.ID,
+			v.VM.ID+":%",
+		); err != nil {
 			return err
 		}
 		if _, err = tx.Exec("DELETE FROM vms WHERE id=?", v.VM.ID); err != nil {
@@ -174,6 +201,7 @@ func (e *Engine) perform(o *opRecord, v *vmRecord) error {
 	}
 	return api.Fail(api.Invalid, "unknown action")
 }
+
 func (e *Engine) observe(v *vmRecord) (Observation, error) {
 	obs, err := e.opts.Backend.Inspect(e.ctx, v.Resource)
 	if err != nil {
@@ -185,7 +213,14 @@ func (e *Engine) observe(v *vmRecord) (Observation, error) {
 	v.VM.NetworkActual = obs.Network
 	if obs.Network {
 		if !v.VM.NetworkEnabled {
-			return obs, e.failClosed(e.ctx, v, api.Fail(api.Conflict, "interfaces active without durable network intent"))
+			return obs, e.failClosed(
+				e.ctx,
+				v,
+				api.Fail(
+					api.Conflict,
+					"interfaces active without durable network intent",
+				),
+			)
 		}
 		if err = e.verifyNetworkPolicy(e.ctx, v); err != nil {
 			return obs, e.failClosed(e.ctx, v, err)
@@ -206,24 +241,39 @@ func (e *Engine) observe(v *vmRecord) (Observation, error) {
 	}
 	return obs, nil
 }
-func (e *Engine) checkImagePublication(r Resource, captured json.RawMessage) error {
+
+func (e *Engine) checkImagePublication(
+	r Resource,
+	captured json.RawMessage,
+) error {
 	requires, ok := e.opts.Backend.(interface{ RequiresImageCatalog() bool })
 	if !ok || !requires.RequiresImageCatalog() {
 		return nil
 	}
 	var body string
-	if err := e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+r.Config.Image).Scan(&body); err != nil {
-		return api.Fail(api.Incompatible, "image has no published catalog record: %v", err)
+	if err := e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+r.Config.Image).
+		Scan(&body); err != nil {
+		return api.Fail(
+			api.Incompatible,
+			"image has no published catalog record: %v",
+			err,
+		)
 	}
 	var published, disk ImageManifest
 	if err := json.Unmarshal([]byte(body), &published); err != nil {
 		return err
 	}
-	if err := readJSON(filepath.Join(r.ImageDir, "image.json"), &disk); err != nil {
+	if err := readJSON(
+		filepath.Join(r.ImageDir, "image.json"),
+		&disk,
+	); err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(published, disk) {
-		return api.Fail(api.Incompatible, "image materialization differs from published catalog")
+		return api.Fail(
+			api.Incompatible,
+			"image materialization differs from published catalog",
+		)
 	}
 	if captured != nil {
 		var saved ImageManifest
@@ -231,11 +281,15 @@ func (e *Engine) checkImagePublication(r Resource, captured json.RawMessage) err
 			return err
 		}
 		if !reflect.DeepEqual(published, saved) {
-			return api.Fail(api.Incompatible, "snapshot image materialization differs from published catalog")
+			return api.Fail(
+				api.Incompatible,
+				"snapshot image materialization differs from published catalog",
+			)
 		}
 	}
 	return published.Verify(r.ImageDir, r.Config.Image)
 }
+
 func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 	if err := e.checkImagePublication(v.Resource, nil); err != nil {
 		return err
@@ -263,7 +317,11 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 		v.VM.NetworkPolicy = nil
 		v.VM.NetworkPolicyInstance = ""
 		v.Resource.Instance = newID("run-")
-		v.Resource.RunDir = filepath.Join(v.Resource.Dir, "runs", v.Resource.Instance)
+		v.Resource.RunDir = filepath.Join(
+			v.Resource.Dir,
+			"runs",
+			v.Resource.Instance,
+		)
 		v.VM.Instance = v.Resource.Instance
 		v.VM.VSockPath = filepath.Join(v.Resource.RunDir, "io", "vsock")
 		v.VM.AgentReady = false
@@ -289,8 +347,12 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 		return err
 	}
 	if !obs.Alive {
-		if o.Operation.Step != "launch_intent" && o.Operation.Step != "restore_launch_intent" {
-			return api.Fail(api.Unknown, "VMM exited during a previous attempt; use a new operation key after inspection")
+		if o.Operation.Step != "launch_intent" &&
+			o.Operation.Step != "restore_launch_intent" {
+			return api.Fail(
+				api.Unknown,
+				"VMM exited during a previous attempt; use a new operation key after inspection",
+			)
 		}
 		if err = e.opts.Backend.Network(e.ctx, v.Resource, false); err != nil {
 			return err
@@ -321,7 +383,13 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 				v.VM.AgentReady = false
 				_ = e.saveVM(*v)
 			}
-			return fmt.Errorf("agent handshake: %w (network=%v stop=%v inspect=%v)", err, netErr, stopErr, inspectErr)
+			return fmt.Errorf(
+				"agent handshake: %w (network=%v stop=%v inspect=%v)",
+				err,
+				netErr,
+				stopErr,
+				inspectErr,
+			)
 		}
 		_, _ = e.observe(v)
 		return err
@@ -342,6 +410,7 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 	v.VM.Verified = true
 	return e.saveVM(*v)
 }
+
 func (e *Engine) stop(o *opRecord, v *vmRecord) error {
 	if _, err := e.observe(v); err != nil {
 		return err
@@ -377,6 +446,7 @@ func (e *Engine) stop(o *opRecord, v *vmRecord) error {
 	}
 	return stopErr
 }
+
 func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	s, err := e.loadSnapshot(e.ctx, o.Operation.SnapshotID)
 	if err != nil {
@@ -410,14 +480,20 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 			if x = e.saveOp(o, "capture_interrupted"); x != nil {
 				return x
 			}
-			return api.Fail(api.Unknown, "capture interrupted before independent disk completion; snapshot not published")
+			return api.Fail(
+				api.Unknown,
+				"capture interrupted before independent disk completion; snapshot not published",
+			)
 		}
 		obs, x := e.observe(v)
 		if x != nil {
 			return x
 		}
 		if !obs.Alive || v.VM.Phase != "running" || !v.VM.AgentReady {
-			return api.Fail(api.Conflict, "snapshot requires a verified running VM")
+			return api.Fail(
+				api.Conflict,
+				"snapshot requires a verified running VM",
+			)
 		}
 		select {
 		case e.capture <- struct{}{}:
@@ -425,7 +501,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 			return e.ctx.Err()
 		}
 		defer func() { <-e.capture }()
-		if err = os.MkdirAll(filepath.Join(capture, "ch"), 0700); err != nil {
+		if err = os.MkdirAll(filepath.Join(capture, "ch"), 0o700); err != nil {
 			return err
 		}
 		o.Journal.ResumeRequired = true
@@ -438,10 +514,18 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		if err = e.saveOp(o, "paused"); err != nil {
 			return err
 		}
-		if err = e.opts.Backend.Capture(e.ctx, r, filepath.Join(capture, "ch")); err != nil {
+		if err = e.opts.Backend.Capture(
+			e.ctx,
+			r,
+			filepath.Join(capture, "ch"),
+		); err != nil {
 			return e.captureFailure(o, r, err)
 		}
-		if err = copyFile(r.Disk, filepath.Join(capture, "disk.raw"), 0600); err != nil {
+		if err = copyFile(
+			r.Disk,
+			filepath.Join(capture, "disk.raw"),
+			0o600,
+		); err != nil {
 			return e.captureFailure(o, r, err)
 		}
 		o.Journal.Captured = true
@@ -478,8 +562,20 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	if err != nil {
 		return err
 	}
-	manifest := Manifest{Format: 1, Backend: e.opts.Backend.Compatibility(), Architecture: runtime.GOARCH, CPU: cpuIdentity(), Config: v.VM.Config, MemoryMode: "CopyOnWrite", Files: files, Image: image}
-	if err = writeJSON(filepath.Join(capture, "manifest.json"), manifest); err != nil {
+	manifest := Manifest{
+		Format:       1,
+		Backend:      e.opts.Backend.Compatibility(),
+		Architecture: runtime.GOARCH,
+		CPU:          cpuIdentity(),
+		Config:       v.VM.Config,
+		MemoryMode:   "CopyOnWrite",
+		Files:        files,
+		Image:        image,
+	}
+	if err = writeJSON(
+		filepath.Join(capture, "manifest.json"),
+		manifest,
+	); err != nil {
 		return err
 	}
 	if err = sealTree(capture); err != nil {
@@ -509,6 +605,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	s.Snapshot.Published = true
 	return e.saveSnapshot(s)
 }
+
 func (e *Engine) captureFailure(o *opRecord, r Resource, cause error) error {
 	// Pause can partially succeed. Resume is attempted after inspecting actual state.
 	obs, err := e.opts.Backend.Inspect(e.ctx, r)
@@ -526,6 +623,7 @@ func (e *Engine) captureFailure(o *opRecord, r Resource, cause error) error {
 	}
 	return cause
 }
+
 func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	var s snapshotRecord
 	var m Manifest
@@ -541,13 +639,26 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	} else if o.Journal.Manifest != nil {
 		m = *o.Journal.Manifest
 	} else {
-		return api.Fail(api.ManualRecovery, "restore manifest missing after dependency transfer")
+		return api.Fail(
+			api.ManualRecovery,
+			"restore manifest missing after dependency transfer",
+		)
 	}
-	if m.Format != 1 || m.Backend != e.opts.Backend.Compatibility() || m.Architecture != runtime.GOARCH || m.CPU != cpuIdentity() || m.MemoryMode != "CopyOnWrite" {
-		return api.Fail(api.Incompatible, "snapshot backend, CPU, format or COW compatibility mismatch")
+	if m.Format != 1 || m.Backend != e.opts.Backend.Compatibility() ||
+		m.Architecture != runtime.GOARCH ||
+		m.CPU != cpuIdentity() ||
+		m.MemoryMode != "CopyOnWrite" {
+		return api.Fail(
+			api.Incompatible,
+			"snapshot backend, CPU, format or COW compatibility mismatch",
+		)
 	}
-	if !reflect.DeepEqual(v.VM.Config.Shape, m.Config.Shape) || v.VM.Config.Image != m.Config.Image {
-		return api.Fail(api.Incompatible, "target shape/image must match snapshot")
+	if !reflect.DeepEqual(v.VM.Config.Shape, m.Config.Shape) ||
+		v.VM.Config.Image != m.Config.Image {
+		return api.Fail(
+			api.Incompatible,
+			"target shape/image must match snapshot",
+		)
 	}
 	if err = e.checkImagePublication(v.Resource, m.Image); err != nil {
 		return err
@@ -574,11 +685,17 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		e.admission.Lock()
 		tx, x := e.db.Begin()
 		if x == nil {
-			x = e.reserve(tx, v.VM.ID+":"+o.Operation.ID, (v.VM.Config.Shape.MemoryMiB+v.VM.Config.Shape.DiskMiB+64)<<20, 0, 0)
+			x = e.reserve(
+				tx,
+				v.VM.ID+":"+o.Operation.ID,
+				(v.VM.Config.Shape.MemoryMiB+v.VM.Config.Shape.DiskMiB+64)<<20,
+				0,
+				0,
+			)
 			if x == nil {
 				x = tx.Commit()
 			} else {
-				tx.Rollback()
+				x = errors.Join(x, tx.Rollback())
 			}
 		}
 		e.admission.Unlock()
@@ -589,7 +706,12 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		r := old
 		r.Instance = newID("run-")
 		r.RunDir = filepath.Join(r.Dir, "runs", r.Instance)
-		r.RestoreDir = filepath.Join(r.Dir, "versions", o.Operation.ID, "restore")
+		r.RestoreDir = filepath.Join(
+			r.Dir,
+			"versions",
+			o.Operation.ID,
+			"restore",
+		)
 		r.Disk = filepath.Join(r.Dir, "versions", o.Operation.ID, "disk.raw")
 		o.Journal.Old = &old
 		o.Journal.Resource = &r
@@ -600,21 +722,33 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	}
 	r := *o.Journal.Resource
 	if o.Journal.Lease {
-		if err = os.MkdirAll(r.RestoreDir, 0700); err != nil {
+		if err = os.MkdirAll(r.RestoreDir, 0o700); err != nil {
 			return err
 		}
 		for _, name := range []string{"config.json", "state.json"} {
 			dst := filepath.Join(r.RestoreDir, name)
 			if _, x := os.Stat(dst); os.IsNotExist(x) {
-				if err = copyFile(filepath.Join(s.Dir, "ch", name), dst, 0444); err != nil {
+				if err = copyFile(
+					filepath.Join(s.Dir, "ch", name),
+					dst,
+					0o444,
+				); err != nil {
 					return err
 				}
 			}
 		}
 		backing := filepath.Join(r.RestoreDir, "memory-ranges")
 		src := filepath.Join(s.Dir, "ch/memory-ranges")
-		if err = os.Link(src, backing); err != nil && !errors.Is(err, os.ErrExist) {
-			return api.Fail(api.Incompatible, "COW requires hardlinks on one filesystem: %v", err)
+		if err = os.Link(
+			src,
+			backing,
+		); err != nil &&
+			!errors.Is(err, os.ErrExist) {
+			return api.Fail(
+				api.Incompatible,
+				"COW requires hardlinks on one filesystem: %v",
+				err,
+			)
 		}
 		a, x := os.Stat(src)
 		if x != nil {
@@ -625,12 +759,19 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 			return x
 		}
 		if !os.SameFile(a, b) {
-			return api.Fail(api.ManualRecovery, "candidate backing inode mismatch")
+			return api.Fail(
+				api.ManualRecovery,
+				"candidate backing inode mismatch",
+			)
 		}
 		if _, x = os.Stat(r.Disk); os.IsNotExist(x) {
 			tmp := r.Disk + ".pending"
 			_ = os.Remove(tmp)
-			if err = copyFile(filepath.Join(s.Dir, "disk.raw"), tmp, 0600); err != nil {
+			if err = copyFile(
+				filepath.Join(s.Dir, "disk.raw"),
+				tmp,
+				0o600,
+			); err != nil {
 				return err
 			}
 			if err = os.Rename(tmp, r.Disk); err != nil {
@@ -652,17 +793,29 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		e.admission.Lock()
 		tx, x := e.db.Begin()
 		if x == nil {
-			_, x = tx.Exec("INSERT OR IGNORE INTO backing VALUES(?,?,?)", v.VM.ID, backing, m.Files["ch/memory-ranges"])
+			_, x = tx.Exec(
+				"INSERT OR IGNORE INTO backing VALUES(?,?,?)",
+				v.VM.ID,
+				backing,
+				m.Files["ch/memory-ranges"],
+			)
 			if x == nil {
-				_, x = tx.Exec("DELETE FROM leases WHERE operation=?", o.Operation.ID)
+				_, x = tx.Exec(
+					"DELETE FROM leases WHERE operation=?",
+					o.Operation.ID,
+				)
 			}
 			if x == nil {
-				_, x = tx.Exec("UPDATE operations SET body=? WHERE id=?", encode(o), o.Operation.ID)
+				_, x = tx.Exec(
+					"UPDATE operations SET body=? WHERE id=?",
+					encode(o),
+					o.Operation.ID,
+				)
 			}
 			if x == nil {
 				x = tx.Commit()
 			} else {
-				tx.Rollback()
+				x = errors.Join(x, tx.Rollback())
 			}
 		}
 		e.admission.Unlock()
@@ -687,13 +840,15 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	if err = e.saveVM(*v); err != nil {
 		return err
 	}
-	if o.Operation.Step == "restore_resources_ready" || o.Operation.Step == "restore_prepare_intent" {
+	if o.Operation.Step == "restore_resources_ready" ||
+		o.Operation.Step == "restore_prepare_intent" {
 		if err = e.saveOp(o, "restore_launch_intent"); err != nil {
 			return err
 		}
 	}
 	return e.start(o, v, true)
 }
+
 func (e *Engine) deleteSnapshot(o *opRecord) error {
 	s, err := e.loadSnapshot(e.ctx, o.Operation.SnapshotID)
 	if err != nil {
@@ -704,11 +859,16 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 		return err
 	}
 	var n int
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE snapshot=?", s.Snapshot.ID).Scan(&n); err != nil {
+	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE snapshot=?", s.Snapshot.ID).
+		Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {
-		return api.Fail(api.Conflict, "snapshot deletion waits for %d durable readers; retry with a new key", n)
+		return api.Fail(
+			api.Conflict,
+			"snapshot deletion waits for %d durable readers; retry with a new key",
+			n,
+		)
 	}
 	if err = e.saveOp(o, "snapshot_remove_intent"); err != nil {
 		return err
@@ -728,20 +888,31 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 		if err = json.Unmarshal(b, &old); err != nil {
 			break
 		}
-		if old.Operation.SnapshotID == s.Snapshot.ID && old.Operation.Request.Action == "snapshot" {
+		if old.Operation.SnapshotID == s.Snapshot.ID &&
+			old.Operation.Request.Action == "snapshot" {
 			if !terminal(old.Operation.Status) || old.Journal.ResumeRequired {
-				err = api.Fail(api.Conflict, "snapshot capture still unresolved")
+				err = api.Fail(
+					api.Conflict,
+					"snapshot capture still unresolved",
+				)
 				break
 			}
 			if old.Journal.Resource != nil {
-				captures = append(captures, filepath.Join(old.Journal.Resource.Dir, "capture", old.Operation.ID))
+				captures = append(
+					captures,
+					filepath.Join(
+						old.Journal.Resource.Dir,
+						"capture",
+						old.Operation.ID,
+					),
+				)
 			}
 		}
 	}
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
+	err = errors.Join(err, rows.Close())
 	if err != nil {
 		return err
 	}
@@ -762,11 +933,17 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	if _, err = tx.Exec("DELETE FROM snapshots WHERE id=?", s.Snapshot.ID); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.Exec(
+		"DELETE FROM snapshots WHERE id=?",
+		s.Snapshot.ID,
+	); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("DELETE FROM reservations WHERE owner=?", s.Snapshot.ID); err != nil {
+	if _, err = tx.Exec(
+		"DELETE FROM reservations WHERE owner=?",
+		s.Snapshot.ID,
+	); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -804,7 +981,10 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		// or uncommitted policy reality always triggers interface shutdown.
 		if obs.Network {
 			if !v.VM.NetworkEnabled {
-				x = api.Fail(api.Conflict, "interfaces active without durable network intent")
+				x = api.Fail(
+					api.Conflict,
+					"interfaces active without durable network intent",
+				)
 			} else {
 				x = e.verifyNetworkPolicy(ctx, &v)
 			}
@@ -831,7 +1011,8 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		}
 		if v.VM.OperationID != "" {
 			o, x := e.loadOp(ctx, v.VM.OperationID)
-			if x == nil && terminal(o.Operation.Status) && o.Journal.ResumeRequired {
+			if x == nil && terminal(o.Operation.Status) &&
+				o.Journal.ResumeRequired {
 				if !obs.Alive || !obs.Paused {
 					x = nil
 				} else {
@@ -839,7 +1020,11 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 				}
 				if x == nil {
 					o.Journal.ResumeRequired = false
-					_, _ = e.db.Exec("UPDATE operations SET body=? WHERE id=?", encode(o), o.Operation.ID)
+					_, _ = e.db.Exec(
+						"UPDATE operations SET body=? WHERE id=?",
+						encode(o),
+						o.Operation.ID,
+					)
 					v.VM.OperationID = ""
 				} else {
 					v.VM.BlockedReason = x.Error()

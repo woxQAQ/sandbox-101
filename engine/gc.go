@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -70,9 +72,7 @@ func (e *Engine) startGC() {
 	if interval == 0 {
 		interval = time.Minute
 	}
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
+	e.wg.Go(func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -85,7 +85,7 @@ func (e *Engine) startGC() {
 				cancel()
 			}
 		}
-	}()
+	})
 }
 
 // LastGCReport returns the latest background or administrative result.
@@ -103,11 +103,23 @@ func (e *Engine) LastGCReport() GCReport {
 // and metadata retirement completes. TryLock avoids waiting for lifecycle work
 // (whose lock order is VM -> admission). A changing inventory causes a retry,
 // never a sweep with an incomplete root set. Operation results are never pruned.
-func (e *Engine) CollectGarbage(ctx context.Context, opts GCOptions) (report GCReport, err error) {
-	report = GCReport{StartedAt: time.Now().UTC(), DryRun: opts.DryRun, Candidates: []string{}, Removed: []string{}, Retained: []GCIssue{}}
+func (e *Engine) CollectGarbage(
+	ctx context.Context,
+	opts GCOptions,
+) (report GCReport, err error) {
+	report = GCReport{
+		StartedAt:  time.Now().UTC(),
+		DryRun:     opts.DryRun,
+		Candidates: []string{},
+		Removed:    []string{},
+		Retained:   []GCIssue{},
+	}
 	defer func() {
 		if err != nil {
-			report.Retained = append(report.Retained, GCIssue{e.opts.StateDir, err.Error()})
+			report.Retained = append(
+				report.Retained,
+				GCIssue{e.opts.StateDir, err.Error()},
+			)
 		}
 		e.mu.Lock()
 		e.lastGC = report
@@ -120,10 +132,16 @@ func (e *Engine) CollectGarbage(ctx context.Context, opts GCOptions) (report GCR
 		opts.MaxArtifacts = 16
 	}
 	if opts.MaxArtifacts < 1 || opts.MaxArtifacts > 1024 {
-		return report, api.Fail(api.Invalid, "GC batch must be 1..1024 artifacts")
+		return report, api.Fail(
+			api.Invalid,
+			"GC batch must be 1..1024 artifacts",
+		)
 	}
 	if !e.artifacts.TryLock() {
-		return report, api.Fail(api.Conflict, "image import or collection in progress")
+		return report, api.Fail(
+			api.Conflict,
+			"image import or collection in progress",
+		)
 	}
 	defer e.artifacts.Unlock()
 	e.mu.Lock()
@@ -138,14 +156,18 @@ func (e *Engine) CollectGarbage(ctx context.Context, opts GCOptions) (report GCR
 	}
 	var locks []*sync.Mutex
 	defer func() {
-		for i := len(locks) - 1; i >= 0; i-- {
-			locks[i].Unlock()
+		for _, lock := range slices.Backward(locks) {
+			lock.Unlock()
 		}
 	}()
 	for _, id := range ids {
 		l := e.vmLock(id)
 		if !l.TryLock() {
-			return report, api.Fail(api.Conflict, "lifecycle work in progress: %s", id)
+			return report, api.Fail(
+				api.Conflict,
+				"lifecycle work in progress: %s",
+				id,
+			)
 		}
 		locks = append(locks, l)
 	}
@@ -158,12 +180,29 @@ func (e *Engine) CollectGarbage(ctx context.Context, opts GCOptions) (report GCR
 		return report, err
 	}
 	if !reflect.DeepEqual(ids, current) {
-		return report, api.Fail(api.Conflict, "resource inventory changed; retry collection")
+		return report, api.Fail(
+			api.Conflict,
+			"resource inventory changed; retry collection",
+		)
 	}
 	if err = e.gcFence(ctx); err != nil {
 		return report, err
 	}
-	g := gcGraph{e: e, ctx: ctx, vms: map[string]vmRecord{}, ops: map[string]opRecord{}, snapshots: map[string]snapshotRecord{}, images: map[string]ImageManifest{}, backing: map[string]string{}, roots: map[string]bool{}, layers: map[string]bool{}, versions: map[string]gcVersion{}, imports: map[string]ImportOptions{}, reservations: map[string]bool{}, deletions: map[string]gcDeletion{}}
+	g := gcGraph{
+		e:            e,
+		ctx:          ctx,
+		vms:          map[string]vmRecord{},
+		ops:          map[string]opRecord{},
+		snapshots:    map[string]snapshotRecord{},
+		images:       map[string]ImageManifest{},
+		backing:      map[string]string{},
+		roots:        map[string]bool{},
+		layers:       map[string]bool{},
+		versions:     map[string]gcVersion{},
+		imports:      map[string]ImportOptions{},
+		reservations: map[string]bool{},
+		deletions:    map[string]gcDeletion{},
+	}
 	if err = g.load(); err != nil {
 		return report, err
 	}
@@ -176,11 +215,14 @@ func (e *Engine) CollectGarbage(ctx context.Context, opts GCOptions) (report GCR
 }
 
 func (e *Engine) gcLockIDs(ctx context.Context) ([]string, error) {
-	rows, err := e.db.QueryContext(ctx, "SELECT id FROM vms UNION SELECT 'snapshot:' || id FROM snapshots ORDER BY 1")
+	rows, err := e.db.QueryContext(
+		ctx,
+		"SELECT id FROM vms UNION SELECT 'snapshot:' || id FROM snapshots ORDER BY 1",
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := []string{}
 	for rows.Next() {
 		var id string
@@ -194,11 +236,23 @@ func (e *Engine) gcLockIDs(ctx context.Context) ([]string, error) {
 
 func (e *Engine) gcFence(ctx context.Context) error {
 	for _, name := range []string{"RECOVERY_REQUIRED", "RECOVERY_REVIEWED.json"} {
-		if _, err := os.Lstat(filepath.Join(e.opts.StateDir, name)); !os.IsNotExist(err) {
-			return api.Fail(api.ManualRecovery, "GC fenced by recovery evidence %s: %v", name, err)
+		if _, err := os.Lstat(
+			filepath.Join(e.opts.StateDir, name),
+		); !os.IsNotExist(
+			err,
+		) {
+			return api.Fail(
+				api.ManualRecovery,
+				"GC fenced by recovery evidence %s: %v",
+				name,
+				err,
+			)
 		}
 	}
-	tables, err := e.db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+	tables, err := e.db.QueryContext(
+		ctx,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+	)
 	if err != nil {
 		return err
 	}
@@ -208,7 +262,14 @@ func (e *Engine) gcFence(ctx context.Context) error {
 			break
 		}
 		switch name {
-		case "meta", "operations", "vms", "snapshots", "leases", "reservations", "backing", "gc_deletions":
+		case "meta",
+			"operations",
+			"vms",
+			"snapshots",
+			"leases",
+			"reservations",
+			"backing",
+			"gc_deletions":
 		default:
 			err = fmt.Errorf("GC unknown metadata table: %s", name)
 		}
@@ -219,27 +280,46 @@ func (e *Engine) gcFence(ctx context.Context) error {
 	if err == nil {
 		err = tables.Err()
 	}
-	tables.Close()
+	err = errors.Join(err, tables.Close())
 	if err != nil {
 		return err
 	}
 	var integrity, schema, store string
 	var epoch int64
-	if err := e.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
-		return api.Fail(api.ManualRecovery, "GC database integrity unavailable: %v %s", err, integrity)
+	if err := e.db.QueryRowContext(ctx, "PRAGMA quick_check").
+		Scan(&integrity); err != nil ||
+		integrity != "ok" {
+		return api.Fail(
+			api.ManualRecovery,
+			"GC database integrity unavailable: %v %s",
+			err,
+			integrity,
+		)
 	}
-	if err := e.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='schema'").Scan(&schema); err != nil || schema != "1" {
+	if err := e.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='schema'").
+		Scan(&schema); err != nil ||
+		schema != "1" {
 		return api.Fail(api.ManualRecovery, "GC schema unavailable")
 	}
-	if err := e.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='identity'").Scan(&store); err != nil {
+	if err := e.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='identity'").
+		Scan(&store); err != nil {
 		return err
 	}
-	if err := e.db.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key='epoch'").Scan(&epoch); err != nil {
+	if err := e.db.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key='epoch'").
+		Scan(&epoch); err != nil {
 		return err
 	}
 	var head RecoveryPoint
-	if err := gcReadJSON(filepath.Join(e.opts.StateDir, "HEAD.json"), &head); err != nil || head.Store != store || epoch < head.Epoch {
-		return api.Fail(api.ManualRecovery, "GC durable HEAD missing, corrupt or ahead of metadata: %v", err)
+	if err := gcReadJSON(
+		filepath.Join(e.opts.StateDir, "HEAD.json"),
+		&head,
+	); err != nil || head.Store != store ||
+		epoch < head.Epoch {
+		return api.Fail(
+			api.ManualRecovery,
+			"GC durable HEAD missing, corrupt or ahead of metadata: %v",
+			err,
+		)
 	}
 	return nil
 }
@@ -275,12 +355,15 @@ func gcID(id, prefix string) bool {
 	return err == nil
 }
 
-func (g *gcGraph) records(table string, visit func(string, []byte) error) error {
+func (g *gcGraph) records(
+	table string,
+	visit func(string, []byte) error,
+) error {
 	rows, err := g.e.db.QueryContext(g.ctx, "SELECT id,body FROM "+table)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		var b []byte
@@ -312,7 +395,16 @@ func (g *gcGraph) load() error {
 			return fmt.Errorf("unknown operation status")
 		}
 		switch o.Operation.Request.Action {
-		case "create", "start", "stop", "snapshot", "restore", "clone", "delete", "delete_snapshot", "network", "network_policy":
+		case "create",
+			"start",
+			"stop",
+			"snapshot",
+			"restore",
+			"clone",
+			"delete",
+			"delete_snapshot",
+			"network",
+			"network_policy":
 		default:
 			return fmt.Errorf("unknown operation action")
 		}
@@ -323,7 +415,10 @@ func (g *gcGraph) load() error {
 	}
 	// Check indexed status and idempotency columns too: GC must not turn malformed
 	// JSON defaults or a disagreeing SQL status into evidence of completion.
-	rows, err := g.e.db.QueryContext(g.ctx, "SELECT id,key,hash,status FROM operations")
+	rows, err := g.e.db.QueryContext(
+		g.ctx,
+		"SELECT id,key,hash,status FROM operations",
+	)
 	if err != nil {
 		return err
 	}
@@ -334,15 +429,19 @@ func (g *gcGraph) load() error {
 		}
 		o := g.ops[id]
 		sum := sha256.Sum256(encode(o.Operation.Request))
-		if key != o.Operation.Key || status != o.Operation.Status || hash != hex.EncodeToString(sum[:]) {
-			err = fmt.Errorf("GC operation index disagrees with journal: %s", id)
+		if key != o.Operation.Key || status != o.Operation.Status ||
+			hash != hex.EncodeToString(sum[:]) {
+			err = fmt.Errorf(
+				"GC operation index disagrees with journal: %s",
+				id,
+			)
 			break
 		}
 	}
 	if err == nil {
 		err = rows.Err()
 	}
-	rows.Close()
+	err = errors.Join(err, rows.Close())
 	if err != nil {
 		return err
 	}
@@ -351,7 +450,8 @@ func (g *gcGraph) load() error {
 		if err := gcDecode(b, &v); err != nil {
 			return err
 		}
-		if !gcID(id, "vm-") || v.VM.ID != id || v.Resource.VMID != id || !reflect.DeepEqual(v.VM.Config, v.Resource.Config) {
+		if !gcID(id, "vm-") || v.VM.ID != id || v.Resource.VMID != id ||
+			!reflect.DeepEqual(v.VM.Config, v.Resource.Config) {
 			return fmt.Errorf("invalid VM root")
 		}
 		if err := g.resource(v.Resource); err != nil {
@@ -382,8 +482,10 @@ func (g *gcGraph) load() error {
 		return err
 	}
 	for id, o := range g.ops {
-		live := !terminal(o.Operation.Status) || o.Journal.ResumeRequired || o.Journal.Lease
-		if o.Operation.Error != nil && o.Operation.Error.Code == api.ManualRecovery {
+		live := !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
+			o.Journal.Lease
+		if o.Operation.Error != nil &&
+			o.Operation.Error.Code == api.ManualRecovery {
 			return fmt.Errorf("GC operation requires manual recovery: %s", id)
 		}
 		if v, ok := g.vms[o.Operation.VMID]; ok && v.VM.OperationID == id {
@@ -414,8 +516,12 @@ func (g *gcGraph) load() error {
 			}
 		}
 		if !terminal(o.Operation.Status) && o.Operation.VMID != "" {
-			if _, ok := g.vms[o.Operation.VMID]; !ok && o.Operation.Request.Action != "delete" {
-				return fmt.Errorf("GC pending operation VM root missing: %s", id)
+			if _, ok := g.vms[o.Operation.VMID]; !ok &&
+				o.Operation.Request.Action != "delete" {
+				return fmt.Errorf(
+					"GC pending operation VM root missing: %s",
+					id,
+				)
 			}
 		}
 		if o.Operation.Request.Action == "create" {
@@ -426,10 +532,13 @@ func (g *gcGraph) load() error {
 				g.versions[r.Disk] = gcVersion{id, r, nil, r.Disk}
 			}
 		}
-		if (o.Operation.Request.Action == "restore" || o.Operation.Request.Action == "clone") && o.Journal.Resource != nil {
+		if (o.Operation.Request.Action == "restore" || o.Operation.Request.Action == "clone") &&
+			o.Journal.Resource != nil {
 			r := *o.Journal.Resource
 			p := filepath.Join(r.Dir, "versions", id)
-			if r.Disk != filepath.Join(p, "disk.raw") || r.RestoreDir != filepath.Join(p, "restore") || o.Journal.Manifest == nil {
+			if r.Disk != filepath.Join(p, "disk.raw") ||
+				r.RestoreDir != filepath.Join(p, "restore") ||
+				o.Journal.Manifest == nil {
 				return fmt.Errorf("GC version ownership mismatch: %s", id)
 			}
 			g.versions[p] = gcVersion{id, r, o.Journal.Manifest, p}
@@ -440,7 +549,9 @@ func (g *gcGraph) load() error {
 		if err := gcDecode(b, &s); err != nil {
 			return err
 		}
-		if !gcID(id, "snap-") || s.Snapshot.ID != id || s.Dir != filepath.Join(g.e.opts.StateDir, "snapshots", id) || checkConfig(&s.Snapshot.Config) != nil {
+		if !gcID(id, "snap-") || s.Snapshot.ID != id ||
+			s.Dir != filepath.Join(g.e.opts.StateDir, "snapshots", id) ||
+			checkConfig(&s.Snapshot.Config) != nil {
 			return fmt.Errorf("invalid snapshot root")
 		}
 		g.snapshots[id] = s
@@ -450,10 +561,14 @@ func (g *gcGraph) load() error {
 			if err := gcDecode(s.Snapshot.Manifest, &m); err != nil {
 				return err
 			}
-			if err := gcReadJSON(filepath.Join(s.Dir, "manifest.json"), &disk); err != nil {
+			if err := gcReadJSON(
+				filepath.Join(s.Dir, "manifest.json"),
+				&disk,
+			); err != nil {
 				return err
 			}
-			if !bytes.Equal(encode(m), encode(disk)) || !reflect.DeepEqual(m.Config, s.Snapshot.Config) {
+			if !bytes.Equal(encode(m), encode(disk)) ||
+				!reflect.DeepEqual(m.Config, s.Snapshot.Config) {
 				return fmt.Errorf("snapshot manifest root mismatch")
 			}
 			if err := g.manifest(m); err != nil {
@@ -510,28 +625,40 @@ func (g *gcGraph) rootResource(r Resource) {
 }
 
 func (g *gcGraph) resource(r Resource) error {
-	if !gcID(r.VMID, "vm-") || r.Dir != filepath.Join(g.e.opts.StateDir, "vms", r.VMID) || checkConfig(&r.Config) != nil || r.ImageDir != filepath.Join(g.e.opts.StateDir, "images", r.Config.Image[7:]) {
+	if !gcID(r.VMID, "vm-") ||
+		r.Dir != filepath.Join(g.e.opts.StateDir, "vms", r.VMID) ||
+		checkConfig(&r.Config) != nil ||
+		r.ImageDir != filepath.Join(
+			g.e.opts.StateDir,
+			"images",
+			r.Config.Image[7:],
+		) {
 		return fmt.Errorf("GC invalid resource ownership")
 	}
 	if !gcID(r.NetworkToken, "net-") || r.Slot < 1 || r.Slot >= 32768 {
 		return fmt.Errorf("GC invalid network ownership")
 	}
-	if r.Instance == "" && r.RunDir != "" || r.Instance != "" && (!gcID(r.Instance, "run-") || r.RunDir != filepath.Join(r.Dir, "runs", r.Instance)) {
+	if r.Instance == "" && r.RunDir != "" ||
+		r.Instance != "" &&
+			(!gcID(r.Instance, "run-") || r.RunDir != filepath.Join(r.Dir, "runs", r.Instance)) {
 		return fmt.Errorf("GC invalid running instance path")
 	}
 	rel, err := filepath.Rel(r.Dir, r.Disk)
 	parts := strings.Split(rel, string(filepath.Separator))
-	if err != nil || !(len(parts) == 2 && parts[0] == "disks" && strings.HasSuffix(parts[1], ".raw") && gcID(strings.TrimSuffix(parts[1], ".raw"), "op-") || len(parts) == 3 && parts[0] == "versions" && gcID(parts[1], "op-") && parts[2] == "disk.raw") {
+	if err != nil ||
+		((len(parts) != 2 || parts[0] != "disks" || !strings.HasSuffix(parts[1], ".raw") || !gcID(strings.TrimSuffix(parts[1], ".raw"), "op-")) && (len(parts) != 3 || parts[0] != "versions" || !gcID(parts[1], "op-") || parts[2] != "disk.raw")) {
 		return fmt.Errorf("GC invalid disk version path")
 	}
-	if r.RestoreDir != "" && r.RestoreDir != filepath.Join(filepath.Dir(r.Disk), "restore") {
+	if r.RestoreDir != "" &&
+		r.RestoreDir != filepath.Join(filepath.Dir(r.Disk), "restore") {
 		return fmt.Errorf("GC invalid backing path")
 	}
 	return nil
 }
 
 func (g *gcGraph) manifest(m Manifest) error {
-	if m.Format != 1 || m.MemoryMode != "CopyOnWrite" || checkConfig(&m.Config) != nil {
+	if m.Format != 1 || m.MemoryMode != "CopyOnWrite" ||
+		checkConfig(&m.Config) != nil {
 		return fmt.Errorf("GC unknown snapshot manifest")
 	}
 	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
@@ -540,7 +667,9 @@ func (g *gcGraph) manifest(m Manifest) error {
 		}
 	}
 	for rel, hash := range m.Files {
-		if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") || strings.Contains(rel, "\\") {
+		if filepath.IsAbs(rel) || filepath.Clean(rel) != rel ||
+			strings.HasPrefix(rel, "../") ||
+			strings.Contains(rel, "\\") {
 			return fmt.Errorf("GC invalid manifest path")
 		}
 		if _, err := shaName(hash); err != nil {

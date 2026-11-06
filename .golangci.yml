@@ -14,9 +14,19 @@ linters:
     - forbidigo
     - embeddedstructfieldcheck
   settings:
+    depguard:
+      rules:
+        operator-sort:
+          files:
+            - '**/operator/**/*.go'
+          deny:
+            - pkg: sort
+              desc: Should be replaced with slices package
     misspell:
       locale: US
   exclusions:
+    paths:
+      - '^references/'
     presets:
       - common-false-positives
       - legacy
@@ -29,6 +39,9 @@ linters:
         path: main.go
 
 formatters:
+  exclusions:
+    paths:
+      - '^references/'
   enable:
     - gofumpt
     - goimports

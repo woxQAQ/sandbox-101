@@ -30,11 +30,14 @@ func gcNode(st os.FileInfo) gcIdentity {
 }
 
 func (g *gcGraph) loadDeletions() error {
-	rows, err := g.e.db.QueryContext(g.ctx, "SELECT path,body FROM gc_deletions")
+	rows, err := g.e.db.QueryContext(
+		g.ctx,
+		"SELECT path,body FROM gc_deletions",
+	)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var path string
 		var b []byte
@@ -46,6 +49,9 @@ func (g *gcGraph) loadDeletions() error {
 			return err
 		}
 		rel, err := filepath.Rel(g.e.opts.StateDir, path)
+		if err != nil {
+			return fmt.Errorf("GC invalid deletion path %q: %w", path, err)
+		}
 		parts := strings.Split(rel, string(filepath.Separator))
 		valid := len(parts) == 2 && parts[0] == "imports"
 		if valid {
@@ -58,13 +64,23 @@ func (g *gcGraph) loadDeletions() error {
 			valid = a == nil && b == nil && d.Dir
 		}
 		if len(parts) == 4 && parts[0] == "vms" && gcID(parts[1], "vm-") {
-			valid = parts[2] == "versions" && gcID(parts[3], "op-") && d.Dir || parts[2] == "capture" && gcID(parts[3], "op-") && d.Dir || parts[2] == "disks" && gcID(strings.TrimSuffix(strings.TrimSuffix(parts[3], ".pending"), ".raw"), "op-") && !d.Dir
+			valid = parts[2] == "versions" && gcID(parts[3], "op-") && d.Dir ||
+				parts[2] == "capture" && gcID(parts[3], "op-") && d.Dir ||
+				parts[2] == "disks" && gcID(strings.TrimSuffix(strings.TrimSuffix(parts[3], ".pending"), ".raw"), "op-") &&
+					!d.Dir
 		}
-		if !valid || d.Path != path || filepath.Clean(path) != path || d.Format != 1 || len(d.Nodes) == 0 {
+		if !valid || d.Path != path || filepath.Clean(path) != path ||
+			d.Format != 1 ||
+			len(d.Nodes) == 0 {
 			return fmt.Errorf("GC corrupt deletion ownership: %s", path)
 		}
 		for rel, n := range d.Nodes {
-			if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") || rel == ".." || strings.Contains(rel, "\\") || n.Inode == 0 || !(os.FileMode(n.Mode).IsDir() || os.FileMode(n.Mode).IsRegular()) {
+			if filepath.IsAbs(rel) || filepath.Clean(rel) != rel ||
+				strings.HasPrefix(rel, "../") ||
+				rel == ".." ||
+				strings.Contains(rel, "\\") ||
+				n.Inode == 0 ||
+				(!os.FileMode(n.Mode).IsDir() && !os.FileMode(n.Mode).IsRegular()) {
 				return fmt.Errorf("GC corrupt deletion inode record: %s", path)
 			}
 		}
@@ -73,21 +89,33 @@ func (g *gcGraph) loadDeletions() error {
 	return rows.Err()
 }
 
-func (g *gcGraph) deletion(path string, files []string, dir bool) (gcDeletion, error) {
-	d := gcDeletion{Format: 1, Path: path, Dir: dir, Nodes: map[string]gcIdentity{}}
+func (g *gcGraph) deletion(
+	path string,
+	files []string,
+	dir bool,
+) (gcDeletion, error) {
+	d := gcDeletion{
+		Format: 1,
+		Path:   path,
+		Dir:    dir,
+		Nodes:  map[string]gcIdentity{},
+	}
 	if dir {
-		err := filepath.WalkDir(path, func(p string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			st, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(path, p)
-			d.Nodes[rel] = gcNode(st)
-			return nil
-		})
+		err := filepath.WalkDir(
+			path,
+			func(p string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				st, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				rel, _ := filepath.Rel(path, p)
+				d.Nodes[rel] = gcNode(st)
+				return nil
+			},
+		)
 		return d, err
 	}
 	for _, p := range files {
@@ -108,31 +136,42 @@ func (g *gcGraph) resumeFiles(d gcDeletion) ([]string, error) {
 		return nil, err
 	}
 	paths := []string{}
-	err := filepath.WalkDir(d.Path, func(p string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err = g.ctx.Err(); err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(d.Path, p)
-		st, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if want, ok := d.Nodes[rel]; !ok || gcNode(st) != want {
-			return fmt.Errorf("GC deletion inode replaced or unknown: %s", p)
-		}
-		if !entry.IsDir() {
-			paths = append(paths, p)
-		}
-		return nil
-	})
+	err := filepath.WalkDir(
+		d.Path,
+		func(p string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if err = g.ctx.Err(); err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(d.Path, p)
+			st, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if want, ok := d.Nodes[rel]; !ok || gcNode(st) != want {
+				return fmt.Errorf(
+					"GC deletion inode replaced or unknown: %s",
+					p,
+				)
+			}
+			if !entry.IsDir() {
+				paths = append(paths, p)
+			}
+			return nil
+		},
+	)
 	return paths, err
 }
 
 func (g *gcGraph) journalDeletion(d gcDeletion) error {
-	if _, err := g.e.db.ExecContext(g.ctx, "INSERT INTO gc_deletions VALUES(?,?)", d.Path, encode(d)); err != nil {
+	if _, err := g.e.db.ExecContext(
+		g.ctx,
+		"INSERT INTO gc_deletions VALUES(?,?)",
+		d.Path,
+		encode(d),
+	); err != nil {
 		return err
 	}
 	g.deletions[d.Path] = d
@@ -146,7 +185,11 @@ func (g *gcGraph) journalDeletion(d gcDeletion) error {
 }
 
 func (g *gcGraph) finishDeletion(path string) error {
-	if _, err := g.e.db.ExecContext(g.ctx, "DELETE FROM gc_deletions WHERE path=?", path); err != nil {
+	if _, err := g.e.db.ExecContext(
+		g.ctx,
+		"DELETE FROM gc_deletions WHERE path=?",
+		path,
+	); err != nil {
 		return err
 	}
 	delete(g.deletions, path)

@@ -19,6 +19,7 @@ import (
 
 	erofs "github.com/erofs/go-erofs"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
@@ -33,26 +34,58 @@ func (m ImageManifest) sharedLayered() bool { return m.Tools["go-erofs"] == shar
 // later in the same tar. Headers retain OCI operations separately from payload
 // names, so a cache never has to resolve a lower-layer or forward hardlink.
 // Native mkfs owns payload extents; the library owns final inode/chunk encoding.
-func buildSharedLayerCache(ctx context.Context, state, input, media, builder, diff string, size, entries int64) (layerCache, error) {
-	cached := layerCache{Format: 1, Profile: sharedLayerProfile, Builder: builder, DiffID: diff, Bytes: size, Entries: entries}
+func buildSharedLayerCache(
+	ctx context.Context,
+	state, input, media, builder, diff string,
+	size, entries int64,
+) (layerCache, error) {
+	cached := layerCache{
+		Format:  1,
+		Profile: sharedLayerProfile,
+		Builder: builder,
+		DiffID:  diff,
+		Bytes:   size,
+		Entries: entries,
+	}
 	parent := filepath.Join(state, "layer-cache", builder[7:])
-	if err := os.MkdirAll(parent, 0700); err != nil {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return cached, err
 	}
 	stage, err := os.MkdirTemp(parent, ".pending-")
 	if err != nil {
 		return cached, err
 	}
-	defer os.RemoveAll(stage)
+	defer func() { _ = os.RemoveAll(stage) }()
 	normalized := filepath.Join(stage, "payload.tar")
 	if err = normalizeLayerPayloads(input, media, normalized); err != nil {
 		return cached, err
 	}
-	args := []string{"--quiet", "--workers=1", "--tar=f", "-b4096", "-E", "noinline_data", "-T0", "--mkfs-time", "--preserve-mtime", "-U", layerUUID(diff), "/work/layer.erofs", "/work/payload.tar"}
+	args := []string{
+		"--quiet",
+		"--workers=1",
+		"--tar=f",
+		"-b4096",
+		"-E",
+		"noinline_data",
+		"-T0",
+		"--mkfs-time",
+		"--preserve-mtime",
+		"-U",
+		layerUUID(diff),
+		"/work/layer.erofs",
+		"/work/payload.tar",
+	}
 	if err = runImageTool(ctx, stage, nil, "mkfs.erofs", args...); err != nil {
 		return cached, err
 	}
-	if err = runImageTool(ctx, stage, nil, "fsck.erofs", "--extract", "/work/layer.erofs"); err != nil {
+	if err = runImageTool(
+		ctx,
+		stage,
+		nil,
+		"fsck.erofs",
+		"--extract",
+		"/work/layer.erofs",
+	); err != nil {
 		return cached, err
 	}
 	if err = os.Remove(normalized); err != nil {
@@ -72,7 +105,10 @@ func buildSharedLayerCache(ctx context.Context, state, input, media, builder, di
 		return cached, err
 	}
 	if _, err = os.Lstat(filepath.Join(parent, diff[7:])); !os.IsNotExist(err) {
-		return cached, api.Fail(api.Incompatible, "layer cache destination already exists")
+		return cached, api.Fail(
+			api.Incompatible,
+			"layer cache destination already exists",
+		)
 	}
 	if err = os.Rename(stage, filepath.Join(parent, diff[7:])); err != nil {
 		return cached, err
@@ -85,28 +121,37 @@ func buildSharedLayerCache(ctx context.Context, state, input, media, builder, di
 	return loadLayerCache(state, builder, diff)
 }
 
+//nolint:staticcheck // Preserve binary xattrs while regenerating PAX records for renamed payloads.
 func normalizeLayerPayloads(input, media, output string) error {
 	f, err := os.Open(input)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var r io.Reader = f
-	if media == v1.MediaTypeImageLayerGzip || media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
+	if media == v1.MediaTypeImageLayerGzip ||
+		media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
 		g, x := gzip.NewReader(f)
 		if x != nil {
 			return x
 		}
-		defer g.Close()
+		defer func() { _ = g.Close() }()
 		r = g
 	}
-	out, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	out, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	tw := tar.NewWriter(out)
-	if err = tw.WriteHeader(&tar.Header{Name: "data", Typeflag: tar.TypeDir, Mode: 0755, ModTime: time.Unix(0, 0)}); err != nil {
+	if err = tw.WriteHeader(
+		&tar.Header{
+			Name:     "data",
+			Typeflag: tar.TypeDir,
+			Mode:     0o755,
+			ModTime:  time.Unix(0, 0),
+		},
+	); err != nil {
 		return err
 	}
 	var headers []cachedHeader
@@ -120,7 +165,8 @@ func normalizeLayerPayloads(input, media, output string) error {
 			return x
 		}
 		headers = append(headers, cacheHeader(*h))
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || strings.HasPrefix(path.Base(h.Name), ".wh.") {
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA ||
+			strings.HasPrefix(path.Base(h.Name), ".wh.") {
 			continue
 		}
 		payload := *h
@@ -139,7 +185,15 @@ func normalizeLayerPayloads(input, media, output string) error {
 	if err = gob.NewEncoder(&metadata).Encode(headers); err != nil {
 		return err
 	}
-	if err = tw.WriteHeader(&tar.Header{Name: "headers.gob", Typeflag: tar.TypeReg, Mode: 0400, Size: int64(metadata.Len()), ModTime: time.Unix(0, 0)}); err != nil {
+	if err = tw.WriteHeader(
+		&tar.Header{
+			Name:     "headers.gob",
+			Typeflag: tar.TypeReg,
+			Mode:     0o400,
+			Size:     int64(metadata.Len()),
+			ModTime:  time.Unix(0, 0),
+		},
+	); err != nil {
 		return err
 	}
 	if _, err = metadata.WriteTo(tw); err != nil {
@@ -153,55 +207,74 @@ func normalizeLayerPayloads(input, media, output string) error {
 
 func payloadName(i int) string { return fmt.Sprintf("data/%08x", i) }
 
-type headerAttribute struct{ Name, Value string }
-type cachedHeader struct {
-	Header tar.Header
-	Xattrs []headerAttribute
-	PAX    []headerAttribute
-}
+type (
+	headerAttribute struct{ Name, Value string }
+	cachedHeader    struct {
+		Header tar.Header
+		Xattrs []headerAttribute
+		PAX    []headerAttribute
+	}
+)
 
 func sortedHeaderAttributes(m map[string]string) []headerAttribute {
 	var attrs []headerAttribute
 	for k, v := range m {
 		attrs = append(attrs, headerAttribute{k, v})
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
+	sort.Slice(
+		attrs,
+		func(i, j int) bool { return attrs[i].Name < attrs[j].Name },
+	)
 	return attrs
 }
 
+//nolint:staticcheck // The persisted cache format stores both tar xattr representations.
 func cacheHeader(h tar.Header) cachedHeader {
-	r := cachedHeader{Header: h, Xattrs: sortedHeaderAttributes(h.Xattrs), PAX: sortedHeaderAttributes(h.PAXRecords)}
+	r := cachedHeader{
+		Header: h,
+		Xattrs: sortedHeaderAttributes(h.Xattrs),
+		PAX:    sortedHeaderAttributes(h.PAXRecords),
+	}
 	r.Header.Xattrs, r.Header.PAXRecords = nil, nil
 	return r
 }
 
-func restoreHeaderAttributes(attrs []headerAttribute) (map[string]string, error) {
+func restoreHeaderAttributes(
+	attrs []headerAttribute,
+) (map[string]string, error) {
 	if len(attrs) == 0 {
 		return nil, nil
 	}
 	m := make(map[string]string, len(attrs))
 	for i, a := range attrs {
 		if i > 0 && attrs[i-1].Name >= a.Name {
-			return nil, api.Fail(api.Incompatible, "noncanonical cached OCI attributes")
+			return nil, api.Fail(
+				api.Incompatible,
+				"noncanonical cached OCI attributes",
+			)
 		}
 		m[a.Name] = a.Value
 	}
 	return m, nil
 }
 
+//nolint:staticcheck // Decode and validate the persisted cache format, including legacy tar fields.
 func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 	f, err := img.Open("headers.gob")
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	limit := receipt.Bytes*4 + receipt.Entries*4096 + 65536
 	if st.Size() <= 0 || st.Size() > limit {
-		return nil, api.Fail(api.Incompatible, "cached OCI index exceeds authenticated bounds")
+		return nil, api.Fail(
+			api.Incompatible,
+			"cached OCI index exceeds authenticated bounds",
+		)
 	}
 	dec := gob.NewDecoder(io.LimitReader(f, limit))
 	var records []cachedHeader
@@ -209,7 +282,10 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 		return nil, err
 	}
 	if int64(len(records)) != receipt.Entries {
-		return nil, api.Fail(api.Incompatible, "cached OCI entry count mismatch")
+		return nil, api.Fail(
+			api.Incompatible,
+			"cached OCI entry count mismatch",
+		)
 	}
 	var extra any
 	if err = dec.Decode(&extra); err != io.EOF {
@@ -218,7 +294,8 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 	headers := make([]tar.Header, len(records))
 	for i, r := range records {
 		h := r.Header
-		if h.Xattrs != nil || h.PAXRecords != nil || h.Size < 0 || h.Size > receipt.Bytes {
+		if h.Xattrs != nil || h.PAXRecords != nil || h.Size < 0 ||
+			h.Size > receipt.Bytes {
 			return nil, api.Fail(api.Incompatible, "invalid cached OCI header")
 		}
 		if err = tarPath(h.Name); err != nil {
@@ -231,7 +308,10 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 				return nil, err
 			}
 		default:
-			return nil, api.Fail(api.Incompatible, "unsupported cached OCI file type")
+			return nil, api.Fail(
+				api.Incompatible,
+				"unsupported cached OCI file type",
+			)
 		}
 		if h.Xattrs, err = restoreHeaderAttributes(r.Xattrs); err != nil {
 			return nil, err
@@ -242,8 +322,12 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 		if err = validateMergedOCIEntry(&h); err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(path.Base(h.Name), ".wh.") && (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Size != 0) {
-			return nil, api.Fail(api.Incompatible, "invalid cached OCI whiteout")
+		if strings.HasPrefix(path.Base(h.Name), ".wh.") &&
+			(h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Size != 0) {
+			return nil, api.Fail(
+				api.Incompatible,
+				"invalid cached OCI whiteout",
+			)
 		}
 		headers[i] = h
 	}
@@ -260,6 +344,7 @@ type metadataFS struct {
 
 type metadataInfo struct {
 	fs.FileInfo
+
 	name string
 	sys  any
 }
@@ -271,21 +356,25 @@ func (i metadataInfo) Sys() any {
 	}
 	return i.FileInfo.Sys()
 }
+
 func (i metadataInfo) DataRange() []erofs.DataRange {
 	if r, ok := i.FileInfo.(interface{ DataRange() []erofs.DataRange }); ok {
 		return r.DataRange()
 	}
 	return nil
 }
+
 func (m metadataFS) Open(n string) (fs.File, error) {
 	return nil, &fs.PathError{Op: "open", Path: n, Err: fs.ErrPermission}
 }
+
 func (m metadataFS) Stat(n string) (fs.FileInfo, error) {
 	if i, ok := m.nodes[n]; ok {
 		return i, nil
 	}
 	return nil, &fs.PathError{Op: "stat", Path: n, Err: fs.ErrNotExist}
 }
+
 func (m metadataFS) ReadDir(n string) ([]fs.DirEntry, error) {
 	var entries []fs.DirEntry
 	for p, i := range m.nodes {
@@ -293,7 +382,10 @@ func (m metadataFS) ReadDir(n string) ([]fs.DirEntry, error) {
 			entries = append(entries, fs.FileInfoToDirEntry(i))
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	sort.Slice(
+		entries,
+		func(i, j int) bool { return entries[i].Name() < entries[j].Name() },
+	)
 	return entries, nil
 }
 func (m metadataFS) BlockSize() uint32    { return 4096 }
@@ -307,15 +399,36 @@ func currentMetadata(w *erofs.Writer, n string) (fs.FileInfo, error) {
 	// CopyFrom accepts its public on-disk Stat metadata; WriterStat is a
 	// separate view and otherwise loses ownership, timestamps and xattrs.
 	st := info.Sys().(*erofs.WriterStat)
-	return metadataInfo{FileInfo: info, name: path.Base(n), sys: &erofs.Stat{UID: st.UID, GID: st.GID, Mtime: st.Mtime, MtimeNs: st.MtimeNs, Nlink: int(st.Nlink), Xattrs: st.Xattrs}}, nil
+	return metadataInfo{
+		FileInfo: info,
+		name:     path.Base(n),
+		sys: &erofs.Stat{
+			UID:     st.UID,
+			GID:     st.GID,
+			Mtime:   st.Mtime,
+			MtimeNs: st.MtimeNs,
+			Nlink:   int(st.Nlink),
+			Xattrs:  st.Xattrs,
+		},
+	}, nil
 }
 
-func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts []ImageArtifact, builder string) error {
-	f, err := os.OpenFile(filepath.Join(out, "fsmeta.erofs"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+//nolint:staticcheck // Cached tar headers retain legacy regular-file types.
+func materializeSharedFsmeta(
+	ctx context.Context,
+	state, out string,
+	artifacts []ImageArtifact,
+	builder string,
+) error {
+	f, err := os.OpenFile(
+		filepath.Join(out, "fsmeta.erofs"),
+		os.O_CREATE|os.O_EXCL|os.O_RDWR,
+		0o600,
+	)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w := erofs.Create(f, erofs.WithBlockSize(4096), erofs.WithBuildTime(0, 0))
 	var reads []imageMount
 	var layers, diffs, devices []string
@@ -328,7 +441,7 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 		if x != nil {
 			return x
 		}
-		defer layer.Close()
+		defer func() { _ = layer.Close() }()
 		img, x := erofs.Open(layer)
 		if x != nil {
 			return x
@@ -351,7 +464,9 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 			_, x = w.Stat(prefix)
 			collision := !errors.Is(x, fs.ErrNotExist)
 			for _, h := range headers {
-				collision = collision || strings.HasPrefix(path.Clean(h.Name), prefix) || strings.HasPrefix(path.Clean(h.Linkname), prefix)
+				collision = collision ||
+					strings.HasPrefix(path.Clean(h.Name), prefix) ||
+					strings.HasPrefix(path.Clean(h.Linkname), prefix)
 			}
 			if !collision {
 				break
@@ -366,17 +481,25 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 		if x != nil {
 			return x
 		}
-		source := metadataFS{nodes: map[string]fs.FileInfo{".": root}, blocks: uint64(st.Size() / 4096)}
+		source := metadataFS{
+			nodes:  map[string]fs.FileInfo{".": root},
+			blocks: uint64(st.Size() / 4096),
+		}
 		for j, h := range headers {
-			if (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA) || strings.HasPrefix(path.Base(h.Name), ".wh.") {
+			if (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA) ||
+				strings.HasPrefix(path.Base(h.Name), ".wh.") {
 				continue
 			}
 			info, x := fs.Stat(img, payloadName(j))
 			if x != nil {
 				return x
 			}
-			if !info.Mode().IsRegular() || info.Size() != h.Size || info.Sys().(*erofs.Stat).InodeLayout != 0 {
-				return api.Fail(api.Incompatible, "cached OCI payload geometry mismatch")
+			if !info.Mode().IsRegular() || info.Size() != h.Size ||
+				info.Sys().(*erofs.Stat).InodeLayout != 0 {
+				return api.Fail(
+					api.Incompatible,
+					"cached OCI payload geometry mismatch",
+				)
 			}
 			name := fmt.Sprintf("%s%08x", prefix, j)
 			source.nodes[name] = metadataInfo{FileInfo: info, name: name}
@@ -425,10 +548,18 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 	if err = f.Close(); err != nil {
 		return err
 	}
-	if err = verifyImageDeviceTable(filepath.Join(out, "fsmeta.erofs"), layers, diffs, true); err != nil {
+	if err = verifyImageDeviceTable(
+		filepath.Join(out, "fsmeta.erofs"),
+		layers,
+		diffs,
+		true,
+	); err != nil {
 		return err
 	}
-	reads = append(reads, imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"})
+	reads = append(
+		reads,
+		imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"},
+	)
 	return extractImageBoot(ctx, out, reads, devices, "/fsmeta.erofs")
 }
 
@@ -440,7 +571,9 @@ func applySharedWhiteouts(w *erofs.Writer, headers []tar.Header) error {
 			continue
 		}
 		if base != ".wh..wh..opq" {
-			if err := w.RemoveAll(path.Join(path.Dir(n), strings.TrimPrefix(base, ".wh."))); err != nil {
+			if err := w.RemoveAll(
+				path.Join(path.Dir(n), strings.TrimPrefix(base, ".wh.")),
+			); err != nil {
 				return err
 			}
 			continue
@@ -453,7 +586,9 @@ func applySharedWhiteouts(w *erofs.Writer, headers []tar.Header) error {
 			return err
 		}
 		for _, child := range children {
-			if err = w.RemoveAll(path.Join(path.Dir(n), child.Name())); err != nil {
+			if err = w.RemoveAll(
+				path.Join(path.Dir(n), child.Name()),
+			); err != nil {
 				return err
 			}
 		}
@@ -472,7 +607,11 @@ func sharedParents(w *erofs.Writer, n string) error {
 	info, err := w.Stat(parent)
 	if err == nil {
 		if !info.IsDir() {
-			return api.Fail(api.Invalid, "OCI path traverses nondirectory %q", parent)
+			return api.Fail(
+				api.Invalid,
+				"OCI path traverses nondirectory %q",
+				parent,
+			)
 		}
 		return nil
 	}
@@ -495,6 +634,7 @@ func sharedParents(w *erofs.Writer, n string) error {
 	return w.Chtimes(parent, ancestor.ModTime(), ancestor.ModTime())
 }
 
+//nolint:staticcheck // Directory xattrs come from the persisted tar header representation.
 func sharedDirectory(w *erofs.Writer, h tar.Header) error {
 	n := path.Clean(h.Name)
 	if info, err := w.Stat(n); err == nil && !info.IsDir() {
@@ -514,11 +654,26 @@ func sharedDirectory(w *erofs.Writer, h tar.Header) error {
 		}
 		nodes[p] = info
 	}
-	nodes[n] = metadataInfo{FileInfo: h.FileInfo(), name: path.Base(n), sys: &erofs.Stat{UID: uint32(h.Uid), GID: uint32(h.Gid), Mtime: uint64(h.ModTime.Unix()), MtimeNs: uint32(h.ModTime.Nanosecond()), Xattrs: h.Xattrs}}
+	nodes[n] = metadataInfo{
+		FileInfo: h.FileInfo(),
+		name:     path.Base(n),
+		sys: &erofs.Stat{
+			UID:     uint32(h.Uid),
+			GID:     uint32(h.Gid),
+			Mtime:   uint64(h.ModTime.Unix()),
+			MtimeNs: uint32(h.ModTime.Nanosecond()),
+			Xattrs:  h.Xattrs,
+		},
+	}
 	return w.CopyFrom(metadataFS{nodes: nodes})
 }
 
-func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) error {
+//nolint:staticcheck // Apply the persisted legacy tar type and binary xattr fields without changing cache identity.
+func applySharedEntries(
+	w *erofs.Writer,
+	headers []tar.Header,
+	prefix string,
+) error {
 	pending := map[string]string{}
 	resolve := func() error {
 		for {
@@ -563,7 +718,10 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 					return err
 				}
 				if info.IsDir() {
-					return api.Fail(api.Invalid, "OCI hardlink targets a directory")
+					return api.Fail(
+						api.Invalid,
+						"OCI hardlink targets a directory",
+					)
 				}
 				continue
 			}
@@ -579,7 +737,10 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 			}
 			switch h.Typeflag {
 			case tar.TypeReg, tar.TypeRegA:
-				if err := w.Link(fmt.Sprintf("%s%08x", prefix, j), n); err != nil {
+				if err := w.Link(
+					fmt.Sprintf("%s%08x", prefix, j),
+					n,
+				); err != nil {
 					return err
 				}
 			case tar.TypeLink:
@@ -600,7 +761,11 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 					}
 				}
 			default:
-				return api.Fail(api.Incompatible, "unsupported cached OCI entry %q", n)
+				return api.Fail(
+					api.Incompatible,
+					"unsupported cached OCI entry %q",
+					n,
+				)
 			}
 		}
 		if err := resolve(); err != nil {
