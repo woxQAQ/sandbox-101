@@ -719,32 +719,43 @@ impl TreeMetadata {
                         };
                     result.seconds = total.div_euclid(1_000_000_000).try_into()?;
                     result.nanos = total.rem_euclid(1_000_000_000) as i64;
-                } else if let Some(name) = key
+                } else if let Some((name, libarchive)) = key
                     .strip_prefix("SCHILY.xattr.")
-                    .or_else(|| key.strip_prefix("LIBARCHIVE.xattr."))
+                    .map(|name| (name, false))
+                    .or_else(|| {
+                        key.strip_prefix("LIBARCHIVE.xattr.")
+                            .map(|name| (name, true))
+                    })
                 {
-                    ensure!(name.len() <= 255 * 3, "encoded xattr name too long");
-                    // percent_decode deliberately preserves malformed escapes;
-                    // validate those before invoking its byte-preserving decoder.
-                    for (i, _) in name.bytes().enumerate().filter(|(_, b)| *b == b'%') {
-                        ensure!(
-                            name.as_bytes()
-                                .get(i + 1)
-                                .is_some_and(u8::is_ascii_hexdigit)
-                                && name
-                                    .as_bytes()
-                                    .get(i + 2)
-                                    .is_some_and(u8::is_ascii_hexdigit),
-                            "invalid xattr name encoding"
-                        );
-                    }
-                    let name = percent_decode_str(name).decode_utf8()?.into_owned();
+                    // The formats encode names differently: a SCHILY suffix is
+                    // the literal attribute name, while a LIBARCHIVE suffix is
+                    // percent-encoded. Decode only the LIBARCHIVE form.
+                    let name = if libarchive {
+                        ensure!(name.len() <= 255 * 3, "encoded xattr name too long");
+                        // percent_decode deliberately preserves malformed escapes;
+                        // validate those before invoking its byte-preserving decoder.
+                        for (i, _) in name.bytes().enumerate().filter(|(_, b)| *b == b'%') {
+                            ensure!(
+                                name.as_bytes()
+                                    .get(i + 1)
+                                    .is_some_and(u8::is_ascii_hexdigit)
+                                    && name
+                                        .as_bytes()
+                                        .get(i + 2)
+                                        .is_some_and(u8::is_ascii_hexdigit),
+                                "invalid xattr name encoding"
+                            );
+                        }
+                        percent_decode_str(name).decode_utf8()?.into_owned()
+                    } else {
+                        name.to_owned()
+                    };
                     ensure!(
                         name.starts_with("user.") && name.len() > 5 && name.len() <= 255,
                         "only bounded user xattrs are supported"
                     );
                     CString::new(name.as_bytes())?;
-                    let value = if key.starts_with("LIBARCHIVE.xattr.") {
+                    let value = if libarchive {
                         ensure!(
                             value.len() <= 4 * 65536usize.div_ceil(3),
                             "encoded xattr value too large"

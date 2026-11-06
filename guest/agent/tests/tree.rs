@@ -136,9 +136,20 @@ fn xattr(path: &Path, name: &str) -> Vec<u8> {
             value.len(),
         )
     };
-    assert!(n >= 0, "{}", std::io::Error::last_os_error());
+    assert!(n >= 0, "{name:?}: {}", std::io::Error::last_os_error());
     value.truncate(n as usize);
     value
+}
+fn xattrs(path: &Path) -> Vec<String> {
+    let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let mut names = vec![0u8; 65536];
+    let n = unsafe { libc::listxattr(path.as_ptr(), names.as_mut_ptr().cast(), names.len()) };
+    assert!(n >= 0, "{}", std::io::Error::last_os_error());
+    names[..n as usize]
+        .split(|b| *b == 0)
+        .filter(|n| !n.is_empty())
+        .map(|n| String::from_utf8(n.to_vec()).unwrap())
+        .collect()
 }
 fn assert_metadata(a: &Path, b: &Path) {
     let a = std::fs::symlink_metadata(a).unwrap();
@@ -614,4 +625,147 @@ async fn restricted_directory_modes_and_equivalent_xattrs_are_applied_after_cont
     );
     assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 2);
     std::fs::set_permissions(target.join("nested"), Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test]
+async fn schily_xattr_names_preserve_literal_percent() {
+    let (tmp, agent) = setup();
+    let target = tmp.path().join("target");
+    let tar = archive(|b| {
+        b.append_pax_extensions([
+            // A literal percent that is not an escape sequence stays as-is.
+            ("SCHILY.xattr.user.100% legit", &b"literal\0\xff"[..]),
+            // A name merely resembling an escape sequence is not decoded.
+            ("SCHILY.xattr.user.a%2Fb", &b"escape-like"[..]),
+        ])
+        .unwrap();
+        regular(b, "file", b"content");
+    });
+    assert_eq!(push(&agent, &target, &tar).await, "");
+    let file = target.join("file");
+    assert_eq!(std::fs::read(&file).unwrap(), b"content");
+    assert_eq!(xattr(&file, "user.100% legit"), b"literal\0\xff");
+    assert_eq!(xattr(&file, "user.a%2Fb"), b"escape-like");
+    let names = xattrs(&file);
+    for expected in ["user.100% legit", "user.a%2Fb"] {
+        assert_eq!(
+            names.iter().filter(|n| *n == expected).count(),
+            1,
+            "{names:?}"
+        );
+    }
+    // Decoding would have produced this alias instead of the literal name.
+    assert!(!names.contains(&"user.a/b".to_owned()), "{names:?}");
+}
+
+#[tokio::test]
+async fn xattr_format_equivalence_and_conflicts_preserve_names() {
+    let (tmp, agent) = setup();
+    let target = tmp.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("kept"), b"kept").unwrap();
+    set_xattr(&target.join("kept"), "user.original", b"before");
+    let entries = || std::fs::read_dir(tmp.path()).unwrap().count();
+    // The same percent-named attribute expressed in both formats dedupes when
+    // the values agree. A literal SCHILY name resembling an escape sequence is
+    // a distinct attribute from the one the LIBARCHIVE form decodes to.
+    let same = archive(|b| {
+        b.append_pax_extensions([
+            ("SCHILY.xattr.user.50%", &b"half"[..]),
+            (
+                "LIBARCHIVE.xattr.user.50%25",
+                STANDARD_NO_PAD.encode(b"half").as_bytes(),
+            ),
+            ("SCHILY.xattr.user.a%20b", &b"raw"[..]),
+            (
+                "LIBARCHIVE.xattr.user.a%20b",
+                STANDARD_NO_PAD.encode(b"raw").as_bytes(),
+            ),
+        ])
+        .unwrap();
+        regular(b, "file", b"data");
+    });
+    assert_eq!(push(&agent, &target, &same).await, "");
+    let file = target.join("file");
+    assert_eq!(std::fs::read(&file).unwrap(), b"data");
+    assert_eq!(xattr(&file, "user.50%"), b"half");
+    assert_eq!(xattr(&file, "user.a%20b"), b"raw");
+    assert_eq!(xattr(&file, "user.a b"), b"raw");
+    let names = xattrs(&file);
+    for expected in ["user.50%", "user.a%20b", "user.a b"] {
+        assert_eq!(
+            names.iter().filter(|n| *n == expected).count(),
+            1,
+            "{names:?}"
+        );
+    }
+    assert_eq!(names.len(), 3, "{names:?}");
+    // A 255-byte final name is accepted in both formats even though the
+    // LIBARCHIVE spelling is longer on the wire; both spellings dedupe.
+    let longest = format!("user.{}%", "n".repeat(249));
+    assert_eq!(longest.len(), 255);
+    let encoded = format!("user.{}%25", "n".repeat(249));
+    let edge = archive(|b| {
+        b.append_pax_extensions([
+            (format!("SCHILY.xattr.{longest}").as_str(), &b"edge"[..]),
+            (
+                format!("LIBARCHIVE.xattr.{encoded}").as_str(),
+                STANDARD_NO_PAD.encode(b"edge").as_bytes(),
+            ),
+        ])
+        .unwrap();
+        regular(b, "edge", b"edge");
+    });
+    assert_eq!(push(&agent, &target, &edge).await, "");
+    assert_eq!(xattr(&target.join("edge"), &longest), b"edge");
+    assert_eq!(xattrs(&target.join("edge")).len(), 1);
+    let too_long = format!("user.{}", "m".repeat(251));
+    assert_eq!(too_long.len(), 256);
+    let rejections = [
+        // Conflicting values for the same final name across formats.
+        archive(|b| {
+            b.append_pax_extensions([
+                ("SCHILY.xattr.user.50%", &b"one"[..]),
+                (
+                    "LIBARCHIVE.xattr.user.50%25",
+                    STANDARD_NO_PAD.encode(b"two").as_bytes(),
+                ),
+            ])
+            .unwrap();
+            regular(b, "bad", b"bad");
+        }),
+        // A 256-byte final name exceeds the name limit.
+        archive(|b| {
+            b.append_pax_extensions([(format!("SCHILY.xattr.{too_long}").as_str(), &b"bad"[..])])
+                .unwrap();
+            regular(b, "bad", b"bad");
+        }),
+        // Malformed LIBARCHIVE escape sequence.
+        archive(|b| {
+            b.append_pax_extensions([("LIBARCHIVE.xattr.user.bad%zz", &b"eA"[..])])
+                .unwrap();
+            regular(b, "bad", b"bad");
+        }),
+        // Non-user namespaces stay unsupported.
+        archive(|b| {
+            b.append_pax_extensions([("SCHILY.xattr.security.capability", &b"bad"[..])])
+                .unwrap();
+            regular(b, "bad", b"bad");
+        }),
+    ];
+    let before = entries();
+    for (i, tar) in rejections.iter().enumerate() {
+        let error = push(&agent, &target, tar).await;
+        assert!(!error.is_empty(), "rejection {i} was accepted");
+        assert!(!target.join("bad").exists(), "rejection {i} committed");
+        assert_eq!(std::fs::read(target.join("kept")).unwrap(), b"kept");
+        assert_eq!(xattr(&target.join("kept"), "user.original"), b"before");
+        assert_eq!(xattr(&file, "user.50%"), b"half");
+        assert_eq!(xattr(&target.join("edge"), &longest), b"edge");
+        assert_eq!(
+            entries(),
+            before,
+            "staging leak after rejection {i}: {error}"
+        );
+    }
 }
