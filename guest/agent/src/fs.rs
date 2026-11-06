@@ -37,6 +37,75 @@ pub mod fixtures {
     use tokio::sync::oneshot;
 
     static NEXT: Mutex<Option<(PathBuf, Operation)>> = Mutex::new(None);
+    static NEXT_PUSH: Mutex<Option<PushOperation>> = Mutex::new(None);
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum PushFailure {
+        PublicationSync,
+        Cleanup,
+    }
+
+    pub struct PushFixture {
+        pub scratch: Arc<tempfile::TempDir>,
+    }
+
+    pub(crate) struct PushOperation {
+        scratch: Arc<tempfile::TempDir>,
+        failure: PushFailure,
+    }
+
+    // Faults belong to one newly created scratch and one tree_push operation.
+    pub fn register_push(identity: (u32, u32), failure: PushFailure) -> Result<PushFixture> {
+        let scratch = scratch(identity)?;
+        let mut next = NEXT_PUSH.lock().unwrap();
+        ensure!(next.is_none(), "push fixture registration already occupied");
+        *next = Some(PushOperation {
+            scratch: scratch.clone(),
+            failure,
+        });
+        Ok(PushFixture { scratch })
+    }
+
+    impl Drop for PushFixture {
+        fn drop(&mut self) {
+            let mut next = NEXT_PUSH.lock().unwrap();
+            if next
+                .as_ref()
+                .is_some_and(|operation| Arc::ptr_eq(&operation.scratch, &self.scratch))
+            {
+                next.take();
+            }
+        }
+    }
+
+    pub(crate) fn take_push(target: &Path, directory: &File) -> Result<Option<PushOperation>> {
+        let mut next = NEXT_PUSH.lock().unwrap();
+        if let Some(operation) = next.as_ref()
+            && target == operation.scratch.path().join("tree")
+        {
+            let expected = std::fs::metadata(operation.scratch.path())?;
+            let actual = directory.metadata()?;
+            ensure!(
+                (actual.dev(), actual.ino()) == (expected.dev(), expected.ino()),
+                "push fixture parent changed"
+            );
+            return Ok(next.take());
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn check_push(
+        operation: &Option<PushOperation>,
+        failure: PushFailure,
+    ) -> Result<()> {
+        if operation
+            .as_ref()
+            .is_some_and(|operation| operation.failure == failure)
+        {
+            return Err(std::io::Error::from_raw_os_error(libc::EIO).into());
+        }
+        Ok(())
+    }
 
     pub struct Snapshot {
         pub path: PathBuf,
@@ -59,8 +128,7 @@ pub mod fixtures {
         release: oneshot::Receiver<()>,
     }
 
-    // A registration owns a new private spool and matches exactly one tree pull.
-    pub fn register(target: PathBuf, identity: (u32, u32)) -> Result<Fixture> {
+    fn scratch(identity: (u32, u32)) -> Result<Arc<tempfile::TempDir>> {
         let scratch = Arc::new(tempfile::tempdir()?);
         let name = CString::new(scratch.path().as_os_str().as_bytes())?;
         ensure!(
@@ -68,6 +136,12 @@ pub mod fixtures {
             "fixture scratch ownership failed"
         );
         std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700))?;
+        Ok(scratch)
+    }
+
+    // A registration owns a new private spool and matches exactly one tree pull.
+    pub fn register(target: PathBuf, identity: (u32, u32)) -> Result<Fixture> {
+        let scratch = scratch(identity)?;
         let (reached_tx, reached) = oneshot::channel();
         let (release, release_rx) = oneshot::channel();
         let mut next = NEXT.lock().unwrap();
@@ -360,11 +434,15 @@ pub async fn dispatch(
             .await?;
             receive(out, &mut input, archive.as_file()).await?;
             let token = out.cancel.clone();
-            access(identity, move || {
+            let outcome = access(identity, move || {
                 push_tree(&target, archive.path(), &token, Some(&private))
             })
             .await?;
-            out.done(json!({})).await
+            let mut terminal = out.request.reply(outcome.params(), vec![], true);
+            if !outcome.publication_durable {
+                terminal.error = "tree publication fsync failed after commit".into();
+            }
+            out.send(terminal).await
         }
         "tree_pull" => {
             // Spooling bounds memory and permits a known-safe archive before exposing bytes.
@@ -1396,13 +1474,72 @@ impl StagedTree {
     }
 }
 
+// Ownership matters only when cleanup needs to restore directory access.
+// Regular-file ownership does not prevent unlink from a writable parent.
+fn cleanup_needs_chmod(root: &File) -> Result<bool> {
+    // AT_EACCESS keeps the current filesystem credentials instead of overriding
+    // them with the daemon's real UID/GID. The pinned-FD check also honors ACLs.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_faccessat2,
+            root.as_raw_fd(),
+            c"".as_ptr(),
+            libc::R_OK | libc::W_OK | libc::X_OK,
+            libc::AT_EMPTY_PATH | libc::AT_EACCESS,
+        )
+    };
+    if result == 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return Ok(true);
+    }
+    Err(error.into())
+}
+
+fn admit_tree_cleanup(root: &File, cancel: &tokio_util::sync::CancellationToken) -> Result<()> {
+    fn visit(
+        root: &File,
+        depth: usize,
+        budget: &mut TreeBudget,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<()> {
+        ensure!(!cancel.is_cancelled(), "connection closed");
+        ensure!(depth <= TREE_DEPTH, "tree depth limit exceeded");
+        budget.entry()?;
+        let metadata = root.metadata()?;
+        if cleanup_needs_chmod(root)? {
+            let uid = unsafe { libc::syscall(libc::SYS_setfsuid, u32::MAX) } as u32;
+            ensure!(
+                metadata.uid() == uid,
+                "old tree directory needs cleanup permissions owned by workload"
+            );
+        }
+        for entry in std::fs::read_dir(descriptor_path(root))? {
+            ensure!(!cancel.is_cancelled(), "connection closed");
+            let entry = entry?;
+            let child = open_at(root, &entry.file_name(), libc::O_PATH)?;
+            if child.metadata()?.is_dir() {
+                visit(&child, depth + 1, budget, cancel)?;
+            } else {
+                budget.entry()?;
+            }
+        }
+        Ok(())
+    }
+    visit(root, 0, &mut TreeBudget::default(), cancel)
+}
+
 fn cleanup_tree(root: &File) -> Result<()> {
     // Failed transfers may already have applied mode 000 to some directories.
-    // Restore owner access through pinned descriptors before TempDir cleanup.
-    std::fs::set_permissions(
-        descriptor_path(root),
-        std::fs::Permissions::from_mode(0o700),
-    )?;
+    // Restore access through pinned descriptors, only where it is needed.
+    if cleanup_needs_chmod(root)? {
+        std::fs::set_permissions(
+            descriptor_path(root),
+            std::fs::Permissions::from_mode(0o700),
+        )?;
+    }
     for entry in std::fs::read_dir(descriptor_path(root))? {
         let entry = entry?;
         let file = open_at(root, &entry.file_name(), libc::O_PATH)?;
@@ -1412,12 +1549,48 @@ fn cleanup_tree(root: &File) -> Result<()> {
     }
     Ok(())
 }
+
+// This value exists only after a successful rename; Err always means precommit.
+struct TreePushOutcome {
+    publication_durable: bool,
+    cleanup: TreeCleanup,
+}
+
+enum TreeCleanup {
+    Complete,
+    Pending { name: String, reason: &'static str },
+}
+
+impl TreePushOutcome {
+    fn params(&self) -> serde_json::Value {
+        let mut params = json!({
+            "committed": true,
+            "publication_durable": self.publication_durable,
+            "cleanup_complete": matches!(self.cleanup, TreeCleanup::Complete),
+            "cleanup_required": matches!(self.cleanup, TreeCleanup::Pending { .. }),
+        });
+        if let TreeCleanup::Pending { name, reason } = &self.cleanup {
+            params["cleanup_name"] = json!(name);
+            params["cleanup_reason"] = json!(reason);
+        }
+        params
+    }
+}
+
+// Both the path and the recursive removal remain bound to the pinned parent.
+fn remove_stage(directory: &File, name: &OsStr) -> Result<()> {
+    let root = open_at(directory, name, libc::O_PATH | libc::O_DIRECTORY)?;
+    cleanup_tree(&root)?;
+    std::fs::remove_dir_all(descriptor_path(directory).join(name))?;
+    Ok(())
+}
+
 fn push_tree(
     target: &Path,
     archive: &Path,
     cancel: &tokio_util::sync::CancellationToken,
     private: Option<&Path>,
-) -> Result<()> {
+) -> Result<TreePushOutcome> {
     let name = target
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("cannot replace filesystem root"))?;
@@ -1432,9 +1605,13 @@ fn push_tree(
             true,
         )?;
     }
-    let stage = tempfile::tempdir_in(descriptor_path(&directory))?;
+    #[cfg(feature = "filesystem-fixtures")]
+    let fixture = fixtures::take_push(target, &directory)?;
+    // Disarm Drop before commit: every removal below has an observed result.
+    let stage = tempfile::tempdir_in(descriptor_path(&directory))?.keep();
+    let stage_name = stage.file_name().unwrap();
     let result = (|| {
-        let root = open_directory(stage.path())?;
+        let root = open_directory(&stage)?;
         let gid = unsafe { libc::syscall(libc::SYS_setfsgid, u32::MAX) } as u32;
         if root.metadata()?.gid() != gid {
             ensure!(
@@ -1460,6 +1637,7 @@ fn push_tree(
                 if let Some(private) = private {
                     public_descriptor(&existing, private, true)?;
                 }
+                admit_tree_cleanup(&existing, cancel)?;
                 let snapshot = tempfile::NamedTempFile::new_in(descriptor_path(&directory))?;
                 archive_tree(&existing, snapshot.as_file(), private, cancel)?;
                 tree.extract(snapshot.path(), cancel)?;
@@ -1480,7 +1658,7 @@ fn push_tree(
         tree.extract(archive, cancel)?;
         tree.finish(cancel)?;
         ensure!(!cancel.is_cancelled(), "connection closed before commit");
-        let a = CString::new(stage.path().file_name().unwrap().as_bytes())?;
+        let a = CString::new(stage_name.as_bytes())?;
         let b = CString::new(name.as_bytes())?;
         let flags = if exists {
             libc::RENAME_EXCHANGE
@@ -1501,19 +1679,50 @@ fn push_tree(
             "commit tree: {}",
             std::io::Error::last_os_error()
         );
+        Ok(exists)
+    })();
+    let exists = match result {
+        Ok(exists) => exists,
+        Err(error) => {
+            // Preserve the original precommit error; the destination is unchanged.
+            let _ = remove_stage(&directory, stage_name);
+            return Err(error);
+        }
+    };
+    // Once rename succeeds, no error may pass through generic failure conversion:
+    // it would erase the commit fact. Never exchange back an already visible tree.
+    let publication: Result<()> = (|| {
+        #[cfg(feature = "filesystem-fixtures")]
+        fixtures::check_push(&fixture, fixtures::PushFailure::PublicationSync)?;
         directory.sync_all()?;
         Ok(())
     })();
-    if let Ok(root) = open_at(
-        &directory,
-        stage.path().file_name().unwrap(),
-        libc::O_PATH | libc::O_DIRECTORY,
-    ) {
-        let _ = cleanup_tree(&root);
-    }
-    // After EXCHANGE the staging name contains the old destination tree.
-    drop(stage);
-    result
+    let publication_durable = publication.is_ok();
+    let cleanup = if !exists {
+        TreeCleanup::Complete
+    } else if !publication_durable {
+        // Retain the entire old tree without attempting cleanup after failed sync.
+        TreeCleanup::Pending {
+            name: stage_name.to_string_lossy().into_owned(),
+            reason: "publication_sync_failed_cleanup_not_attempted",
+        }
+    } else {
+        #[cfg(feature = "filesystem-fixtures")]
+        let cleanup = fixtures::check_push(&fixture, fixtures::PushFailure::Cleanup);
+        #[cfg(not(feature = "filesystem-fixtures"))]
+        let cleanup: Result<()> = Ok(());
+        match cleanup.and_then(|()| remove_stage(&directory, stage_name)) {
+            Ok(()) => TreeCleanup::Complete,
+            Err(_) => TreeCleanup::Pending {
+                name: stage_name.to_string_lossy().into_owned(),
+                reason: "old_tree_cleanup_failed",
+            },
+        }
+    };
+    Ok(TreePushOutcome {
+        publication_durable,
+        cleanup,
+    })
 }
 
 async fn watch(identity: (u32, u32), out: &Output, target: &Path) -> Result<()> {

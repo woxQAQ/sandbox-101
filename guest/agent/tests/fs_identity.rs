@@ -395,6 +395,357 @@ async fn settled(context: &Context, snapshot: Option<&fixtures::Snapshot>) {
     .expect("archive descriptor or RPC slot leaked");
 }
 
+fn push_archive(mode: Option<u32>) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    if let Some(mode) = mode {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_mode(mode);
+        header.set_size(0);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "restricted", std::io::empty())
+            .unwrap();
+    }
+    let mut header = tar::Header::new_gnu();
+    header.set_mode(0o600);
+    header.set_size(9);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "new", &b"new bytes"[..])
+        .unwrap();
+    builder.into_inner().unwrap()
+}
+
+async fn push(context: &Context, target: &Path, archive: &[u8]) -> Frame {
+    let mut client = connect(&context.agent);
+    let request = Frame {
+        id: "identity-push".into(),
+        method: "tree_push".into(),
+        ..Default::default()
+    }
+    .reply(json!({"path": target}), vec![], false);
+    write_frame(&mut client, &request).await.unwrap();
+    for (index, chunk) in archive.chunks(CHUNK).enumerate() {
+        write_frame(
+            &mut client,
+            &Frame {
+                id: request.id.clone(),
+                data: chunk.to_vec(),
+                eof: (index + 1) * CHUNK >= archive.len(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    tokio::time::timeout(DEADLINE, async {
+        loop {
+            let frame = read_frame(&mut client)
+                .await
+                .unwrap()
+                .expect("push closed without terminal frame");
+            assert!(frame.data.is_empty());
+            if frame.eof {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("tree push blocked")
+}
+
+fn directory_names(path: &Path) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn tree_push_mixed_owner_rejected_before_commit() {
+    isolated("tree_push_mixed_owner_rejected_before_commit", || {
+        let context = Context::new();
+        context.prove_workload();
+        let target = context.source.join("tree");
+        let nested = target.join("readonly");
+        std::fs::create_dir_all(&nested).unwrap();
+        owner(&target, 1, 1, 0o700);
+        std::fs::write(nested.join("old"), b"old bytes").unwrap();
+        owner(&nested.join("old"), 0, 0, 0o444);
+        owner(&nested, 0, 0, 0o555);
+        let before = directory_names(&context.source);
+        let inode = std::fs::metadata(&target).unwrap().ino();
+        runtime(async {
+            let frame = push(&context, &target, &push_archive(None)).await;
+            assert!(
+                !frame.error.is_empty(),
+                "mixed-owner admission RED: tree committed instead of rejecting"
+            );
+            assert!(frame.params_json().as_object().unwrap().is_empty());
+            assert_eq!(std::fs::metadata(&target).unwrap().ino(), inode);
+            let unchanged = std::fs::metadata(&nested).unwrap();
+            assert_eq!((unchanged.uid(), unchanged.mode() & 0o777), (0, 0o555));
+            assert!(!target.join("new").exists());
+            assert_eq!(std::fs::read(nested.join("old")).unwrap(), b"old bytes");
+            assert_eq!(
+                directory_names(&context.source),
+                before,
+                "precommit staging leaked"
+            );
+            // The fixture owner changes only its own read-only directory for the control.
+            owner(&nested, 1, 1, 0o555);
+            let frame = push(&context, &target, &push_archive(None)).await;
+            assert!(frame.error.is_empty(), "{}", frame.error);
+            assert_eq!(std::fs::read(target.join("new")).unwrap(), b"new bytes");
+            assert_eq!(directory_names(&context.source), before);
+            // Restoring access to this newly published fixture is test teardown only.
+            owner(&target.join("readonly"), 1, 1, 0o700);
+            settled(&context, None).await;
+        });
+    });
+}
+
+fn assert_clean_push(frame: &Frame) {
+    assert!(frame.error.is_empty(), "{}", frame.error);
+    assert_eq!(
+        frame.params_json(),
+        json!({
+            "committed": true,
+            "publication_durable": true,
+            "cleanup_complete": true,
+            "cleanup_required": false,
+        })
+    );
+}
+
+fn pending_evidence(frame: &Frame, target: &Path, old_inode: u64, durable: bool) -> PathBuf {
+    let params = frame.params_json();
+    assert_eq!(params["committed"], true);
+    assert_eq!(params["publication_durable"], durable);
+    assert_eq!(params["cleanup_complete"], false);
+    assert_eq!(params["cleanup_required"], true);
+    assert_eq!(
+        params["cleanup_reason"],
+        if durable {
+            "old_tree_cleanup_failed"
+        } else {
+            "publication_sync_failed_cleanup_not_attempted"
+        }
+    );
+    let name = Path::new(params["cleanup_name"].as_str().unwrap());
+    assert_eq!(name.components().count(), 1);
+    assert!(matches!(
+        name.components().next(),
+        Some(std::path::Component::Normal(_))
+    ));
+    assert!(name.file_name().unwrap().as_bytes().starts_with(b".tmp"));
+    let evidence = target.parent().unwrap().join(name);
+    assert_ne!(evidence, target);
+    assert_eq!(std::fs::metadata(&evidence).unwrap().ino(), old_inode);
+    assert!(!evidence.join("new").exists());
+    assert_eq!(std::fs::read(evidence.join("old")).unwrap(), b"old bytes");
+    assert_eq!(std::fs::read(target.join("new")).unwrap(), b"new bytes");
+    assert_ne!(std::fs::metadata(target).unwrap().ino(), old_inode);
+    evidence
+}
+
+fn old_push_tree(target: &Path) -> u64 {
+    std::fs::create_dir(target).unwrap();
+    owner(target, 1, 1, 0o700);
+    std::fs::write(target.join("old"), b"old bytes").unwrap();
+    owner(&target.join("old"), 1, 1, 0o600);
+    owner(target, 1, 1, 0o555);
+    std::fs::metadata(target).unwrap().ino()
+}
+
+#[test]
+fn tree_push_postcommit_cleanup_outcome_is_explicit() {
+    isolated("tree_push_postcommit_cleanup_outcome_is_explicit", || {
+        let context = Context::new();
+        context.prove_workload();
+        let fixture = fixtures::register_push((1, 1), fixtures::PushFailure::Cleanup).unwrap();
+        let target = fixture.scratch.path().join("tree");
+        let inode = old_push_tree(&target);
+        runtime(async {
+            // The fault cannot affect another destination, even in the same RPC server.
+            let other = context.source.join("unrelated");
+            assert_clean_push(&push(&context, &other, &push_archive(None)).await);
+            let frame = push(&context, &target, &push_archive(None)).await;
+            assert!(
+                frame.error.is_empty(),
+                "durable publication must report cleanup pending: {}",
+                frame.error
+            );
+            let evidence = pending_evidence(&frame, &target, inode, true);
+            let published_inode = std::fs::metadata(&target).unwrap().ino();
+            settled(&context, None).await;
+            assert_eq!(std::fs::metadata(&target).unwrap().ino(), published_inode);
+            assert_eq!(directory_names(fixture.scratch.path()).len(), 2);
+            // Registration is consumed by one operation; a later push has no fault.
+            assert_clean_push(&push(&context, &target, &push_archive(None)).await);
+            assert!(
+                evidence.exists(),
+                "later push must not collect another operation's evidence"
+            );
+            assert_eq!(directory_names(fixture.scratch.path()).len(), 2);
+        });
+    });
+}
+
+#[test]
+fn tree_push_postcommit_sync_failure_remains_error() {
+    isolated("tree_push_postcommit_sync_failure_remains_error", || {
+        let context = Context::new();
+        context.prove_workload();
+        for existing in [true, false] {
+            let fixture =
+                fixtures::register_push((1, 1), fixtures::PushFailure::PublicationSync).unwrap();
+            let target = fixture.scratch.path().join("tree");
+            let inode = existing.then(|| old_push_tree(&target));
+            runtime(async {
+                let frame = push(&context, &target, &push_archive(None)).await;
+                assert!(
+                    !frame.error.is_empty(),
+                    "old client must observe fsync failure"
+                );
+                assert_eq!(frame.error, "tree publication fsync failed after commit");
+                if let Some(inode) = inode {
+                    let evidence = pending_evidence(&frame, &target, inode, false);
+                    assert_eq!(std::fs::metadata(&evidence).unwrap().mode() & 0o777, 0o555);
+                    assert_eq!(directory_names(fixture.scratch.path()).len(), 2);
+                } else {
+                    assert_eq!(
+                        frame.params_json(),
+                        json!({
+                            "committed": true, "publication_durable": false,
+                            "cleanup_complete": true, "cleanup_required": false,
+                        })
+                    );
+                    assert_eq!(directory_names(fixture.scratch.path()).len(), 1);
+                }
+                let published_inode = std::fs::metadata(&target).unwrap().ino();
+                settled(&context, None).await;
+                assert_eq!(
+                    std::fs::metadata(&target).unwrap().ino(),
+                    published_inode,
+                    "unexpected second commit"
+                );
+                assert_eq!(std::fs::read(target.join("new")).unwrap(), b"new bytes");
+            });
+        }
+    });
+}
+
+#[test]
+fn tree_push_cleanup_success_is_reported() {
+    isolated("tree_push_cleanup_success_is_reported", || {
+        let context = Context::new();
+        context.prove_workload();
+        runtime(async {
+            for scenario in [
+                "new",
+                "empty",
+                "readonly",
+                "foreign-file",
+                "foreign-writable",
+                "foreign-group-writable",
+                "foreign-acl-writable",
+                "mode000",
+            ] {
+                let target = context.source.join(scenario);
+                if scenario != "new" {
+                    std::fs::create_dir(&target).unwrap();
+                    owner(&target, 1, 1, 0o700);
+                }
+                if scenario == "readonly"
+                    || scenario.starts_with("foreign-") && scenario.ends_with("writable")
+                {
+                    let nested = target.join("nested");
+                    std::fs::create_dir(&nested).unwrap();
+                    std::fs::write(nested.join("old"), b"old bytes").unwrap();
+                    owner(&nested.join("old"), 0, 0, 0o444);
+                    if scenario == "readonly" {
+                        owner(&nested, 1, 1, 0o555);
+                    } else if scenario == "foreign-group-writable" {
+                        owner(&nested, 0, 1, 0o770);
+                    } else if scenario == "foreign-acl-writable" {
+                        owner(&nested, 0, 0, 0o755);
+                        // Linux POSIX ACL xattr v2: owner, named workload user,
+                        // owning group, mask, other. All bytes are fixture data.
+                        let mut acl = 2u32.to_le_bytes().to_vec();
+                        for (tag, permissions, id) in [
+                            (1u16, 7u16, u32::MAX),
+                            (2, 7, 1),
+                            (4, 5, u32::MAX),
+                            (16, 7, u32::MAX),
+                            (32, 5, u32::MAX),
+                        ] {
+                            acl.extend(tag.to_le_bytes());
+                            acl.extend(permissions.to_le_bytes());
+                            acl.extend(id.to_le_bytes());
+                        }
+                        let path = CString::new(nested.as_os_str().as_bytes()).unwrap();
+                        assert_eq!(
+                            unsafe {
+                                libc::setxattr(
+                                    path.as_ptr(),
+                                    c"system.posix_acl_access".as_ptr(),
+                                    acl.as_ptr().cast(),
+                                    acl.len(),
+                                    0,
+                                )
+                            },
+                            0
+                        );
+                    } else {
+                        owner(&nested, 0, 0, 0o777);
+                    }
+                }
+                if scenario == "foreign-file" {
+                    std::fs::write(target.join("foreign"), b"foreign bytes").unwrap();
+                    owner(&target.join("foreign"), 0, 0, 0o444);
+                }
+                let before = directory_names(&context.source);
+                let archive = if scenario == "empty" {
+                    tar::Builder::new(Vec::new()).into_inner().unwrap()
+                } else {
+                    push_archive((scenario == "mode000").then_some(0))
+                };
+                let frame = push(&context, &target, &archive).await;
+                assert_clean_push(&frame);
+                let mut expected = before;
+                if scenario == "new" {
+                    expected.push("new".into());
+                    expected.sort();
+                }
+                assert_eq!(
+                    directory_names(&context.source),
+                    expected,
+                    "stage remains after {scenario}"
+                );
+                if scenario == "mode000" {
+                    assert_eq!(
+                        std::fs::metadata(target.join("restricted")).unwrap().mode() & 0o777,
+                        0
+                    );
+                    // Teardown touches only the new directory owned by this fixture.
+                    owner(&target.join("restricted"), 1, 1, 0o700);
+                }
+                if scenario == "readonly" {
+                    owner(&target.join("nested"), 1, 1, 0o700);
+                }
+                if scenario == "foreign-file" {
+                    assert_eq!(std::fs::metadata(target.join("foreign")).unwrap().uid(), 1);
+                }
+            }
+            settled(&context, None).await;
+        });
+    });
+}
+
 #[test]
 fn identity_fixture_proves_distinct_authorities() {
     if std::env::var("FS_WORKLOAD_PROBE").as_deref() == Ok("1") {

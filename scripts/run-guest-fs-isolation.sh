@@ -15,8 +15,9 @@ if [[ ${1:-} == --inside ]]; then
   mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$run/fixtures"
   unset FS_IDENTITY_CHILD FS_WORKLOAD_PROBE FS_PROBE_ALLOWED FS_PROBE_SENTINEL FS_PROBE_SENTINEL_DEV FS_PROBE_SENTINEL_INO
   export TMPDIR="$run/fixtures" FS_IDENTITY_REQUIRED=1
+  "$run/fs_identity" --list >"$run/test-list"
   "$run/fs_identity" --test-threads=1 --show-output | tee "$run/results"
-  python3 - "$run/results" <<'PY'
+  python3 - "$run/results" "$run/test-list" <<'PY'
 import pathlib
 import re
 import sys
@@ -26,13 +27,22 @@ required = {
     "identity_fixture_proves_distinct_authorities",
     "tree_pull_authority_stays_on_created_descriptor",
     "tree_pull_descriptor_cleanup_and_cancellation",
+    "tree_push_mixed_owner_rejected_before_commit",
+    "tree_push_postcommit_cleanup_outcome_is_explicit",
+    "tree_push_postcommit_sync_failure_remains_error",
+    "tree_push_cleanup_success_is_reported",
 }
+listed = re.findall(r"^(\S+): test$", pathlib.Path(sys.argv[2]).read_text(), re.MULTILINE)
+expected = set(listed)
+if not expected or len(expected) != len(listed) or not required <= expected:
+    sys.exit("BLOCKED: compiled test list must contain every required scenario")
 passed = re.findall(r"^test (\S+) \.\.\. ok$", text, re.MULTILINE)
-if set(passed) != required or len(passed) != len(required) or "SKIP" in text:
-    sys.exit("BLOCKED: every required scenario must actually PASS exactly once")
-if "3 passed; 0 failed; 0 ignored;" not in text:
+if set(passed) != expected or len(passed) != len(expected):
+    sys.exit("BLOCKED: every compiled scenario must actually PASS exactly once")
+if re.search(r"skip", text, re.IGNORECASE) or not re.search(
+        rf"test result: ok\. {len(expected)} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;", text):
     sys.exit("BLOCKED: incomplete identity test run")
-print("required dual-UID scenarios: 3 actual PASS; no skips")
+print(f"required dual-UID scenarios: {len(expected)} actual PASS; no skips")
 PY
   exit 0
 fi
