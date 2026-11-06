@@ -35,6 +35,77 @@ Use artifact storage with consistent `stat` and `/proc/PID/maps` device identity
 
 The materials receipt includes derivations, source/config identities and ELF checks. Guest packaging rejects `INTERP` and `NEEDED` and constructs a reproducible initramfs. Local build outputs and logs are ignored artifacts, not checked-in binaries or an independent build attestation.
 
+## Final composed verification of plans 001–005
+
+All five implementations and their review revisions were applied together to the root checkout, based on `da513a6`, without creating a parent-branch commit. Independent second-round code reviews approved both sandboxd and engine changes. The final combined run rebuilt and tested the actual root-checkout code; its full command/exit/time records are in [REPORT.txt](../build/implementation-final/run.Jd1dCRzq/REPORT.txt), with the implementation summary in [plans/IMPLEMENTATION.md](../plans/IMPLEMENTATION.md).
+
+| Final combined gate | Result |
+|---|---|
+| Workspace lint / capture-tag engine lint | Both passed with 0 issues |
+| Go vet: engine, sandboxd, protocol | All passed |
+| Rust fmt, clippy, workspace all-target tests | Passed; 29 tests, 0 ignored |
+| Required-native full engine race | Passed with `SANDBOX_REQUIRE_EROFS_TESTS=1`; command 86.214 s |
+| Full sandboxd / protocol race | Passed; commands 25.149 / 1.323 s |
+| Actual two-UID capture isolation | Four scenarios executed and passed, no skips |
+| Actual Rust fixture integration / race integration | Passed; commands 1.236 / 2.789 s |
+| Rebuilt actual daemon/CLI smoke | All four checks passed |
+| Combined production microVM acceptance | Passed; test 99.56 s, command 103.966 s |
+| Working/index whitespace checks | Both passed |
+
+The combined production evidence is [production/run.eVLB3y9x](../build/implementation-final/run.Jd1dCRzq/production/run.eVLB3y9x/). It exercised live daemon adoption, complete sandbox lifecycle, golden/warm provisioning and real guest TCP with 512 MiB guest RAM and the unchanged 640 MiB VMM limit. Before/after/warm observations retained UID/GID 65534, empty supplementary groups, all five capability sets zero, NoNewPrivs=1 and Seccomp=2. All thirteen scope records had no OOM kill. The owned transient service exited 0/SUCCESS and was subsequently inactive/not-found; its cgroup was absent. See [production-audit.json](../build/implementation-final/run.Jd1dCRzq/production-audit.json).
+
+The first combined harness used an overly deep TMPDIR, causing Unix socket path-length failures and preventing dropped-UID writer traversal through home ancestors. Original failure logs are retained. The affected commands were rerun sequentially with a newly owned short, traversable temporary directory; every required gate then passed without source/index changes. Ordinary non-verbose Go output does not enumerate optional internal skips; required native tooling, capture scenarios and production execution were separately enforced. Staged source-index and working-source fingerprints matched before/after verification; only prose/plan completion records were updated afterwards.
+
+Deployment boundaries remain explicit: sandboxd schema 2 rejects schema 1 before DDL, and engine restore rejects old snapshots lacking independent-publication proof. Preserve older state and use the matching previous binary for consistent backup before a separately reviewed migration; do not initialize over existing state. Deterministic disk/RAM truncation, equal-length zeroing and removal tests model loss/corruption; no physical host power-off was performed. Uncertain capture stages are resumed and fenced rather than rebuilt from the live source.
+
+## Privileged capture publication boundary (plan005)
+
+The implementation checkout is `/home/woxQAQ/.t3/worktrees/sandbox-101/t3-43b862e6`, based on `da513a6`. All paths below belong to this new checkout or its newly created KVM scratch; the retained parent materials were read only. No old daemon/state, parent evidence, capabilities, namespace restrictions or COW identity checks were modified.
+
+### Durability revision after P1 review
+
+Review found that the initial `materialized` journal flag preceded artifact fsync, and that replay of `captured` / `source_resumed` could hash a damaged unsynced disk into a new manifest. The revision makes the private-material completion proof durable only after source resume, fixed checksums, and successful `syncTree` of all four files and every child/staging directory. The journal atomically records `materialized` with `capture_files`, the fixed checksum map. Replays compare existing material to that proof and never replace it with hashes of changed bytes. `captured`, `source_resumed` and the new `capture_copied` progress step do not authorize replay publication: recovery resumes the source if necessary, fails Incompatible and preserves the uncertain materials. The live disk is not used to reconstruct the earlier generation. A legacy materialized flag without its checksum proof also fails closed. The complete step table is in [snapshot persistence](../engine/INTEGRATION.md#snapshot-and-restore-persistence).
+
+Current revision evidence is under `build/plan005-revision/` in the same isolated checkout:
+
+| Check | Revision evidence |
+|---|---|
+| Focused RED | `durability-red.log` / `.exit=1`: old code published truncated or equal-length zeroed disk/RAM at durable journal checkpoints, including materialized/synced/renamed states |
+| Focused GREEN | `focused-green.log` / `.exit=0`, 52.903 s under race; all 30 truncate/zero/remove cases pass; intact synced material converges with the original disk/RAM generation; uncertain earlier phases fail safely; GC/Clone/Reservation behavior regressions pass |
+| Required-native full engine race | `engine-native-race.log` / `.exit=0`, root 87.303 s; `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -race ./... -count=1 -timeout=180s`, using the native tool closure recorded below; detached execution preserved the full result beyond a 60 s caller wait budget |
+| Two-UID isolation | `capture-isolation.log`, all four actual filesystem scenarios pass without skips; retained source FD mutation cannot affect final publication; writer cannot open the published file for writing |
+| Workspace lint | `make lint`: `lint.log` / `.exit=0`, **0 issues** across engine/operator/protocol/sandboxd in this checkout |
+| Tagged engine lint | `golangci-lint run --build-tags=capture_isolation ./engine/...`: `lint-capture-tag.log`, **0 issues** |
+| Vet and whitespace | `engine-vet.log`, engine vet exit 0; `git diff --check` exit 0 |
+| Final production | `production.log` / `.exit=0`, **104.21 s**, artifacts `production/run.RoWMLVgm/`; real launcher, daemon adoption, lifecycle, golden/warm provisioning and guest TCP pass |
+
+The damage regression explicitly truncates, replaces bytes with equal-length zeros, or unlinks disk/RAM files after durable journal checkpoints before reopening the engine. It verifies non-publication, no re-capture, no extra VMM launch, preserved evidence and source recovery. These are deterministic filesystem-loss/corruption models; this acceptance did not physically power off the host. A process close/open that retains cached pages alone is not considered power-loss evidence. Focused tests without the tool PATH may skip the native-only GC fixture; the separate required-native full suite above supplies the tools and enforces their presence.
+
+Revision isolation evidence records source device 34/inode 517867 and independent publication inode 517873. A retained source write FD changes the source after publication seal/fsync/rename, while published hashes remain unchanged and the writer receives EACCES for the final path. Production reused the existing current guest and owned OCI input described below; no guest/kernel/VMM material rebuild or parallel VM suite was started. The final VMM identity/capability/COW/resource constraints remain unchanged. The transient production service exited successfully; the VM slot was explicitly released to the parent. Only plan005 source/test/document paths were modified, including fixes for its existing errcheck/staticcheck/formatter findings; no sandboxd or parent-plan edits were made.
+
+### Initial boundary verification (retained evidence)
+
+These runs predate the durability revision above and establish the original namespace/UID/inode boundary and material identities:
+
+| Check | Initial result / evidence |
+|---|---|
+| Capture-tag compilation | `GOWORK=off go -C engine test -tags=capture_isolation -run '^$' -count=1`, exit 0 |
+| Real two-UID filesystem isolation | `make capture-isolation-e2e`, all four named scenarios passed with no skips; `build/plan005/capture-isolation.log` |
+| Lifecycle and crash recovery | Lifecycle/SnapshotCrash focused suite passed; new prepared/materialized boundaries, legacy journal rejection, replaced staging inode, failed artifact resume and reservation coverage also passed under race |
+| GC | Engine service regressions passed for private staging, unknown entries, replaced parent/staging identities, dry-run and partial deletion/restart including substituted file inodes |
+| Required-native engine suite | `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -race ./... -count=1 -timeout=180s`, exit 0; root package 54.998 s; `build/plan005/engine-native-boundary.log` and `.exit` |
+| Vet / whitespace | `GOWORK=off go -C engine vet ./...` and `git diff --check`, exit 0; `build/plan005/engine-vet.log` |
+| Real KVM, both layouts | `make kvm-e2e`, exit 0, 10.418 s; `build/plan005/kvm.log`; artifacts `/dev/shm/plan005-kvm-43b862e6/kvm-acceptance-2325353818` |
+| Real production launcher | Final `make production-e2e`, exit 0, 120.46 s; `build/plan005/production-boundary.log`; artifacts `build/plan005/production-boundary/run.F5xey5OS/` |
+
+The isolation runner creates fresh user/mount/PID namespaces with subordinate mappings: namespace UID 0 maps host UID 1000, and UIDs 1–65536 map host 100000–165535; namespace GID 0 maps host GID 100 with the same subordinate range. The writer runs at UID/GID 1 with zero effective/permitted capabilities. The root-owned capture/operation parents are 0711 and publication is 0700. One retained-FD run recorded source device 34/inode 489888 and publication device 34/inode 489893. After private copy, seal, fsync and final rename, the writer changed the source through its preexisting write FD, received EACCES opening the final publication file, and all publication SHA256s remained unchanged. Separate dropped-UID processes created FIFO, symlink, directory, unknown and oversized artifacts; the production handoff rejected every case without blocking. Metadata/content sentinels remained unchanged. The engine operation regression also verifies that rejected material never publishes and the source resumes.
+
+Current guest package `/nix/store/05dhwqkv3l90d72q2kk6yp1bnbypfpa3-sandbox-guest-static-x86_64-unknown-linux-musl-0.1.0` was built from this checkout and packaged into `build/guest`, refreshing the Workload protocol. SHA256s: agent `2463ee2fbcba231fc2ef48d78b6674fdf02f29da6f844b0bb7a0a0af6f557ddb`, init `6ef7d992c9e95688ac3455f539226aee1efb7c3534f63d1eccd181c7f5dfc015`, initramfs `fa30e046b478fa0f772d644ca10ad09139c7046acf1db5b5fe37c9bacf4a1699`. Guest build receipt/log: `build/plan005/guest-package.txt` and `guest-build.log`. Native tools came from the pinned Nix closure `/nix/store/ppifd9prd8f7a4kkbrq5m50ss153r4jr-sandbox-kvm-acceptance-userspace`; its erofs, umoci, bubblewrap and e2fsprogs bin directories were explicitly added to PATH for required-native race tests.
+
+KVM reused the parent's exact kernel/VMM receipt at `/home/woxQAQ/sandbox-101/build/runtime/acceptance-materials/run.rVAvN3Ca` and the fresh `build/guest`. Production consumed the newly generated OCI layout under the new KVM run, using the previously verified explicit budget `259:0 rbps=268435456 wbps=134217728 riops=20000 wiops=10000`. No duplicate kernel/VMM materials were built. The final production run preserved UID/GID 65534, empty supplementary groups, zero capability sets, private namespaces, 512 MiB guest RAM and the unchanged 640 MiB VMM limit. It passed live daemon adoption, complete sandbox lifecycle, golden/warm provisioning and guest TCP allow/deny; its transient service exited successfully, with peak memory 8 GiB and no swap. Prior successful development runs remain separately at `build/plan005/production/run.kyNm30G5/`, `build/plan005/production-final/run.C8VOUuF1/` and `build/plan005/production-prepared/run.bfj62zPY/`; the final evidence is the boundary run above.
+
+The staging layout is operation-local `capture/<op>/publication`, under a root-controlled parent, with its exact path and inode identity journaled. It moves atomically onto the final snapshot path on the same state filesystem. This avoids a new top-level GC namespace and lets the existing recursive inode deletion journal cover staging descendants; GC ownership/inventory and behavior tests were updated accordingly. Admission reserves `(2 * MemoryMiB + DiskMiB + 224) MiB`, covering copy fallback and the retained CH source. Old capture journals without identities fail explicitly and preserve evidence, including existing GC deletion intents without a matching boundary. New manifests carry `publication_mode: IndependentInodes`; restore rejects older published or already-transferred manifests that cannot prove this boundary. A service regression verifies rejection without another VMM launch or evidence mutation. The plan index remains parent-maintained.
+
 ## Passed verification
 
 For the terminology cleanup and Workload portal rename, verification passed for Rust workspace tests with all targets, clippy and formatting; all sandboxd package race tests and vet; privileged integration compilation; the actual Rust fixture through the Go client under the race detector; and `make smoke`. The portal identity is now `workload`, so rebuild and deploy the guest agent and host daemons together, including refreshing guest image/template artifacts that contain the agent. Existing guest artifacts using the previous portal identity must be rebuilt before use with the updated host. The retained production/KVM results and material hashes below describe earlier runs; production/KVM acceptance was not rerun for this cleanup.

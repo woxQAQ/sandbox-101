@@ -22,6 +22,19 @@ func (s *Service) retireSnapshotOwned(
 	o Operation,
 	snapshot, excludeSandbox, excludeCheckpoint string,
 ) error {
+	return s.retireSnapshotOwnedExcept(
+		o,
+		snapshot,
+		excludeSandbox,
+		excludeCheckpoint,
+		o.ID,
+	)
+}
+
+func (s *Service) retireSnapshotOwnedExcept(
+	o Operation,
+	snapshot, excludeSandbox, excludeCheckpoint, excludeOperation string,
+) error {
 	var users int
 	if err := s.store.db.QueryRowContext(s.ctx, `SELECT
  (SELECT count(*) FROM sandboxes WHERE id!=? AND json_extract(body,'$.snapshot_id')=?) +
@@ -29,7 +42,7 @@ func (s *Service) retireSnapshotOwned(
  (SELECT count(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=?) +
  (SELECT count(*) FROM warm WHERE snapshot_id=?) +
  (SELECT count(*) FROM operations WHERE id!=? AND status IN ('pending','running') AND
-   (json_extract(body,'$.snapshot_id')=? OR json_extract(body,'$.command.template.snapshot_id')=?))`, excludeSandbox, snapshot, excludeCheckpoint, snapshot, snapshot, snapshot, o.ID, snapshot, snapshot).Scan(&users); err != nil {
+   (json_extract(body,'$.snapshot_id')=? OR json_extract(body,'$.command.template.snapshot_id')=?))`, excludeSandbox, snapshot, excludeCheckpoint, snapshot, snapshot, snapshot, excludeOperation, snapshot, snapshot).Scan(&users); err != nil {
 		return err
 	}
 	if users > 0 {
@@ -78,6 +91,14 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 	}
 	if cp.SandboxID != b.ID || cp.TenantID != b.TenantID {
 		return api.Fail(api.NotFound, "not found")
+	}
+	if err = requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		cp.SnapshotID,
+		b.TenantID,
+	); err != nil {
+		return err
 	}
 	if s.CredentialsMissing(*b) {
 		return api.Fail(

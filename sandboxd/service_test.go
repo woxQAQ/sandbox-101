@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ type fakeEngine struct {
 	vms          map[string]api.VM
 	snaps        map[string]api.Snapshot
 	calls        map[string]int
+	generation   map[string]int
 	failSnapshot bool
 	unavailable  bool
 	cloneGate    <-chan struct{}
@@ -32,10 +34,11 @@ type fakeEngine struct {
 
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
-		ops:   map[string]api.Operation{},
-		vms:   map[string]api.VM{},
-		snaps: map[string]api.Snapshot{},
-		calls: map[string]int{},
+		ops:        map[string]api.Operation{},
+		vms:        map[string]api.VM{},
+		snaps:      map[string]api.Snapshot{},
+		calls:      map[string]int{},
+		generation: map[string]int{},
 	}
 }
 
@@ -46,6 +49,12 @@ func (f *fakeEngine) Submit(
 	f.mu.Lock()
 	if o, ok := f.ops[r.Key]; ok {
 		f.mu.Unlock()
+		if !bytes.Equal(encode(o.Request), encode(r)) {
+			return o, api.Fail(
+				api.Conflict,
+				"key already belongs to different parameters",
+			)
+		}
 		return o, nil
 	}
 	gate := f.cloneGate
@@ -60,7 +69,18 @@ func (f *fakeEngine) Submit(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if o, ok := f.ops[r.Key]; ok {
+		if !bytes.Equal(encode(o.Request), encode(r)) {
+			return o, api.Fail(
+				api.Conflict,
+				"key already belongs to different parameters",
+			)
+		}
 		return o, nil
+	}
+	if r.Action == "delete" {
+		if _, ok := f.vms[r.VMID]; !ok {
+			return api.Operation{}, api.Fail(api.NotFound, "VM not found")
+		}
 	}
 	f.calls[r.Action]++
 	o := api.Operation{
@@ -97,6 +117,7 @@ func (f *fakeEngine) Submit(
 			return o, api.Fail(api.NotFound, "snapshot missing")
 		}
 		o.VMID = newID("vm_")
+		f.generation[o.VMID] = f.generation[r.SnapshotID]
 		f.vms[o.VMID] = api.VM{
 			ID:         o.VMID,
 			Config:     snap.Config,
@@ -127,6 +148,7 @@ func (f *fakeEngine) Submit(
 			break
 		}
 		o.SnapshotID = newID("snap_")
+		f.generation[o.SnapshotID] = f.generation[r.VMID]
 		f.snaps[o.SnapshotID] = api.Snapshot{
 			ID:        o.SnapshotID,
 			Config:    v.Config,
@@ -372,6 +394,275 @@ func claimTest(
 		t.Fatal(err)
 	}
 	return r
+}
+
+func TestSandboxTokenCannotReadForkOperation(t *testing.T) {
+	s, _, _, p := fixture(t)
+	source := claimTest(t, s, p, "source", nil)
+	r, err := s.Execute(
+		context.Background(),
+		p,
+		"fork",
+		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := Principal{TenantID: p.TenantID, SandboxID: source.Sandbox.ID}
+	if _, err := s.Operation(
+		context.Background(),
+		sp,
+		r.OperationID,
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatalf("fork operation visible to source: %v", err)
+	}
+	h := s.Handler()
+	get := func(id string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/v1/operations/"+id, nil)
+		req.Header.Set(
+			"Authorization",
+			"Bearer "+source.Tokens[source.Sandbox.ID],
+		)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	foreign, missing := get(r.OperationID), get("missing")
+	if foreign.Code != 404 || foreign.Body.String() != missing.Body.String() {
+		t.Fatalf(
+			"foreign response differs: %d %s",
+			foreign.Code,
+			foreign.Body.String(),
+		)
+	}
+}
+
+func TestSandboxTokenCanPollOwnLeaseOperations(t *testing.T) {
+	s, _, _, p := fixture(t)
+	source := claimTest(t, s, p, "source", nil)
+	sp := Principal{TenantID: p.TenantID, SandboxID: source.Sandbox.ID}
+	for _, action := range []string{"renew", "release"} {
+		o, err := s.Submit(
+			context.Background(),
+			sp,
+			action,
+			Command{Action: action, SandboxID: sp.SandboxID, TTLSeconds: 60},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.Wait(context.Background(), sp, o.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if action == "release" && len(r.Tokens) != 0 {
+			t.Fatal("terminated token issued")
+		}
+		for _, other := range []Principal{{TenantID: p.TenantID, SandboxID: "other"}, {TenantID: "other"}} {
+			if _, err := s.Operation(
+				context.Background(),
+				other,
+				o.ID,
+			); !isCode(
+				err,
+				api.NotFound,
+			) {
+				t.Fatalf("foreign read: %v", err)
+			}
+		}
+	}
+}
+
+func TestOperationResultTokensRespectPrincipal(t *testing.T) {
+	s, _, _, p := fixture(t)
+	source := claimTest(t, s, p, "source", nil)
+	r, err := s.Execute(
+		context.Background(),
+		p,
+		"fork",
+		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := s.store.operation(context.Background(), r.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Result.Tokens = map[string]string{"forged": "credential"}
+	if err := saveOp(context.Background(), s.store.db, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, principal := range []Principal{p, {Root: true}} {
+		got, err := s.Wait(context.Background(), principal, o.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Tokens) != 2 || got.Tokens["forged"] != "" {
+			t.Fatal("tokens were not rebuilt")
+		}
+	}
+	for _, credential := range []string{"alice-token", "root-secret"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/operations/"+o.ID, nil)
+		req.Header.Set("Authorization", "Bearer "+credential)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		var got Operation
+		if err := json.Unmarshal(
+			w.Body.Bytes(),
+			&got,
+		); err != nil || w.Code != 200 || len(got.Result.Tokens) != 2 ||
+			got.Result.Tokens["forged"] != "" {
+			t.Fatalf(
+				"HTTP result tokens were not rebuilt: status=%d decode=%v",
+				w.Code,
+				err,
+			)
+		}
+	}
+	o.Result.Sandboxes[0].TenantID = "foreign"
+	if err := saveOp(context.Background(), s.store.db, o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Operation(
+		context.Background(),
+		p,
+		o.ID,
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatalf("foreign result exposed: %v", err)
+	}
+}
+
+func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
+	s, f, _, p := fixture(t)
+	b := claimTest(t, s, p, "source", nil)
+	cp, err := s.Execute(
+		context.Background(),
+		p,
+		"checkpoint",
+		Command{Action: "checkpoint", SandboxID: b.Sandbox.ID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PutTenant(
+		context.Background(),
+		Principal{Root: true},
+		Tenant{
+			ID:            "bob",
+			Token:         "bob-token",
+			MaxSandboxes:  10,
+			MaxStorageMiB: 1 << 20,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	bob := Principal{TenantID: "bob"}
+	template := Template{
+		ID:         "imported",
+		Shape:      b.Sandbox.Shape,
+		SnapshotID: cp.Checkpoint.SnapshotID,
+	}
+	if _, err = s.Execute(
+		context.Background(),
+		bob,
+		"foreign",
+		Command{Action: "template_put", Template: &template},
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatalf("foreign snapshot accepted: %v", err)
+	}
+	if _, err = s.Execute(
+		context.Background(),
+		p,
+		"own",
+		Command{Action: "template_put", Template: &template},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Execute(
+		context.Background(),
+		Principal{TenantID: p.TenantID, SandboxID: b.Sandbox.ID},
+		"sandbox-import",
+		Command{Action: "template_put", Template: &template},
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	get := func(snapshot string) *httptest.ResponseRecorder {
+		template.ID = "bob-template"
+		template.SnapshotID = snapshot
+		req := httptest.NewRequest(
+			"POST",
+			"/v1/templates",
+			strings.NewReader(string(encode(Command{Template: &template}))),
+		)
+		req.Header.Set("Authorization", "Bearer bob-token")
+		req.Header.Set("Idempotency-Key", snapshot)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	foreign, unknown := get(cp.Checkpoint.SnapshotID), get("unknown")
+	if foreign.Code != 404 || unknown.Code != 404 ||
+		foreign.Body.String() != unknown.Body.String() {
+		t.Fatalf(
+			"authorization responses differ: %d %s / %d %s",
+			foreign.Code,
+			foreign.Body.String(),
+			unknown.Code,
+			unknown.Body.String(),
+		)
+	}
+	f.mu.Lock()
+	f.snaps["external"] = api.Snapshot{
+		ID:        "external",
+		Config:    api.Config{Shape: b.Sandbox.Shape},
+		Published: true,
+	}
+	f.mu.Unlock()
+	template.ID = "golden"
+	template.SnapshotID = "external"
+	if _, err = s.Execute(
+		context.Background(),
+		Principal{Root: true, TenantID: "bob"},
+		"root-import",
+		Command{Action: "template_put", Template: &template},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Execute(
+		context.Background(),
+		Principal{Root: true, TenantID: "bob"},
+		"root-foreign",
+		Command{
+			Action: "template_put",
+			Template: &Template{
+				ID:         "no-transfer",
+				Shape:      b.Sandbox.Shape,
+				SnapshotID: cp.Checkpoint.SnapshotID,
+			},
+		},
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatal("root transferred ownership", err)
+	}
+	if f.count("clone") != 0 {
+		t.Fatal("import cloned before authorization")
+	}
 }
 
 func TestClaimIdempotencyAndTenantIsolation(t *testing.T) {

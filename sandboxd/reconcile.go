@@ -83,10 +83,8 @@ func (s *Service) reap() {
 			action = "release"
 			key = "paused-expiry:" + b.ID + ":" + b.SnapshotID
 		}
-		if b.State == "terminated" && (b.VMID != "" || b.SnapshotID != "") {
-			action = "release"
-			key = "cleanup:" + b.ID + ":" + newID("")
-		}
+		// Terminated resources belong to their durable compensation intent.
+		// A fresh release would replace its receipt and retry sequence.
 		if action != "" {
 			_, _ = s.Submit(
 				s.ctx,
@@ -206,7 +204,13 @@ func (s *Service) pools() {
 		return
 	}
 	for _, t := range templates {
-		if t.State != "ready" || t.SnapshotID == "" {
+		if t.State != "ready" || t.SnapshotID == "" ||
+			requireSnapshotOwner(
+				s.ctx,
+				s.store.db,
+				t.SnapshotID,
+				t.TenantID,
+			) != nil {
 			continue
 		}
 		rows, e := s.store.db.QueryContext(
@@ -316,6 +320,14 @@ func (s *Service) pools() {
 
 func (s *Service) refill(o *Operation) error {
 	t := *o.Command.Template
+	if err := requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		t.SnapshotID,
+		o.TenantID,
+	); err != nil {
+		return err
+	}
 	v, err := s.engine(
 		*o,
 		"warm-clone",
@@ -371,6 +383,14 @@ func (s *Service) refill(o *Operation) error {
 	}
 	ownership := s.lockResourceOwnership()
 	defer ownership()
+	if err = requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		t.SnapshotID,
+		o.TenantID,
+	); err != nil {
+		return err
+	}
 	_, err = s.store.db.ExecContext(
 		s.ctx,
 		"INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?) ON CONFLICT(vm_id) DO NOTHING",

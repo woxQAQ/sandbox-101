@@ -739,6 +739,29 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 						path,
 					)
 				}
+				boundary := o.Journal.CaptureBoundary
+				if boundary == nil || boundary.Path != path ||
+					d.Nodes["."] != boundary.Parent {
+					report.Retained = append(
+						report.Retained,
+						GCIssue{
+							path,
+							"capture deletion boundary unconfirmed; manual recovery required",
+						},
+					)
+					continue
+				}
+				if stage, present := d.Nodes["publication"]; present &&
+					stage != boundary.Publication {
+					report.Retained = append(
+						report.Retained,
+						GCIssue{
+							path,
+							"capture deletion staging identity unconfirmed",
+						},
+					)
+					continue
+				}
 			}
 		case "imports":
 			if _, ok := g.images["sha256:"+parts[1]]; !ok ||
@@ -816,6 +839,38 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue
 		}
+		if o.Journal.CaptureBoundary == nil {
+			report.Retained = append(
+				report.Retained,
+				GCIssue{
+					path,
+					"legacy capture ownership requires manual recovery",
+				},
+			)
+			continue
+		}
+		st, statErr := os.Lstat(path)
+		if statErr != nil || o.Journal.CaptureBoundary.Path != path ||
+			gcNode(st) != o.Journal.CaptureBoundary.Parent {
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, "capture parent identity changed"},
+			)
+			continue
+		}
+		if stage, x := os.Lstat(
+			filepath.Join(path, "publication"),
+		); x == nil &&
+			gcNode(stage) != o.Journal.CaptureBoundary.Publication {
+			report.Retained = append(
+				report.Retained,
+				GCIssue{path, "publication staging identity changed"},
+			)
+			continue
+		} else if x != nil &&
+			!os.IsNotExist(x) {
+			return x
+		}
 		if err := g.idle(o.Operation.VMID); err != nil {
 			report.Retained = append(
 				report.Retained,
@@ -826,11 +881,14 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		if err := apply(
 			path,
 			map[string]string{
-				"manifest.json":    "",
-				"disk.raw":         "",
-				"ch/config.json":   "",
-				"ch/state.json":    "",
-				"ch/memory-ranges": "",
+				"ch/config.json":               "",
+				"ch/state.json":                "",
+				"ch/memory-ranges":             "",
+				"publication/manifest.json":    "",
+				"publication/disk.raw":         "",
+				"publication/ch/config.json":   "",
+				"publication/ch/state.json":    "",
+				"publication/ch/memory-ranges": "",
 			},
 			true,
 			nil,

@@ -63,6 +63,14 @@ func (s *Service) fork(o *Operation) error {
 			return err
 		}
 	}
+	if err := requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		o.SnapshotID,
+		o.TenantID,
+	); err != nil {
+		return s.rollbackFork(o, err)
+	}
 	type branchResult struct {
 		index int
 		b     Sandbox
@@ -133,11 +141,19 @@ func (s *Service) rollbackFork(o *Operation, cause error) error {
 		unlock := s.lock(id)
 		b, err := getSandbox(s.ctx, s.store.db, id)
 		if err == nil {
-			err = s.release(o, &b)
+			// Persist compensation ownership even for already activated branches.
+			b.State, b.OperationID = "terminated", o.ID
+			err = saveSandbox(s.ctx, s.store.db, b)
+			if err == nil {
+				err = s.release(o, &b)
+			}
 		}
 		unlock()
 		if err != nil {
-			return errors.Join(cause, err)
+			cause = errors.Join(cause, err)
+			if s.ctx.Err() != nil {
+				return cause
+			}
 		}
 	}
 	if o.OwnedSnapshot {

@@ -20,6 +20,8 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
+const storeSchemaVersion = 2
+
 type store struct {
 	db      *sql.DB
 	lock    *os.File
@@ -149,7 +151,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 		var version int
 		if err = s.db.QueryRow("SELECT version FROM version").
 			Scan(&version); err != nil ||
-			version != 1 {
+			version != storeSchemaVersion {
 			return fail(
 				api.Fail(api.Incompatible, "unsupported database schema"),
 			)
@@ -157,13 +159,15 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	_, err = s.db.Exec(`
  CREATE TABLE IF NOT EXISTS version(version INTEGER NOT NULL);
- INSERT INTO version SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM version);
+ INSERT INTO version SELECT 2 WHERE NOT EXISTS (SELECT 1 FROM version);
  CREATE TABLE IF NOT EXISTS tenants(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS sandboxes(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, state TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS checkpoints(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, idem_key TEXT NOT NULL, spec_hash TEXT NOT NULL, status TEXT NOT NULL, body BLOB NOT NULL, UNIQUE(tenant,idem_key));
  CREATE TABLE IF NOT EXISTS warm(vm_id TEXT PRIMARY KEY, template_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, created_at INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS snapshot_owners(snapshot_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, source_operation_id TEXT NOT NULL, source_kind TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS resource_recovery(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL, hash TEXT NOT NULL);
  `)
 	if err != nil {
@@ -172,12 +176,12 @@ func openStore(dir string, initialize bool) (*store, error) {
 	var version int
 	if err = s.db.QueryRow("SELECT version FROM version").
 		Scan(&version); err != nil ||
-		version != 1 {
+		version != storeSchemaVersion {
 		return fail(api.Fail(api.Incompatible, "unsupported database schema"))
 	}
 	if err = atomicFile(
 		filepath.Join(dir, "initialized"),
-		[]byte("sandboxd schema 1\n"),
+		[]byte(fmt.Sprintf("sandboxd schema %d\n", storeSchemaVersion)),
 	); err != nil {
 		return fail(err)
 	}
@@ -252,6 +256,61 @@ func decodeSandbox(b []byte) (Sandbox, error) {
 type executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// Snapshot owners record immutable authorization provenance, never GC roots.
+// captured means a sandboxd engine receipt; external_import means a root grant.
+func requireSnapshotOwner(
+	ctx context.Context,
+	e executor,
+	snapshot, tenant string,
+) error {
+	if snapshot == "" {
+		return nil
+	}
+	var owner string
+	err := e.QueryRowContext(ctx, "SELECT tenant_id FROM snapshot_owners WHERE snapshot_id=?", snapshot).
+		Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != tenant) {
+		return api.Fail(api.NotFound, "not found")
+	}
+	return err
+}
+
+func recordSnapshotOwner(
+	ctx context.Context,
+	e executor,
+	snapshot, tenant, operation, kind string,
+) error {
+	if snapshot == "" || tenant == "" || operation == "" {
+		return api.Fail(api.ManualRecovery, "snapshot source is incomplete")
+	}
+	if _, err := e.ExecContext(
+		ctx,
+		`INSERT INTO snapshot_owners(snapshot_id,tenant_id,source_operation_id,source_kind)
+        VALUES(?,?,?,?) ON CONFLICT(snapshot_id) DO NOTHING`,
+		snapshot,
+		tenant,
+		operation,
+		kind,
+	); err != nil {
+		return err
+	}
+	var owner, source, sourceKind string
+	if err := e.QueryRowContext(ctx, "SELECT tenant_id,source_operation_id,source_kind FROM snapshot_owners WHERE snapshot_id=?", snapshot).
+		Scan(&owner, &source, &sourceKind); err != nil {
+		return err
+	}
+	if owner != tenant {
+		return api.Fail(api.NotFound, "not found")
+	}
+	if source != operation || sourceKind != kind {
+		return api.Fail(
+			api.ManualRecovery,
+			"snapshot source conflicts with immutable provenance",
+		)
+	}
+	return nil
 }
 
 func saveSandbox(ctx context.Context, e executor, b Sandbox) error {

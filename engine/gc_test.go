@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -493,6 +494,74 @@ func TestGCFailsClosedForCorruptOrUnknownRoots(t *testing.T) {
 			gcExists(t, old, true)
 			if len(r.Retained) == 0 {
 				t.Fatal("missing diagnostic")
+			}
+		})
+	}
+}
+
+func TestGCCaptureBoundaryIdentityAndDryRun(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprint(replace), func(t *testing.T) {
+			e, b := openGCTest(t, nil)
+			vm := wait(
+				t,
+				e,
+				api.Request{Key: "create", Action: "create", Config: config()},
+			)
+			wait(
+				t,
+				e,
+				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
+			)
+			v, _ := e.loadVM(context.Background(), vm.VMID)
+			if err := os.Remove(
+				filepath.Join(v.Resource.ImageDir, "image.json"),
+			); err != nil {
+				t.Fatal(err)
+			}
+			op, err := e.Submit(
+				context.Background(),
+				api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
+				t.Fatal(final)
+			}
+			if err = writeJSON(
+				filepath.Join(v.Resource.ImageDir, "image.json"),
+				b.image,
+			); err != nil {
+				t.Fatal(err)
+			}
+			wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
+			path := filepath.Join(v.Resource.Dir, "capture", op.ID)
+			if replace {
+				// Preserve the original outside the inventory while substituting an
+				// otherwise identical-looking directory at the journaled pathname.
+				retained := filepath.Join(t.TempDir(), "original")
+				if err = os.Rename(path, retained); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Mkdir(path, 0o711); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gcPass(t, e, GCOptions{DryRun: true})
+			after, err := os.Stat(path)
+			if err != nil || gcNode(before) != gcNode(after) ||
+				!before.ModTime().Equal(after.ModTime()) {
+				t.Fatalf("dry run changed capture: %v", err)
+			}
+			r := gcPass(t, e, GCOptions{})
+			gcExists(t, path, replace)
+			if replace && len(r.Retained) == 0 {
+				t.Fatal("replacement was not diagnosed")
 			}
 		})
 	}

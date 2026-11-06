@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -191,7 +192,7 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 	}
 	if err = atomicFile(
 		filepath.Join(state, "initialized"),
-		[]byte("sandboxd schema 1\n"),
+		[]byte(fmt.Sprintf("sandboxd schema %d\n", storeSchemaVersion)),
 	); err != nil {
 		return point, err
 	}

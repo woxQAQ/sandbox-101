@@ -22,7 +22,7 @@ Use a TLS gateway preserving HTTP/1.1 `Connection: Upgrade` / `Upgrade: sandbox-
 
 ## Image and network configuration
 
-Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Sandbox templates freeze the selected image, resource shape and golden snapshot dependency at admission.
+Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Sandbox templates freeze the selected image, resource shape and golden snapshot dependency at admission. Tenant snapshot imports require trusted provenance for that tenant. Import external golden snapshots with a root `template_put` and explicit `X-Tenant-ID`; an existing owner cannot be transferred. Metadata schema 2 persists capture owners and root import grants, including in backups. Schema 1 is rejected before DDL: stop the service, preserve a consistent backup and review resource ownership before designing an explicit migration. Do not overwrite or delete old state to bypass this check.
 
 Network modes:
 

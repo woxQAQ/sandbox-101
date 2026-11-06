@@ -633,7 +633,7 @@ func (b *CloudHypervisor) Launch(
 	); err != nil {
 		return err
 	}
-	for _, path := range []string{r.Disk, filepath.Join(r.Dir, "capture")} {
+	for _, path := range []string{r.Disk} {
 		if err := os.Chown(path, int(b.opts.UID), int(b.opts.GID)); err != nil {
 			return err
 		}
@@ -965,24 +965,38 @@ func (b *CloudHypervisor) Resume(ctx context.Context, r Resource) error {
 	return err
 }
 
+// prepareCaptureWriter delegates only the pinned CH leaf, before source pause.
+func (b *CloudHypervisor) prepareCaptureWriter(r Resource, dst string) error {
+	return delegateCapture(r, dst, int(b.opts.UID), int(b.opts.GID))
+}
+
 func (b *CloudHypervisor) Capture(
 	ctx context.Context,
 	r Resource,
 	dst string,
 ) error {
-	if err := os.Chown(
-		filepath.Dir(dst),
-		int(b.opts.UID),
-		int(b.opts.GID),
-	); err != nil {
-		return err
-	}
-	if err := os.Chown(dst, int(b.opts.UID), int(b.opts.GID)); err != nil {
-		return err
-	}
 	rel, err := filepath.Rel(filepath.Join(r.Dir, "capture"), dst)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return api.Fail(api.Invalid, "capture outside instance-owned directory")
+	parts := strings.Split(rel, string(filepath.Separator))
+	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") ||
+		parts[1] != "ch" {
+		return api.Fail(api.Invalid, "capture outside prepared CH leaf")
+	}
+	leaf, err := openCaptureDir(dst)
+	if err != nil {
+		return err
+	}
+	st, err := leaf.Stat()
+	_ = leaf.Close()
+	if err != nil {
+		return err
+	}
+	owner := st.Sys().(*syscall.Stat_t)
+	if owner.Uid != b.opts.UID || owner.Gid != b.opts.GID ||
+		st.Mode().Perm() != 0o700 {
+		return api.Fail(
+			api.Incompatible,
+			"capture writer leaf was not prepared",
+		)
 	}
 	_, err = b.api(
 		ctx,

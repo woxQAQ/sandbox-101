@@ -238,7 +238,8 @@ func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
 		t.Fatal("state directory was not made private", err)
 	}
 	if _, err = store.db.Exec(
-		"UPDATE version SET version=2; DROP TABLE checkpoints",
+		"UPDATE version SET version=?; DROP TABLE checkpoints",
+		storeSchemaVersion+1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
 		Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 0 || version != 2 {
+	if tables != 0 || version != storeSchemaVersion+1 {
 		t.Fatal("opening an incompatible database changed its schema")
 	}
 }

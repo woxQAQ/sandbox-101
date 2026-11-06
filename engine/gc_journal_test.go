@@ -11,6 +11,121 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
+func TestGCCaptureStagingPartialDeletionRestart(t *testing.T) {
+	for _, damage := range []string{"complete", "replacement", "legacy-journal"} {
+		t.Run(damage, func(t *testing.T) {
+			replace := damage == "replacement"
+			legacy := damage == "legacy-journal"
+			interrupt := false
+			e, b := openGCTest(t, func(step string) error {
+				if interrupt && step == "gc_unlinked" {
+					return ErrInterrupted
+				}
+				return nil
+			})
+			vm := wait(
+				t,
+				e,
+				api.Request{Key: "create", Action: "create", Config: config()},
+			)
+			wait(
+				t,
+				e,
+				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
+			)
+			v, _ := e.loadVM(context.Background(), vm.VMID)
+			if err := os.Remove(
+				filepath.Join(v.Resource.ImageDir, "image.json"),
+			); err != nil {
+				t.Fatal(err)
+			}
+			op, err := e.Submit(
+				context.Background(),
+				api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
+				t.Fatal(final)
+			}
+			if err = writeJSON(
+				filepath.Join(v.Resource.ImageDir, "image.json"),
+				b.image,
+			); err != nil {
+				t.Fatal(err)
+			}
+			wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
+			// Terminal operation publication can precede release of its lifecycle lock.
+			lock := e.vmLock(vm.VMID)
+			lock.Lock()
+			interrupt = true
+			lock.Unlock()
+			if _, err = e.CollectGarbage(
+				context.Background(),
+				GCOptions{},
+			); !errors.Is(
+				err,
+				ErrInterrupted,
+			) {
+				t.Fatalf("missing partial deletion: %v", err)
+			}
+			path := filepath.Join(v.Resource.Dir, "capture", op.ID)
+			if legacy {
+				o, x := e.loadOp(context.Background(), op.ID)
+				if x != nil {
+					t.Fatal(x)
+				}
+				o.Journal.CaptureBoundary = nil
+				if x = e.saveOp(&o, "legacy-capture"); x != nil {
+					t.Fatal(x)
+				}
+			}
+			if err = e.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if replace {
+				// Keep the original inode alive to prevent allocator reuse.
+				file := filepath.Join(path, "publication", "disk.raw")
+				if _, err = os.Stat(file); err != nil {
+					file = filepath.Join(
+						path,
+						"publication",
+						"ch",
+						"memory-ranges",
+					)
+				}
+				if err = os.Rename(
+					file,
+					filepath.Join(t.TempDir(), "retained"),
+				); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(
+					file,
+					[]byte("replacement"),
+					0o600,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opts := e.opts
+			opts.Init = false
+			opts.Fault = nil
+			next, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			r := gcPass(t, next, GCOptions{})
+			gcExists(t, path, replace || legacy)
+			if (replace || legacy) && len(r.Retained) == 0 {
+				t.Fatal("partial-deletion replacement not retained")
+			}
+		})
+	}
+}
+
 func TestGCDeletionJournalRetiresAfterExplicitVMDeletion(t *testing.T) {
 	interrupt := false
 	e, _ := openGCTest(t, func(step string) error {

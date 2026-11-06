@@ -94,17 +94,22 @@ func regular(path string) error {
 // Its caller must keep the source stable until it returns. It deliberately does
 // not fsync: snapshot capture must resume the source before publication syncing.
 func copyFile(src, dst string, mode os.FileMode) error {
-	if e := regular(src); e != nil {
-		return e
-	}
-	in, e := os.Open(src)
+	fd, e := unix.Open(
+		src,
+		unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC,
+		0,
+	)
 	if e != nil {
 		return e
 	}
+	in := os.NewFile(uintptr(fd), src)
 	defer func() { _ = in.Close() }()
 	st, e := in.Stat()
 	if e != nil {
 		return e
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", src)
 	}
 	out, e := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_RDWR, mode)
 	if e != nil {

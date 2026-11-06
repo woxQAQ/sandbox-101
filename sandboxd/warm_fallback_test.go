@@ -108,9 +108,13 @@ func warmFallbackFixture(
 	); err != nil {
 		t.Fatal(err)
 	}
+	importer := principal
+	if golden {
+		importer = Principal{Root: true, TenantID: principal.TenantID}
+	}
 	if _, err = service.Execute(
 		context.Background(),
-		principal,
+		importer,
 		"template",
 		Command{Action: "template_put", Template: &template},
 	); err != nil {

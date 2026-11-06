@@ -12,7 +12,7 @@ See the [daemon example](../deploy/sandboxd/sandboxd.example.yaml) and [client e
 
 Use `Authorization: Bearer TOKEN`. Root tokens administer tenants and metrics; tenant tokens manage their templates/sandboxes/checkpoints; sandbox tokens are restricted to their own sandbox. Root may select an existing tenant with `X-Tenant-ID`. Foreign and missing objects return the same 404 body.
 
-Mutations require a stable `Idempotency-Key`. The same key and parameters return the original operation/result, including terminal failure. Changed parameters conflict. A canceled HTTP request stops waiting while durable work continues. `Prefer: respond-async` returns 202 with an operation and `Location`; poll that location with the same authority. Result responses can contain sandbox tokens, so store them privately.
+Mutations require a stable `Idempotency-Key`. The same key and parameters return the original operation/result, including terminal failure. Changed parameters conflict. A canceled HTTP request stops waiting while durable work continues. `Prefer: respond-async` returns 202 with an operation and `Location`; poll that location with the same authority. Sandbox tokens may poll only their own renew/release operations, including the completed release after termination; terminated credentials remain rejected on other routes. An operation ID is not an authorization credential. Result responses can contain sandbox tokens, so store them privately.
 
 Create a tenant using a root token and `POST /v1/tenants`:
 
@@ -34,7 +34,7 @@ The response returns the tenant token when generated. With that tenant authority
 }
 ```
 
-Replace the digest with an already imported engine image. `template_put` registers cold provisioning or an existing published golden snapshot. `template_build` creates a build VM, runs optional `template.warmup`, prepares the guest for capture, publishes a golden snapshot and retires the build VM. Build warmup uses a deterministic keyed guest execution intent. Build network currently remains blocked, so bake dependencies into the image or supply them without external fetches. Increase `target_warm` on a published golden template to maintain a pool.
+Replace the digest with an already imported engine image. `template_put` registers cold provisioning or an authorized published golden snapshot. Snapshot provenance is private to one tenant: tenants can register their own sandboxd captures; external golden snapshots require a root `template_put` with an explicit target tenant (`X-Tenant-ID` over HTTP). Published engine state alone grants no tenant access. Root import cannot transfer an existing snapshot owner. Root may pause or checkpoint an existing sandbox with its default or selected request tenant; every resulting capture remains owned by the source sandbox's tenant, including receipt recovery. Captures and root grants are immutable SQLite authorization records, rechecked before publication, clone and warm refill; these records do not retain physical snapshots for GC. `template_build` creates a build VM, runs optional `template.warmup`, prepares the guest for capture, publishes a golden snapshot and retires the build VM. Build warmup uses a deterministic keyed guest execution intent. Build network currently remains blocked, so bake dependencies into the image or supply them without external fetches. Increase `target_warm` on a published golden template to maintain a pool.
 
 Claim using `POST /v1/claim`:
 
@@ -72,7 +72,7 @@ Provisioning atomically transfers a matching warm instance, otherwise clones the
 
 Bodies are strict JSON with a 1 MiB limit. Fork takes `count`; rollback takes `checkpoint_id`. Checkpoint creation returns a sandbox checkpoint referring to a published engine snapshot. A paused source can checkpoint or fork without waking. Release closes active data streams and deletes dedicated resources. Repeated operation requests converge on the same result.
 
-`paused` means an immutable sleep snapshot and no VMM. Concurrent data requests converge on one resume operation and new clone. Resume preserves machine identity, shell/process state and the guest execution ledger; fork resets identity/environment/history. Failed resume retains the sleep snapshot and permits a later distinct attempt. Reaper actions record their expected deadline and recheck it under the sandbox lock, so stale expiry work cannot delete a renewed sandbox.
+`paused` means an immutable sleep snapshot and no VMM. Concurrent data requests converge on one resume operation and new clone. Resume preserves machine identity, shell/process state and the guest execution ledger; fork resets identity/environment/history. Publishing a running sandbox atomically transfers its old sleep snapshot and memory storage charge to a durable cleanup intent. Cleanup retries independently, preserves live shared references, and retains the tenant charge until physical reclamation. A later pause always captures the current running state. Failed resume retains the sleep snapshot and permits a later distinct attempt. Reaper actions record their expected deadline and recheck it under the sandbox lock, so stale expiry work cannot delete a renewed sandbox.
 
 `auto_renew` refreshes TTL when a data connection is established or a Preview HTTP request is admitted. Expired leases cannot be revived by activity. Existing raw streams are not decoded by the host, so internal RPC frames do not continuously renew a long-lived connection; call `renew` explicitly for that case. Rebind work that outlives the lease cannot renew it afterward.
 
@@ -109,6 +109,8 @@ sandboxctl --token-file /private/tenant-token --key pause-001 change SANDBOX_ID 
 ```
 
 `pause.json` contains `{"action":"pause"}`. `sandboxctl exec` uses unkeyed execution; use the SDK's explicit `exec_key` for durable deduplication.
+
+Metadata schema 2 stores snapshot authorization in SQLite and preserves it through backup/restore. Schema 1 requires explicit ownership review and is rejected before schema DDL; no labels or existing template references are used to infer owners. Stop the service and preserve a consistent backup before planning migration; do not overwrite old state to bypass the version boundary.
 
 ## Egress, Preview and boundaries
 

@@ -461,10 +461,21 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	}
 	r := *o.Journal.Resource
 	capture := filepath.Join(r.Dir, "capture", o.Operation.ID)
-	// A prior capture may have been atomically moved before the DB publication.
-	if _, err = os.Stat(s.Dir); err == nil && o.Journal.Captured {
-		capture = s.Dir
+	if o.Journal.CaptureBoundary == nil &&
+		(o.Journal.Captured || o.Journal.ResumeRequired) {
+		return e.captureFailure(
+			o,
+			r,
+			api.Fail(
+				api.Incompatible,
+				"legacy capture journal requires manual recovery; original materials retained",
+			),
+		)
 	}
+	stage := filepath.Join(capture, "publication")
+	// A replay cannot prove bytes copied before source resume reached storage.
+	// Only this uninterrupted attempt may promote those bytes to a durable proof.
+	capturedThisAttempt := !o.Journal.Captured
 	if !o.Journal.Captured {
 		if o.Journal.ResumeRequired {
 			obs, x := e.opts.Backend.Inspect(e.ctx, r)
@@ -501,8 +512,22 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 			return e.ctx.Err()
 		}
 		defer func() { <-e.capture }()
-		if err = os.MkdirAll(filepath.Join(capture, "ch"), 0o700); err != nil {
-			return err
+		if o.Journal.CaptureBoundary == nil {
+			o.Journal.CaptureBoundary, err = prepareCapture(r, o.Operation.ID)
+			if err != nil {
+				return err
+			}
+			if backend, ok := e.opts.Backend.(interface{ prepareCaptureWriter(Resource, string) error }); ok {
+				if err = backend.prepareCaptureWriter(
+					r,
+					filepath.Join(capture, "ch"),
+				); err != nil {
+					return err
+				}
+			}
+			if err = e.saveOp(o, "capture_prepared"); err != nil {
+				return err
+			}
 		}
 		o.Journal.ResumeRequired = true
 		if err = e.saveOp(o, "pause_intent"); err != nil {
@@ -523,7 +548,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		}
 		if err = copyFile(
 			r.Disk,
-			filepath.Join(capture, "disk.raw"),
+			filepath.Join(stage, "disk.raw"),
 			0o600,
 		); err != nil {
 			return e.captureFailure(o, r, err)
@@ -548,14 +573,96 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 			return err
 		}
 	}
-	// No fsync, hashing or publication work is done while the source is paused.
-	files, err := hashTree(capture)
+	// No artifact fsync, hashing or publication work is done while paused.
+	if !capturedThisAttempt &&
+		(!o.Journal.Materialized || len(o.Journal.CaptureFiles) != 4) {
+		return api.Fail(
+			api.Incompatible,
+			"capture interrupted before durable independent materials; source resumed and materials retained for manual recovery",
+		)
+	}
+	boundary := o.Journal.CaptureBoundary
+	if boundary == nil || boundary.Path != capture {
+		return api.Fail(
+			api.Incompatible,
+			"capture ownership journal missing or inconsistent",
+		)
+	}
+	parent, err := boundary.open()
 	if err != nil {
 		return err
+	}
+	_ = parent.Close()
+	if st, x := os.Lstat(s.Dir); x == nil {
+		if !o.Journal.ArtifactsSynced || gcNode(st) != boundary.Publication {
+			return api.Fail(
+				api.Incompatible,
+				"published directory identity unconfirmed",
+			)
+		}
+		stage = s.Dir
+	} else if !os.IsNotExist(x) {
+		return x
+	}
+	stageInfo, err := os.Lstat(stage)
+	if err != nil {
+		return err
+	}
+	if gcNode(stageInfo) != boundary.Publication {
+		return api.Fail(
+			api.Incompatible,
+			"publication staging identity changed",
+		)
+	}
+	if !o.Journal.Materialized {
+		if err = materializeCapture(
+			boundary,
+			v.VM.Config.Shape.MemoryMiB,
+		); err != nil {
+			return err
+		}
+		// This progress checkpoint is deliberately not a completion proof.
+		if err = e.saveOp(o, "capture_copied"); err != nil {
+			return err
+		}
+	}
+	files, err := hashTree(stage)
+	if err != nil {
+		return api.Fail(
+			api.Incompatible,
+			"independent capture integrity: %v",
+			err,
+		)
 	}
 	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
 		if _, ok := files[name]; !ok {
 			return api.Fail(api.Incompatible, "capture missing %s", name)
+		}
+	}
+	if len(files) != 4 {
+		return api.Fail(
+			api.Incompatible,
+			"unexpected independent capture artifacts",
+		)
+	}
+	if o.Journal.Materialized {
+		// Never rehash altered replay input into a new authoritative manifest.
+		if !reflect.DeepEqual(files, o.Journal.CaptureFiles) {
+			return api.Fail(
+				api.Incompatible,
+				"durable independent capture checksum mismatch; materials retained",
+			)
+		}
+	} else {
+		// Include disk.raw, all independent CH data, and every directory entry.
+		// The completion flag and fixed checksums become durable only afterwards.
+		if err = syncTree(stage); err != nil {
+			return err
+		}
+		o.Journal.CaptureFiles = files
+		o.Journal.Materialized = true
+		if err = e.saveOp(o, "capture_materialized"); err != nil {
+			return err
 		}
 	}
 	image, err := os.ReadFile(filepath.Join(r.ImageDir, "image.json"))
@@ -563,35 +670,37 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		return err
 	}
 	manifest := Manifest{
-		Format:       1,
-		Backend:      e.opts.Backend.Compatibility(),
-		Architecture: runtime.GOARCH,
-		CPU:          cpuIdentity(),
-		Config:       v.VM.Config,
-		MemoryMode:   "CopyOnWrite",
-		Files:        files,
-		Image:        image,
+		Format:          1,
+		Backend:         e.opts.Backend.Compatibility(),
+		Architecture:    runtime.GOARCH,
+		CPU:             cpuIdentity(),
+		Config:          v.VM.Config,
+		MemoryMode:      "CopyOnWrite",
+		PublicationMode: "IndependentInodes",
+		Files:           files,
+		Image:           image,
 	}
 	if err = writeJSON(
-		filepath.Join(capture, "manifest.json"),
+		filepath.Join(stage, "manifest.json"),
 		manifest,
 	); err != nil {
 		return err
 	}
-	if err = sealTree(capture); err != nil {
+	if err = sealTree(stage); err != nil {
 		return err
 	}
-	if err = syncTree(capture); err != nil {
+	if err = syncTree(stage); err != nil {
 		return err
 	}
+	o.Journal.ArtifactsSynced = true
 	if err = e.saveOp(o, "artifacts_synced"); err != nil {
 		return err
 	}
-	if capture != s.Dir {
-		if err = os.Rename(capture, s.Dir); err != nil {
+	if stage != s.Dir {
+		if err = os.Rename(stage, s.Dir); err != nil {
 			return err
 		}
-		if err = syncDir(filepath.Dir(capture)); err != nil {
+		if err = syncDir(filepath.Dir(stage)); err != nil {
 			return err
 		}
 		if err = syncDir(filepath.Dir(s.Dir)); err != nil {
@@ -647,10 +756,10 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	if m.Format != 1 || m.Backend != e.opts.Backend.Compatibility() ||
 		m.Architecture != runtime.GOARCH ||
 		m.CPU != cpuIdentity() ||
-		m.MemoryMode != "CopyOnWrite" {
+		m.MemoryMode != "CopyOnWrite" || m.PublicationMode != "IndependentInodes" {
 		return api.Fail(
 			api.Incompatible,
-			"snapshot backend, CPU, format or COW compatibility mismatch",
+			"snapshot backend, CPU, format, COW or independent publication compatibility mismatch; legacy materials require manual recovery",
 		)
 	}
 	if !reflect.DeepEqual(v.VM.Config.Shape, m.Config.Shape) ||
@@ -898,6 +1007,57 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 				break
 			}
 			if old.Journal.Resource != nil {
+				path := filepath.Join(
+					old.Journal.Resource.Dir,
+					"capture",
+					old.Operation.ID,
+				)
+				if _, x := os.Lstat(path); x == nil {
+					boundary := old.Journal.CaptureBoundary
+					if boundary == nil || boundary.Path != path {
+						err = api.Fail(
+							api.Incompatible,
+							"legacy capture deletion requires manual recovery",
+						)
+						break
+					}
+					parent, x := boundary.open()
+					if x != nil {
+						err = x
+						break
+					}
+					_ = parent.Close()
+					if st, x := os.Lstat(
+						filepath.Join(path, "publication"),
+					); x == nil &&
+						gcNode(st) != boundary.Publication {
+						err = api.Fail(
+							api.Incompatible,
+							"staging identity changed",
+						)
+						break
+					} else if x != nil &&
+						!os.IsNotExist(x) {
+						err = x
+						break
+					}
+				} else if !os.IsNotExist(x) {
+					err = x
+					break
+				}
+				if st, x := os.Lstat(s.Dir); x == nil {
+					if old.Journal.CaptureBoundary == nil ||
+						gcNode(st) != old.Journal.CaptureBoundary.Publication {
+						err = api.Fail(
+							api.Incompatible,
+							"snapshot deletion identity unconfirmed",
+						)
+						break
+					}
+				} else if !os.IsNotExist(x) {
+					err = x
+					break
+				}
 				captures = append(
 					captures,
 					filepath.Join(

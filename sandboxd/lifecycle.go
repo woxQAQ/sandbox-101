@@ -86,16 +86,19 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 			return err
 		}
 	}
-	b.Instance = v.Instance
+	next := *b
+	next.Instance = v.Instance
 	if b.State != "running" {
-		b.Deadline = time.Now().
+		next.Deadline = time.Now().
 			UTC().
 			Add(time.Duration(b.TTLSeconds) * time.Second)
 	}
-	b.State = "running"
-	b.OperationID = ""
-	b.LastError = ""
-	return saveSandbox(s.ctx, s.store.db, *b)
+	next.State, next.OperationID, next.LastError = "running", "", ""
+	if err := s.commitRunning(o, &next); err != nil {
+		return err
+	}
+	*b = next
+	return nil
 }
 
 func (s *Service) claim(o *Operation) error {
@@ -121,6 +124,14 @@ func (s *Service) claim(o *Operation) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err = requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		t.SnapshotID,
+		b.TenantID,
+	); err != nil {
+		return err
 	}
 	if b.VMID == "" && b.ProvisionSource == "" {
 		if err = s.claimWarm(t, &b); err != nil {
@@ -358,6 +369,14 @@ func (s *Service) change(o *Operation) error {
 		// keep that engine snapshot alive without starting another VM.
 		switch b.State {
 		case "paused":
+			if err = requireSnapshotOwner(
+				s.ctx,
+				s.store.db,
+				b.SnapshotID,
+				b.TenantID,
+			); err != nil {
+				return err
+			}
 			cp.SnapshotID = b.SnapshotID
 		case "running":
 			snap, e := s.engine(
@@ -401,6 +420,11 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 	}
 	if b.State != "running" && b.State != "pausing" {
 		return api.Fail(api.Conflict, "sandbox cannot pause in %s", b.State)
+	}
+	if b.State == "running" && b.SnapshotID != "" {
+		if err := s.commitRunning(*o, b); err != nil {
+			return err
+		}
 	}
 	b.State = "pausing"
 	b.OperationID = o.ID
@@ -488,6 +512,14 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
+	if err := requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		b.SnapshotID,
+		b.TenantID,
+	); err != nil {
+		return err
+	}
 	b.State = "resuming"
 	b.OperationID = o.ID
 	if err := saveSandbox(s.ctx, s.store.db, *b); err != nil {
@@ -540,18 +572,68 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 }
 
 func (s *Service) finishResume(o *Operation, b *Sandbox) error {
-	if b.SnapshotID == "" {
-		return nil
+	if b.SnapshotID != "" {
+		if err := s.commitRunning(*o, b); err != nil {
+			return err
+		}
 	}
-	if err := s.retireSnapshot(*o, b.SnapshotID, b.ID, ""); err != nil {
+	intents, err := s.resourceRecoveries()
+	if err != nil {
 		return err
 	}
-	b.SnapshotID = ""
-	b.PausedUntil = time.Time{}
+	for _, r := range intents {
+		if r.Kind == "retired_snapshot" && r.SandboxID == b.ID && !r.Done {
+			// Cleanup owns its errors independently from a successful activation.
+			_ = s.recoverRetiredSnapshot(&r)
+		}
+	}
+	return nil
+}
+
+func (s *Service) proveReleaseInstance(o Operation, b *Sandbox) error {
+	if b.VMID == "" || b.Instance != "" {
+		return nil
+	}
+	source := o
+	if b.OperationID != "" && b.OperationID != o.ID {
+		var err error
+		source, err = s.store.operation(s.ctx, b.OperationID)
+		if err != nil {
+			return err
+		}
+	}
+	proof, err := s.findResourceStep(source, "network-off:"+b.ID, "network")
+	if err != nil {
+		return err
+	}
+	if proof == nil || proof.Status != "succeeded" || proof.VMID != b.VMID ||
+		proof.Request.ExpectedInstance == "" {
+		return api.Fail(
+			api.ManualRecovery,
+			"sandbox VM instance cannot be proven for release",
+		)
+	}
+	b.Instance = proof.Request.ExpectedInstance
 	return saveSandbox(s.ctx, s.store.db, *b)
 }
 
 func (s *Service) release(o *Operation, b *Sandbox) error {
+	// A lost delete response can leave metadata pointing at an already reclaimed
+	// VM. Confirm absence before issuing another delete or requiring a live fence.
+	if b.VMID != "" {
+		_, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
+		if isCode(err, api.NotFound) {
+			b.VMID = ""
+			b.Instance = ""
+		} else if err != nil {
+			return err
+		}
+	}
+	// Establish the deletion fence before transferring cleanup ownership. This
+	// check applies to explicit release, fork rollback and background recovery.
+	if err := s.proveReleaseInstance(*o, b); err != nil {
+		return err
+	}
 	s.closeConnections(b.ID)
 	if s.opts.Egress != nil {
 		if err := s.revoke(b.ID); err != nil {
@@ -567,7 +649,7 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	if b.VMID != "" {
 		if _, err := s.engine(
 			*o,
-			"release-vm",
+			releaseVMStep(b.ID),
 			api.Request{
 				Action:           "delete",
 				VMID:             b.VMID,
@@ -703,6 +785,14 @@ func (s *Service) template(o *Operation) error {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	if t.SnapshotID != "" {
+		if err := requireSnapshotOwner(
+			s.ctx,
+			s.store.db,
+			t.SnapshotID,
+			t.TenantID,
+		); err != nil {
+			return err
+		}
 		snap, err := s.opts.Engine.GetSnapshot(s.ctx, t.SnapshotID)
 		if err != nil {
 			return err
@@ -764,6 +854,14 @@ func (s *Service) DataReady(
 	}
 	if b.State != "running" || !time.Now().Before(b.Deadline) {
 		return b, api.Fail(api.Conflict, "sandbox lease is not active")
+	}
+	if b.SnapshotID != "" {
+		if err = s.commitRunning(
+			Operation{ID: "handoff:" + b.ID + ":" + b.SnapshotID},
+			&b,
+		); err != nil {
+			return b, err
+		}
 	}
 	if s.CredentialsMissing(b) {
 		return b, api.Fail(

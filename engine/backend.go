@@ -61,14 +61,15 @@ type Observation struct {
 }
 
 type Manifest struct {
-	Format       int               `json:"format"`
-	Backend      string            `json:"backend"`
-	Architecture string            `json:"architecture"`
-	CPU          string            `json:"cpu"`
-	Config       api.Config        `json:"config"`
-	MemoryMode   string            `json:"memory_mode"`
-	Files        map[string]string `json:"files"`
-	Image        json.RawMessage   `json:"image"`
+	Format          int               `json:"format"`
+	Backend         string            `json:"backend"`
+	Architecture    string            `json:"architecture"`
+	CPU             string            `json:"cpu"`
+	Config          api.Config        `json:"config"`
+	MemoryMode      string            `json:"memory_mode"`
+	PublicationMode string            `json:"publication_mode"`
+	Files           map[string]string `json:"files"`
+	Image           json.RawMessage   `json:"image"`
 }
 
 type vmRecord struct {
@@ -80,12 +81,16 @@ type snapshotRecord struct {
 	Dir      string       `json:"dir"`
 }
 type journal struct {
-	ResumeRequired bool      `json:"resume_required,omitempty"`
-	Captured       bool      `json:"captured,omitempty"`
-	Resource       *Resource `json:"resource,omitempty"`
-	Old            *Resource `json:"old,omitempty"`
-	Lease          bool      `json:"lease,omitempty"`
-	Manifest       *Manifest `json:"manifest,omitempty"`
+	CaptureBoundary *captureBoundary  `json:"capture_boundary,omitempty"`
+	Materialized    bool              `json:"materialized,omitempty"`
+	CaptureFiles    map[string]string `json:"capture_files,omitempty"`
+	ArtifactsSynced bool              `json:"artifacts_synced,omitempty"`
+	ResumeRequired  bool              `json:"resume_required,omitempty"`
+	Captured        bool              `json:"captured,omitempty"`
+	Resource        *Resource         `json:"resource,omitempty"`
+	Old             *Resource         `json:"old,omitempty"`
+	Lease           bool              `json:"lease,omitempty"`
+	Manifest        *Manifest         `json:"manifest,omitempty"`
 }
 type opRecord struct {
 	Operation api.Operation `json:"operation"`

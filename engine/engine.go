@@ -876,7 +876,8 @@ func (e *Engine) Submit(
 			},
 			Dir: dir,
 		}
-		bytes := (v.VM.Config.Shape.MemoryMiB + v.VM.Config.Shape.DiskMiB + 64) << 20
+		// CH output and the independent publication may both occupy full space.
+		bytes := (2*v.VM.Config.Shape.MemoryMiB + v.VM.Config.Shape.DiskMiB + 224) << 20
 		if err = e.reserve(tx, s.Snapshot.ID, bytes, 0, 0); err != nil {
 			return api.Operation{}, err
 		}

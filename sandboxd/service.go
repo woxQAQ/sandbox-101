@@ -154,6 +154,15 @@ func (s *Service) Authenticate(
 	ctx context.Context,
 	token string,
 ) (Principal, error) {
+	return s.authenticateToken(ctx, token, false)
+}
+
+// Terminated credentials remain usable only for authorized operation polling.
+func (s *Service) authenticateToken(
+	ctx context.Context,
+	token string,
+	allowTerminated bool,
+) (Principal, error) {
 	if token == "" {
 		return Principal{}, api.Fail(api.NotFound, "not found")
 	}
@@ -175,7 +184,7 @@ func (s *Service) Authenticate(
 	// A token carries an opaque id prefix solely to avoid scanning all sandboxes.
 	if parts := strings.SplitN(token, ".", 2); len(parts) == 2 {
 		b, err := getSandbox(ctx, s.store.db, parts[0])
-		if err == nil && b.State != "terminated" &&
+		if err == nil && (b.State != "terminated" || allowTerminated) &&
 			hmac.Equal([]byte(parts[1]), []byte(s.store.token(b))) {
 			return Principal{TenantID: b.TenantID, SandboxID: b.ID}, nil
 		}
@@ -420,6 +429,14 @@ func (s *Service) Submit(
 			if t.State != "ready" {
 				return o, api.Fail(api.Conflict, "template is not ready")
 			}
+			if err = requireSnapshotOwner(
+				ctx,
+				tx,
+				t.SnapshotID,
+				p.TenantID,
+			); err != nil {
+				return o, err
+			}
 			o.Command.Template = &t
 			o.SnapshotID = t.SnapshotID
 		}
@@ -458,6 +475,17 @@ func (s *Service) Submit(
 						source.State,
 					)
 				}
+			}
+			if source.TenantID != p.TenantID {
+				return o, api.Fail(api.NotFound, "not found")
+			}
+			if err = requireSnapshotOwner(
+				ctx,
+				tx,
+				source.SnapshotID,
+				p.TenantID,
+			); err != nil {
+				return o, err
 			}
 			o.SnapshotID = source.SnapshotID
 			t = Template{ID: source.TemplateID, Shape: source.Shape}
@@ -568,8 +596,7 @@ func (s *Service) Submit(
 			}
 			o.IDs = []string{newID("cp_")}
 		}
-		if c.Action == "pause" && source.State == "running" &&
-			source.SnapshotID == "" {
+		if c.Action == "pause" && source.State == "running" {
 			o.ReservedMiB = source.Shape.MemoryMiB
 			if err = s.quota(ctx, tx, p, 0, o.ReservedMiB); err != nil {
 				return o, err
@@ -626,6 +653,31 @@ func (s *Service) Submit(
 		t.State = "building"
 		if c.Action == "template_put" {
 			t.State = "ready"
+			if t.SnapshotID != "" {
+				if p.TenantID == "" {
+					return o, api.Fail(api.Invalid, "target tenant required")
+				}
+				if e := requireSnapshotOwner(
+					ctx,
+					tx,
+					t.SnapshotID,
+					p.TenantID,
+				); e != nil {
+					if !p.Root || !isCode(e, api.NotFound) {
+						return o, e
+					}
+					if e = recordSnapshotOwner(
+						ctx,
+						tx,
+						t.SnapshotID,
+						p.TenantID,
+						o.ID,
+						"external_import",
+					); e != nil {
+						return o, e
+					}
+				}
+			}
 			if t.SnapshotID == "" && t.Image == "" {
 				return o, api.Fail(
 					api.Invalid,
@@ -722,6 +774,7 @@ func (s *Service) quota(
 	}
 	n := 0
 	used := int64(0)
+	coveredSnapshots := map[string]bool{}
 	for rows.Next() {
 		var b []byte
 		if err = rows.Scan(&b); err != nil {
@@ -734,6 +787,7 @@ func (s *Service) quota(
 		n++
 		used += sb.Shape.DiskMiB
 		if sb.SnapshotID != "" {
+			coveredSnapshots[sb.SnapshotID] = true
 			used += sb.Shape.MemoryMiB
 		}
 	}
@@ -759,10 +813,38 @@ func (s *Service) quota(
 			return errors.Join(err, rows.Close())
 		}
 		used += cp.Shape.DiskMiB + cp.Shape.MemoryMiB
+		coveredSnapshots[cp.SnapshotID] = true
 	}
 	err = errors.Join(rows.Err(), rows.Close())
 	if err != nil {
 		return err
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT body FROM resource_recovery
+        WHERE json_extract(body,'$.kind')='retired_snapshot'
+        AND json_extract(body,'$.tenant_id')=?
+        AND COALESCE(json_extract(body,'$.done'),0)=0`, p.TenantID)
+	if err != nil {
+		return err
+	}
+	charges := map[string]int64{}
+	for rows.Next() {
+		var raw []byte
+		var r resourceRecovery
+		if err = rows.Scan(&raw); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if err = json.Unmarshal(raw, &r); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if !coveredSnapshots[r.Snapshot] && r.MemoryMiB > charges[r.Snapshot] {
+			charges[r.Snapshot] = r.MemoryMiB
+		}
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, charge := range charges {
+		used += charge
 	}
 	var reserved int64
 	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(CAST(json_extract(body,'$.reserved_mib') AS INTEGER)),0) FROM operations WHERE tenant=? AND status IN ('pending','running')", p.TenantID).
@@ -812,7 +894,7 @@ func (s *Service) Wait(
 			return Result{}, err
 		}
 		if o.Status == "succeeded" {
-			return s.resultTokens(o.Result), nil
+			return s.resultTokens(p, o.Result)
 		}
 		if o.Status == "failed" {
 			if o.Error != nil {
@@ -837,23 +919,44 @@ func (s *Service) Operation(
 	if err != nil {
 		return o, err
 	}
-	if !visible(p, o.TenantID, o.Command.SandboxID) {
+	if !visible(p, o.TenantID, o.Command.SandboxID) ||
+		(p.SandboxID != "" && !p.Root && o.Command.Action != "renew" && o.Command.Action != "release") {
 		return Operation{}, api.Fail(api.NotFound, "not found")
 	}
+	if _, err := s.resultTokens(p, o.Result); err != nil {
+		return Operation{}, err
+	}
+	o.Result.Tokens = nil
 	return o, nil
 }
 
-func (s *Service) resultTokens(r Result) Result {
-	if r.Sandbox != nil && r.Sandbox.State != "terminated" {
-		r.Tokens = map[string]string{r.Sandbox.ID: s.issuedToken(*r.Sandbox)}
+func (s *Service) resultTokens(p Principal, r Result) (Result, error) {
+	r.Tokens = nil
+	targets := append([]Sandbox(nil), r.Sandboxes...)
+	if r.Sandbox != nil {
+		targets = append(targets, *r.Sandbox)
 	}
-	if len(r.Sandboxes) > 0 {
-		r.Tokens = map[string]string{}
-		for _, b := range r.Sandboxes {
+	for _, b := range targets {
+		if !visible(p, b.TenantID, b.ID) {
+			return Result{}, api.Fail(api.NotFound, "not found")
+		}
+	}
+	if r.Checkpoint != nil &&
+		!visible(p, r.Checkpoint.TenantID, r.Checkpoint.SandboxID) {
+		return Result{}, api.Fail(api.NotFound, "not found")
+	}
+	if r.Template != nil && !visible(p, r.Template.TenantID, "") {
+		return Result{}, api.Fail(api.NotFound, "not found")
+	}
+	for _, b := range targets {
+		if b.State != "terminated" {
+			if r.Tokens == nil {
+				r.Tokens = map[string]string{}
+			}
 			r.Tokens[b.ID] = s.issuedToken(b)
 		}
 	}
-	return r
+	return r, nil
 }
 
 func (s *Service) setStep(o *Operation, step string) error {
@@ -867,7 +970,35 @@ func (s *Service) engine(
 	r api.Request,
 ) (api.Operation, error) {
 	r.Key = stepKey(o, step)
-	return api.Wait(s.ctx, s.opts.Engine, r)
+	captureTenant := o.TenantID
+	if r.Action == "snapshot" && o.Command.SandboxID != "" {
+		source, err := getSandbox(s.ctx, s.store.db, o.Command.SandboxID)
+		if err != nil {
+			return api.Operation{}, err
+		}
+		if source.VMID != r.VMID || source.Instance != r.ExpectedInstance {
+			return api.Operation{}, api.Fail(
+				api.ManualRecovery,
+				"capture does not match the source sandbox instance",
+			)
+		}
+		// Root's selected tenant scopes the request, not the existing data.
+		captureTenant = source.TenantID
+	}
+	result, err := api.Wait(s.ctx, s.opts.Engine, r)
+	if err == nil && r.Action == "snapshot" {
+		ownership := s.lockResourceOwnership()
+		err = recordSnapshotOwner(
+			s.ctx,
+			s.store.db,
+			result.SnapshotID,
+			captureTenant,
+			o.ID,
+			"captured",
+		)
+		ownership()
+	}
+	return result, err
 }
 
 func (s *Service) run(o Operation) {

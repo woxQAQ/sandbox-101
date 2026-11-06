@@ -12,7 +12,7 @@ KERNEL_ARTIFACTS_DIR ?= $(ROOT)/build/kernel-isolation-acceptance
 PRODUCTION_OCI_LAYOUT ?=
 PRODUCTION_ARTIFACTS_DIR ?= $(ROOT)/build/production-acceptance
 
-.PHONY: all build test test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e
+.PHONY: all build test test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e capture-isolation-e2e
 all: build
 
 build:
@@ -75,6 +75,9 @@ kvm-e2e:
 
 kernel-isolation-e2e:
 	bash scripts/run-kernel-isolation-acceptance.sh "$(KERNEL_ARTIFACTS_DIR)"
+
+capture-isolation-e2e:
+	bash scripts/run-capture-isolation-acceptance.sh
 
 production-e2e:
 	bash scripts/run-production-acceptance.sh "$(KVM_MATERIALS_DIR)" "$(PRODUCTION_OCI_LAYOUT)" "$(PRODUCTION_ARTIFACTS_DIR)"

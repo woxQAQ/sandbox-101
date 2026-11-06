@@ -114,7 +114,10 @@ func (s *Service) Handler() http.Handler {
 			c.Param("id"),
 		)
 		if err == nil {
-			v.Result = s.resultTokens(v.Result)
+			v.Result, err = s.resultTokens(
+				c.MustGet("principal").(Principal),
+				v.Result,
+			)
 		}
 		respond(c.Writer, v, err)
 	})
@@ -149,6 +152,15 @@ func (s *Service) Handler() http.Handler {
 
 func (s *Service) authenticate(c *gin.Context) {
 	p, err := s.principal(c.Request)
+	if err != nil && c.Request.Method == http.MethodGet &&
+		c.FullPath() == "/v1/operations/:id" &&
+		strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") {
+		p, err = s.authenticateToken(
+			c.Request.Context(),
+			strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "),
+			true,
+		)
+	}
 	if err != nil {
 		writeError(c.Writer, err)
 		c.Abort()

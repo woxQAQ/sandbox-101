@@ -93,6 +93,8 @@ sandboxd 管理可按需认领、分支、休眠和销毁的隔离编程环境�
 3. **静默捕获**：关闭构建 VM 的网络接入，确认 Admin `prepare_template` 已完成、Workload 无在途 RPC/会话后，调用 `engine.snapshot` 生成黄金快照。
 4. **原子晋升与池滚动**：将新 `snapshot_id` 登记到 `sandboxd` 模板目录，调用 `engine.delete` 销毁临时构建 VM。通知预热池管理器按新快照补充（refill）新预热实例，并逐步排空旧版本预热实例。
 
+快照授权来源由 `sandboxd` schema 2 的不可变 `snapshot_owners` 记录持久化：本层捕获以原 operation 和 engine receipt 证明来源，外部黄金快照仅允许 root 为明确目标租户导入。普通租户登记、模板发布与所有 clone/refill/恢复消费都核验同租户来源；engine 的 published 状态和继承 labels 不构成授权。单个 snapshot ID 不跨租户共享或转移，授权记录本身不是 GC 保活引用。schema 1 不自动推断所有权，启动前须备份并另行审查迁移。
+
 ### 预热池（Warm Pool）管理
 
 后台 `refill` 协调器按池键配置的 `target_warm_count` 维持水位：

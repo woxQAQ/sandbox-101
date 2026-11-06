@@ -14,6 +14,8 @@ import (
 // intent, and advances its attempt only after a known terminal engine failure.
 type resourceRecovery struct {
 	ID        string `json:"id"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	MemoryMiB int64  `json:"memory_mib,omitempty"`
 	Source    string `json:"source"`
 	Step      string `json:"step,omitempty"`
 	Kind      string `json:"kind"`
@@ -222,12 +224,119 @@ func (s *Service) recoverResources() error {
 		return errors.Join(failures, err)
 	}
 	for _, r := range intents {
-		if !r.Done && r.Kind != "sandbox" {
+		if !r.Done && r.Kind == "retired_snapshot" {
+			failures = errors.Join(failures, s.recoverRetiredSnapshot(&r))
+		} else if !r.Done && r.Kind != "sandbox" {
 			failures = errors.Join(failures, s.recoverOrphanResource(&r))
 		}
 	}
 	return failures
 }
+
+// commitRunning transfers the sleep reference and its storage charge together.
+// The caller holds the sandbox lock; no db query is opened inside the transaction.
+func (s *Service) commitRunning(o Operation, b *Sandbox) error {
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	next := *b
+	if next.SnapshotID == "" {
+		return saveSandbox(s.ctx, s.store.db, next)
+	}
+	if err := s.proveRetiredSnapshot(next); err != nil {
+		return err
+	}
+	r := resourceRecovery{
+		ID: "retired:" + next.ID + ":" + next.SnapshotID, Source: o.ID,
+		Kind: "retired_snapshot", SandboxID: next.ID, TenantID: next.TenantID,
+		Snapshot: next.SnapshotID, MemoryMiB: next.Shape.MemoryMiB,
+	}
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(
+		s.ctx,
+		"INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
+		r.ID,
+		encode(r),
+	); err != nil {
+		return err
+	}
+	next.SnapshotID = ""
+	next.PausedUntil = time.Time{}
+	if err = saveSandbox(s.ctx, tx, next); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*b = next
+	return nil
+}
+
+func (s *Service) proveRetiredSnapshot(b Sandbox) error {
+	if err := requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		b.SnapshotID,
+		b.TenantID,
+	); err != nil {
+		if isCode(err, api.NotFound) {
+			return api.Fail(
+				api.ManualRecovery,
+				"sleep snapshot provenance cannot be proven",
+			)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) recoverRetiredSnapshot(r *resourceRecovery) error {
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	_, err := s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
+	if isCode(err, api.NotFound) {
+		return s.finishRecoveryAttempt(r, nil)
+	}
+	if err != nil {
+		return err
+	}
+	// Duplicate handoffs share one deletion sequence, while all retain their
+	// persisted charges until physical absence is confirmed.
+	var collector string
+	if err = s.store.db.QueryRowContext(s.ctx, `SELECT id FROM resource_recovery
+        WHERE json_extract(body,'$.kind')='retired_snapshot'
+        AND json_extract(body,'$.snapshot_id')=?
+        AND COALESCE(json_extract(body,'$.done'),0)=0 ORDER BY id LIMIT 1`, r.Snapshot).Scan(&collector); err != nil {
+		return err
+	}
+	if collector != r.ID {
+		return nil
+	}
+	o := r.operation()
+	if err = s.retireSnapshotOwnedExcept(
+		o,
+		r.Snapshot,
+		"",
+		"",
+		r.Source,
+	); err != nil {
+		if isCode(err, api.NotFound) {
+			return s.finishRecoveryAttempt(r, nil)
+		}
+		return s.finishRecoveryAttempt(r, err, "retire-snapshot:"+r.Snapshot)
+	}
+	// A shared live reference leaves both the intent and its charge intact.
+	_, err = s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
+	if isCode(err, api.NotFound) {
+		return s.finishRecoveryAttempt(r, nil)
+	}
+	return err
+}
+
+func releaseVMStep(id string) string { return "release-vm:" + id }
 
 type resourceStep struct{ name, action string }
 
@@ -385,7 +494,11 @@ func recoveryDependencySteps(o Operation) []string {
 	case "rollback":
 		steps = append(steps, "rollback-stop", "rollback-restore")
 	case "release":
-		steps = append(steps, "release-vm")
+		steps = append(steps, releaseVMStep(o.Command.SandboxID))
+	case "fork":
+		for _, id := range o.IDs {
+			steps = append(steps, releaseVMStep(id))
+		}
 	}
 	for _, id := range append([]string{o.Command.SandboxID}, o.IDs...) {
 		if id != "" {
@@ -429,6 +542,21 @@ func (s *Service) finishRecoveryAttempt(
 func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 	unlock := s.lockResourceOwnership()
 	defer unlock()
+	if r.Kind == "snapshot" {
+		// Retired cleanup has the durable charge and deletion attempt. A generic
+		// collector must not start another key while that responsibility is live.
+		var retired int
+		if err := s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM resource_recovery
+            WHERE json_extract(body,'$.kind')='retired_snapshot'
+            AND json_extract(body,'$.snapshot_id')=?
+            AND COALESCE(json_extract(body,'$.done'),0)=0`, r.Snapshot).
+			Scan(&retired); err != nil {
+			return err
+		}
+		if retired > 0 {
+			return nil
+		}
+	}
 	o, err := s.store.operation(s.ctx, r.Source)
 	if err != nil || !recoveryTerminal(o.Status) {
 		return err
@@ -558,12 +686,53 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 	o.TenantID, o.Command = source.TenantID, source.Command
 	switch b.State {
 	case "provisioning", "terminated":
+		cleanup := &o
+		if b.VMID != "" &&
+			(source.Command.Action == "fork" || source.Command.Action == "release") {
+			deletion, e := s.findResourceStep(
+				source,
+				releaseVMStep(b.ID),
+				"delete",
+			)
+			if e != nil {
+				return e
+			}
+			if deletion != nil {
+				if deletion.Request.VMID != b.VMID ||
+					deletion.Request.ExpectedInstance != b.Instance {
+					return api.Fail(
+						api.ManualRecovery,
+						"original release does not match the sandbox instance",
+					)
+				}
+				if !recoveryTerminal(deletion.Status) {
+					return nil
+				}
+				if deletion.Status == "succeeded" {
+					_, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
+					if e == nil {
+						return api.Fail(
+							api.ManualRecovery,
+							"successful deletion still has a live VM",
+						)
+					}
+					if !isCode(e, api.NotFound) {
+						return e
+					}
+				}
+			}
+			// Unknown dispatch reuses the original key. Only a proven terminal
+			// engine failure permits the compensation intent's distinct key.
+			if deletion == nil || deletion.Status != "failed" {
+				cleanup = &source
+			}
+		}
 		// Release is compensating work; it never retries activation or guest exec.
-		err = s.release(&o, &b)
+		err = s.release(cleanup, &b)
 		return s.finishRecoveryAttempt(
 			r,
 			err,
-			"release-vm",
+			releaseVMStep(b.ID),
 			"retire-snapshot:"+b.SnapshotID,
 		)
 	case "pausing":
@@ -589,6 +758,19 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 				proof.Request.VMID == b.VMID &&
 				proof.Request.ExpectedInstance == b.Instance {
 				b.SnapshotID = proof.SnapshotID
+				ownership := s.lockResourceOwnership()
+				err = recordSnapshotOwner(
+					s.ctx,
+					s.store.db,
+					b.SnapshotID,
+					b.TenantID,
+					source.ID,
+					"captured",
+				)
+				ownership()
+				if err != nil {
+					return err
+				}
 				if err = saveSandbox(s.ctx, s.store.db, b); err != nil {
 					return err
 				}
@@ -765,6 +947,14 @@ func (s *Service) recoverRollback(
 			api.ManualRecovery,
 			"rollback checkpoint ownership does not match",
 		)
+	}
+	if err = requireSnapshotOwner(
+		s.ctx,
+		s.store.db,
+		cp.SnapshotID,
+		cp.TenantID,
+	); err != nil {
+		return err
 	}
 	if err = s.recoverySnapshotReady(cp.SnapshotID); err != nil {
 		return err
