@@ -1430,13 +1430,26 @@ func hasUnresolvedAllocations(r resourceRecovery) bool {
 }
 
 func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
-	_, err := e.ExecContext(
+	result, err := e.ExecContext(
 		ctx,
 		`UPDATE resource_recovery SET body=? WHERE id=?`,
 		encode(r),
 		r.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return api.Fail(
+			api.ManualRecovery,
+			"recovery responsibility was not persisted",
+		)
+	}
+	return nil
 }
 
 func (s *Service) loadRecovery(id string) (resourceRecovery, error) {

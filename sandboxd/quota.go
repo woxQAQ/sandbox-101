@@ -574,6 +574,15 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 	var err error
 	if kind == "vm_disk" {
 		var unresolved int
+		// A late receipt still owns its frozen physical target even after release
+		// clears sandbox metadata. Only its destination transaction can retire it.
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.kind')='vm_disk' AND json_extract(a.value,'$.request.vm_id')=? AND json_extract(a.value,'$.resolution.state') IN ('unresolved','result_known')`, key).
+			Scan(&unresolved); err != nil {
+			return err
+		}
+		if unresolved > 0 {
+			return nil
+		}
 		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs r WHERE r.kind='vm_disk' AND r.holder_kind='engine_dependency' AND (r.resource_key=? OR EXISTS(SELECT 1 FROM quota_refs v WHERE v.tenant_id=r.tenant_id AND v.kind=r.kind AND v.resource_key=r.resource_key AND v.holder_id=?))`, key, "vm:"+key).
 			Scan(&unresolved); err != nil {
 			return err
@@ -581,17 +590,18 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 		if unresolved > 0 {
 			return nil
 		}
-		if _, err = tx.ExecContext(
+		if err = deleteQuotaRows(
 			s.ctx,
-			`DELETE FROM quota_refs WHERE holder_id=?`,
+			tx,
+			`FROM quota_refs WHERE holder_id=?`,
 			"backing:"+key,
 		); err != nil {
 			return err
 		}
 	}
-	query := `DELETE FROM quota_resources WHERE kind=? AND resource_key=?`
+	query := `FROM quota_resources WHERE kind=? AND resource_key=?`
 	if kind == "vm_disk" {
-		query = `DELETE FROM quota_resources WHERE kind=? AND (resource_key=? OR EXISTS(SELECT 1 FROM quota_refs q WHERE q.tenant_id=quota_resources.tenant_id AND q.kind=quota_resources.kind AND q.resource_key=quota_resources.resource_key AND q.holder_id=?))`
+		query = `FROM quota_resources WHERE kind=? AND (resource_key=? OR EXISTS(SELECT 1 FROM quota_refs q WHERE q.tenant_id=quota_resources.tenant_id AND q.kind=quota_resources.kind AND q.resource_key=quota_resources.resource_key AND q.holder_id=?))`
 	}
 	if kind == "snapshot" {
 		query += ` AND NOT EXISTS(SELECT 1 FROM quota_refs q WHERE q.tenant_id=quota_resources.tenant_id AND q.kind=quota_resources.kind AND q.resource_key=quota_resources.resource_key AND q.holder_kind IN ('active_use','engine_dependency'))`
@@ -600,7 +610,7 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 	if kind == "vm_disk" {
 		args = append(args, "vm:"+key)
 	}
-	if _, err = tx.ExecContext(s.ctx, query, args...); err != nil {
+	if err = deleteQuotaRows(s.ctx, tx, query, args...); err != nil {
 		return err
 	}
 	if err = retireQuotaSlots(s.ctx, tx); err != nil {
@@ -609,19 +619,49 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 	return nil
 }
 
+// Reclamation requires every selected row to retire. A silent SQLite IGNORE
+// must roll back the destination transaction just like an explicit SQL error.
+func deleteQuotaRows(
+	ctx context.Context,
+	e executor,
+	selection string,
+	args ...any,
+) error {
+	var expected int64
+	if err := e.QueryRowContext(ctx, "SELECT count(*) "+selection, args...).
+		Scan(&expected); err != nil {
+		return err
+	}
+	result, err := e.ExecContext(ctx, "DELETE "+selection, args...)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != expected {
+		return api.Fail(
+			api.ManualRecovery,
+			"quota responsibility was not fully retired",
+		)
+	}
+	return nil
+}
+
 // A terminated sandbox retains its slot through unknown allocations and
 // exclusive sleep cleanup. Independent live users can take over a snapshot;
 // cleanup references alone never constitute such a transfer.
 func retireQuotaSlots(ctx context.Context, e executor) error {
-	_, err := e.ExecContext(
+	return deleteQuotaRows(
 		ctx,
-		`DELETE FROM quota_resources AS slot WHERE slot.kind='sandbox_slot'
+		e,
+		`FROM quota_resources AS slot WHERE slot.kind='sandbox_slot'
  AND EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.kind=slot.kind AND r.resource_key=slot.resource_key AND r.holder_kind='cleanup')
  AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.holder_id='sandbox:'||slot.resource_key AND r.kind IN ('vm_disk','pending_storage'))
  AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.holder_id='sandbox:'||slot.resource_key AND r.kind='snapshot'
  AND NOT EXISTS(SELECT 1 FROM quota_refs live WHERE live.tenant_id=r.tenant_id AND live.kind=r.kind AND live.resource_key=r.resource_key AND live.holder_kind='active_use' AND live.holder_id!=r.holder_id))`,
 	)
-	return err
 }
 
 func quotaTerminate(ctx context.Context, e executor, b Sandbox) error {
@@ -1013,7 +1053,10 @@ func (s *Service) quotaRecoveryAllocation(
 
 func (a recoveryAllocation) validate(proof api.Operation) error {
 	if proof.Key != a.Request.Key ||
-		!bytes.Equal(encode(proof.Request), encode(a.Request)) {
+		!bytes.Equal(encode(proof.Request), encode(a.Request)) ||
+		(a.Request.Action == "restore" && proof.VMID != "" && proof.VMID != a.Request.VMID) ||
+		(a.Request.Action == "restore" && proof.Status == "succeeded" &&
+			(proof.VMID == "" || proof.VMID != a.Request.VMID || proof.ResultInstance == "")) {
 		return api.Fail(
 			api.ManualRecovery,
 			"recovery receipt does not match frozen allocation request",
@@ -1229,7 +1272,8 @@ func (s *Service) reconcileRecoveryAllocations(
 			return recoveryProgress{}, err
 		}
 		v, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
-		if isCode(err, api.NotFound) && proof.Status == "failed" &&
+		if isCode(err, api.NotFound) &&
+			(proof.Status == "failed" || proof.Status == "succeeded") &&
 			b.TenantID == a.ChargeTenantID &&
 			(b.VMID == proof.VMID || b.VMID == "") {
 			if err = s.deliverKnownAllocation(
@@ -1340,6 +1384,38 @@ func (s *Service) deliverKnownAllocation(
 			)
 		}
 	}
+	if vm != "" && state == "reclaimed" &&
+		a.Resolution.Proof.Status == "succeeded" {
+		if err = s.validateAbsentRestoreTx(tx, *r, a, vm); err != nil {
+			return err
+		}
+	}
+	next := *r
+	next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
+	next.Allocations[index].Resolution.State = state
+	next.Allocations[index].Resolution.Destination = destination
+	if err = writeRecovery(s.ctx, tx, next); err != nil {
+		return err
+	}
+	var pending int
+	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage'`, a.OperationID).
+		Scan(&pending); err != nil {
+		return err
+	}
+	if pending != 0 {
+		return api.Fail(
+			api.Conflict,
+			"terminal allocation still has pending storage",
+		)
+	}
+	if err = deleteQuotaRows(
+		s.ctx,
+		tx,
+		`FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?`,
+		"operation:"+a.OperationID,
+	); err != nil {
+		return err
+	}
 	if vm != "" && state == "reclaimed" {
 		b, err := getSandbox(s.ctx, tx, a.SandboxID)
 		if err != nil {
@@ -1348,7 +1424,7 @@ func (s *Service) deliverKnownAllocation(
 		if b.TenantID != a.ChargeTenantID || (b.VMID != vm && b.VMID != "") {
 			return api.Fail(
 				api.ManualRecovery,
-				"absent failed allocation has another sandbox target",
+				"absent allocation has another sandbox target",
 			)
 		}
 		if err = s.reclaimQuotaTx(tx, "vm_disk", vm); err != nil {
@@ -1365,25 +1441,86 @@ func (s *Service) deliverKnownAllocation(
 				"absent VM still has unresolved allocation dependencies",
 			)
 		}
-	}
-	next := *r
-	next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
-	next.Allocations[index].Resolution.State = state
-	next.Allocations[index].Resolution.Destination = destination
-	if err = writeRecovery(s.ctx, tx, next); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=? AND NOT EXISTS(SELECT 1 FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage')`,
-		"operation:"+a.OperationID,
-		a.OperationID,
-	); err != nil {
-		return err
+		if a.Resolution.Proof.Status == "succeeded" && b.VMID == vm {
+			b.VMID, b.Instance = "", ""
+			if err = saveSandbox(s.ctx, tx, b); err != nil {
+				return err
+			}
+			current, err := getSandbox(s.ctx, tx, b.ID)
+			if err != nil {
+				return err
+			}
+			if current.VMID != "" || current.Instance != "" ||
+				current.State != b.State ||
+				current.TenantID != b.TenantID {
+				return api.Fail(
+					api.ManualRecovery,
+					"absent VM metadata was not retired",
+				)
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
 	*r = next
+	return nil
+}
+
+// The frozen restore intent and its immutable public source remain provenance
+// after a successful release clears V. Current metadata cannot supply a witness.
+func (s *Service) validateAbsentRestoreTx(
+	tx *sql.Tx,
+	r resourceRecovery,
+	a recoveryAllocation,
+	vm string,
+) error {
+	proof := a.Resolution.Proof
+	if proof == nil || proof.Status != "succeeded" ||
+		proof.ID == "" || proof.ResultInstance == "" ||
+		a.Kind != "vm_disk" || a.Step != "rollback-restore" ||
+		a.Request.Action != "restore" || a.Request.VMID != vm ||
+		proof.VMID != vm || a.Request.ExpectedInstance == "" ||
+		a.Request.SnapshotID == "" || r.Kind != "sandbox" ||
+		r.SandboxID != a.SandboxID ||
+		!strings.HasPrefix(a.OperationID, "recovery:"+r.ID+":") ||
+		a.Request.Key != stepKey(a.operation(), a.Step) {
+		return api.Fail(
+			api.ManualRecovery,
+			"absent restore has no exact successful history",
+		)
+	}
+	if err := a.validate(*proof); err != nil {
+		return err
+	}
+	var raw []byte
+	if err := tx.QueryRowContext(s.ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
+		Scan(&raw); err != nil {
+		return err
+	}
+	var source Operation
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return err
+	}
+	b, err := getSandbox(s.ctx, tx, a.SandboxID)
+	if err != nil {
+		return err
+	}
+	if source.ID != r.Source || source.Status != "failed" ||
+		source.Command.Action != "rollback" || source.Step != "rollback_restore" ||
+		source.SourceInstance != a.Request.ExpectedInstance ||
+		source.Command.SandboxID != a.SandboxID || source.Command.CheckpointID == "" ||
+		source.TenantID != a.TenantID || source.ChargeTenantID != a.ChargeTenantID ||
+		b.TenantID != a.ChargeTenantID ||
+		b.Shape != a.Shape ||
+		b.State != "terminated" ||
+		(b.VMID != vm && b.VMID != "") ||
+		(b.VMID == vm && b.Instance != a.Request.ExpectedInstance && b.Instance != proof.ResultInstance) ||
+		(b.VMID == "" && b.Instance != "") {
+		return api.Fail(
+			api.ManualRecovery,
+			"absent restore history belongs to another lifecycle",
+		)
+	}
 	return nil
 }

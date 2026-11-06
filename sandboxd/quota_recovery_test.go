@@ -1386,6 +1386,437 @@ func (f *r3CleanupTransport) FindOperation(
 	return f.Client.FindOperation(ctx, key)
 }
 
+// These cases preserve the review's public Engine deletion and release/reopen
+// ordering. Absence is observed through GetVM; no fixture inventory is erased.
+func (x *r3RestoreScenario) deleteResultBeforeDestination(t *testing.T) {
+	t.Helper()
+	v, err := x.f.GetVM(x.s.ctx, x.b.VMID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := api.Wait(x.s.ctx, x.f, api.Request{
+		Key: "explicit-result-delete", Action: "delete", VMID: v.ID,
+		ExpectedInstance: v.Instance,
+	})
+	if err != nil || proof.Status != "succeeded" {
+		t.Fatal("legitimate exact-B delete failed", err)
+	}
+	if _, err = x.f.GetVM(x.s.ctx, v.ID); !isCode(err, api.NotFound) {
+		t.Fatal("deleted B is still present", err)
+	}
+	x.assertResultEffects(t)
+}
+
+func (x *r3RestoreScenario) assertResultEffects(t *testing.T) {
+	t.Helper()
+	x.f.mu.Lock()
+	deletes := x.f.physicalDeletes
+	x.f.mu.Unlock()
+	if x.f.count("restore") != 1 || deletes != 1 {
+		t.Fatalf("restore=%d physical delete=%d", x.f.count("restore"), deletes)
+	}
+}
+
+func (x *r3RestoreScenario) resultAllocation(
+	t *testing.T,
+) (resourceRecovery, recoveryAllocation) {
+	t.Helper()
+	all, err := x.s.resourceRecoveries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range all {
+		if r.Source == x.rollback && len(r.Allocations) == 1 {
+			return r, r.Allocations[0]
+		}
+	}
+	t.Fatal("missing frozen restore allocation")
+	return resourceRecovery{}, recoveryAllocation{}
+}
+
+func (x *r3RestoreScenario) finishAbsentResult(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 4; i++ {
+		if err := x.s.recoverResources(); err != nil {
+			t.Fatal("recover", i, err)
+		}
+	}
+	x.s = ledgerRestart(t, x.s)
+	for i := 0; i < 4; i++ {
+		if err := x.s.recoverResources(); err != nil {
+			t.Fatal("reopen recover", i, err)
+		}
+	}
+	ledgerExecute(
+		t,
+		x.s,
+		x.p,
+		"absent-fresh-release",
+		Command{Action: "release", SandboxID: x.b.ID},
+	)
+	r, a := x.resultAllocation(t)
+	if !r.Done || a.Resolution.State != "reclaimed" ||
+		a.Resolution.Destination != "vm-absent:"+x.b.VMID ||
+		a.Resolution.Proof == nil ||
+		a.Resolution.Proof.ResultInstance == "" {
+		t.Fatalf("allocation has no reclaimed delivery: %s", encode(r))
+	}
+	b := recoverySandbox(t, x.s, x.b.ID)
+	if b.State != "terminated" || b.VMID != "" || b.Instance != "" {
+		t.Fatalf("terminated metadata retained V: %+v", b)
+	}
+	var pending, dependency, backing int
+	if err := x.s.store.db.QueryRow(`SELECT
+	 (SELECT count(*) FROM quota_resources WHERE kind='pending_storage'),
+	 (SELECT count(*) FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?),
+	 (SELECT count(*) FROM quota_refs WHERE holder_id=?)`, "operation:"+a.OperationID, "backing:"+x.b.VMID).
+		Scan(&pending, &dependency, &backing); err != nil || pending != 0 || dependency != 0 || backing != 0 {
+		t.Fatal(
+			"incomplete responsibility retirement",
+			pending,
+			dependency,
+			backing,
+			err,
+		)
+	}
+	ledgerMoney(t, x.s, x.p.TenantID, 0, 192)
+	t.Logf(
+		"delivered allocation=%s request=%s proof=%s CP-active storage=192 slot=0 pending=0 dependency=0 backing=0 restore=1 physical-delete=1",
+		r.ID,
+		encode(a.Request),
+		encode(a.Resolution),
+	)
+	rows, err := x.s.store.db.Query(
+		`SELECT kind,resource_key,storage_mib FROM quota_resources ORDER BY kind,resource_key`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var kind, key string
+		var storage int64
+		if err = rows.Scan(&kind, &key, &storage); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		t.Logf("resource kind=%s key=%s storage=%d", kind, key, storage)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgerExecute(
+		t,
+		x.s,
+		x.p,
+		"absent-delete-independent-cp",
+		Command{Action: "delete_checkpoint", CheckpointID: x.cp.ID},
+	)
+	for i := 0; i < 4; i++ {
+		if err = x.s.recoverResources(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ledgerMoney(t, x.s, x.p.TenantID, 0, 0)
+	if _, err = x.f.GetSnapshot(
+		x.s.ctx,
+		x.cp.SnapshotID,
+	); !isCode(
+		err,
+		api.NotFound,
+	) {
+		t.Fatal("CP physical snapshot was not reclaimed", err)
+	}
+	x.assertResultEffects(t)
+	x.assertImmutable(t)
+	ledgerLimit(t, x.s, x.p, 1, 192)
+	ledgerExecute(
+		t,
+		x.s,
+		x.p,
+		"absent-new-claim",
+		Command{Action: "claim", TemplateID: "python"},
+	)
+	ledgerMoney(t, x.s, x.p.TenantID, 1, 64)
+	// Old receipt replay during further scans cannot recreate/refund the old disk
+	// or affect the new sandbox's responsibility.
+	for i := 0; i < 2; i++ {
+		if err = x.s.recoverResources(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ledgerMoney(t, x.s, x.p.TenantID, 1, 64)
+	x.assertResultEffects(t)
+	x.assertImmutable(t)
+}
+
+func TestQuotaLedgerRecoverySuccessfulRestoreAbsentBeforeDestination(
+	t *testing.T,
+) {
+	for _, fault := range []string{"transport", "sqlite"} {
+		for _, metadata := range []string{"cleared-by-release", "original-V"} {
+			t.Run(fault+"/"+metadata, func(t *testing.T) {
+				x := newR3RestoreScenario(t, fault, false)
+				ledgerRejectClaim(t, x.s, x.f, x.p, "absent-before-effects")
+				if metadata == "original-V" {
+					x.releaseFirst(t)
+				}
+				x.deleteResultBeforeDestination(t)
+				if _, err := x.s.store.db.Exec(
+					`DROP TRIGGER IF EXISTS r3_initial`,
+				); err != nil {
+					t.Fatal(err)
+				}
+				if metadata == "cleared-by-release" {
+					result := ledgerExecute(
+						t,
+						x.s,
+						Principal{Root: true, TenantID: "bob"},
+						"absent-public-release",
+						Command{Action: "release", SandboxID: x.b.ID},
+					)
+					op, err := x.s.store.operation(x.s.ctx, result.OperationID)
+					if err != nil || op.TenantID != "bob" ||
+						op.ChargeTenantID != x.p.TenantID {
+						t.Fatal("root request/charge owner changed", err)
+					}
+					b := recoverySandbox(t, x.s, x.b.ID)
+					if b.VMID != "" || b.Instance != "" {
+						t.Fatal(
+							"public release did not clear absent V metadata",
+						)
+					}
+				}
+				x.finishAbsentResult(t)
+			})
+		}
+	}
+}
+
+func TestQuotaLedgerRecoveryAbsentResultTransaction(t *testing.T) {
+	for _, fault := range []string{"transport", "sqlite"} {
+		for _, effect := range []string{"ABORT", "IGNORE"} {
+			for _, boundary := range []string{"destination", "dependency", "disk", "backing", "slot", "metadata"} {
+				t.Run(fault+"/"+effect+"/"+boundary, func(t *testing.T) {
+					x := newR3RestoreScenario(t, fault, false)
+					x.releaseFirst(t)
+					x.deleteResultBeforeDestination(t)
+					raise := "RAISE(" + effect + ",'absent result transaction')"
+					if effect == "IGNORE" {
+						raise = "RAISE(IGNORE)"
+					}
+					statement := map[string]string{
+						"destination": `BEFORE UPDATE ON resource_recovery WHEN json_extract(NEW.body,'$.allocations[0].resolution.state')='reclaimed'`,
+						"dependency":  `BEFORE DELETE ON quota_refs WHEN OLD.holder_kind='engine_dependency' AND OLD.holder_id LIKE 'operation:recovery:%'`,
+						"disk":        `BEFORE DELETE ON quota_resources WHEN OLD.kind='vm_disk'`,
+						"backing":     `BEFORE DELETE ON quota_refs WHEN OLD.holder_id LIKE 'backing:%'`,
+						"slot":        `BEFORE DELETE ON quota_resources WHEN OLD.kind='sandbox_slot'`,
+						"metadata":    `BEFORE UPDATE ON sandboxes WHEN json_extract(OLD.body,'$.vm_id') IS NOT NULL AND COALESCE(json_extract(NEW.body,'$.vm_id'),'')=''`,
+					}[boundary]
+					if _, err := x.s.store.db.Exec(
+						"CREATE TRIGGER absent_transaction " + statement + " BEGIN SELECT " + raise + "; END",
+					); err != nil {
+						t.Fatal(err)
+					}
+					if err := x.s.recoverResources(); err == nil {
+						t.Fatal(
+							"SQL no-effect/error did not block destination",
+							boundary,
+						)
+					} else {
+						t.Logf(
+							"actual %s/%s blocked delivery: %v",
+							effect,
+							boundary,
+							err,
+						)
+					}
+					_, before := x.resultAllocation(t)
+					frozen := encode(before.Request)
+					proof := encode(before.Resolution.Proof)
+					x.s = ledgerRestart(t, x.s)
+					if err := x.s.recoverResources(); err == nil {
+						t.Fatal("reopen crossed persistent SQL fault")
+					}
+					r, a := x.resultAllocation(t)
+					if r.Done || a.Resolution.State != "result_known" ||
+						a.Resolution.Destination != "" ||
+						!bytes.Equal(frozen, encode(a.Request)) ||
+						!bytes.Equal(proof, encode(a.Resolution.Proof)) {
+						t.Fatalf(
+							"fault committed partial delivery: %s",
+							encode(r),
+						)
+					}
+					var dependency, backing int
+					if err := x.s.store.db.QueryRow(`SELECT
+					 (SELECT count(*) FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?),
+					 (SELECT count(*) FROM quota_refs WHERE holder_id=?)`, "operation:"+a.OperationID, "backing:"+x.b.VMID).
+						Scan(&dependency, &backing); err != nil || dependency < 1 || backing < 1 {
+						t.Fatal(
+							"fault lost dependency/backing responsibility",
+							dependency,
+							backing,
+							err,
+						)
+					}
+					ledgerMoney(t, x.s, x.p.TenantID, 1, 320)
+					ledgerRejectClaim(t, x.s, x.f, x.p, "absent-fault-refusal")
+					x.assertResultEffects(t)
+					x.assertImmutable(t)
+					t.Logf(
+						"fault retained allocation=%s proof=%s dependency=%d backing=%d storage=320 slot=1",
+						r.ID,
+						proof,
+						dependency,
+						backing,
+					)
+					if _, err := x.s.store.db.Exec(
+						`DROP TRIGGER absent_transaction`,
+					); err != nil {
+						t.Fatal(err)
+					}
+					x.finishAbsentResult(t)
+				})
+			}
+		}
+	}
+}
+
+type absentResultQueryEngine struct {
+	api.Client
+
+	vm string
+}
+
+func (e *absentResultQueryEngine) GetVM(
+	ctx context.Context,
+	id string,
+) (api.VM, error) {
+	if id == e.vm {
+		return api.VM{}, api.Fail(api.Unknown, "VM proof query unavailable")
+	}
+	return e.Client.GetVM(ctx, id)
+}
+
+func TestQuotaLedgerRecoveryAbsentResultRejectsUnprovenHistory(t *testing.T) {
+	for _, fault := range []string{"transport", "sqlite"} {
+		for _, damage := range []string{"query-error", "missing-witness", "foreign-result-V", "foreign-S", "public-request", "current-C", "unverified", "other-owner", "engine-dependency"} {
+			t.Run(fault+"/"+damage, func(t *testing.T) {
+				x := newR3RestoreScenario(t, fault, false)
+				x.releaseFirst(t)
+				if damage != "current-C" && damage != "unverified" &&
+					damage != "other-owner" {
+					x.deleteResultBeforeDestination(t)
+				}
+				switch damage {
+				case "query-error":
+					x.s.opts.Engine = &absentResultQueryEngine{
+						Client: x.adapter,
+						vm:     x.b.VMID,
+					}
+				case "missing-witness", "foreign-result-V":
+					x.f.mu.Lock()
+					for key, op := range x.f.ops {
+						if op.Request.Action == "restore" &&
+							strings.Contains(key, "recovery:") {
+							if damage == "missing-witness" {
+								op.ResultInstance = ""
+							} else {
+								op.VMID = "foreign-V"
+							}
+							x.f.ops[key] = op
+						}
+					}
+					x.f.mu.Unlock()
+				case "foreign-S":
+					r, _ := x.resultAllocation(t)
+					r.SandboxID = "foreign-S"
+					if err := writeRecovery(
+						x.s.ctx,
+						x.s.store.db,
+						r,
+					); err != nil {
+						t.Fatal(err)
+					}
+				case "public-request":
+					if _, err := x.s.store.db.Exec(
+						`UPDATE operations SET body=json_set(body,'$.command.sandbox_id','foreign-S') WHERE id=?`,
+						x.rollback,
+					); err != nil {
+						t.Fatal(err)
+					}
+					// This case intentionally corrupts the test-owned public request;
+					// retain the corrupted bytes to prove recovery never repairs history.
+					x.remember(t, x.rollback)
+				case "current-C", "unverified", "other-owner":
+					x.f.mu.Lock()
+					v := x.f.vms[x.b.VMID]
+					switch damage {
+					case "current-C":
+						v.Instance = "foreign-C"
+					case "unverified":
+						v.Verified = false
+					case "other-owner":
+						v.OperationID = "other-owner"
+					}
+					x.f.vms[x.b.VMID] = v
+					x.f.mu.Unlock()
+				case "engine-dependency":
+					if err := putQuotaRef(
+						x.s.ctx,
+						x.s.store.db,
+						x.p.TenantID,
+						"vm_disk",
+						x.b.VMID,
+						quotaRef{
+							Kind: "engine_dependency",
+							ID:   "independent-reader",
+						},
+					); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := x.s.recoverResources(); err == nil {
+					t.Fatal("unproven result was accepted", damage)
+				}
+				x.s = ledgerRestart(t, x.s)
+				if err := x.s.recoverResources(); err == nil {
+					t.Fatal("reopen accepted unproven history", damage)
+				}
+				r, a := x.resultAllocation(t)
+				if r.Done || a.Resolution.delivered() {
+					t.Fatalf("unproven allocation delivered: %s", encode(r))
+				}
+				ledgerMoney(t, x.s, x.p.TenantID, 1, 320)
+				ledgerRejectClaim(t, x.s, x.f, x.p, "absent-unproven-refusal")
+				x.assertImmutable(t)
+				if x.f.count("restore") != 1 {
+					t.Fatal("unproven result caused another restore")
+				}
+				x.f.mu.Lock()
+				deletes := x.f.physicalDeletes
+				current := x.f.vms[x.b.VMID]
+				x.f.mu.Unlock()
+				expectedDeletes := 1
+				if damage == "current-C" || damage == "unverified" ||
+					damage == "other-owner" {
+					expectedDeletes = 0
+				}
+				if deletes != expectedDeletes ||
+					(damage == "current-C" && current.Instance != "foreign-C") {
+					t.Fatal(
+						"unproven continuation changed physical target",
+						deletes,
+						current.Instance,
+					)
+				}
+			})
+		}
+	}
+}
+
 func TestQuotaLedgerRecoveryRestoreCollectorContinuations(t *testing.T) {
 	for _, fault := range []string{"transport", "sqlite"} {
 		for _, boundary := range []string{"before-dispatch", "lost-reply", "post-delete-ledger"} {
