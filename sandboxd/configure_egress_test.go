@@ -850,6 +850,377 @@ func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
 	}
 }
 
+// requireWorkloadAdmissionBlocked exercises the real HTTP upgrade. If admission
+// regresses, exchange bytes before reporting it and join the hijacked handler.
+func requireWorkloadAdmissionBlocked(
+	t *testing.T,
+	s *Service,
+	a *workloadRelayAgent,
+	p Principal,
+	id string,
+) {
+	t.Helper()
+	done := make(chan struct{})
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			s.relay(w, r, p, id)
+		}),
+	)
+	var client, peer net.Conn
+	started := false
+	defer func() {
+		if client != nil {
+			_ = client.Close()
+		}
+		if peer != nil {
+			_ = peer.Close()
+		}
+		server.Close()
+		if started {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("admission probe handler did not exit")
+			}
+		}
+	}()
+	var err error
+	client, err = net.DialTimeout(
+		"tcp",
+		server.Listener.Addr().String(),
+		2*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = io.WriteString(
+		client,
+		"GET /connect HTTP/1.1\r\nHost: sandbox\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+	started = true
+	response, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode == http.StatusSwitchingProtocols {
+		select {
+		case peer = <-a.peers:
+		case <-time.After(5 * time.Second):
+			t.Fatal("admitted probe has no guest endpoint")
+		}
+		exchangeWorkload(t, client, peer)
+		t.Error(
+			"fresh HTTP 101 workload transferred while direct teardown still fails",
+		)
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf(
+			"admission returned HTTP %d, want conflict",
+			response.StatusCode,
+		)
+	}
+}
+
+func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
+	for _, backend := range []string{"manager", "install_direct"} {
+		for _, fault := range []string{"save_ok", "save_abort", "save_ignored"} {
+			t.Run(backend+"/"+fault, func(t *testing.T) {
+				s, f, agent, p, _ := egressFixture(t)
+				a := &workloadRelayAgent{
+					fakeAgent: agent,
+					peers:     make(chan net.Conn, 1),
+				}
+				s.opts.Agent = a
+				var fail, rulesOwned atomic.Bool
+				var cleanupCalls atomic.Int32
+				fail.Store(true)
+				install := func(context.Context, egress.Binding, egress.Policy) (func() error, error) {
+					rulesOwned.Store(true)
+					return func() error {
+						cleanupCalls.Add(1)
+						if fail.Load() {
+							return errors.New(
+								"injected direct teardown failure",
+							)
+						}
+						rulesOwned.Store(false)
+						return nil
+					}, nil
+				}
+				engine := &directTestEngine{fakeEngine: f}
+				arm := func() {}
+				if backend == "install_direct" {
+					s.opts.Engine = engine
+					install = s.InstallDirect
+					// The existing engine boundary fails one operation. Rearm at
+					// every synchronous admission gate to keep cleanup failing.
+					arm = func() {
+						engine.requestMu.Lock()
+						engine.failRevoke = true
+						engine.requestMu.Unlock()
+					}
+				}
+				manager, err := egress.New(
+					egress.Options{InstallDirect: install},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = s.opts.Egress.Close(); err != nil {
+					t.Fatal(err)
+				}
+				s.opts.Egress = manager
+				t.Cleanup(func() {
+					fail.Store(false)
+					engine.requestMu.Lock()
+					engine.failRevoke = false
+					engine.requestMu.Unlock()
+				})
+				r := claimRelay(
+					t,
+					s,
+					p,
+					"claim",
+					map[string]EnvVar{},
+					egress.Policy{Mode: "none"},
+				)
+				before := *r.Sandbox
+				old, guest := openWorkloadRelay(t, s, a, p, before.ID)
+				exchangeWorkload(t, old, guest)
+				agent.mu.Lock()
+				activations := len(agent.activations)
+				agent.mu.Unlock()
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					15*time.Second,
+				)
+				defer cancel()
+				v, err := f.GetVM(ctx, before.VMID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = manager.Bind(
+					ctx,
+					before.ID,
+					before.TenantID,
+					v.VSockPath,
+					egress.Policy{
+						Mode:         "direct",
+						AllowedCIDRs: []string{"1.1.1.1/32"},
+					},
+					nil,
+				); err != nil {
+					t.Fatal(err)
+				}
+				// An untracked residual must be confirmed by the actual Manager.
+				s.mu.Lock()
+				delete(s.bindings, before.ID)
+				s.mu.Unlock()
+				switch fault {
+				case "save_abort":
+					_, err = s.store.db.Exec(
+						`CREATE TRIGGER reject_diagnostic BEFORE UPDATE ON sandboxes
+						WHEN json_extract(NEW.body,'$.last_error') IS NOT NULL
+						BEGIN SELECT RAISE(ABORT,'injected diagnostic write failure'); END`,
+					)
+				case "save_ignored":
+					_, err = s.store.db.Exec(
+						`CREATE TRIGGER reject_diagnostic BEFORE UPDATE ON sandboxes
+						WHEN json_extract(NEW.body,'$.last_error') IS NOT NULL
+						BEGIN SELECT RAISE(IGNORE); END`,
+					)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				arm()
+				s.reconcile()
+				requireStreamClosed(t, old)
+				after, err := s.Get(ctx, p, before.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				diagnostic := after.LastError
+				if (fault == "save_ok") != (diagnostic != "") {
+					t.Fatal(
+						"diagnostic write control/fault did not take effect",
+					)
+				}
+				requireFence(t, s, before.ID, "")
+				for pass := 0; pass < 2; pass++ {
+					arm()
+					if _, err = s.DataReady(
+						ctx,
+						p,
+						before.ID,
+					); !isCode(
+						err,
+						api.Conflict,
+					) {
+						t.Errorf(
+							"incomplete teardown admitted DataReady: %v",
+							err,
+						)
+					}
+					arm()
+					requireWorkloadAdmissionBlocked(t, s, a, p, before.ID)
+					if info, bound := manager.Binding(
+						before.ID,
+					); !bound ||
+						info.Mode != "direct" {
+						t.Fatal("failed teardown lost actual Manager ownership")
+					}
+					vm, lookupErr := f.GetVM(ctx, before.VMID)
+					if lookupErr != nil || vm.NetworkActual ||
+						vm.NetworkEnabled {
+						t.Fatalf("none NIC state changed: %v", lookupErr)
+					}
+					if backend == "install_direct" && vm.NetworkPolicy == nil {
+						t.Fatal(
+							"production teardown fault did not retain engine policy",
+						)
+					}
+				}
+				if backend == "manager" &&
+					(!rulesOwned.Load() || cleanupCalls.Load() == 0) {
+					t.Fatal(
+						"fixture did not retain actual retryable direct ownership",
+					)
+				}
+				if backend == "install_direct" {
+					engine.requestMu.Lock()
+					revokes := 0
+					for _, request := range engine.requests {
+						if request.Action == "network_policy" &&
+							request.Policy == nil {
+							revokes++
+						}
+					}
+					engine.failRevoke = false
+					engine.requestMu.Unlock()
+					if revokes == 0 {
+						t.Fatal(
+							"production teardown fault did not reach policy revocation",
+						)
+					}
+				}
+				fail.Store(false)
+				if fault != "save_ok" {
+					if _, err = s.store.db.Exec(
+						"DROP TRIGGER reject_diagnostic",
+					); err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err = s.DataReady(ctx, p, before.ID)
+				if (fault == "save_ok" && !isCode(err, api.Conflict)) ||
+					(fault != "save_ok" && err != nil) {
+					t.Fatalf(
+						"cleanup retry changed diagnostic admission semantics: %v",
+						err,
+					)
+				}
+				after, err = s.Get(ctx, p, before.ID)
+				if err != nil || after.LastError != diagnostic {
+					t.Fatal("implicit cleanup changed the persisted diagnostic")
+				}
+				if _, bound := manager.Binding(
+					before.ID,
+				); bound &&
+					fault != "save_ok" {
+					t.Fatal(
+						"successful admission cleanup retained Manager ownership",
+					)
+				}
+				if fault == "save_ok" {
+					if _, err = s.Execute(ctx, p, "configure-retry", Command{
+						Action:    "configure",
+						SandboxID: before.ID,
+						Env:       map[string]EnvVar{},
+						Policy:    egress.Policy{Mode: "none"},
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				fresh, freshGuest := openWorkloadRelay(t, s, a, p, before.ID)
+				for pass := 0; pass < 2; pass++ {
+					s.reconcile()
+					if _, err = s.DataReady(ctx, p, before.ID); err != nil {
+						t.Fatal(err)
+					}
+					exchangeWorkload(t, fresh, freshGuest)
+				}
+				after, err = s.Get(ctx, p, before.ID)
+				if err != nil || after.Instance != before.Instance ||
+					after.Epoch != before.Epoch ||
+					!after.Deadline.Equal(before.Deadline) ||
+					after.ResumeAttempt != before.ResumeAttempt {
+					t.Fatal("cleanup changed guest identity or lease")
+				}
+				agent.mu.Lock()
+				afterActivations := len(agent.activations)
+				agent.mu.Unlock()
+				wantActivations := activations
+				if fault == "save_ok" {
+					wantActivations++
+				}
+				if afterActivations != wantActivations {
+					t.Fatal("implicit cleanup replayed guest activation")
+				}
+				vm, err := f.GetVM(ctx, before.VMID)
+				if err != nil || vm.NetworkActual || vm.NetworkEnabled ||
+					vm.NetworkPolicy != nil {
+					t.Fatal("cleanup left engine authorization behind")
+				}
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				for _, op := range f.ops {
+					if op.Request.Action == "network" &&
+						op.Request.NetworkEnabled {
+						t.Fatal("none admission enabled NIC")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestConfigureEgressNoneAdmissionWithoutManager(t *testing.T) {
+	s, _, agent, p, _ := egressFixture(t)
+	if err := s.opts.Egress.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.opts.Egress = nil
+	a := &workloadRelayAgent{fakeAgent: agent, peers: make(chan net.Conn, 1)}
+	s.opts.Agent = a
+	r := claimRelay(
+		t,
+		s,
+		p,
+		"claim",
+		map[string]EnvVar{},
+		egress.Policy{Mode: "none"},
+	)
+	client, guest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
+	for pass := 0; pass < 2; pass++ {
+		s.reconcile()
+		if _, err := s.DataReady(
+			context.Background(),
+			p,
+			r.Sandbox.ID,
+		); err != nil {
+			t.Fatal(err)
+		}
+		exchangeWorkload(t, client, guest)
+	}
+}
+
 func TestConfigureEgressPersistenceFailures(t *testing.T) {
 	wide := egress.Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
 	narrow := egress.Policy{

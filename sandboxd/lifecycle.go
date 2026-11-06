@@ -1248,6 +1248,16 @@ func (s *Service) DataReady(
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
+	if b.Policy.Mode == "none" {
+		// Confirm residual teardown before admission; LastError is diagnostic
+		// and its persistence may have failed during maintenance.
+		if err = s.bind(ctx, b, ""); err != nil {
+			return b, api.Fail(
+				api.Conflict,
+				"egress policy could not be revoked",
+			)
+		}
+	}
 	if s.opts.Egress != nil && b.Policy.Mode != "none" {
 		s.mu.Lock()
 		bound := s.bindings[b.ID] != ""
