@@ -1213,9 +1213,13 @@ func (s *Service) reconcileRecoveryAllocations(
 			continue
 		}
 		if proof.VMID == "" && proof.SnapshotID == "" {
-			r.Allocations[i].Resolution.State = "reclaimed"
-			r.Allocations[i].Resolution.Destination = "terminal-no-allocation:" + proof.ID
-			if err = s.saveRecovery(*r); err != nil {
+			if err = s.deliverKnownAllocation(
+				r,
+				i,
+				"reclaimed",
+				"terminal-no-allocation:"+proof.ID,
+				"",
+			); err != nil {
 				return recoveryProgress{}, err
 			}
 			continue
@@ -1225,6 +1229,20 @@ func (s *Service) reconcileRecoveryAllocations(
 			return recoveryProgress{}, err
 		}
 		v, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
+		if isCode(err, api.NotFound) && proof.Status == "failed" &&
+			b.TenantID == a.ChargeTenantID &&
+			(b.VMID == proof.VMID || b.VMID == "") {
+			if err = s.deliverKnownAllocation(
+				r,
+				i,
+				"reclaimed",
+				"vm-absent:"+proof.VMID,
+				proof.VMID,
+			); err != nil {
+				return recoveryProgress{}, err
+			}
+			continue
+		}
 		if err != nil {
 			return recoveryProgress{}, err
 		}
@@ -1247,9 +1265,13 @@ func (s *Service) reconcileRecoveryAllocations(
 					"failed allocation has no proven existing VM holder",
 				)
 			}
-			r.Allocations[i].Resolution.State = "cleanup"
-			r.Allocations[i].Resolution.Destination = "vm:" + v.ID
-			if err = s.saveRecovery(*r); err != nil {
+			if err = s.deliverKnownAllocation(
+				r,
+				i,
+				"cleanup",
+				"vm:"+v.ID,
+				v.ID,
+			); err != nil {
 				return recoveryProgress{}, err
 			}
 			continue
@@ -1278,4 +1300,90 @@ func (s *Service) reconcileRecoveryAllocations(
 		progress.AllowedParentDone = false
 	}
 	return progress, nil
+}
+
+// Terminal receipt dependency retirement shares the destination transaction.
+// Existing-VM delivery retains every conservative D version until V is reclaimed.
+func (s *Service) deliverKnownAllocation(
+	r *resourceRecovery,
+	index int,
+	state, destination, vm string,
+) error {
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	a := r.Allocations[index]
+	if a.Resolution.Proof == nil ||
+		!recoveryTerminal(a.Resolution.Proof.Status) {
+		return api.Fail(api.ManualRecovery, "allocation is not terminal")
+	}
+	if vm != "" && state == "cleanup" {
+		var holders int
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs r USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='vm_disk' AND q.source_operation_id=? AND r.holder_kind='cleanup' AND r.holder_id=?`, a.ChargeTenantID, a.OperationID, "vm:"+vm).
+			Scan(&holders); err != nil {
+			return err
+		}
+		b, err := getSandbox(s.ctx, tx, a.SandboxID)
+		if err != nil {
+			return err
+		}
+		if holders == 0 || b.VMID != vm ||
+			b.Instance != a.Request.ExpectedInstance ||
+			b.TenantID != a.ChargeTenantID {
+			return api.Fail(
+				api.ManualRecovery,
+				"terminal allocation lost its VM destination",
+			)
+		}
+	}
+	if vm != "" && state == "reclaimed" {
+		b, err := getSandbox(s.ctx, tx, a.SandboxID)
+		if err != nil {
+			return err
+		}
+		if b.TenantID != a.ChargeTenantID || (b.VMID != vm && b.VMID != "") {
+			return api.Fail(
+				api.ManualRecovery,
+				"absent failed allocation has another sandbox target",
+			)
+		}
+		if err = s.reclaimQuotaTx(tx, "vm_disk", vm); err != nil {
+			return err
+		}
+		var remaining int
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND holder_id=?`, a.ChargeTenantID, "vm:"+vm).
+			Scan(&remaining); err != nil {
+			return err
+		}
+		if remaining > 0 {
+			return api.Fail(
+				api.Conflict,
+				"absent VM still has unresolved allocation dependencies",
+			)
+		}
+	}
+	next := *r
+	next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
+	next.Allocations[index].Resolution.State = state
+	next.Allocations[index].Resolution.Destination = destination
+	if err = writeRecovery(s.ctx, tx, next); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=? AND NOT EXISTS(SELECT 1 FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage')`,
+		"operation:"+a.OperationID,
+		a.OperationID,
+	); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*r = next
+	return nil
 }

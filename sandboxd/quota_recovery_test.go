@@ -2109,6 +2109,214 @@ func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(
 	}
 }
 
+type r3FailedCompensation struct {
+	api.Client
+
+	f      *recoveryTestEngine
+	mu     sync.Mutex
+	failed bool
+	omitVM bool
+	key    string
+}
+
+func (e *r3FailedCompensation) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	e.mu.Lock()
+	fail := !e.failed && r.Action == "restore" &&
+		strings.Contains(r.Key, "recovery:")
+	if fail {
+		e.failed = true
+		e.key = r.Key
+	}
+	e.mu.Unlock()
+	if !fail {
+		return e.Client.Submit(ctx, r)
+	}
+	e.f.mu.Lock()
+	defer e.f.mu.Unlock()
+	op := api.Operation{
+		ID:      r.Key,
+		Key:     r.Key,
+		Request: r,
+		VMID:    r.VMID,
+		Status:  "failed",
+		Error: &api.Error{
+			Code:    api.Internal,
+			Message: "accepted compensation failed before candidate",
+		},
+	}
+	if e.omitVM {
+		op.VMID = ""
+	}
+	e.f.ops[r.Key] = op
+	return op, nil
+}
+
+func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
+	t *testing.T,
+) {
+	for _, scenario := range []string{"accepted-VMID", "no-result", "destination-sql", "dependency-sql", "release-before-destination"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f, _, p := recoveryFixture(t)
+			ledgerLimit(t, s, p, 1, 448)
+			b := *claimTest(t, s, p, "source", nil).Sandbox
+			cp := ledgerExecute(
+				t,
+				s,
+				p,
+				"checkpoint",
+				Command{Action: "checkpoint", SandboxID: b.ID},
+			).Checkpoint
+			original := &ledgerRecoveryDeliveryEngine{
+				recoveryTestEngine:  f,
+				rejectPublicRestore: true,
+				faithfulFailure:     true,
+			}
+			adapter := &r3FailedCompensation{
+				Client: original,
+				f:      f,
+				omitVM: scenario == "no-result",
+			}
+			s.opts.Engine = adapter
+			result, err := s.Execute(
+				s.ctx,
+				p,
+				"rollback",
+				Command{
+					Action:       "rollback",
+					SandboxID:    b.ID,
+					CheckpointID: cp.ID,
+				},
+			)
+			if err == nil {
+				t.Fatal("public restore did not fail")
+			}
+			var body []byte
+			if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+				Scan(&body); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.recoverResources(); err == nil {
+				t.Fatal("compensation failure missing")
+			}
+			initial, peak := int64(384), int64(448)
+			if scenario == "no-result" {
+				initial, peak = 320, 384
+			}
+			ledgerMoney(t, s, p.TenantID, 1, initial)
+			if scenario == "release-before-destination" {
+				ledgerExecute(
+					t,
+					s,
+					p,
+					"release-first",
+					Command{Action: "release", SandboxID: b.ID},
+				)
+				s = ledgerRestart(t, s)
+				for i := 0; i < 3; i++ {
+					_ = s.recoverResources()
+				}
+				ledgerExecute(
+					t,
+					s,
+					p,
+					"delete-cp-first",
+					Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
+				)
+				for i := 0; i < 3; i++ {
+					_ = s.recoverResources()
+				}
+				ledgerMoney(t, s, p.TenantID, 0, 0)
+				if f.count("restore") != 0 {
+					t.Fatal("terminated failed allocation was restored")
+				}
+				return
+			}
+			if scenario == "destination-sql" || scenario == "dependency-sql" {
+				trigger := `CREATE TRIGGER r3_terminal_transfer BEFORE UPDATE ON resource_recovery WHEN json_extract(NEW.body,'$.allocations[0].resolution.state')='cleanup' BEGIN SELECT RAISE(ABORT,'terminal destination'); END`
+				if scenario == "dependency-sql" {
+					trigger = `CREATE TRIGGER r3_terminal_transfer BEFORE DELETE ON quota_refs WHEN OLD.holder_kind='engine_dependency' AND OLD.holder_id LIKE 'operation:recovery:%' BEGIN SELECT RAISE(ABORT,'terminal dependency'); END`
+				}
+				if _, err = s.store.db.Exec(trigger); err != nil {
+					t.Fatal(err)
+				}
+				if err = s.recoverResources(); err == nil {
+					t.Fatal("terminal transfer SQL fault missing")
+				}
+				if f.count("restore") != 0 {
+					t.Fatal(
+						"next attempt crossed failed responsibility transfer",
+					)
+				}
+				all, err := s.resourceRecoveries()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, r := range all {
+					if len(r.Allocations) > 0 &&
+						r.Allocations[0].Resolution.State != "result_known" {
+						t.Fatal("failed transfer committed partial destination")
+					}
+				}
+				if _, err = s.store.db.Exec(
+					`DROP TRIGGER r3_terminal_transfer`,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s = ledgerRestart(t, s)
+			for i := 0; i < 3; i++ {
+				_ = s.recoverResources()
+			}
+			if f.count("restore") != 1 ||
+				recoverySandbox(t, s, b.ID).State != "running" {
+				t.Fatal(
+					"known terminal failure did not permit its next attempt",
+				)
+			}
+			ledgerMoney(t, s, p.TenantID, 1, peak)
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"delete-cp",
+				Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
+			)
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"release",
+				Command{Action: "release", SandboxID: b.ID},
+			)
+			for i := 0; i < 3; i++ {
+				_ = s.recoverResources()
+			}
+			ledgerMoney(t, s, p.TenantID, 0, 0)
+			var after []byte
+			if err = s.store.db.QueryRow(`SELECT body FROM operations WHERE id=?`, result.OperationID).
+				Scan(&after); err != nil ||
+				!bytes.Equal(body, after) {
+				t.Fatal("public failure changed", err)
+			}
+			if _, err = f.GetSnapshot(
+				s.ctx,
+				cp.SnapshotID,
+			); !isCode(
+				err,
+				api.NotFound,
+			) {
+				t.Fatal(
+					"terminal failed restore retained its source dependency",
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestQuotaLedgerReleaseIntentAtomicity(t *testing.T) {
 	for _, boundary := range []string{"intent", "marker"} {
 		t.Run(boundary, func(t *testing.T) {
