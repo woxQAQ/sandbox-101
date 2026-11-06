@@ -19,6 +19,8 @@ type Backend interface {
 	Launch(context.Context, Resource, bool) error
 	Boot(context.Context, Resource, bool) error
 	Agent(context.Context, Resource, bool) error
+	// Stop proves the supplied instance's identity before signaling it. It must
+	// not require sibling instances to be absent; Inspect proves that inventory.
 	Stop(context.Context, Resource) error
 	Pause(context.Context, Resource) error
 	Capture(context.Context, Resource, string) error

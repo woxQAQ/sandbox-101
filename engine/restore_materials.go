@@ -167,21 +167,38 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 			continue
 		}
 		seen[r.Instance] = true
-		if _, err = e.opts.Backend.Inspect(e.ctx, r); err != nil {
-			return err
-		}
 		instances = append(instances, r)
 	}
 	if err = e.saveOp(o, "restore_delete_stop_intent"); err != nil {
 		return err
 	}
+	// Stop validates the exact recorded process identity itself. Inspect also
+	// rejects live sibling scopes, including other journal-owned instances, so
+	// all known instances must exit before the complete inventory can be proved.
+	// No network/device mutation or removal is authorized by Stop alone.
+	for _, r := range instances {
+		if err = e.opts.Backend.Stop(e.ctx, r); err != nil {
+			return err
+		}
+	}
+	for _, r := range instances {
+		obs, x := e.opts.Backend.Inspect(e.ctx, r)
+		if x != nil {
+			return x
+		}
+		if obs.Alive {
+			return api.Fail(
+				api.ManualRecovery,
+				"restore deletion cannot confirm instance shutdown",
+			)
+		}
+	}
 	for _, r := range instances {
 		if err = e.opts.Backend.Network(e.ctx, r, false); err != nil {
 			return err
 		}
-		if err = e.opts.Backend.Stop(e.ctx, r); err != nil {
-			return err
-		}
+	}
+	for _, r := range instances {
 		obs, x := e.opts.Backend.Inspect(e.ctx, r)
 		if x != nil {
 			return x

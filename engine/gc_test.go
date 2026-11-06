@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -988,6 +989,178 @@ func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
 	if len(r.Retained) == 0 ||
 		!strings.Contains(r.Retained[0].Reason, "inode") {
 		t.Fatalf("replacement not diagnosed: %+v", r)
+	}
+}
+
+func TestGCResolvesFailedRestoreDeleteRetry(t *testing.T) {
+	var armed atomic.Bool
+	e, b := openGCTest(t, func(step string) error {
+		if armed.Load() && step == "restore_materials_complete" {
+			return errors.New("candidate delivery failed")
+		}
+		return nil
+	})
+	_, source := gcSource(t, e)
+	armed.Store(true)
+	op, err := e.Submit(context.Background(), api.Request{
+		Key: "blocked-clone", Action: "clone", SnapshotID: source.SnapshotID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := awaitStatus(t, e, op.ID)
+	if failed.Status != "failed" {
+		t.Fatal("clone did not fail")
+	}
+	original := encode(failed)
+	lock := e.vmLock(op.VMID)
+	lock.Lock()
+	lock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
+	b.mu.Lock()
+	b.inspectError = api.Fail(
+		api.ManualRecovery,
+		"candidate ownership temporarily uncertain",
+	)
+	b.mu.Unlock()
+	request := api.Request{
+		Key:    "delete-uncertain",
+		Action: "delete",
+		VMID:   op.VMID,
+	}
+	deletion, err := e.Submit(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteFailed := awaitStatus(t, e, deletion.ID)
+	if deleteFailed.Status != "failed" || deleteFailed.Error == nil ||
+		deleteFailed.Error.Code != api.ManualRecovery {
+		t.Fatalf("unexpected failed delete: %+v", deleteFailed)
+	}
+	deleteOriginal := encode(deleteFailed)
+	lock.Lock()
+	lock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
+	if _, err = e.CollectGarbage(
+		context.Background(),
+		GCOptions{},
+	); err == nil ||
+		!strings.Contains(err.Error(), deletion.ID) {
+		t.Fatalf("unresolved failed delete did not fence GC: %v", err)
+	}
+	b.mu.Lock()
+	b.inspectError = nil
+	b.mu.Unlock()
+	request.Key = "delete-confirmed"
+	wait(t, e, request)
+	lock.Lock()
+	lock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
+	for id, want := range map[string][]byte{op.ID: original, deletion.ID: deleteOriginal} {
+		after, err := e.GetOperation(context.Background(), id)
+		if err != nil || !bytes.Equal(want, encode(after)) {
+			t.Fatalf("failed public response changed: %s", id)
+		}
+	}
+	cleaned, err := e.loadOp(context.Background(), op.ID)
+	if err != nil || !cleaned.Journal.RestoreCleaned || cleaned.Journal.Lease {
+		t.Fatal("original restore cleanup proof missing")
+	}
+	if _, err = e.GetVM(context.Background(), op.VMID); err == nil {
+		t.Fatal("cleaned VM retained")
+	}
+	gcExists(t, filepath.Join(e.opts.StateDir, "vms", op.VMID), false)
+	gcPass(t, e, GCOptions{})
+
+	// A cleanup receipt for another VM cannot retire this delete's responsibility.
+	otherClone, err := e.Submit(context.Background(), api.Request{
+		Key:        "other-blocked-clone",
+		Action:     "clone",
+		SnapshotID: source.SnapshotID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := awaitStatus(t, e, otherClone.ID); got.Status != "failed" {
+		t.Fatal("other clone did not fail")
+	}
+	wait(
+		t,
+		e,
+		api.Request{
+			Key:    "other-clone-delete",
+			Action: "delete",
+			VMID:   otherClone.VMID,
+		},
+	)
+	cloneLock := e.vmLock(otherClone.VMID)
+	cloneLock.Lock()
+	cloneLock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
+	firstDelete, err := e.loadOp(context.Background(), deletion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched := firstDelete
+	mismatched.Journal.BlockedRestoreID = otherClone.ID
+	if _, err = e.db.Exec(
+		"UPDATE operations SET body=? WHERE id=?",
+		encode(mismatched),
+		deletion.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.CollectGarbage(
+		context.Background(),
+		GCOptions{},
+	); err == nil ||
+		!strings.Contains(err.Error(), deletion.ID) {
+		t.Fatalf("unrelated VM cleanup bypassed GC fence: %v", err)
+	}
+	if _, err = e.db.Exec(
+		"UPDATE operations SET body=? WHERE id=?",
+		encode(firstDelete),
+		deletion.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// An unrelated ManualRecovery failure remains a global GC fence.
+	armed.Store(false)
+	other := wait(
+		t,
+		e,
+		api.Request{Key: "other-create", Action: "create", Config: config()},
+	)
+	b.mu.Lock()
+	b.inspectError = api.Fail(
+		api.ManualRecovery,
+		"unrelated instance identity uncertain",
+	)
+	b.mu.Unlock()
+	start, err := e.Submit(
+		context.Background(),
+		api.Request{Key: "other-start", Action: "start", VMID: other.VMID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := awaitStatus(
+		t,
+		e,
+		start.ID,
+	); got.Status != "failed" || got.Error == nil ||
+		got.Error.Code != api.ManualRecovery {
+		t.Fatalf("unrelated operation did not fail: %+v", got)
+	}
+	otherLock := e.vmLock(other.VMID)
+	otherLock.Lock()
+	otherLock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
+	b.mu.Lock()
+	b.inspectError = nil
+	b.mu.Unlock()
+	if _, err = e.CollectGarbage(
+		context.Background(),
+		GCOptions{},
+	); err == nil ||
+		!strings.Contains(err.Error(), start.ID) {
+		t.Fatalf("unrelated ManualRecovery bypassed GC fence: %v", err)
 	}
 }
 

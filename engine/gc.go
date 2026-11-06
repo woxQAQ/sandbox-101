@@ -484,8 +484,10 @@ func (g *gcGraph) load() error {
 	for id, o := range g.ops {
 		live := !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
 			o.Journal.Lease || o.Journal.RestoreBlocked && !o.Journal.RestoreCleaned || o.Journal.BlockedRestoreID != "" && g.vms[o.Operation.VMID].VM.ID != ""
-		if o.Operation.Error != nil && !o.Journal.RestoreCleaned &&
-			o.Operation.Error.Code == api.ManualRecovery {
+		if o.Operation.Error != nil &&
+			o.Operation.Error.Code == api.ManualRecovery &&
+			!o.Journal.RestoreCleaned &&
+			!g.restoreDeleteCleaned(o) {
 			return fmt.Errorf("GC operation requires manual recovery: %s", id)
 		}
 		if v, ok := g.vms[o.Operation.VMID]; ok && v.VM.OperationID == id {
@@ -614,6 +616,39 @@ func (g *gcGraph) load() error {
 		}
 	}
 	return nil
+}
+
+// restoreDeleteCleaned derives internal responsibility from the original
+// restore's cleanup transaction. Historical failed delete responses stay fixed.
+func (g *gcGraph) restoreDeleteCleaned(o opRecord) bool {
+	if o.Operation.Request.Action != "delete" ||
+		o.Operation.Status != "failed" ||
+		o.Operation.Request.VMID != o.Operation.VMID ||
+		o.Operation.VMID == "" {
+		return false
+	}
+	original, ok := g.ops[o.Journal.BlockedRestoreID]
+	if !ok || original.Operation.ID == o.Operation.ID ||
+		original.Operation.VMID != o.Operation.VMID || original.Operation.Status != "failed" ||
+		(original.Operation.Request.Action != "restore" && original.Operation.Request.Action != "clone") ||
+		!gcID(
+			original.Operation.SnapshotID,
+			"snap-",
+		) || original.Operation.Request.SnapshotID != original.Operation.SnapshotID ||
+		!original.Journal.RestoreBlocked || !original.Journal.RestoreCleaned || original.Journal.Lease {
+		return false
+	}
+	if _, exists := g.vms[o.Operation.VMID]; exists {
+		return false
+	}
+	resource, receipt := original.Journal.Resource, original.Journal.RestoreDeletion
+	return resource != nil && resource.VMID == o.Operation.VMID &&
+		receipt != nil && receipt.Format == 1 && receipt.Dir &&
+		receipt.Path == filepath.Join(
+			g.e.opts.StateDir,
+			"vms",
+			o.Operation.VMID,
+		)
 }
 
 func (g *gcGraph) rootResource(r Resource) {
