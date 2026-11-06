@@ -60,7 +60,7 @@ func TestConfigRejectsInvalidSettings(t *testing.T) {
 
 func TestConfigExample(t *testing.T) {
 	c, err := parseConfig(
-		[]string{"--config", "../../../deploy/product/sandboxd.example.yaml"},
+		[]string{"--config", "../../../deploy/sandboxd/sandboxd.example.yaml"},
 	)
 	if err != nil || c.RootTokenFile != "/etc/sandboxd/root-token" ||
 		c.Mode != "serve" {

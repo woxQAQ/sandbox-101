@@ -217,7 +217,7 @@ func productionGuestTCP(
 	); err != nil {
 		t.Fatal(err)
 	}
-	// Connecting performs the actual product auto-resume and instance rebind.
+	// Connecting performs the actual sandbox auto-resume and instance rebind.
 	productionExec(t, ctx, client, direct.ID, "printf resumed")
 	resumed, err := client.Get(ctx, direct.ID)
 	if err != nil {

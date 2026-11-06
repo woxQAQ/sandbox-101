@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let agent = Agent::new(config)?;
     let admin = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, 2046))?;
     let system = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, 2047))?;
-    let product = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, 2048))?;
+    let workload = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, 2048))?;
     let proxy_agent = agent.clone();
     let mut proxy = tokio::spawn(async move { sandbox_agent::proxy::listeners(proxy_agent).await });
     let connections = Arc::new(Semaphore::new(64));
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         let (stream, address, portal) = tokio::select! {
             r=admin.accept()=>{let(s,a)=r?;(s,a,Portal::Admin)},
             r=system.accept()=>{let(s,a)=r?;(s,a,Portal::System)},
-            r=product.accept()=>{let(s,a)=r?;(s,a,Portal::Product)},
+            r=workload.accept()=>{let(s,a)=r?;(s,a,Portal::Workload)},
             _=reap.tick()=>{agent.reap().await;continue;},
             r=&mut proxy=>{r??;anyhow::bail!("proxy listeners stopped");},
             _=tokio::signal::ctrl_c()=>break,
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
         let budget = match portal {
             Portal::System => &system_connections,
             Portal::Admin => &admin_connections,
-            Portal::Product => &connections,
+            Portal::Workload => &connections,
         };
         let Ok(permit) = budget.clone().try_acquire_owned() else {
             continue;

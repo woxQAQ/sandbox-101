@@ -1,12 +1,12 @@
 # sandboxd API and lifecycle
 
-The Go module `github.com/woxQAQ/sandboxd` provides the product service, HTTP control API, end-to-end guest SDK, host egress manager and CLI. Build with `make build`; deployment and metadata recovery are described in [deploy/product](../deploy/product/README.md).
+The Go module `github.com/woxQAQ/sandboxd` provides the sandbox service, HTTP control API, end-to-end guest SDK, host egress manager and CLI. Build with `make build`; deployment and metadata recovery are described in [deploy/sandboxd](../deploy/sandboxd/README.md).
 
 ## Configuration
 
 The HTTP API uses Gin, including authenticated route groups, raw Upgrade connections and Preview forwarding. Daemon and CLI configuration use Viper with `--config FILE`, retaining the existing flags. Explicit flags override environment variables, then file values, then defaults. YAML, JSON and TOML files use flat flag names such as `engine-socket` and `root-token-file`; environment names use `SANDBOXD_` or `SANDBOXCTL_` and replace hyphens with underscores. Files can also be selected with `SANDBOXD_CONFIG` or `SANDBOXCTL_CONFIG`. Unknown file keys and invalid typed values are errors; configuration is loaded once at startup.
 
-See the [daemon example](../deploy/product/sandboxd.example.yaml) and [client example](../deploy/client/sandboxctl.example.yaml). Token contents remain in private files. CLI options precede the command, so guest command arguments keep their original meaning.
+See the [daemon example](../deploy/sandboxd/sandboxd.example.yaml) and [client example](../deploy/client/sandboxctl.example.yaml). Token contents remain in private files. CLI options precede the command, so guest command arguments keep their original meaning.
 
 ## Tokens and commands
 
@@ -49,7 +49,7 @@ Claim using `POST /v1/claim`:
 }
 ```
 
-Provisioning atomically transfers a matching warm instance, otherwise clones the frozen golden snapshot or cold boots the image. A rejected warm activation is durably marked and cleaned before using golden/cold supply, with distinct activation keys. Replay resumes the same replacement. Every delivery checks engine readiness, disables the NIC, probes the product portal, binds egress and activates the guest before enabling a verified direct NIC.
+Provisioning atomically transfers a matching warm instance, otherwise clones the frozen golden snapshot or cold boots the image. A rejected warm activation is durably marked and cleaned before using golden/cold supply, with distinct activation keys. Replay resumes the same replacement. Every delivery checks engine readiness, disables the NIC, probes the workload portal, binds egress and activates the guest before enabling a verified direct NIC.
 
 ## Routes
 
@@ -66,11 +66,11 @@ Provisioning atomically transfers a matching warm instance, otherwise clones the
 | `GET /v1/checkpoints`, `DELETE /v1/checkpoints/{id}` | List/delete checkpoints |
 | `POST /v1/checkpoints/{id}/fork` | Fork a published checkpoint |
 | `GET /v1/operations/{id}` | Durable operation status |
-| `GET /v1/sandboxes/{id}/connect` | HTTP/1.1 Upgrade to raw guest product portal |
+| `GET /v1/sandboxes/{id}/connect` | HTTP/1.1 Upgrade to raw guest workload portal |
 | `POST /v1/sandboxes/{id}/preview?port=8080&ttl_seconds=60` | Signed Preview URL; send `{}` body |
 | `POST /v1/drain` | Root-only stop of new claims/refills |
 
-Bodies are strict JSON with a 1 MiB limit. Fork takes `count`; rollback takes `checkpoint_id`. Checkpoint creation returns a product checkpoint referring to a published engine snapshot. A paused source can checkpoint or fork without waking. Release closes active data streams and deletes dedicated resources. Repeated operation requests converge on the same result.
+Bodies are strict JSON with a 1 MiB limit. Fork takes `count`; rollback takes `checkpoint_id`. Checkpoint creation returns a sandbox checkpoint referring to a published engine snapshot. A paused source can checkpoint or fork without waking. Release closes active data streams and deletes dedicated resources. Repeated operation requests converge on the same result.
 
 `paused` means an immutable sleep snapshot and no VMM. Concurrent data requests converge on one resume operation and new clone. Resume preserves machine identity, shell/process state and the guest execution ledger; fork resets identity/environment/history. Failed resume retains the sleep snapshot and permits a later distinct attempt. Reaper actions record their expected deadline and recheck it under the sandbox lock, so stale expiry work cannot delete a renewed sandbox.
 
@@ -78,7 +78,7 @@ Bodies are strict JSON with a 1 MiB limit. Fork takes `count`; rollback takes `c
 
 ## Raw protocol and SDK
 
-Connect with `Connection: Upgrade` and `Upgrade: sandbox-v1`. After 101, the host copies bytes with bounded buffers/backpressure, preserving buffered upgrade bytes and half-close. Only the Rust guest and client parse user frames. Guest host administration is on port 2046, system control on 2047 and unprivileged product RPC on 2048. Product RPC cannot invoke administrative activation or reseeding.
+Connect with `Connection: Upgrade` and `Upgrade: sandbox-v1`. After 101, the host copies bytes with bounded buffers/backpressure, preserving buffered upgrade bytes and half-close. Only the Rust guest and client parse user frames. Guest host administration is on port 2046, system control on 2047 and unprivileged workload RPC on 2048. Workload RPC cannot invoke administrative activation or reseeding.
 
 Frames are generated Protobuf preceded by a four-byte big-endian length. Maximum frame size is 8 MiB; data chunks are 64 KiB. See [protocol](../protocol/README.md) and [guest RPC](../guest/README.md). `port_forward` must be first on a fresh connection: one ready frame, then entirely raw duplex bytes with no final Protobuf frame.
 

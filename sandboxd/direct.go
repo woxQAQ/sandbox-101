@@ -111,7 +111,7 @@ func (s *Service) InstallDirect(
 	}
 	var attempt uint64
 	cleanup := func() error {
-		// Product shutdown cancels s.ctx before closing egress. Cleanup must still
+		// Service shutdown cancels s.ctx before closing egress. Cleanup must still
 		// reach the engine, and every request remains conditioned on this instance.
 		cleanupCtx, cancel := context.WithTimeout(
 			context.Background(),

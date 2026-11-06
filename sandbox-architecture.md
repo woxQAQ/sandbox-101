@@ -1,8 +1,8 @@
-# sandbox 产品层架构
+# sandbox 架构
 
-本文描述构建在单宿主机 microVM engine（见 `@architecture.md`）之上的 sandbox 产品控制面与数据面架构，包括模板构建、预热池（warm pool）、沙箱租约（claim/TTL）、休眠与透明唤醒（hibernate/auto-resume）、分支派生（fork/checkpoint）、零拷贝数据面中继（byte relay）、受控出网与凭据注入（guarded egress），以及多租户隔离、一致性与不变量。
+本文描述构建在单宿主机 microVM engine（见 `@architecture.md`）之上的 sandbox 控制面与数据面架构，包括模板构建、预热池（warm pool）、沙箱租约（claim/TTL）、休眠与透明唤醒（hibernate/auto-resume）、分支派生（fork/checkpoint）、零拷贝数据面中继（byte relay）、受控出网与凭据注入（guarded egress），以及多租户隔离、一致性与不变量。
 
-底层 engine 提供确定、安全、可恢复的单机 VM 与快照原语；本层（以下简称 `sandboxd` 与 `guest agent`）在此之上提供亚毫秒至数十毫秒级交付、面向 AI Agent 及交互式工作负载的产品语义。
+底层 engine 提供确定、安全、可恢复的单机 VM 与快照原语；本层（以下简称 `sandboxd` 与 `guest agent`）在此之上提供亚毫秒至数十毫秒级交付、面向 AI Agent 及交互式工作负载的 sandbox 语义。
 
 接口字段、帧编码细节、具体路径与部署参数在实现设计中确定。待定设计项与限制另行标明。
 
@@ -10,7 +10,7 @@
 
 ## 0.1 系统模型
 
-sandbox 产品层管理可按需认领、分支、休眠和销毁的隔离编程环境。调用方通过控制面 API 认领（claim）沙箱，获取专属访问令牌，再经数据面通道在沙箱内执行命令、读写文件、操作持久化会话或转发端口。
+sandboxd 管理可按需认领、分支、休眠和销毁的隔离编程环境。调用方通过控制面 API 认领（claim）沙箱，获取专属访问令牌，再经数据面通道在沙箱内执行命令、读写文件、操作持久化会话或转发端口。
 
 系统由宿主机常驻服务 `sandboxd`、底层 `engine` 以及运行在 microVM 内部的统一 `guest agent` 组成。控制面与宿主机中继使用 Go 实现，guest agent 使用 Rust 静态编译并内置于基础镜像。
 
@@ -27,7 +27,7 @@ sandbox 产品层管理可按需认领、分支、休眠和销毁的隔离编程
 |---|---|
 | 模板与预热池管理 | 黄金快照构建管线、预热池水位维持（refill）、健康探测与陈旧预热实例淘汰 |
 | 租约与生命周期编排 | claim、renew、release、空闲或到期回收（reap）、hibernate、按需透明唤醒（auto-resume）、fork 与 checkpoint |
-| 统一 guest agent | 监听固定 vsock 端口，同时承载底层 engine 的基础控制能力（握手、reseed、校时）与上层产品数据面能力（exec、session、pty、fs、port forward） |
+| 统一 guest agent | 监听固定 vsock 端口，同时承载底层 engine 的基础控制能力（握手、reseed、校时）、宿主专用 Admin 管理能力（activate、prepare_template、quiesce）与 Workload 数据面能力（exec、session、pty、fs、port forward） |
 | 数据面字节中继 | 验证沙箱令牌后，将客户端连接经 HTTP Upgrade 直连拼接至对应 VM 的 vsock UDS，以及提供 HMAC 签名的端口预览（preview URL） |
 | 受控出网与凭据注入 | 双轨出网控制（vsock 代理轨与受控网卡直连轨）、宿主侧秘密代填（secret injection）、DNS 防重绑定与防私网逃逸（SSRF guard）、出网审计 |
 | 租户与配额治理 | 三级令牌鉴权（root / tenant / sandbox）、每租户并发沙箱与存储配额、使用量与审计日志（journal） |
@@ -35,12 +35,12 @@ sandbox 产品层管理可按需认领、分支、休眠和销毁的隔离编程
 
 ## 0.2 与底层 engine 的协同边界
 
-传统设计常因底层运行时与上层沙箱控制面脱节而产生两类缺陷：一是 guest 内同时运行两套守护进程（基础管理 agent 与产品数据面 daemon），浪费内存与启动时间；二是底层克隆恢复时直接放通网卡，导致上层来不及安装租户防火墙或出网锁定规则，从而被迫禁止带网络沙箱的 fork 与 checkpoint。
+传统设计常因底层运行时与上层沙箱控制面脱节而产生两类缺陷：一是 guest 内同时运行两套守护进程（基础管理 agent 与 Workload 数据面 daemon），浪费内存与启动时间；二是底层克隆恢复时直接放通网卡，导致上层来不及安装租户防火墙或出网锁定规则，从而被迫禁止带网络沙箱的 fork 与 checkpoint。
 
 本设计利用 `@architecture.md` 的底层保证消除上述断层：
 
 1. **网络默认阻断（fail-closed）消除激活竞态**：`engine` 在 `create`、`restore`、`clone` 完成时保持 `tap0` 与 `veth` 关闭。`sandboxd` 在认领或派生路径上，始终先完成租户出网规则安装、代理句柄绑定与环境变量注入，最后才调用 `engine` 启用网络接口或保持代理轨运行，使所有网络模式的沙箱均支持 `fork`、`checkpoint` 与 `hibernate`。
-2. **单一二进制、双逻辑通道**：guest 内仅运行一个静态编译的 Rust agent，但严格区分「系统控制通道」（供 `engine` 执行握手、`reseed`、时钟步进）与「产品数据面通道」（供 `sandboxd` 字节中继转发用户 RPC）。`engine` 的 `running` 仅证明系统控制通道与基础重播种就绪；`sandboxd` 在确认产品数据面通道就绪且租户配置注入完毕后，才将沙箱交付给调用方。
+2. **单一二进制、三条通道**：guest 内仅运行一个静态编译的 Rust agent，严格区分 System 2047（供 `engine` 执行 `ping` 握手、`reseed`、`clock_sync`）、宿主专用 Admin 2046（供 `sandboxd` 执行 `activate`、`prepare_template`、`quiesce`）与 Workload 2048（供 `sandboxd` 字节中继转发租户 RPC）。`engine` 的 `running` 仅证明 System 通道与本次基础协作就绪；`sandboxd` 完成 Admin 激活并确认 Workload 就绪后，才将沙箱交付给调用方。租户中继固定连接 2048，不能调用 System 或 Admin 方法。
 
 ## 0.3 一个完整示例
 
@@ -64,7 +64,7 @@ sandbox 产品层管理可按需认领、分支、休眠和销毁的隔离编程
 已定项如下：
 
 - 单节点控制面与数据面中继合并为常驻进程 `sandboxd`（Go），底层通过程序接口驱动 `engine`，不通过 CLI 子进程胶水调用，见 1.1、1.4。
-- guest 内统一使用单个静态编译的 Rust agent 二进制，分设系统控制端口与产品数据面端口，见第 2 章。
+- guest 内统一使用单个静态编译的 Rust agent 二进制，分设 System 2047、Admin 2046 与 Workload 2048 端口，见第 2 章。
 - 认领路径采用三级供应（Warm Pool Hit $\rightarrow$ Golden Clone $\rightarrow$ Cold Boot），预热实例在池中保持网络阻断，认领激活时才注入租户配置并按需开启网络轨，见 1.1、3.1。
 - 数据面采用宿主机零反序列化的字节流拼接（Byte Relay），帧协议解析由客户端 SDK 与 guest agent 端到端完成，见 2.2。
 - 休眠（`paused`）沙箱通过「底层快照 + 销毁原 VM」实现，删除 `paused` 沙箱直接回收快照，禁止先唤醒再销毁，见 1.2。
@@ -82,30 +82,30 @@ sandbox 产品层管理可按需认领、分支、休眠和销毁的隔离编程
 |---|---|---|---|
 | Tier 1: Warm Hit | 目标池键存在就绪的预热 VM | 从内存池原子弹出 VM $\rightarrow$ 写入租户 `/run/sandbox.env` $\rightarrow$ 绑定出网策略并按需启用接口 $\rightarrow$ 签发令牌 | $< 2\text{ms}$（无 VMM 启动与磁盘分配） |
 | Tier 2: Golden Clone | 预热池为空，但存在已发布的黄金模板快照 | 调用 `engine.clone(golden_snapshot)`（CH `CopyOnWrite` 内存映射 + `reflink` 可写盘）$\rightarrow$ 执行上述租户激活序列 | $20 \sim 60\text{ms}$ |
-| Tier 3: Cold Boot | 未构建黄金模板的原始镜像 | 调用 `engine.create(image)` + `engine.start` $\rightarrow$ 等待产品通道就绪 $\rightarrow$ 执行租户激活序列 | $200 \sim 400\text{ms}$ |
+| Tier 3: Cold Boot | 未构建黄金模板的原始镜像 | 调用 `engine.create(image)` + `engine.start` $\rightarrow$ 等待 Workload 通道就绪 $\rightarrow$ 执行租户激活序列 | $200 \sim 400\text{ms}$ |
 
 ### 黄金模板构建（Template Build & Promote）
 
 黄金模板是一份在受控状态下捕获的底层 `engine` 整机快照。构建流程由 `sandboxd` 编排：
 
 1. **启动构建实例**：按目标 `Base OCI Digest` 与 `resource_shape` 调用 `engine.create` 与 `engine.start`。若预热脚本需访问外部仓库，临时绑定受控出网。
-2. **执行预热与清理**：通过产品通道执行用户或镜像定义的 `warmup` 动作（例如启动常驻运行时、预加载大型语言模型或依赖库、等待本地端口就绪）。预热完成后，清空临时凭据、历史日志并将 `/etc/machine-id` 置空，同步文件系统缓存。
-3. **静默捕获**：关闭构建 VM 的网络接入，确认产品 agent 处于无在途任务的静默态后，调用 `engine.snapshot` 生成黄金快照。
+2. **执行预热与清理**：通过 Workload 通道执行用户或镜像定义的 `warmup` 动作（例如启动常驻运行时、预加载大型语言模型或依赖库、等待本地端口就绪）。预热完成后，构建方清理应用特有的凭据与历史记录；随后通过 Admin 2046 调用 `prepare_template`，排空 Workload RPC/会话，清理 agent 身份、环境与保留日志并同步文件系统。该操作保留分离运行的应用进程，无法通用清理它们的内存、环境或外部注册状态。
+3. **静默捕获**：关闭构建 VM 的网络接入，确认 Admin `prepare_template` 已完成、Workload 无在途 RPC/会话后，调用 `engine.snapshot` 生成黄金快照。
 4. **原子晋升与池滚动**：将新 `snapshot_id` 登记到 `sandboxd` 模板目录，调用 `engine.delete` 销毁临时构建 VM。通知预热池管理器按新快照补充（refill）新预热实例，并逐步排空旧版本预热实例。
 
 ### 预热池（Warm Pool）管理
 
 后台 `refill` 协调器按池键配置的 `target_warm_count` 维持水位：
 
-- **预热实例状态**：池中每台 VM 均已通过 `engine.clone` 恢复执行、完成基础 `reseed` 与时钟同步，且通过了产品数据面端口的存活探测（`info` 握手）。
+- **预热实例状态**：池中每台 VM 均已通过 `engine.clone` 恢复执行、完成基础 `reseed` 与时钟同步，且通过了 Workload 2048 端口的存活探测（`info` 握手）。
 - **池内安全边界**：预热实例在池中运行期间，从未接触任何租户数据或环境变量，底层网络接口保持关闭，也不绑定任何宿主出网代理端口。
 - **故障退避与健康巡检**：周期巡检池中 VM；若发现底层 VMM 意外退出或数据面探测超时，立即从池中摘除并调用 `engine.delete` 清理。当节点容量耗尽（如收到 `engine` 的空间不足或资源预算拒绝错误）或连续克隆失败时，按指数退避暂停 `refill`，避免雪崩重试。
 
-## 1.2 沙箱产品状态机与租约（Lease / TTL）
+## 1.2 沙箱状态机与租约（Lease / TTL）
 
 上层沙箱的状态机建立在 `sandboxd` 本地元数据（SQLite）之上，与底层 `engine` 的 VM `phase` 通过明确映射关联：
 
-| 产品状态 | 含义 | 对应的底层 Engine 资源状态 | 允许的客户端操作 |
+| 沙箱状态 | 含义 | 对应的底层 Engine 资源状态 | 允许的客户端操作 |
 |---|---|---|---|
 | `provisioning` | 正在执行 Golden Clone 或 Cold Boot 准备（Warm Hit 跳过此态） | `creating` / `created` / `running`（激活未完成） | 查询、取消/释放 |
 | `running` | 沙箱已激活并交付租户，可正常收发数据面请求 | 对应 `vm_id` 处于 `running` | 数据面全部操作、`renew`、`checkpoint`、`fork`、`pause`、`release` |
@@ -147,9 +147,9 @@ stateDiagram-v2
 
 ### 休眠（Hibernate / Pause）与零唤醒删除
 
-底层 `engine` 不维护长期暂停的僵尸 VMM 进程；上层产品通过组合 `engine` 原语实现真正的零内存占用休眠：
+底层 `engine` 不维护长期暂停的僵尸 VMM 进程；上层 sandboxd 通过组合 `engine` 原语实现真正的零内存占用休眠：
 
-1. 在沙箱锁内将产品状态标记为 `pausing`，断开当前对外网络接入并排空正在建立的数据面握手。
+1. 在沙箱锁内将沙箱状态标记为 `pausing`，断开当前对外网络接入并排空正在建立的数据面握手。
 2. 调用 `engine.snapshot(vm_id)` 捕获一致整机快照（记为 `hib_snap_id`），在 `sandboxd` 元数据中将该快照绑定为沙箱的当前休眠载体。
 3. 确认快照发布成功后，调用 `engine.delete(vm_id)` 彻底终止原 VMM 进程并释放其内存与网络 namespace，将沙箱状态提交为 `paused`。
 4. **零唤醒删除规则**：当对 `paused` 沙箱执行 `release` 或休眠保留期（`paused_ttl`）届满时，`sandboxd` **直接调用 `engine.delete_snapshot(hib_snap_id)`**，绝不为销毁而重新启动 VMM。
@@ -170,7 +170,7 @@ Agent 在执行多步推理或代码修改时，可随时对沙箱创建 `checkp
 1. **从 `running` 沙箱创建 Checkpoint / Fork**：
    - `sandboxd` 调用 `engine.snapshot(source_vm_id)`。得益于 `@architecture.md` 3.1 的短暂停窗口设计，源 VM 在完成内存写出与磁盘 `reflink` 后立即恢复运行，后台完成 `fsync` 与快照发布。
    - 若为 `fork(N)`，则在快照发布后并发调用 $N$ 次 `engine.clone(snap_id)`。每个分支沙箱获得全新的 `sandbox_id`、`sandbox_token`、宿主机网络身份与独立可写盘，但共享同一份宿主页缓存（`CopyOnWrite`）与底层 EROFS 只读层。
-   - **分支身份去重**：与 `restore` 不同，`fork` 出的新沙箱在激活阶段必须通过产品控制帧重置 `/etc/machine-id`、更新主机名并重写专属的 `/run/sandbox.env`，防止多个分支共享相同的内部实例标识。
+   - **分支身份去重**：与 `restore` 不同，`fork` 出的新沙箱在激活阶段必须通过 Admin 2046 的 `activate` 重置 `/etc/machine-id`、更新主机名并重写专属的 `/run/sandbox.env`，防止多个分支共享相同的内部实例标识。
 2. **从 `paused` 沙箱或已有 `Checkpoint` 创建分支**：
    - 无需唤醒源沙箱，直接对已持久化的 `snapshot_id` 并发执行 `engine.clone`。
 
@@ -199,13 +199,15 @@ Agent 在执行多步推理或代码修改时，可随时对沙箱创建 `checkp
 
 guest 内仅部署一个静态编译（musl）的 Rust 守护进程 `sandbox-agent`，由 systemd 在 `sysinit` 阶段并行拉起，不依赖任何虚拟网卡或外网就绪。
 
-`sandbox-agent` 仅监听 `AF_VSOCK`（固定 guest CID，仅接受来自宿主 CID 2 的连接），在逻辑上提供两类服务：
+`sandbox-agent` 仅监听 `AF_VSOCK`（固定 guest CID，仅接受来自宿主 CID 2 的连接），提供三条独立的 RPC 通道：
 
 | 端口 / 门户 | 调用方 | 职责范围 |
 |---|---|---|
-| 系统控制门户（如 `vsock:2047`） | 底层 `engine` | `ping` 握手、`reseed`（注入宿主熵至 `/dev/urandom` 并触发 `RNDRESEEDCRNG`）、`clock_sync`（直接调用 `clock_settime(CLOCK_REALTIME)` 步进对齐宿主时间）。协议极简、固定有界 |
-| 产品数据面门户（如 `vsock:2048`） | 上层 `sandboxd`（及经其字节中继的 SDK） | 实例激活配置（写 `/run/sandbox.env`、重置 `machine-id`、设置主机名、切换网络轨标记）及全部用户态数据面操作（`exec`、`proc`、`session`、`pty`、`fs`、`port_forward`、`info`） |
-| 受控出网转发门户（Guest `127.0.0.1:3128` / `:1080` $\rightarrow$ `vsock:2049` / `:2050`） | Guest 内部应用进程 | 将 guest 内部发起的 HTTP/HTTPS 代理请求与 SOCKS5 请求透明桥接至宿主机 `sandboxd` 的专属出网代理 UDS |
+| System 系统控制通道（`vsock:2047`） | 底层 `engine` | `ping` 握手、`reseed`（注入宿主熵至 `/dev/urandom` 并触发 `RNDRESEEDCRNG`）、`clock_sync`（直接调用 `clock_settime(CLOCK_REALTIME)` 步进对齐宿主时间）。协议极简、固定有界 |
+| Admin 宿主管理通道（`vsock:2046`） | 仅宿主 `sandboxd`，不经租户中继暴露 | `activate` 写入 `/run/sandbox.env`、按需重置 `machine-id`、设置主机名及网络模式；`prepare_template` 清理模板状态；`quiesce` 阻止新 Workload 请求并检查排空状态 |
+| Workload 工作负载通道（`vsock:2048`） | 经 `sandboxd` 鉴权字节中继的租户 SDK | 用户态数据面操作（`exec`、`proc`、`session`、`pty`、`fs`、`port_forward`、`info`）；拒绝 System/Admin 方法，工作负载以非特权 UID/GID 执行 |
+
+受控出网是独立的反向代理路径：guest `127.0.0.1:3128` / `:1080` 经 `vsock:2049` / `:2050` 桥接到宿主 `sandboxd` 的专属 HTTP/HTTPS 与 SOCKS5 代理 UDS，不属于上述三条 RPC 通道。
 
 通过将时钟校正与身份初始化收归 `sandbox-agent` 原生系统调用处理，消除了在每次恢复路径上 fork `/bin/date` 或 shell 脚本的进程开销与镜像工具链依赖。
 
@@ -234,10 +236,10 @@ guest 内仅部署一个静态编译（musl）的 Rust 守护进程 `sandbox-age
 
 认领沙箱或运行期更新环境变量时，条目分为两类：
 
-1. **Guest 可见变量（`guest: true`，默认）**：由 `sandboxd` 通过激活协议写入 guest 内的 `/run/sandbox.env`（权限 `0600`，位于内存 tmpfs）。`sandbox-agent` 在派生任何 `exec`、`session` 或 `pty` 子进程时自动加载该文件（请求级显式传入的 `env` 优先级高于此文件）。由于 `/run/sandbox.env` 位于 guest 内存中，它在 `hibernate` 与 `restore` 时自然保留；而在 `fork` 或从模板 `clone` 时，由 `sandboxd` 在激活新实例时用目标沙箱自己的变量集原子覆写（若目标无变量则清空），绝不泄漏源实例的环境变量。
+1. **Guest 可见变量（`guest: true`，默认）**：由 `sandboxd` 通过 Admin 2046 的 `activate` 写入 guest 内的 `/run/sandbox.env`（权限 `0600`，位于内存 tmpfs）。`sandbox-agent` 在派生任何 `exec`、`session` 或 `pty` 子进程时自动加载该文件（请求级显式传入的 `env` 优先级高于此文件）。由于 `/run/sandbox.env` 位于 guest 内存中，它在 `hibernate` 与 `restore` 时自然保留；而在 `fork` 或从模板 `clone` 时，由 `sandboxd` 在激活新实例时用目标沙箱自己的变量集原子覆写（若目标无变量则清空），绝不泄漏源实例的环境变量。
 2. **宿主代填秘密（`guest: false`）**：仅保存在宿主机 `sandboxd` 内存中，永不发往 `sandbox-agent`，也不落入 guest 内存或磁盘。
 
-# 3. 网络产品层与零信任出网（Guarded Egress）
+# 3. sandbox 网络与零信任出网（Guarded Egress）
 
 ## 3.1 双轨出网模型（Dual-Lane Networking）
 
@@ -253,9 +255,10 @@ guest 内仅部署一个静态编译（musl）的 Rust 守护进程 `sandbox-age
 
 无论在冷启动、预热池认领、还是从快照 `fork` / `restore` 时，只要目标沙箱处于 `direct` 轨，`sandboxd` 都严格执行以下顺序：
 1. 确认底层 `engine` 的 VM 网络接口处于关闭状态。
-2. 将该沙箱的网段/接口及租户级过滤策略写入对应 netns 及宿主机 nftables 规则集。
-3. 调用 `engine` 启用网络接口。
-4. 向客户端返回沙箱就绪。
+2. 通过 `engine.network_policy` 安装绑定当前运行实例的 CIDR 与连接预算策略，由 engine 管理 netns/nftables 资源。
+3. 绑定宿主出网代理（若适用），通过 Admin 2046 的 `activate` 注入身份、环境及网络模式，并确认 Workload 2048 就绪。
+4. 调用 `engine` 启用网络接口。
+5. 向客户端返回沙箱就绪。
 
 在暂停（`hibernate`）或制作快照（`checkpoint` / `fork`）前，若需锁定出网状态，同样可在操作前后无缝控制接口启停，不会出现克隆恢复瞬间流量绕过策略逃逸的问题。
 
@@ -325,14 +328,14 @@ sequenceDiagram
 2. **防乒乓重定向（Ping-Pong Guard）**：入口节点采用 Power-of-Two-Choices 从报告有预热余量的节点中随机挑选目标返回重定向；客户端重试时必须携带 `no_redirect=true`，目标节点收到该标记后即使本地预热实例刚被抢光，也直接在本地降级执行 Tier 2（Golden Clone），禁止再次重定向。
 3. **诚实的节点故障模型**：由于活跃沙箱的内存状态位于所属宿主机本地，若某台宿主机宕机，其上的活跃运行沙箱随之终止；对于已将休眠快照或检查点异步归档至共享对象存储（S3）的沙箱，客户端可在其他健康节点上从归档快照恢复（跨节点唤醒）。
 
-# 6. 产品层不变量
+# 6. sandbox 层不变量
 
 上层 `sandboxd` 与 `guest agent` 的实现和故障恢复必须遵守以下跨模块不变量（編號以 `P` 开头，与 `@architecture.md` 的底层不变量 `I1`~`I19` 正交互补）：
 
 | 编号 | 不变量 |
 |---|---|
 | P1 | **单一底层权威**：`sandboxd` 对 VM、快照与宿主网络接口的一切变更均通过 `engine` 的幂等接口执行，使用由上层操作确定性派生的幂等键，禁止绕过 `engine` 直接操作进程、挂载、网络设备或快照文件 |
-| P2 | **双重就绪门控**：沙箱交付客户端（进入产品 `running` 态）前，必须同时满足底层 `engine` 的 `running` 契约与上层 `sandbox-agent` 产品通道握手、租户 `/run/sandbox.env` 写入及出网策略激活 |
+| P2 | **双重就绪门控**：沙箱交付客户端（进入 sandbox `running` 态）前，必须同时满足底层 `engine` 的 `running` 契约与上层 Workload 2048 握手、Admin 2046 租户配置激活及宿主出网策略安装 |
 | P3 | **预热池纯净性**：处于 Warm Pool 中的预热 VM 必须保持网络阻断且不含任何租户环境变量、凭据或历史任务痕迹；一旦预热实例被探测为异常或污染，只能销毁，禁止放回池中 |
 | P4 | **先上锁后开网**：在 `claim`、`restore`、`auto-resume` 与 `fork` 路径上，宿主出网策略、代填代理绑定与防火墙规则必须在启用 VM 网络接口或向客户端返回句柄之前生效，不存在未受控的出网时间窗 |
 | P5 | **宿主秘密零落地**：标记为 `guest: false` 的凭据仅驻留宿主机 `sandboxd` 内存，永不写入 guest 内存、`/run/sandbox.env`、guest 磁盘、日志或任何快照/检查点产物；代填仅对通过域名校验与防重绑定检查的授权目标生效 |

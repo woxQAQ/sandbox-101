@@ -1,6 +1,6 @@
 # sandbox 架构
 
-本文描述供上层控制组件调用的单宿主机 microVM engine，包括生命周期、存储、快照和网络的职责，以及一致性、资源依赖与安全约束。engine 提供可查询、可重试、可恢复的 VM 资源操作；上层负责 sandbox 产品语义与编排。各章说明所选方案及其依据。
+本文描述供上层控制组件调用的单宿主机 microVM engine，包括生命周期、存储、快照和网络的职责，以及一致性、资源依赖与安全约束。engine 提供可查询、可重试、可恢复的 VM 资源操作；上层 sandboxd 负责 sandbox 语义与编排。各章说明所选方案及其依据。
 
 接口字段、记录布局、具体路径、系统调用与调度参数在实现设计中确定。文中的操作名说明操作含义，示例解释方案，后端接口与源码说明后端的能力和限制。这些内容不直接定义本项目的实现接口。待定设计项与后端限制另行标明。
 
@@ -30,7 +30,7 @@ engine 是单机资源协调者，OCI 是软件分发格式，VMM 负责执行 g
 | VMM 适配层 | 启停、设备配置、暂停与状态保存，核实后端实际保证 |
 | guest 协作 | vsock 通道、agent 握手、restore/clone 协作序列 |
 
-这些职责可在同一服务内实现。engine 以程序调用契约为主，CLI 可作为客户端与诊断入口。上层组件负责模板构建与预热、warm pool、claim、TTL、租户、调度、产品 agent 初始化及任务接纳。engine 的 `running` 只表达 VM 和基础管理通道已满足本层契约，不表示上层 sandbox 服务已经就绪。
+这些职责可在同一服务内实现。engine 以程序调用契约为主，CLI 可作为客户端与诊断入口。上层组件负责模板构建与预热、warm pool、claim、TTL、租户、调度、guest Admin 通道初始化及 Workload 任务接纳。engine 的 `running` 只表达 VM 和基础管理通道已满足本层契约，不表示上层 sandbox 服务已经就绪。
 
 控制面和 Kubernetes 集成使用 Go。需要精细内存控制或低运行时开销的组件使用 Rust。自行实现 engine 也用于学习和掌握这些机制。
 
@@ -95,7 +95,7 @@ guest 与 OCI 内容均是不可信输入。engine 准备宿主资源需要特�
 已定项如下：
 
 - 首后端为上游 CH（固定支持 `CopyOnWrite` 恢复与 pagemap 增量快照的精确 commit）；内存恢复基线为 CopyOnWrite，不支持的配置在恢复前拒绝，见 3.2。
-- engine 面向上层组件，按 1.8 提供程序调用、查询与状态同步契约；产品编排由上层负责。
+- engine 面向上层组件，按 1.8 提供程序调用、查询与状态同步契约；sandbox 编排由上层 sandboxd 负责。
 - daemon 通过 `pidfd` 与进程起始时间标识直接监控 VMM 生命周期，不引入与 VMM 生死绑定的伴生监管进程，见 1.6。
 - 每 VM 通过私有 mount namespace 将固定 VMM 路径绑定到自己的宿主文件，并通过 `CLONE_INTO_CGROUP` 在创建进程时直接进入专属 cgroup，加载阶段豁免 CPU 配额并在恢复执行前收紧，见 1.7、2.2。
 - 所有 VM 复用固定 guest CID，宿主通过独立 UDS 寻址，见 1.5。
@@ -149,7 +149,7 @@ phase 表示最后确认的粗粒度运行阶段。operation 与资源检查结�
 
 VM 通常依次进入 `creating`、`created`、`running` 和 `stopped`，停止后可再次进入 `running`。restore/clone 先加载状态并恢复 guest 执行，再经 vsock 完成 reseed 与时钟校正，最后提交 `running`。协作失败时保留最后确认的 phase，并在 operation 中记录 VMM 已存活及待完成步骤。不能因 phase 尚未更新而重复启动或回收其资源。
 
-`running` 阶段允许快照过程中的临时暂停。operation 的恢复记录说明 VM 是否暂停、是否应恢复运行，以及操作已越过哪些不可逆步骤。当前不提供独立的长期暂停产品状态。
+`running` 阶段允许快照过程中的临时暂停。operation 的恢复记录说明 VM 是否暂停、是否应恢复运行，以及操作已越过哪些不可逆步骤。当前不提供独立的长期暂停 sandbox 状态。
 
 快照和恢复的进度记录在各自的 operation 中，删除意图用墓碑记录。例如，VMM 仍存活、快照发布失败且 guest 尚待恢复时，phase 保持 `running`，快照 operation 保存失败原因与待恢复运行标记。
 
@@ -206,7 +206,7 @@ daemon 崩溃但数据库完整时，按持久化意图自动 reconcile。数据
 
 ## 1.5 guest agent
 
-guest agent 是 engine 必需的基础协作进程，由镜像中的 systemd service 启动，经 vsock 与宿主通信。自定义镜像也必须满足这一启动契约；当前不提供无 agent 的降级形态。上层可以另外部署自己的产品 agent，其初始化与就绪由上层管理。
+guest agent 是 engine 必需的基础协作进程，由镜像中的 systemd service 启动，经 vsock 与宿主通信。自定义镜像也必须满足这一启动契约；当前不提供无 agent 的降级形态。当前实现复用一个 Rust `sandbox-agent`，分设 System 2047、Admin 2046 与 Workload 2048 三条通道。engine 仅通过 System 完成 `ping` 握手、`reseed` 与 `clock_sync`；sandboxd 通过宿主专用 Admin 执行 `activate`、`prepare_template` 与 `quiesce`，通过 Workload 字节中继承载租户 exec、文件、会话及端口 RPC。租户不能选择中继目标端口，也不能经 Workload 调用 System 或 Admin 方法。
 
 冷启动 `start` 在 VMM 存活且基础 agent 握手成功后才提交 `running`。握手超时或初始化失败时，关闭接入并停止本次启动的 VMM，确认退出后记录失败；停止未确认时保留实际状态与待清理步骤，不能报告已停止。保留串口及操作诊断，不等待外网或执行通用应用健康检查。
 
@@ -214,14 +214,15 @@ guest agent 是 engine 必需的基础协作进程，由镜像中的 systemd ser
 
 clone 保留 CID 与 VMM 可见路径，不依赖 FC 的 `vsock_override` 接口。设备布局按 3.4 校验，机制见 [CH vsock 说明](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/038ce5a72d761380a02f714a4eb4ca63e0ea073d/docs/vsock.md)。
 
-agent 提供两项基线能力，均有超时。请求与结果关联当前运行实例和所属操作。下表说明各项能力，协议字段与编码由实现确定：
+System 通道提供三项基线能力，均有超时。请求与结果关联当前运行实例和所属操作，使用共享的长度前缀 protobuf 帧；具体协议见 [protocol](protocol/README.md)。
 
 | 能力 | 语义 |
 |---|---|
-| exec | 在 guest 内执行命令并报告执行结果；输出有界、可取消、保留审计记录；重复请求去重，副作用已发生但结果不可确认时报告结果未知，不自动重放 |
-| reseed | 注入新熵并触发 guest 内核随机数生成器重播种；可安全重试，不修改 machine-id，不重置用户态随机状态 |
+| `ping` | 验证协议版本与 System 通道身份，作为基础握手 |
+| `reseed` | 注入新熵并触发 guest 内核随机数生成器重播种；可安全重试，不修改 machine-id，不重置用户态随机状态 |
+| `clock_sync` | 直接调用 `clock_settime(CLOCK_REALTIME)` 步进校正 guest 时钟，不执行 shell 或 `/bin/date` |
 
-时钟步进、machine-id 设置等其他机器级操作统一经 exec 完成。restore 保留 machine-id，只更新内核随机状态并校正时钟。clone 的 machine-id 初始化由黄金镜像约定与调用方负责，reseed 不负责该操作。改写 machine-id 文件不保证已运行进程中的身份缓存随之更新。
+engine 的 restore/clone 协作只更新内核随机状态并校正时钟，不改写 machine-id。sandboxd 根据沙箱身份在 Admin 2046 上调用 `activate`，原地恢复保留 machine-id，新沙箱或 fork 分支按需重置身份、设置主机名及环境变量。Workload 2048 不承载激活。改写 machine-id 文件不保证已运行进程中的身份缓存随之更新。
 
 restore 与 clone 按以下顺序完成：
 
@@ -233,11 +234,11 @@ restore 与 clone 按以下顺序完成：
 
 网络在整个过程中保持阻断，之后仍须显式启用。只有本次协作全部成功才认定 agent 就绪。握手、reseed 或校时失败时，不能将恢复操作提交为成功，具体原因记在 operation。agent 是否可达与本次协作是否完成分别记录，具体状态编码由实现确定。
 
-上述协作序列全程持有 restore/clone 的 VM 锁。agent 不可达时保留失败记录及实际进程状态，可继续协作或按停止协议清理。普通 exec 不长期占有生命周期锁，但接纳、结果提交及与 stop/restore 的交错必须遵循运行实例和操作归属规则。网络阻断和 agent 的回复都不能证明 guest 可信。
+上述协作序列全程持有 restore/clone 的 VM 锁。agent 不可达时保留失败记录及实际进程状态，可继续协作或按停止协议清理。Workload RPC 由 sandboxd 与 guest 管理，不长期占有 engine 生命周期锁；sandboxd 的接纳、结果提交及与 stop/restore 的交错必须遵循运行实例和操作归属规则。网络阻断和 agent 的回复都不能证明 guest 可信。
 
-所有已发布、完整且兼容的快照都可以 restore 或 clone，不设置黄金模板资格门槛。上层可通过配置、预热和 ready 检查准备黄金镜像，即在受控捕获点生成的整机模板快照。engine 提供镜像、exec、snapshot 与 clone 原语；模板选择、捕获时机及发布编排由上层负责。
+所有已发布、完整且兼容的快照都可以 restore 或 clone，不设置黄金模板资格门槛。上层可通过配置、预热和 ready 检查准备黄金镜像，即在受控捕获点生成的整机模板快照。engine 提供镜像、VM 生命周期、snapshot 与 clone 原语；模板选择、捕获时机及发布编排由上层负责。
 
-engine 恢复协作完成只表示基础管理通道就绪。上层完成自身配置与产品 agent 检查后决定是否接纳新任务。快照中已经运行的进程会继续执行，网络阻断不暂停其本地动作。engine 不通用地重写用户态身份或 RNG，不保证已有进程等待上层初始化；模板构建方按需要避免捕获租户凭据和一次性状态。guest workload 冻结作为独立扩展评估，不是完整快照或 clone 的前置条件。
+engine 恢复协作完成只表示基础管理通道就绪。sandboxd 完成 Admin 激活与 Workload 通道检查后决定是否接纳新任务。快照中已经运行的进程会继续执行，网络阻断不暂停其本地动作。engine 不通用地重写用户态身份或 RNG，不保证已有进程等待上层初始化；模板构建方按需要避免捕获租户凭据和一次性状态。guest workload 冻结作为独立扩展评估，不是完整快照或 clone 的前置条件。
 
 ## 1.6 engine 进程形态
 
@@ -282,7 +283,7 @@ cgroup OOM 杀死 VMM 即表示 VM 已死亡。reconcile 修正 phase 并上报�
 
 事件用于提示上层重新核对，允许重复、丢失或断线，不承诺 exactly-once 投递或完整历史回放。连接重建后通过完整查询或初始状态同步重新建立视图，正常连接期间也保留周期查询兜底。上层根据查询结果执行自身 reconcile，engine 根据实际宿主资源执行本层 reconcile，两层不互相覆盖对方的状态与编排决策。
 
-上层初始化失败时，由上层显式决定继续初始化、stop 或 delete，并处理对应 operation 结果。engine 不因上层连接断开或产品 agent 未就绪自动销毁 VM；1.5 规定的基础 agent 冷启动失败清理仍由 engine 执行。
+上层初始化失败时，由上层显式决定继续初始化、stop 或 delete，并处理对应 operation 结果。engine 不因上层连接断开或 sandboxd 的 Workload 通道未就绪自动销毁 VM；1.5 规定的基础 agent 冷启动失败清理仍由 engine 执行。
 
 # 2. 存储层
 
@@ -731,7 +732,7 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | 镜像与启动 | OCI 覆盖、whiteout、opaque、同层与跨层 hardlink、权限与 xattr 经 `fsmeta` 组合到实际 guest 文件视图；initramfs `/sys/block` 设备解析与根切换、基础 agent 握手与失败清理、共享层拒绝原始块写 |
 | 捕获与发布 | 内存与磁盘一致恢复、捕获后立即恢复源 VM、后台 `fsync`/发布中断恢复、CopyOnWrite 二次快照 reflink 增量覆写、并发 snapshot 与 VM 后续写入的统一空间预算 |
 | 资源独立与回收 | 固定路径下并发 clone 与源 VM 删除、租约与删除竞争、所选内存模式的源依赖释放、长期依赖交接及源快照删除后的缺页读取、共享 backing 写保护、加载期 CPU 配额豁免与恢复前收紧 |
-| guest 协作 | 固定 CID 与独立 UDS 寻址、restore 保留 machine-id、协作失败与迟到结果、基础就绪与上层产品就绪分离；普通快照可 clone，已有进程继续执行 |
+| guest 协作 | 固定 CID 与独立 UDS 寻址、restore 保留 machine-id、协作失败与迟到结果、System 基础就绪与 sandboxd 的 Admin 激活、Workload 就绪分离；普通快照可 clone，已有进程继续执行 |
 | 中断恢复 | daemon 重启后的无损接管、`pidfd` + `starttime` 退出核对、一致备份与显式人工恢复、回退后归属和引用不明时保留资源 |
 | 上层调用 | 创建响应丢失后按原键找回 operation 与资源、终态重查、运行实例条件拒绝迟到动作、查询失败与不存在区分、完整列举、事件断线重同步及轮询兜底 |
 | 网络生命周期 | VMM 与点对点 TAP/veth 同 namespace、内核启动配置、同 IP/MAC 的并发 clone、CH 恢复重绑定、配置失败不启用接口、stop/VMM 退出后关闭接口、按保留配置 start、延迟回收与重新启动竞争、daemon 接管及宿主清理失败后的 netns 锚点保留 |
@@ -817,7 +818,7 @@ engine 退出不等于 VMM 退出，已运行 VM 的接口和内核网络配置�
 | 网络创建标识 | 某次宿主网络资源实例的唯一标识，重建时更新 |
 | fail-closed | 本设计指 engine 接入配置失败或归属不明时不启用接口；不等同于控制面失联、外部规则缺失时自动断网，见 4.4 |
 | vsock / CID | guest 与宿主之间的套接字式通信设备 / guest vsock 地址；所有 VM 使用同一固定 CID，宿主按独立 UDS 寻址 |
-| guest agent | 镜像必需、由 systemd service 启动的协作进程，经 vsock 提供 exec 与 reseed 能力 |
+| guest agent | 镜像必需、由 systemd service 启动的协作进程；System 2047 供 engine 握手、reseed 与校时，Admin 2046 供 sandboxd 激活及模板管理，Workload 2048 承载非特权租户 RPC |
 | 幂等键 | 调用方为意图生成的唯一键；engine 持久化键到 operation 的映射，终态结果固定 |
 | daemon | 常驻协调进程、唯一写者；通过 `pidfd` 监控 VMM 并执行周期 reconcile；上层和可选 CLI 经程序接口调用 |
 | `pidfd` | Linux 指向特定进程实例的文件描述符，配合 `/proc/<pid>/stat` 起始时间用于无轮询监听 VMM 退出并防止 PID 复用误判 |

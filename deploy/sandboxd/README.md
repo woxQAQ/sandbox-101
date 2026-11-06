@@ -1,6 +1,6 @@
-# Product service deployment
+# sandboxd deployment
 
-Provision and validate [the engine host](../host/README.md) first. `sandboxd` owns product metadata and orchestrates the engine through its private UDS. It must reach the engine control socket and create host proxy sockets beside each VM's vsock socket. The sample runs as root for this access; it does not isolate the product process from the engine's control authority.
+Provision and validate [the engine host](../host/README.md) first. `sandboxd` owns sandboxd metadata and orchestrates the engine through its private UDS. It must reach the engine control socket and create host proxy sockets beside each VM's vsock socket. The sample runs as root for this access; it does not isolate the sandboxd process from the engine's control authority.
 
 ## First start
 
@@ -10,11 +10,11 @@ Build `make build`, install `bin/sandboxd` and `bin/sandboxctl` under `/usr/loca
 install -d -m 0700 /etc/sandboxd /var/lib/sandboxd
 umask 077
 openssl rand -hex 32 > /etc/sandboxd/root-token
-install -m 0600 deploy/product/sandboxd.example.yaml /etc/sandboxd/config.yaml
+install -m 0600 deploy/sandboxd/sandboxd.example.yaml /etc/sandboxd/config.yaml
 sandboxd --config=/etc/sandboxd/config.yaml --init
 ```
 
-Run `--init` only against fresh product state. Stop the initial process cleanly before installing/enabling `sandboxd.service`; the service deliberately omits initialization. Its engine state and runtime paths must match your actual deployment. The example allows writes to engine state because CH's guest-to-host proxy listeners live beside VM vsock sockets. Review these paths when changing the engine layout.
+Run `--init` only against fresh sandboxd state. Stop the initial process cleanly before installing/enabling `sandboxd.service`; the service deliberately omits initialization. Its engine state and runtime paths must match your actual deployment. The example allows writes to engine state because CH's guest-to-host proxy listeners live beside VM vsock sockets. Review these paths when changing the engine layout.
 
 Review [sandboxd.example.yaml](sandboxd.example.yaml) before starting. Both the daemon and CLI use Viper: explicit flags override environment variables, then configuration file values, then defaults. Daemon environment names use `SANDBOXD_` and CLI names use `SANDBOXCTL_`, with hyphens replaced by underscores. For example, `SANDBOXD_LISTEN` overrides `listen` in the daemon file. `--config FILE` selects a file explicitly; the existing individual flags remain supported. Unknown keys and invalid typed values fail startup. Keep token contents in private files and configure only their paths.
 
@@ -22,7 +22,7 @@ Use a TLS gateway preserving HTTP/1.1 `Connection: Upgrade` / `Upgrade: sandbox-
 
 ## Image and network configuration
 
-Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Product templates freeze the selected image, resource shape and golden snapshot dependency at admission.
+Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Sandbox templates freeze the selected image, resource shape and golden snapshot dependency at admission.
 
 Network modes:
 
@@ -34,23 +34,23 @@ Host-only credentials are accepted on claim/configure and retained only in proce
 
 ## Restart, drain and backup
 
-`POST /v1/drain` with the root token stops new claims/refills while retaining existing sandboxes. Graceful shutdown drains admission, closes byte streams and proxy bindings, and releases the product writer lock. It does not delete VM/snapshot resources. Engine and VMM lifetime remain independent. Restart with the same product database and node key; changing the node key invalidates derived sandbox tokens and Preview signatures.
+`POST /v1/drain` with the root token stops new claims/refills while retaining existing sandboxes. Graceful shutdown drains admission, closes byte streams and proxy bindings, and releases the sandboxd writer lock. It does not delete VM/snapshot resources. Engine and VMM lifetime remain independent. Restart with the same sandboxd database and node key; changing the node key invalidates derived sandbox tokens and Preview signatures.
 
 The node key, SQLite store, audit rows and sanitized operation records are under the private state directory. Guest-visible environment values are persisted so they can be restored; host-only secret values are not. Treat backups as confidential metadata.
 
-Take a consistent product backup with the daemon stopped:
+Take a consistent sandboxd backup with the daemon stopped:
 
 ```sh
-sandboxd --mode=backup --state-dir=/var/lib/sandboxd --backup=/safe/product-point-001
+sandboxd --mode=backup --state-dir=/var/lib/sandboxd --backup=/safe/sandboxd-point-001
 ```
 
 The destination must be new. It contains `sandboxd.db`, `node.key` and a checksummed `backup.json` receipt. This does not copy engine disks, snapshots, images or memory. Coordinate engine metadata/resource backups separately.
 
-For recovery, preserve the entire damaged product state as evidence. Restore into a new destination directory:
+For recovery, preserve the entire damaged sandboxd state as evidence. Restore into a new destination directory:
 
 ```sh
 sandboxd --mode=restore-backup --state-dir=/var/lib/sandboxd-restored \
-  --backup=/safe/product-point-001
+  --backup=/safe/sandboxd-point-001
 ```
 
 A durable `RECOVERY_REQUIRED` fence blocks startup. Compare the backup point with the current engine inventory, operation keys, instances and live resource ownership. Resolve unknown effects without replaying old guest commands. Then acknowledge the actual review:

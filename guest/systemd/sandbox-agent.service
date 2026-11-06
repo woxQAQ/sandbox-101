@@ -1,5 +1,5 @@
 [Unit]
-Description=Sandbox guest system and product agent
+Description=Sandbox guest system, admin and workload agent
 DefaultDependencies=no
 After=local-fs.target systemd-tmpfiles-setup.service
 Before=sysinit.target

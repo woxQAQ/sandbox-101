@@ -1,5 +1,5 @@
 [Unit]
-Description=Sandbox product control plane and guest relay
+Description=sandboxd control plane and guest workload relay
 After=network.target sandbox-engine.service
 Requires=sandbox-engine.service
 RequiresMountsFor=/var/lib/sandboxd /var/lib/sandbox-engine

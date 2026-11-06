@@ -26,7 +26,7 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 	if v.Phase != "running" || !v.AgentReady || !v.Verified {
 		return api.Fail(api.Conflict, "engine VM is not verified ready")
 	}
-	// Network is disabled even for a recovered activation. Product policy always precedes enable.
+	// Network is disabled even for a recovered activation. Sandbox policy always precedes enable.
 	if _, err = s.engine(
 		o,
 		"network-off:"+b.ID,
@@ -354,7 +354,7 @@ func (s *Service) change(o *Operation) error {
 			Shape:     b.Shape,
 			CreatedAt: o.CreatedAt,
 		}
-		// A sleeping source already owns an immutable capture. Its product references
+		// A sleeping source already owns an immutable capture. Its sandbox references
 		// keep that engine snapshot alive without starting another VM.
 		switch b.State {
 		case "paused":

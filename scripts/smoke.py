@@ -93,9 +93,9 @@ def main():
             "socket": str(directory / "unused.sock"),
             "init": False,
         }))
-        product_config = directory / "product.json"
-        product_config.write_text(json.dumps({
-            "state-dir": str(directory / "product"),
+        sandboxd_config = directory / "sandboxd.json"
+        sandboxd_config.write_text(json.dumps({
+            "state-dir": str(directory / "sandboxd"),
             "engine-socket": str(engine_socket),
             "listen": "127.0.0.1:1",
             "root-token-file": str(token_file),
@@ -110,10 +110,10 @@ def main():
             launch([str(root / "bin/engined"), "--config", str(engine_config),
                     "--socket", str(engine_socket), "--init"])
             assert ready(inventory) in (None, [])
-            product_args = [str(root / "bin/sandboxd"), "--state-dir", str(directory / "product"),
+            sandboxd_args = [str(root / "bin/sandboxd"), "--state-dir", str(directory / "sandboxd"),
                             "--engine-socket", str(engine_socket), "--listen", f"127.0.0.1:{port}",
                             "--root-token-file", str(token_file)]
-            product = launch(product_args + ["--init"])
+            sandboxd = launch(sandboxd_args + ["--init"])
             assert ready(lambda: request("/healthz"))["status"] == "ok"
             command = {"action": "template_put", "template": {
                 "id": "smoke-template", "image": "sha256:" + "1" * 64,
@@ -129,24 +129,24 @@ def main():
                 "--endpoint", endpoint, "list",
             ], env={**os.environ, "SANDBOXCTL_ENDPOINT": "http://127.0.0.1:2"}, text=True)
             assert json.loads(listed) == []
-            product.terminate()
-            product.wait(timeout=10)
-            processes.remove(product)
-            product = launch([str(root / "bin/sandboxd"), "--config", str(product_config)],
+            sandboxd.terminate()
+            sandboxd.wait(timeout=10)
+            processes.remove(sandboxd)
+            sandboxd = launch([str(root / "bin/sandboxd"), "--config", str(sandboxd_config)],
                              env={**os.environ, "SANDBOXD_LISTEN": f"127.0.0.1:{port}"})
             ready(lambda: request("/healthz"))
             again = request("/v1/templates", command, "smoke-register")
             assert first["operation_id"] == again["operation_id"]
             print("PASS: sandboxd restart preserves the same idempotent operation")
             print("PASS: Viper files, environment overrides and explicit flags across all three CLIs")
-            product.terminate()
-            product.wait(timeout=10)
-            processes.remove(product)
+            sandboxd.terminate()
+            sandboxd.wait(timeout=10)
+            processes.remove(sandboxd)
             result = subprocess.check_output([str(root / "bin/sandboxd"), "--state-dir",
-                                              str(directory / "product"), "--mode", "backup",
+                                              str(directory / "sandboxd"), "--mode", "backup",
                                               "--backup", str(directory / "backup")], text=True)
             assert json.loads(result)["format"] == 1
-            print("PASS: offline product backup records a consistent recovery point")
+            print("PASS: offline sandboxd backup records a consistent recovery point")
         finally:
             for process in reversed(processes):
                 if process.poll() is None:

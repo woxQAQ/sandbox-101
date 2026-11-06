@@ -1,5 +1,5 @@
 {
-  description = "Single-node microVM engine, product service, and static Rust guest";
+  description = "Single-node microVM engine, sandbox service, and static Rust guest";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/319e4cebef10cbb636c6ea392137b52ad105336a";
   outputs = { self, nixpkgs }:
     let

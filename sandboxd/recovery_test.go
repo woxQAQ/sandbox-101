@@ -599,7 +599,7 @@ func TestRecoverResourcesRetainsPendingOperationSourceSnapshot(t *testing.T) {
 	}
 }
 
-func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalProductOperation(
+func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalSandboxOperation(
 	t *testing.T,
 ) {
 	s, f, _, _ := recoveryFixture(t)
@@ -625,7 +625,7 @@ func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalProductOperat
 		t.Fatal(err)
 	}
 	if f.count("delete") != 0 {
-		t.Fatal("terminal product status hid an in-flight engine dependency")
+		t.Fatal("terminal sandbox status hid an in-flight engine dependency")
 	}
 	f.mu.Lock()
 	op := f.ops[key]

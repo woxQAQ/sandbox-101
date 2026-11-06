@@ -10,9 +10,9 @@ Management listeners use AF_VSOCK exclusively, reject peers other than host CID 
 |---|---|---|
 | 2046 | sandboxd administration, never exposed through tenant relay | `activate`, `quiesce`, `prepare_template` |
 | 2047 | engine | `ping`, `reseed`, `clock_sync` |
-| 2048 | authenticated sandboxd tenant byte relay | Product methods below; rejects all system/admin methods |
+| 2048 | authenticated sandboxd tenant byte relay | Workload methods below; rejects all system/admin methods |
 
-CID 2 identifies the host, not individual host applications. Host permissions on the per-VM UDS are authoritative. sandboxd must relay tenant traffic only to 2048 and must not permit a user-selected vsock port. Product commands run with UID/GID 1000 by default, cleared supplementary groups and `PR_SET_NO_NEW_PRIVS`; the production binary refuses workload UID or GID zero. Product filesystem path resolution and mutations run with the workload's filesystem credentials. These restrictions protect privileged agent configuration inside the guest; the VM and host relay remain the tenant isolation boundary.
+CID 2 identifies the host, not individual host applications. Host permissions on the per-VM UDS are authoritative. sandboxd must relay tenant traffic only to 2048 and must not permit a user-selected vsock port. Workload commands run with UID/GID 1000 by default, cleared supplementary groups and `PR_SET_NO_NEW_PRIVS`; the production binary refuses workload UID or GID zero. Workload filesystem path resolution and mutations run with the workload's filesystem credentials. These restrictions protect privileged agent configuration inside the guest; the VM and host relay remain the tenant isolation boundary.
 
 Every message is:
 
@@ -35,7 +35,7 @@ JSON-shaped examples below describe Struct contents, not a JSON wire format. Int
 
 Ordinary calls set request `eof=true`. Streaming input starts with `eof=false`, then sends `{id, method:"", data, eof}` chunks of at most 65,536 bytes until `eof=true`. Continuations cannot carry params. Initial data may occupy the full permitted frame. Request EOF does not close the shared transport. Responses interleave by ID, allowing 16 concurrent RPCs per connection and unlimited sequential calls. Except forwarding, the final response has `eof=true`, no data, and completion params; prior frames have `eof=false`. A failed mutation can have committed before response loss; do not automatically retry exec or non-idempotent mutations. IDs provide active-call correlation, not durable execution deduplication.
 
-Limits: 64 product connections, 8 system and 8 admin connections with separate admission budgets; 128 product RPCs and 32 control RPCs globally; 8 queued response frames per connection and 8 input chunks per RPC; 30-second output-stall timeout; 60-second streaming-input idle timeout. Slow readers backpressure foreground output; a stalled or disconnected reader cancels its connection and kills foreground process groups. System capacity is separate from tenant capacity. No arbitrary command output is logged by the agent itself.
+Limits: 64 workload connections, 8 system and 8 admin connections with separate admission budgets; 128 workload RPCs and 32 control RPCs globally; 8 queued response frames per connection and 8 input chunks per RPC; 30-second output-stall timeout; 60-second streaming-input idle timeout. Slow readers backpressure foreground output; a stalled or disconnected reader cancels its connection and kills foreground process groups. System capacity is separate from tenant capacity. No arbitrary command output is logged by the agent itself.
 
 ## System methods (2047)
 
@@ -59,13 +59,13 @@ A nonempty `ca_pem` (<=128 KiB, certificate PEM envelope) replaces `/run/sandbox
 
 `network=relay` enables the guest's localhost byte bridges `127.0.0.1:3128 -> host CID2:2049` and `127.0.0.1:1080 -> host CID2:2050`. HTTP/CONNECT/SOCKS are parsed and authorized **on the host**. The guest bridge is transparent, capped at 64 tunnels, and closes old tunnels on any activation/policy generation change. Child env receives upper/lowercase HTTP(S) proxy variables, ALL_PROXY/all_proxy `socks5h://127.0.0.1:1080`, and NO_PROXY for localhost. None/direct modes reject these bridge connections. Direct mode only records intent; host engine controls the NIC/firewall. Existing application environments and network sessions require application cooperation after policy changes; host egress authorization is always authoritative.
 
-`quiesce` params `{}` gates new product work and returns `{quiescent:bool, in_flight:number, running_processes:number, sessions:number}`. It reports true only with no other product RPCs/raw forwards, no running managed processes, and no persistent sessions. Existing work is not killed. Call again after draining; `activate` opens admission again.
+`quiesce` params `{}` gates new workload requests and returns `{quiescent:bool, in_flight:number, running_processes:number, sessions:number}`. It reports true only with no other workload RPCs/raw forwards, no running managed processes, and no persistent sessions. Existing work is not killed. Call again after draining; `activate` opens admission again.
 
-`prepare_template` params `{}` gates admission, requires no product RPCs/raw forwards or persistent sessions, disables relay, clears sandbox ID, environment, CA, machine-id, exited records and retained agent logs, then `syncfs`s root. Returns `{quiescent:true, prepared:true}`. Running detached application processes are deliberately retained for warm templates. Their memory/env, application logs, shell histories and external registration state cannot be generically scrubbed by this method; the template builder must start from a clean build instance and explicitly clean application-specific material. Failure keeps admission gated. Activated template clones reopen admission.
+`prepare_template` params `{}` gates admission, requires no workload RPCs/raw forwards or persistent sessions, disables relay, clears sandbox ID, environment, CA, machine-id, exited records and retained agent logs, then `syncfs`s root. Returns `{quiescent:true, prepared:true}`. Running detached application processes are deliberately retained for warm templates. Their memory/env, application logs, shell histories and external registration state cannot be generically scrubbed by this method; the template builder must start from a clean build instance and explicitly clean application-specific material. Failure keeps admission gated. Activated template clones reopen admission.
 
-## Product methods (2048)
+## Workload methods (2048)
 
-`info {}` returns `{protocol:1, portal:"product", sandbox_id, network, active:bool, processes:number, in_flight:number, quiesced:bool}`. `in_flight` excludes the info call itself and includes raw forwards. This handshake is permitted while quiesced; it is not an application health check.
+`info {}` returns `{protocol:1, portal:"workload", sandbox_id, network, active:bool, processes:number, in_flight:number, quiesced:bool}`. `in_flight` excludes the info call itself and includes raw forwards. This handshake is permitted while quiesced; it is not an application health check.
 
 ### Processes and terminals
 
@@ -116,7 +116,7 @@ Tree push merges archive entries into a staged copy of the old tree; unmentioned
 
 ### Raw port forwarding
 
-`port_forward {port:number}` requires a **fresh exclusive product connection**, valid loopback port 1..65535, and empty request data. The agent connects to `127.0.0.1:<port>`, replies with one Frame `{id,method:"port_forward",params:{ready:true},eof:false}`, then switches the whole connection to **raw bytes** in both directions. No additional protobuf frames, including final frames, occur after ready. Client and server TCP/vsock FINs independently half-close each direction; the reverse direction remains open until its own EOF. Setup failure is a normal terminal error Frame followed by connection close. Request `eof` has no raw-stream half-close meaning; use the transport's write shutdown after ready. Regular multiplexed connections reject a subsequent port_forward request. This works in none/relay/direct network modes and does not depend on NIC access.
+`port_forward {port:number}` requires a **fresh exclusive workload connection**, valid loopback port 1..65535, and empty request data. The agent connects to `127.0.0.1:<port>`, replies with one Frame `{id,method:"port_forward",params:{ready:true},eof:false}`, then switches the whole connection to **raw bytes** in both directions. No additional protobuf frames, including final frames, occur after ready. Client and server TCP/vsock FINs independently half-close each direction; the reverse direction remains open until its own EOF. Setup failure is a normal terminal error Frame followed by connection close. Request `eof` has no raw-stream half-close meaning; use the transport's write shutdown after ready. Regular multiplexed connections reject a subsequent port_forward request. This works in none/relay/direct network modes and does not depend on NIC access.
 
 ## Verification and remaining integration work
 

@@ -40,7 +40,7 @@ func (s *store) backup(
 ) (BackupPoint, error) {
 	point := BackupPoint{
 		Format:    1,
-		ID:        newID("product-backup_"),
+		ID:        newID("sandboxd-backup_"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := os.Mkdir(destination, 0o700); err != nil {
@@ -156,7 +156,7 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 		return point, err
 	}
 	if point.Format != 1 || point.ID == "" {
-		return point, api.Fail(api.Incompatible, "unsupported product backup")
+		return point, api.Fail(api.Incompatible, "unsupported sandboxd backup")
 	}
 	for name, want := range map[string]string{"sandboxd.db": point.DatabaseSHA256, "node.key": point.NodeKeySHA256} {
 		got, err := hashFile(filepath.Join(source, name))

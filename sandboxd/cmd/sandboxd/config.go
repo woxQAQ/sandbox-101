@@ -28,7 +28,7 @@ func parseConfig(args []string) (commandConfig, error) {
 		"",
 		"configuration file (YAML, JSON, TOML or another Viper-supported format)",
 	)
-	f.String("state-dir", "/var/lib/sandboxd", "product metadata directory")
+	f.String("state-dir", "/var/lib/sandboxd", "sandboxd metadata directory")
 	f.String(
 		"engine-socket",
 		"/run/sandbox-engine/engine.sock",
@@ -43,7 +43,7 @@ func parseConfig(args []string) (commandConfig, error) {
 	f.Bool(
 		"init",
 		false,
-		"initialize a fresh product database (first start only)",
+		"initialize a fresh sandboxd database (first start only)",
 	)
 	f.String("mode", "serve", "serve, backup, restore-backup, or recover")
 	f.String("backup", "", "new backup directory or restore source")

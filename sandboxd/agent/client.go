@@ -197,8 +197,8 @@ func (c *Client) Info(ctx context.Context, v api.VM) error {
 	if err != nil {
 		return err
 	}
-	if p["portal"] != "product" || p["protocol"] != float64(1) {
-		return errors.New("incompatible product agent")
+	if p["portal"] != "workload" || p["protocol"] != float64(1) {
+		return errors.New("incompatible workload agent")
 	}
 	return nil
 }

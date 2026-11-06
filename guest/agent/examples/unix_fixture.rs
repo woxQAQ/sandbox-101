@@ -1,5 +1,5 @@
 //! Explicit local integration fixture. Production remains AF_VSOCK-only.
-//! Only the unprivileged product portal is exposed: no host entropy, clock,
+//! Only the unprivileged workload portal is exposed: no host entropy, clock,
 //! hostname, machine-id, template preparation, or activation operations.
 use anyhow::Result;
 use sandbox_agent::{
@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("usage: unix_fixture SOCKET_DIR"))?,
     );
     std::fs::create_dir_all(&dir)?;
-    let listener = UnixListener::bind(dir.join("product.sock"))?;
+    let listener = UnixListener::bind(dir.join("workload.sock"))?;
     let agent = Agent::new(Config {
         env_file: dir.join("sandbox.env"),
         machine_id: dir.join("machine-id"),
@@ -28,13 +28,13 @@ async fn main() -> Result<()> {
     })?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut reap = tokio::time::interval(Duration::from_secs(30));
-    println!("ready {}", dir.join("product.sock").display());
+    println!("ready {}", dir.join("workload.sock").display());
     loop {
         tokio::select! {
             next=listener.accept()=>{
                 let (stream,_)=next?;
                 let agent=agent.clone();
-                tokio::spawn(async move{let _=serve_connection(agent,stream,Portal::Product).await;});
+                tokio::spawn(async move{let _=serve_connection(agent,stream,Portal::Workload).await;});
             }
             _=reap.tick()=>agent.reap().await,
             _=terminate.recv()=>break,
@@ -47,6 +47,6 @@ async fn main() -> Result<()> {
     for session in agent.sessions.lock().await.values() {
         session.lock().await.kill();
     }
-    std::fs::remove_file(dir.join("product.sock"))?;
+    std::fs::remove_file(dir.join("workload.sock"))?;
     Ok(())
 }

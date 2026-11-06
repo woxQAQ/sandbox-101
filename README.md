@@ -1,10 +1,10 @@
 # sandbox-101
 
-A single-host microVM engine and sandbox service implementing [the engine architecture](architecture.md) and [the product architecture](product-architecture.md).
+A single-host microVM engine and sandbox service implementing [the engine architecture](architecture.md) and [the sandbox architecture](sandbox-architecture.md).
 
 `engined` owns VMs, Cloud Hypervisor processes, namespaces, cgroups, images, disks and snapshots. `sandboxd` uses its Unix-socket API to provide templates, warm pools, tenant leases, hibernation, checkpoints, fork and raw guest connections. Each daemon owns an independent SQLite store and writer lock. A static Rust guest agent handles host administration, system readiness and unprivileged workload RPC on separate portals; a small Rust PID 1 mounts the EROFS/ext4/OverlayFS root and execs systemd.
 
-The production entrypoints use the real runtime. Unit tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM acceptance boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production acceptance runner exercises the privileged launcher, live adoption after daemon failure and the product microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](deploy/ACCEPTANCE.md). The latency figures in the design documents are targets, not measured results.
+The production entrypoints use the real runtime. Unit tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM acceptance boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production acceptance runner exercises the privileged launcher, live adoption after daemon failure and the sandbox microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](deploy/ACCEPTANCE.md). The latency figures in the design documents are targets, not measured results.
 
 ## Build and local verification
 
@@ -32,7 +32,7 @@ See [image materialization](engine/IMAGE-MATERIALIZATION.md) for compatibility t
 
 ## HTTP and configuration
 
-The engine UDS API and product HTTP API use Gin routes and authentication middleware. The product retains HTTP/1.1 Upgrade, raw duplex streaming and Preview forwarding; the egress proxy uses goproxy for HTTP/CONNECT protocol handling.
+The engine UDS API and sandboxd HTTP API use Gin routes and authentication middleware. sandboxd retains HTTP/1.1 Upgrade, raw duplex streaming and Preview forwarding; the egress proxy uses goproxy for HTTP/CONNECT protocol handling.
 
 `engined`, `sandboxd` and `sandboxctl` use Viper with optional `--config FILE`. Files use the same flat, hyphenated keys as the existing flags; YAML, JSON and TOML are supported. Configuration precedence is explicit flags, environment, file, then defaults. Environment variables use `ENGINE_`, `SANDBOXD_` and `SANDBOXCTL_` respectively, with hyphens replaced by underscores: `ENGINE_IO_MAX`, `SANDBOXD_LISTEN` and `SANDBOXCTL_ENDPOINT`, for example. A file can also be selected with the corresponding `_CONFIG` variable. Configuration is loaded at startup, without implicit file discovery or hot reload. Unknown file keys and invalid typed values fail startup.
 
@@ -42,7 +42,7 @@ SANDBOXD_LISTEN=127.0.0.1:8888 sandboxd --config /etc/sandboxd/config.yaml
 sandboxctl --config /private/sandboxctl.yaml --key claim-001 claim < claim.json
 ```
 
-Example files are in [host configuration](deploy/host/engined.example.yaml), [product configuration](deploy/product/sandboxd.example.yaml) and [client configuration](deploy/client/sandboxctl.example.yaml). Token values stay in private token files referenced by configuration. Keep `--init` as an explicit first-start option rather than enabling it in a persistent configuration file.
+Example files are in [host configuration](deploy/host/engined.example.yaml), [sandboxd configuration](deploy/sandboxd/sandboxd.example.yaml) and [client configuration](deploy/client/sandboxctl.example.yaml). Token values stay in private token files referenced by configuration. Keep `--init` as an explicit first-start option rather than enabling it in a persistent configuration file.
 
 ## Static guest and image
 
@@ -75,7 +75,7 @@ make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/the/printed/run-directory \
 
 The materials builder needs the pinned Cloud Hypervisor Git objects under `references/cocoonstack/cloud-hypervisor`. It preserves sources, build logs, kernel configuration and artifact hashes in a fresh run directory. The KVM test uses actual OCI import, initramfs, systemd, vsock, EROFS/OverlayFS and native VMM snapshot APIs. It checks file contents, ownership, modes, hardlinks, symlinks, whiteouts, opaque directories, xattrs, ACLs and capabilities in the guest. A boot-time root precheck also proves raw reads succeed and raw writes are rejected for every readonly root/data block device. It also checks binary tree-transfer roundtrips, private retained RAM mappings, independent source/clone disks, deletion of a source capture while a clone runs, and restoration of a COW clone's next snapshot. Missing prerequisites fail explicitly.
 
-Use artifact storage with matching `stat` and `/proc/PID/maps` device identity. The development Btrfs subvolume fails that strict proof; tmpfs passed. The fixture reserves about 9 GiB for each offline import before starting VMs; keep additional free space for the retained runtime/image/capture artifacts. Completed runs remain on disk for diagnosis, so archive stopped runs before repeating on a bounded tmpfs. This standalone test runs the actual VMM as the invoking nonroot user. The separate production runner below exercises the privileged launcher, daemon adoption and product lifecycle through both daemons.
+Use artifact storage with matching `stat` and `/proc/PID/maps` device identity. The development Btrfs subvolume fails that strict proof; tmpfs passed. The fixture reserves about 9 GiB for each offline import before starting VMs; keep additional free space for the retained runtime/image/capture artifacts. Completed runs remain on disk for diagnosis, so archive stopped runs before repeating on a bounded tmpfs. This standalone test runs the actual VMM as the invoking nonroot user. The separate production runner below exercises the privileged launcher, daemon adoption and sandbox lifecycle through both daemons.
 
 With usable user namespaces, TUN, native networking tools and a systemd user manager that delegates cpu/memory/io/pids, run the separate kernel checks:
 
@@ -97,9 +97,9 @@ This runner needs subordinate UID/GID mappings, usable `/dev/fuse` and a systemd
 
 ## Deploy and use
 
-Provision the engine according to [host deployment](deploy/host/README.md), then follow [product deployment](deploy/product/README.md). Both initialization and recovery acknowledgment are explicit. The private engine UDS is a privileged host interface. Product HTTP should listen on loopback behind a TLS gateway or use its certificate/key flags.
+Provision the engine according to [host deployment](deploy/host/README.md), then follow [sandboxd deployment](deploy/sandboxd/README.md). Both initialization and recovery acknowledgment are explicit. The private engine UDS is a privileged host interface. sandboxd HTTP should listen on loopback behind a TLS gateway or use its certificate/key flags.
 
-The [product API guide](sandboxd/README.md) documents tokens, commands, raw connections, Preview and the Go SDK. Network `none` and `relay` leave the NIC blocked. Direct mode installs and verifies an instance-bound IPv4 CIDR/flow policy before enabling the NIC; hostname filtering and credential injection require relay mode. Host-only credentials remain in host memory and must be reconfigured after a daemon restart.
+The [sandboxd API guide](sandboxd/README.md) documents tokens, commands, raw connections, Preview and the Go SDK. Network `none` and `relay` leave the NIC blocked. Direct mode installs and verifies an instance-bound IPv4 CIDR/flow policy before enabling the NIC; hostname filtering and credential injection require relay mode. Host-only credentials remain in host memory and must be reconfigured after a daemon restart.
 
 `make privileged-e2e` runs the real lifecycle acceptance suite against an isolated, configured host. Missing `SANDBOX_E2E_*` configuration fails explicitly. It covers cold claim, checkpoint, independent branches, hibernation, concurrent transparent resume, identity/session preservation, rollback and paused deletion. Additional host acceptance requirements are listed in the deployment guide.
 
@@ -107,7 +107,7 @@ The [product API guide](sandboxd/README.md) documents tokens, commands, raw conn
 
 Accepted operations are durable and use deterministic step keys. Reusing a key with changed parameters conflicts; a terminal failure remains the original result. Cancellation stops waiting, not accepted work. Unknown runtime identity or uncertain side effects remain visible for recovery instead of being guessed away. Snapshot disk bytes are independent from the live source, while immutable memory backings remain retained independently for clones. Keyed guest exec deduplicates within its retained ledger, which is itself restored with VM snapshots; rollback to before admission requires an external host ledger/fence for stronger guarantees.
 
-Engine and product backups cover metadata and receipts/keys; they do not copy VM disks, image data or memory captures. Restoring a known older point fences startup until an operator reviews it against actual resources. Local audit chains and engine HEAD cannot detect coordinated rollback of all local history.
+Engine and sandboxd backups cover metadata and receipts/keys; they do not copy VM disks, image data or memory captures. Restoring a known older point fences startup until an operator reviews it against actual resources. Local audit chains and engine HEAD cannot detect coordinated rollback of all local history.
 
 Reference-aware engine GC reclaims proven orphan layer caches, completed import work and retired resource versions/backings, with durable inode deletion intents and bounded background passes. It retains published images, operation/idempotency records and uncertain resources; recovery evidence fences collection. See [the collection contract](engine/INTEGRATION.md#reference-aware-garbage-collection).
 

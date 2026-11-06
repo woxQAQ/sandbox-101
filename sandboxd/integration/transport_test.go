@@ -27,7 +27,7 @@ import (
 	"github.com/woxQAQ/sandboxd/sdk"
 )
 
-// This harness exercises the real Go service/SDK and Rust product dispatcher.
+// This harness exercises the real Go service/SDK and Rust workload dispatcher.
 // VM lifecycle and privileged admin activation are fixtures; they are not boot tests.
 type fixtureEngine struct {
 	mu     sync.Mutex
@@ -224,7 +224,7 @@ func transportFixture(
 					conn.Close()
 					return
 				}
-				up, err := net.Dial("unix", filepath.Join(dir, "product.sock"))
+				up, err := net.Dial("unix", filepath.Join(dir, "workload.sock"))
 				if err != nil {
 					conn.Close()
 					return
@@ -310,7 +310,7 @@ func transportFixture(
 	), p, result.Sandbox.ID
 }
 
-func TestRustAgentThroughProductRelay(t *testing.T) {
+func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	service, client, p, id := transportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -321,7 +321,7 @@ func TestRustAgentThroughProductRelay(t *testing.T) {
 	defer conn.Close()
 	for range 2 {
 		info, err := conn.Call(ctx, "info", map[string]any{}, nil)
-		if err != nil || info["portal"] != "product" {
+		if err != nil || info["portal"] != "workload" {
 			t.Fatalf("reused info stream: %v %v", info, err)
 		}
 	}
@@ -413,7 +413,7 @@ func TestRustAgentThroughProductRelay(t *testing.T) {
 	}
 }
 
-func TestRustKeyedExecReplayThroughProductRelay(t *testing.T) {
+func TestRustKeyedExecReplayThroughSandboxRelay(t *testing.T) {
 	_, client, _, id := transportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -484,7 +484,7 @@ func TestRustKeyedExecReplayThroughProductRelay(t *testing.T) {
 				nil,
 				nil,
 			); err != nil ||
-				info["portal"] != "product" {
+				info["portal"] != "workload" {
 				conn.Close()
 				t.Fatalf(
 					"connection after terminal guest error: %v %v",

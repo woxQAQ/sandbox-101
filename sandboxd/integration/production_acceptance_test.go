@@ -81,7 +81,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 17*time.Minute)
 	defer cancel()
 	// Keep the runtime socket paths below sockaddr_un's 108-byte limit, including
-	// the product proxy suffix. The compiled daemons are executable by the dropped
+	// the sandbox proxy suffix. The compiled daemons are executable by the dropped
 	// identity, just as their installed /usr/local/bin counterparts would be.
 	for _, dir := range []string{"/run/p", "/run/p/bin", "/run/p/e", "/run/p/backing"} {
 		if err := os.Mkdir(dir, 0o755); err != nil {
@@ -161,7 +161,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			"-C",
 			"/run/p",
 			"e",
-			"product",
+			"sandboxd",
 		)
 		if out, err := archive.CombinedOutput(); err != nil {
 			t.Errorf("archive owned engine state: %v: %s", err, out)
@@ -328,24 +328,24 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 	address := listener.Addr().String()
 	listener.Close()
 	endpoint := "http://" + address
-	productArgs := []string{
-		"--state-dir=/run/p/product",
+	sandboxdArgs := []string{
+		"--state-dir=/run/p/sandboxd",
 		"--engine-socket=/run/p/engine.sock",
 		"--listen=" + address,
 		"--root-token-file=" + tokenPath,
 	}
-	product := productionStart(
+	sandboxdProcess := productionStart(
 		t,
 		artifacts,
 		"sandboxd-1",
 		"/run/p/bin/sandboxd",
-		append(productArgs, "--init")...)
-	t.Cleanup(func() { product.stop(t) })
+		append(sandboxdArgs, "--init")...)
+	t.Cleanup(func() { sandboxdProcess.stop(t) })
 	client := sdk.New(endpoint, token)
 	productionWait(
 		t,
 		ctx,
-		product,
+		sandboxdProcess,
 		func(attempt context.Context) error { _, err := client.List(attempt); return err },
 	)
 	t.Setenv("SANDBOX_E2E_ENDPOINT", endpoint)
@@ -433,7 +433,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			t.Fatal(err)
 		}
 		conn.Close()
-		product.stop(t)
+		sandboxdProcess.stop(t)
 		engined.stop(t)
 		if err := syscall.Kill(before.PID, 0); err != nil {
 			t.Fatalf("VMM died with daemons: %v", err)
@@ -463,16 +463,16 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			)
 		}
 		productionVMMProof(t, artifacts, "after", after)
-		product = productionStart(
+		sandboxdProcess = productionStart(
 			t,
 			artifacts,
 			"sandboxd-2",
 			"/run/p/bin/sandboxd",
-			productArgs...)
+			sandboxdArgs...)
 		productionWait(
 			t,
 			ctx,
-			product,
+			sandboxdProcess,
 			func(attempt context.Context) error { _, err := client.List(attempt); return err },
 		)
 		if actual := productionExec(
@@ -654,7 +654,7 @@ func productionProvisioningTiers(
 	// readiness from a sleep or from an unclaimed but still loading VMM.
 	db, err := sql.Open(
 		"sqlite",
-		"file:/run/p/product/sandboxd.db?mode=ro&_pragma=busy_timeout(1000)",
+		"file:/run/p/sandboxd/sandboxd.db?mode=ro&_pragma=busy_timeout(1000)",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -771,7 +771,7 @@ func productionProvisioningTiers(
 	)
 }
 
-// Product compensation can remove an exited VM's directory before a failing
+// sandboxd compensation can remove an exited VM's directory before a failing
 // test returns. Hold only diagnostic log FDs so its exact console survives that
 // cleanup; disks, memory backings and lifecycle operations are unaffected.
 func productionRetainConsoles(t *testing.T, artifacts, cgroup string) {
@@ -842,7 +842,7 @@ func productionRetainConsoles(t *testing.T, artifacts, cgroup string) {
 }
 
 // memory.events supports POLLPRI notifications. Retain the last readable counters
-// before product compensation removes the owned scope, including an OOM kill.
+// before sandboxd compensation removes the owned scope, including an OOM kill.
 func productionRetainScopeMemory(
 	artifacts, scope string,
 	stop <-chan struct{},

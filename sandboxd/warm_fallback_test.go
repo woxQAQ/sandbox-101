@@ -203,7 +203,7 @@ func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The durable sandbox still names the rejected VM, as after a crash between
-	// confirmed engine deletion and the product reference commit.
+	// confirmed engine deletion and the sandbox reference commit.
 	if err := s.claim(&o); err != nil {
 		t.Fatal(err)
 	}

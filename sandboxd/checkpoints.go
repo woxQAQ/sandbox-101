@@ -4,7 +4,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-// retireSnapshot holds the shared product reference lock until engine deletion
+// retireSnapshot holds the shared sandbox reference lock until engine deletion
 // finishes. A checkpoint may share a sleeping sandbox's immutable capture.
 func (s *Service) retireSnapshot(
 	o Operation,

@@ -8,7 +8,7 @@ state-dir: /var/lib/sandboxd
 engine-socket: /run/sandbox-engine/engine.sock
 listen: 127.0.0.1:7777
 root-token-file: /etc/sandboxd/root-token
-# Enable only for the first start of a fresh product database.
+# Enable only for the first start of a fresh sandboxd database.
 init: false
 mode: serve
 tls-cert: ""

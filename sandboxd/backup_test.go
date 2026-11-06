@@ -8,7 +8,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-func TestProductBackupRestorationRequiresReview(t *testing.T) {
+func TestSandboxdBackupRestorationRequiresReview(t *testing.T) {
 	s, _, _, p := fixture(t)
 	r := claimTest(
 		t,

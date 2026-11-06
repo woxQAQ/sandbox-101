@@ -108,7 +108,7 @@ async fn saved_result_survives_restart_and_hashes_all_inputs() {
     );
     let mut frame = exec("initial", "a-private-key", &command);
     frame.data = b"input\0bytes".to_vec();
-    let mut stream = connect(&agent, Portal::Product);
+    let mut stream = connect(&agent, Portal::Workload);
     let first = rpc(&mut stream, frame.clone()).await;
     success(&first);
     assert_eq!(bytes(&first, "stdout"), frame.data);
@@ -138,14 +138,14 @@ async fn saved_result_survives_restart_and_hashes_all_inputs() {
     assert_eq!(agent.activation.lock().await.sandbox_id, "sandbox-a");
     success(&activate(&agent, "sandbox-a", json!({"BASE":"ambient-secret"})).await);
     frame.id = "different-connection-id".into();
-    let replay = rpc(&mut connect(&agent, Portal::Product), frame.clone()).await;
+    let replay = rpc(&mut connect(&agent, Portal::Workload), frame.clone()).await;
     success(&replay);
     assert_eq!(replay.last().unwrap().params_json()["replayed"], true);
     assert_eq!(bytes(&replay, "stdout"), frame.data);
     assert_eq!(std::fs::read(tmp.path().join("effect")).unwrap(), b"x");
     success(&activate(&agent, "sandbox-a", json!({"BASE":"changed-secret"})).await);
     assert_eq!(
-        rpc(&mut connect(&agent, Portal::Product), frame)
+        rpc(&mut connect(&agent, Portal::Workload), frame)
             .await
             .last()
             .unwrap()
@@ -183,13 +183,13 @@ async fn concurrent_key_is_admitted_once_and_identity_cannot_change_while_runnin
         "printf x >> {}/effect; sleep 0.25; printf done",
         tmp.path().display()
     );
-    let mut first = connect(&agent, Portal::Product);
+    let mut first = connect(&agent, Portal::Workload);
     write_frame(&mut first, &exec("same-id", "operation-step", &command))
         .await
         .unwrap();
     assert_eq!(next(&mut first).await.params_json()["started"], true);
     let duplicate = rpc(
-        &mut connect(&agent, Portal::Product),
+        &mut connect(&agent, Portal::Workload),
         exec("same-id", "operation-step", &command),
     )
     .await;
@@ -205,7 +205,7 @@ async fn concurrent_key_is_admitted_once_and_identity_cannot_change_while_runnin
         }
     }
     let replay = rpc(
-        &mut connect(&agent, Portal::Product),
+        &mut connect(&agent, Portal::Workload),
         exec("other-id", "operation-step", &command),
     )
     .await;
@@ -216,7 +216,7 @@ async fn concurrent_key_is_admitted_once_and_identity_cannot_change_while_runnin
     success(&activate(&agent, "a", json!({})).await);
     success(&activate(&agent, "b", json!({})).await);
     let new_scope = rpc(
-        &mut connect(&agent, Portal::Product),
+        &mut connect(&agent, Portal::Workload),
         exec("new", "operation-step", &command),
     )
     .await;
@@ -231,7 +231,7 @@ async fn output_and_admission_bounds_do_not_evict_keys() {
     let mut cfg = config(tmp.path());
     cfg.ledger_max_entries = 2;
     let agent = Agent::new(cfg).unwrap();
-    let mut stream = connect(&agent, Portal::Product);
+    let mut stream = connect(&agent, Portal::Workload);
     let f = exec(
         "big",
         "one",
@@ -287,7 +287,7 @@ async fn output_and_admission_bounds_do_not_evict_keys() {
 async fn unsupported_keyed_modes_and_private_files_are_rejected_before_side_effects() {
     let tmp = tempfile::tempdir().unwrap();
     let agent = Agent::new(config(tmp.path())).unwrap();
-    let mut stream = connect(&agent, Portal::Product);
+    let mut stream = connect(&agent, Portal::Workload);
     let effect = tmp.path().join("should-not-exist");
     let command = format!("touch {}", effect.display());
     let initial = exec("initial", "key", &command);
@@ -383,7 +383,7 @@ fn keyed_crash_fixture() {
     let root = std::path::PathBuf::from(root);
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let agent = Agent::new(config(&root)).unwrap();
-        let mut stream = connect(&agent, Portal::Product);
+        let mut stream = connect(&agent, Portal::Workload);
         write_frame(&mut stream, &crash_request(&root))
             .await
             .unwrap();
@@ -431,7 +431,7 @@ async fn crash_after_side_effect_reports_unknown_and_never_replays() {
     let cfg = config(tmp.path());
     for _ in 0..2 {
         let agent = Agent::new(cfg.clone()).unwrap();
-        let mut stream = connect(&agent, Portal::Product);
+        let mut stream = connect(&agent, Portal::Workload);
         let result = rpc(&mut stream, crash_request(tmp.path())).await;
         assert_eq!(result.last().unwrap().error, "result_unknown");
         assert_eq!(
@@ -448,7 +448,7 @@ async fn crash_after_side_effect_reports_unknown_and_never_replays() {
 async fn prepare_template_removes_saved_history_before_a_new_sandbox() {
     let tmp = tempfile::tempdir().unwrap();
     let agent = Agent::new(config(tmp.path())).unwrap();
-    let mut stream = connect(&agent, Portal::Product);
+    let mut stream = connect(&agent, Portal::Workload);
     let frame = exec("warm", "operation-step", "printf TEMPLATE_OUTPUT_PRIVATE");
     success(&rpc(&mut stream, frame.clone()).await);
     drop(stream);
@@ -467,7 +467,7 @@ async fn prepare_template_removes_saved_history_before_a_new_sandbox() {
     );
     assert!(agent.processes.lock().await.is_empty());
     success(&activate(&agent, "new-sandbox", json!({})).await);
-    let first = rpc(&mut connect(&agent, Portal::Product), frame).await;
+    let first = rpc(&mut connect(&agent, Portal::Workload), frame).await;
     success(&first);
     assert_eq!(first.last().unwrap().params_json()["replayed"], false);
 }

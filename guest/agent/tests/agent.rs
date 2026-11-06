@@ -79,9 +79,9 @@ fn success(frames: &[Frame]) {
 #[tokio::test]
 async fn portal_separation_activation_and_multiplex() {
     let (_tmp, agent) = setup();
-    let mut product = connection(agent.clone(), Portal::Product);
+    let mut workload = connection(agent.clone(), Portal::Workload);
     for method in ["reseed", "clock_sync", "ping", "activate", "quiesce"] {
-        let frames = rpc(&mut product, request("deny", method, json!({}))).await;
+        let frames = rpc(&mut workload, request("deny", method, json!({}))).await;
         assert!(!frames.last().unwrap().error.is_empty());
     }
     let mut system = connection(agent.clone(), Portal::System);
@@ -103,17 +103,17 @@ async fn portal_separation_activation_and_multiplex() {
     );
     assert!(!agent.config.machine_id.exists());
     write_frame(
-        &mut product,
+        &mut workload,
         &request("one", "exec", json!({"command":"sleep 0.05; printf one"})),
     )
     .await
     .unwrap();
-    write_frame(&mut product, &request("two", "info", json!({})))
+    write_frame(&mut workload, &request("two", "info", json!({})))
         .await
         .unwrap();
     let mut complete = std::collections::BTreeSet::new();
     while complete.len() < 2 {
-        let f = next(&mut product).await;
+        let f = next(&mut workload).await;
         assert!(f.error.is_empty(), "{}", f.error);
         if f.eof {
             complete.insert(f.id);
@@ -135,7 +135,7 @@ async fn portal_separation_activation_and_multiplex() {
 #[tokio::test]
 async fn exec_environment_streaming_and_disconnect_cleanup() {
     let (_tmp, agent) = setup();
-    let mut stream = connection(agent.clone(), Portal::Product);
+    let mut stream = connection(agent.clone(), Portal::Workload);
     let frames=rpc(&mut stream,request("exec","exec",json!({"command":"printf '%s' \"$X\"; printf err >&2; head -c 1048576 /dev/zero","env":{"X":"override"}}))).await;
     success(&frames);
     assert!(
@@ -172,7 +172,7 @@ async fn exec_environment_streaming_and_disconnect_cleanup() {
 #[tokio::test]
 async fn detached_ring_and_persistent_shell() {
     let (_tmp, agent) = setup();
-    let mut s = connection(agent.clone(), Portal::Product);
+    let mut s = connection(agent.clone(), Portal::Workload);
     let frames = rpc(
         &mut s,
         request(
@@ -251,7 +251,7 @@ async fn files_rollback_and_watch_ready() {
     let (tmp, agent) = setup();
     let target = tmp.path().join("data");
     std::fs::write(&target, b"original").unwrap();
-    let mut stream = connection(agent.clone(), Portal::Product);
+    let mut stream = connection(agent.clone(), Portal::Workload);
     let mut first = request("write", "fs_write", json!({"path":target}));
     first.data = b"partial".to_vec();
     first.eof = false;
@@ -260,7 +260,7 @@ async fn files_rollback_and_watch_ready() {
     drop(stream);
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(std::fs::read(&target).unwrap(), b"original");
-    let mut stream = connection(agent.clone(), Portal::Product);
+    let mut stream = connection(agent.clone(), Portal::Workload);
     first.eof = true;
     first.id = "full".into();
     success(&rpc(&mut stream, first).await);
@@ -272,7 +272,7 @@ async fn files_rollback_and_watch_ready() {
     .await;
     success(&frames);
     assert_eq!(output(&frames), "partial");
-    let mut watcher = connection(agent, Portal::Product);
+    let mut watcher = connection(agent, Portal::Workload);
     write_frame(
         &mut watcher,
         &request("watch", "fs_watch", json!({"path":tmp.path()})),
@@ -298,7 +298,7 @@ async fn raw_port_forward_supports_half_close() {
         s.write_all(b"response-after-fin").await.unwrap();
         s.shutdown().await.unwrap();
     });
-    let mut stream = connection(agent, Portal::Product);
+    let mut stream = connection(agent, Portal::Workload);
     write_frame(
         &mut stream,
         &request("p", "port_forward", json!({"port":port})),
@@ -320,7 +320,7 @@ async fn raw_port_forward_supports_half_close() {
 #[tokio::test]
 async fn pty_is_real_terminal_and_resize() {
     let (_tmp, agent) = setup();
-    let mut s = connection(agent, Portal::Product);
+    let mut s = connection(agent, Portal::Workload);
     write_frame(
         &mut s,
         &request(

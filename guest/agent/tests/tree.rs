@@ -32,7 +32,7 @@ fn setup() -> (tempfile::TempDir, Arc<Agent>) {
 fn connect(agent: Arc<Agent>) -> UnixStream {
     let (client, server) = UnixStream::pair().unwrap();
     tokio::spawn(async move {
-        let _ = serve_connection(agent, server, Portal::Product).await;
+        let _ = serve_connection(agent, server, Portal::Workload).await;
     });
     client
 }

@@ -31,7 +31,7 @@ func (r resourceRecovery) operation() Operation {
 }
 
 // Take sandbox/checkpoint/pool locks before this lock. Publication/transfer of
-// product references shares this lock with GC's final ownership check + delete.
+// sandbox references shares this lock with GC's final ownership check + delete.
 // Allocation and activation stay outside it; pending operation keys protect them.
 func (s *Service) lockResourceOwnership() func() { return s.lock("resource-ownership") }
 
@@ -349,7 +349,7 @@ func (s *Service) resourceReferences(
 				vms[b.VMID], snaps[b.SnapshotID] = true, true
 			}
 		}
-		// Even a terminal product operation may have lost contact while an engine
+		// Even a terminal sandbox operation may have lost contact while an engine
 		// step was still running. Protect both sides of every such dependency.
 		for _, step := range recoveryDependencySteps(o) {
 			op, e := s.findResourceStep(o, step, "*")

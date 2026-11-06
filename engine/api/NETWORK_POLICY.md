@@ -68,14 +68,14 @@ api.Wait(ctx, engine, api.Request{
     ExpectedInstance: instance,
     Policy: &api.NetworkPolicy{
         Version: 1, AllowedCIDRs: policy.AllowedCIDRs,
-        MaxConnections: maxConnections, // normalize the product default to 256
+        MaxConnections: maxConnections, // normalize the sandbox default to 256
     },
 })
 ```
 
 `InstallDirect` returns success only after step 2 succeeds. It returns a cleanup
 closure even after an uncertain/partial installation. It never enables links.
-After product guest configuration/activation, sandboxd separately awaits:
+After guest configuration/activation through Admin port 2046, sandboxd separately awaits:
 
 ```go
 api.Wait(ctx, engine, api.Request{

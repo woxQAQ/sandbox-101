@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Portal {
     System,
-    Product,
+    Workload,
     Admin,
 }
 #[derive(Clone)]
@@ -50,7 +50,7 @@ where
 {
     let mut first =
         tokio::time::timeout(Duration::from_secs(30), wire::read_frame(&mut stream)).await??;
-    if portal == Portal::Product && first.as_ref().is_some_and(|f| f.method == "port_forward") {
+    if portal == Portal::Workload && first.as_ref().is_some_and(|f| f.method == "port_forward") {
         use std::sync::atomic::Ordering;
         struct StreamGuard(Arc<Agent>);
         impl Drop for StreamGuard {
@@ -107,7 +107,7 @@ where
             let mut requests = active.lock().await;
             // Duplicate active IDs are a connection error, never a second execution.
             ensure!(!requests.contains_key(&frame.id), "duplicate active request id");
-            let slots=if portal==Portal::Product{agent.requests.clone()}else{agent.control_requests.clone()};
+            let slots=if portal==Portal::Workload{agent.requests.clone()}else{agent.control_requests.clone()};
             let permit = if requests.len() < 16 { slots.try_acquire_owned().ok() } else { None };
             let Some(permit) = permit else {
                 drop(requests);
@@ -177,13 +177,13 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
     match f.method.as_str() {
         "info" => {
             let a = agent.activation.lock().await;
-            out.done(json!({"protocol":1,"portal":"product","sandbox_id":a.sandbox_id,"network":a.network,"active":!a.sandbox_id.is_empty(),"processes":agent.processes.lock().await.len(),"in_flight":(128-agent.requests.available_permits()).saturating_sub(1)+agent.active_streams.load(std::sync::atomic::Ordering::SeqCst),"quiesced":agent.quiesced.load(std::sync::atomic::Ordering::SeqCst)})).await
+            out.done(json!({"protocol":1,"portal":"workload","sandbox_id":a.sandbox_id,"network":a.network,"active":!a.sandbox_id.is_empty(),"processes":agent.processes.lock().await.len(),"in_flight":(128-agent.requests.available_permits()).saturating_sub(1)+agent.active_streams.load(std::sync::atomic::Ordering::SeqCst),"quiesced":agent.quiesced.load(std::sync::atomic::Ordering::SeqCst)})).await
         }
         "activate" | "quiesce" | "prepare_template" => {
-            bail!("method is not authorized on product portal")
+            bail!("method is not authorized on workload portal")
         }
         "ping" | "reseed" | "clock_sync" => {
-            bail!("system method is not authorized on product portal")
+            bail!("system method is not authorized on workload portal")
         }
         "exec" | "pty_open" if p.get("exec_key").is_some() => {
             crate::keyed::execute(&agent, out, input).await
@@ -213,7 +213,7 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
             process.signal(libc::SIGKILL)?;
             out.done(json!({})).await
         }
-        _ => bail!("unknown product method"),
+        _ => bail!("unknown workload method"),
     }
 }
 

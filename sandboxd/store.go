@@ -65,7 +65,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return fail(
 			api.Fail(
 				api.ManualRecovery,
-				"product metadata was restored; review engine inventory and acknowledge the recovery point",
+				"sandboxd metadata was restored; review engine inventory and acknowledge the recovery point",
 			),
 		)
 	} else if !os.IsNotExist(e) {
