@@ -22,7 +22,7 @@ Use a TLS gateway preserving HTTP/1.1 `Connection: Upgrade` / `Upgrade: sandbox-
 
 ## Image and network configuration
 
-Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Sandbox templates freeze the selected image, resource shape and golden snapshot dependency at admission. Tenant snapshot imports require trusted provenance for that tenant. Import external golden snapshots with a root `template_put` and explicit `X-Tenant-ID`; an existing owner cannot be transferred. Metadata schema 2 persists capture owners and root import grants, including in backups. Schema 1 is rejected before DDL: stop the service, preserve a consistent backup and review resource ownership before designing an explicit migration. Do not overwrite or delete old state to bypass this check.
+Import a native Linux OCI manifest into the engine before registering its digest in a template. `engined --mode=import` is offline and shares the engine writer lock. See [materialization](../../engine/IMAGE-MATERIALIZATION.md) for layered versus explicit merged compatibility. Sandbox templates freeze the selected image, resource shape and golden snapshot dependency at admission. Tenant snapshot imports require trusted provenance for that tenant. Import external golden snapshots with a root `template_put` and explicit `X-Tenant-ID`; an existing owner cannot be transferred. Metadata schema 3 persists capture owners, root import grants and configuration fences, including in backups. Schema 1 and 2 are rejected before DDL: stop the service, preserve a consistent backup and review resource ownership and pending configuration changes before designing an explicit migration. Do not overwrite or delete old state to bypass this check.
 
 Network modes:
 
@@ -31,6 +31,8 @@ Network modes:
 - `direct`: instance-bound IPv4 CIDR policy and tracked-flow budget installed through engine operations, then guest activation and NIC enable. AllowedHosts and host-only credentials are rejected before VM allocation. IPv6 and private/reserved/metadata destinations are denied.
 
 Host-only credentials are accepted on claim/configure and retained only in process memory. Guest receives public CA material and configured placeholders. Restart loses secrets; affected sandboxes remain blocked and need explicit `configure` with fresh credentials. Existing non-secret relay bindings are recreated with the new proxy CA before admission, preserving guest identity and the current lease. Local audit persistence is required before injection; persistence failure rejects the request without injecting or dialing upstream.
+
+A running `configure` first revokes the previous proxy binding and closes its streams, then publishes and activates the new intent. Any failure leaves the sandbox behind a durable configuration fence: the old data path stays closed, admission and automatic resume/rebind stay blocked, and maintenance only keeps the NIC off and the proxy revoked. Retry with a new `configure` intent (new idempotency key); only the matching successful configure, or a completed release, clears the fence.
 
 ## Restart, drain and backup
 

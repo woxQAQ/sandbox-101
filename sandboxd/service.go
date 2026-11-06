@@ -616,6 +616,18 @@ func (s *Service) Submit(
 			if err = checkEgressPolicy(policy, len(secrets) > 0); err != nil {
 				return o, err
 			}
+			// The configuration fence is admitted atomically with the
+			// operation. It blocks automatic resume/rebind until this
+			// configure delivers, is replaced by a newer explicit configure,
+			// or the sandbox is released.
+			if err = recordConfigFence(
+				ctx,
+				tx,
+				c.SandboxID,
+				o.ID,
+			); err != nil {
+				return o, err
+			}
 		}
 	case "delete_checkpoint":
 		cp, e := getCheckpointTx(ctx, tx, c.CheckpointID)

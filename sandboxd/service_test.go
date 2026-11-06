@@ -28,8 +28,10 @@ type fakeEngine struct {
 	calls        map[string]int
 	generation   map[string]int
 	failSnapshot bool
+	failNetwork  bool
 	unavailable  bool
 	cloneGate    <-chan struct{}
+	sockDir      string
 }
 
 func newFakeEngine() *fakeEngine {
@@ -40,6 +42,15 @@ func newFakeEngine() *fakeEngine {
 		calls:      map[string]int{},
 		generation: map[string]int{},
 	}
+}
+
+// Callers hold f.mu. Real egress fixtures need listener paths inside a
+// private directory; the default keeps the historical non-listening path.
+func (f *fakeEngine) vsockPath(id string) string {
+	if f.sockDir != "" {
+		return filepath.Join(f.sockDir, "vsock-"+id)
+	}
+	return "/tmp/" + id + "/vsock"
 }
 
 func (f *fakeEngine) Submit(
@@ -109,7 +120,7 @@ func (f *fakeEngine) Submit(
 		v.AgentReady = true
 		v.Verified = true
 		v.Instance = newID("run_")
-		v.VSockPath = "/tmp/" + v.Instance + "/vsock"
+		v.VSockPath = f.vsockPath(v.Instance)
 		f.vms[v.ID] = v
 	case "clone":
 		snap, ok := f.snaps[r.SnapshotID]
@@ -125,7 +136,7 @@ func (f *fakeEngine) Submit(
 			Verified:   true,
 			AgentReady: true,
 			Instance:   newID("run_"),
-			VSockPath:  "/tmp/" + o.VMID + "/vsock",
+			VSockPath:  f.vsockPath(o.VMID),
 		}
 	case "stop":
 		v.Phase = "stopped"
@@ -139,7 +150,7 @@ func (f *fakeEngine) Submit(
 		v.AgentReady = true
 		v.Verified = true
 		v.Instance = newID("run_")
-		v.VSockPath = "/tmp/" + v.Instance + "/vsock"
+		v.VSockPath = f.vsockPath(v.Instance)
 		f.vms[v.ID] = v
 	case "snapshot":
 		if f.failSnapshot {
@@ -159,6 +170,14 @@ func (f *fakeEngine) Submit(
 	case "delete_snapshot":
 		delete(f.snaps, r.SnapshotID)
 	case "network":
+		if f.failNetwork {
+			o.Status = "failed"
+			o.Error = &api.Error{
+				Code:    api.Internal,
+				Message: "network change failed",
+			}
+			break
+		}
 		v.NetworkActual = r.NetworkEnabled
 		v.NetworkEnabled = r.NetworkEnabled
 		f.vms[v.ID] = v
@@ -250,9 +269,18 @@ type fakeAgent struct {
 	mu          sync.Mutex
 	activations []Activation
 	fail        bool
+	failInfo    bool
 }
 
-func (f *fakeAgent) Info(context.Context, api.VM) error { return nil }
+func (f *fakeAgent) Info(context.Context, api.VM) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failInfo {
+		return errors.New("agent info probe failed")
+	}
+	return nil
+}
+
 func (f *fakeAgent) Activate(_ context.Context, _ api.VM, a Activation) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

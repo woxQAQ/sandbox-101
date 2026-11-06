@@ -149,6 +149,30 @@ func (s *Service) reconcile() {
 			unlock()
 			continue
 		}
+		fence, fenceErr := configFence(s.ctx, s.store.db, b.ID)
+		if fenceErr != nil || fence != "" {
+			// A fenced (or unverifiable) configuration boundary is never
+			// reactivated by maintenance. Close the data path by proven
+			// instance only; the fence owner keeps the diagnostics.
+			s.closeConnections(b.ID)
+			if s.opts.Egress != nil {
+				_ = s.revoke(b.ID)
+			}
+			_, _ = api.Wait(
+				s.ctx,
+				s.opts.Engine,
+				api.Request{
+					Key: "config-fence-off:" + s.epoch + ":" +
+						b.ID + ":" + v.Instance,
+					Action:           "network",
+					VMID:             v.ID,
+					ExpectedInstance: v.Instance,
+					NetworkEnabled:   false,
+				},
+			)
+			unlock()
+			continue
+		}
 		if s.CredentialsMissing(b) {
 			s.closeConnections(b.ID)
 			if s.opts.Egress != nil {
@@ -183,6 +207,15 @@ func (s *Service) reconcile() {
 					b.LastError = "egress policy could not be restored"
 					_ = saveSandbox(s.ctx, s.store.db, b)
 				}
+			}
+		} else if s.opts.Egress != nil {
+			// A none policy never retains a residual proxy binding.
+			s.mu.Lock()
+			bound := s.bindings[b.ID] != ""
+			s.mu.Unlock()
+			if bound {
+				s.closeConnections(b.ID)
+				_ = s.revoke(b.ID)
 			}
 		}
 		unlock()

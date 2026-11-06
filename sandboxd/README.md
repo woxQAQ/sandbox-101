@@ -110,13 +110,15 @@ sandboxctl --token-file /private/tenant-token --key pause-001 change SANDBOX_ID 
 
 `pause.json` contains `{"action":"pause"}`. `sandboxctl exec` uses unkeyed execution; use the SDK's explicit `exec_key` for durable deduplication.
 
-Metadata schema 2 stores snapshot authorization in SQLite and preserves it through backup/restore. Schema 1 requires explicit ownership review and is rejected before schema DDL; no labels or existing template references are used to infer owners. Stop the service and preserve a consistent backup before planning migration; do not overwrite old state to bypass the version boundary.
+Metadata schema 3 stores snapshot authorization and configuration fences in SQLite and preserves both through backup/restore. Schema 1 and 2 require explicit review and are rejected before schema DDL; no labels or existing template references are used to infer owners. Stop the service and preserve a consistent backup before planning migration; do not overwrite old state to bypass the version boundary.
 
 ## Egress, Preview and boundaries
 
 Relay mode applies host/DNS/address checks before pinned numeric dialing and verifies upstream TLS. Host-only env values use `guest:false` and an `inject` rule; only the harmless placeholder reaches guest state. Secret values never enter SQLite or snapshots. They must be resupplied after restart. Injection requires a durable sanitized audit record before header replacement. See [egress](egress/README.md) for matching, trusted CA, reflection handling and SOCKS restrictions.
 
 Direct mode accepts canonical IPv4 `allowed_cidrs` and `max_connections` (default 256), installs them through the engine policy API, and denies private/reserved/metadata targets. Nonempty `allowed_hosts` and host-only credentials are rejected. Empty direct CIDRs deny all. Use explicit `0.0.0.0/0` for permitted public destinations. Host bandwidth and conntrack allocation quotas remain deployment responsibilities.
+
+`configure` on a running sandbox revokes the existing proxy binding and closes live streams before the new environment or policy is published. Admission records a durable configuration fence with the operation: if revocation, engine networking, the agent probe or activation fails, the sandbox stays fenced with the old data path closed, `last_error` records the diagnostic, and automatic resume/rebind and maintenance never reopen the proxy. Only the matching explicit `configure` that finishes activation and delivery clears its fence; an older operation cannot clear a newer fence, and `release` retires it with teardown. Retry a failed change with a new intent (new idempotency key).
 
 Preview capabilities bind tenant, sandbox, creation epoch, port and expiry capped by lease. Authorization/Cookie headers are stripped before guest forwarding; responses enforce `Referrer-Policy: no-referrer`. Preview uses a signed path on the service origin. It does not provide per-sandbox browser origins or rewrite absolute asset URLs; use a separate origin gateway when that isolation is needed.
 

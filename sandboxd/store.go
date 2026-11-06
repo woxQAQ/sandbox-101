@@ -20,7 +20,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-const storeSchemaVersion = 2
+const storeSchemaVersion = 3
 
 type store struct {
 	db      *sql.DB
@@ -159,7 +159,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	_, err = s.db.Exec(`
  CREATE TABLE IF NOT EXISTS version(version INTEGER NOT NULL);
- INSERT INTO version SELECT 2 WHERE NOT EXISTS (SELECT 1 FROM version);
+ INSERT INTO version SELECT 3 WHERE NOT EXISTS (SELECT 1 FROM version);
  CREATE TABLE IF NOT EXISTS tenants(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS sandboxes(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, state TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
@@ -167,6 +167,7 @@ func openStore(dir string, initialize bool) (*store, error) {
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, idem_key TEXT NOT NULL, spec_hash TEXT NOT NULL, status TEXT NOT NULL, body BLOB NOT NULL, UNIQUE(tenant,idem_key));
  CREATE TABLE IF NOT EXISTS warm(vm_id TEXT PRIMARY KEY, template_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, created_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS snapshot_owners(snapshot_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, source_operation_id TEXT NOT NULL, source_kind TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS configuration_fences(sandbox_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS resource_recovery(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL, hash TEXT NOT NULL);
  `)
@@ -321,6 +322,57 @@ func saveSandbox(ctx context.Context, e executor, b Sandbox) error {
 		b.TenantID,
 		b.State,
 		encode(diskSandbox{b, b.Env}),
+	)
+	return err
+}
+
+// recordConfigFence atomically admits a configure intent. A newer explicit
+// configure replaces the fence; an older operation can never remove it.
+// Only identities are stored here, never previous or new parameters.
+func recordConfigFence(
+	ctx context.Context,
+	e executor,
+	sandboxID, operationID string,
+) error {
+	_, err := e.ExecContext(
+		ctx,
+		"INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id",
+		sandboxID,
+		operationID,
+	)
+	return err
+}
+
+// configFence returns the operation owning the configuration boundary. A
+// failed query is never reported as the absence of a fence.
+func configFence(
+	ctx context.Context,
+	e executor,
+	sandboxID string,
+) (string, error) {
+	var operation string
+	err := e.QueryRowContext(
+		ctx,
+		"SELECT operation_id FROM configuration_fences WHERE sandbox_id=?",
+		sandboxID,
+	).Scan(&operation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return operation, err
+}
+
+// clearConfigFence removes only the fence owned by this operation.
+func clearConfigFence(
+	ctx context.Context,
+	e executor,
+	sandboxID, operationID string,
+) error {
+	_, err := e.ExecContext(
+		ctx,
+		"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?",
+		sandboxID,
+		operationID,
 	)
 	return err
 }

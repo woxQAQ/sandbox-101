@@ -13,6 +13,19 @@ import (
 )
 
 func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
+	// A configuration fence admits only the explicit configure operation that
+	// owns it. Rebind, resume and rollback activations must not bypass a
+	// pending or failed configuration boundary.
+	fence, err := configFence(s.ctx, s.store.db, b.ID)
+	if err != nil {
+		return err
+	}
+	if fence != "" && fence != o.ID {
+		return api.Fail(
+			api.Conflict,
+			"sandbox configuration change is pending",
+		)
+	}
 	if s.CredentialsMissing(*b) {
 		return api.Fail(
 			api.Conflict,
@@ -95,6 +108,11 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 	}
 	next.State, next.OperationID, next.LastError = "running", "", ""
 	if err := s.commitRunning(o, &next); err != nil {
+		// The new binding was already published; never leave it reachable when
+		// the running delivery cannot be committed.
+		if s.opts.Egress != nil {
+			err = errors.Join(err, s.revoke(b.ID))
+		}
 		return err
 	}
 	*b = next
@@ -325,6 +343,20 @@ func (s *Service) change(o *Operation) error {
 				"configuration requires running or paused sandbox",
 			)
 		}
+		if b.State == "running" {
+			// The old data path is revoked before any new intent is published.
+			// A failed revocation keeps the fence and the previous
+			// configuration; the new policy is never reported as delivered.
+			s.closeConnections(b.ID)
+			if err = s.revoke(b.ID); err != nil {
+				s.mu.Lock()
+				delete(s.opSecrets, o.ID)
+				s.mu.Unlock()
+				b.LastError = err.Error()
+				_ = saveSandbox(s.ctx, s.store.db, b)
+				return err
+			}
+		}
 		s.mu.Lock()
 		s.secrets[b.ID] = s.opSecrets[o.ID]
 		delete(s.opSecrets, o.ID)
@@ -348,15 +380,27 @@ func (s *Service) change(o *Operation) error {
 			if err = saveSandbox(s.ctx, s.store.db, b); err != nil {
 				return err
 			}
-			s.closeConnections(b.ID)
 			if err = s.activate(*o, &b, false); err != nil {
 				b.LastError = err.Error()
 				_ = saveSandbox(s.ctx, s.store.db, b)
 				return err
 			}
-		} else {
-			err = saveSandbox(s.ctx, s.store.db, b)
 		}
+		// Only the matching configure clears its own fence, atomically with
+		// the final persisted state. A late older operation cannot clear a
+		// newer fence.
+		tx, txErr := s.store.db.BeginTx(s.ctx, nil)
+		if txErr != nil {
+			return txErr
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err = saveSandbox(s.ctx, tx, b); err != nil {
+			return err
+		}
+		if err = clearConfigFence(s.ctx, tx, b.ID, o.ID); err != nil {
+			return err
+		}
+		err = tx.Commit()
 	case "checkpoint":
 		cp := Checkpoint{
 			ID:        o.IDs[0],
@@ -674,7 +718,24 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	s.mu.Lock()
 	delete(s.secrets, b.ID)
 	s.mu.Unlock()
-	return saveSandbox(s.ctx, s.store.db, *b)
+	// Termination retires any configuration fence left by a failed configure,
+	// atomically with the final persisted state.
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = saveSandbox(s.ctx, tx, *b); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		"DELETE FROM configuration_fences WHERE sandbox_id=?",
+		b.ID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) template(o *Operation) error {
@@ -832,6 +893,18 @@ func (s *Service) DataReady(
 	if err != nil {
 		return b, err
 	}
+	// A configuration fence blocks admission before any automatic resume.
+	// A failed fence query is never treated as the absence of a fence.
+	fence, err := configFence(ctx, s.store.db, b.ID)
+	if err != nil {
+		return b, err
+	}
+	if fence != "" {
+		return b, api.Fail(
+			api.Conflict,
+			"sandbox configuration change is pending",
+		)
+	}
 	if b.State == "paused" || b.State == "resuming" {
 		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(
 			b.ResumeAttempt,
@@ -851,6 +924,18 @@ func (s *Service) DataReady(
 	b, err = s.Get(ctx, p, id)
 	if err != nil {
 		return b, err
+	}
+	// Recheck under the sandbox lock: an admitted configure may have fenced
+	// the sandbox between the first read and this acquisition.
+	fence, err = configFence(ctx, s.store.db, b.ID)
+	if err != nil {
+		return b, err
+	}
+	if fence != "" {
+		return b, api.Fail(
+			api.Conflict,
+			"sandbox configuration change is pending",
+		)
 	}
 	if b.State != "running" || !time.Now().Before(b.Deadline) {
 		return b, api.Fail(api.Conflict, "sandbox lease is not active")

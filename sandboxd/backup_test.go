@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/woxQAQ/sandbox-engine/api"
+	"github.com/woxQAQ/sandboxd/egress"
 )
 
 func TestSnapshotOwnershipBackupRoundTrip(t *testing.T) {
@@ -202,5 +204,122 @@ func TestSandboxdBackupRestorationRequiresReview(t *testing.T) {
 	}
 	if _, err = RestoreStateBackup(restored, destination); err == nil {
 		t.Fatal("restore overwrote an existing metadata directory")
+	}
+}
+
+func TestBackupPreservesConfigurationFence(t *testing.T) {
+	s, _, agent, p := fixture(t)
+	r, err := s.Execute(
+		context.Background(),
+		p,
+		"claim",
+		Command{
+			Action:     "claim",
+			TemplateID: "python",
+			Policy:     egress.Policy{Mode: "relay"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	agent.fail = true
+	agent.mu.Unlock()
+	res, err := s.Execute(
+		context.Background(),
+		p,
+		"configure-none",
+		Command{
+			Action:    "configure",
+			SandboxID: r.Sandbox.ID,
+			Env:       map[string]EnvVar{},
+			Policy:    egress.Policy{Mode: "none"},
+		},
+	)
+	if err == nil {
+		t.Fatal("configure succeeded despite the activation failure")
+	}
+	requireFence(t, s, r.Sandbox.ID, res.OperationID)
+	destination := filepath.Join(t.TempDir(), "backup")
+	if _, err = s.Backup(context.Background(), destination); err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(t.TempDir(), "restored")
+	if _, err = RestoreStateBackup(restored, destination); err != nil {
+		t.Fatal(err)
+	}
+	if err = AcknowledgeStateRecovery(
+		restored,
+		"Reviewed test engine inventory and ownership receipts",
+	); err != nil {
+		t.Fatal(err)
+	}
+	opts := s.opts
+	opts.StateDir = restored
+	opts.Initialize = false
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	// The restored metadata keeps the configuration boundary: admission stays
+	// closed and maintenance does not recreate the proxy.
+	requireFence(t, reopened, r.Sandbox.ID, res.OperationID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err = reopened.DataReady(ctx, p, r.Sandbox.ID); !isCode(
+		err,
+		api.Conflict,
+	) {
+		t.Fatalf("restored fence admitted to data: %v", err)
+	}
+	agent.mu.Lock()
+	agent.fail = false
+	agent.mu.Unlock()
+	// Release still tears down and retires the fence with its final commit.
+	if _, err = reopened.Execute(
+		context.Background(),
+		p,
+		"release",
+		Command{Action: "release", SandboxID: r.Sandbox.ID},
+	); err != nil {
+		t.Fatal(err)
+	}
+	requireFence(t, reopened, r.Sandbox.ID, "")
+}
+
+func TestLegacySchemaTwoRequiresReviewBeforeDDL(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openStore(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.db.Exec(
+		"UPDATE version SET version=2; DROP TABLE configuration_fences",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = openStore(dir, false); !isCode(err, api.Incompatible) {
+		t.Fatalf("schema 2 state accepted: %v", err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "sandboxd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, fences int
+	if err = db.QueryRow("SELECT version FROM version").
+		Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='configuration_fences'").
+		Scan(&fences); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || fences != 0 {
+		t.Fatal("opening schema 2 state mutated it", version, fences)
 	}
 }
