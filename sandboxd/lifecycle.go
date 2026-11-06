@@ -1189,15 +1189,8 @@ func (s *Service) DataReady(
 	}
 	// A configuration fence blocks admission before any automatic resume.
 	// A failed fence query is never treated as the absence of a fence.
-	fence, err := configFence(ctx, s.store.db, b.ID)
-	if err != nil {
+	if err = s.dataFence(ctx, b.ID); err != nil {
 		return b, err
-	}
-	if fence != "" {
-		return b, api.Fail(
-			api.Conflict,
-			"sandbox configuration change is pending",
-		)
 	}
 	if b.State == "paused" || b.State == "resuming" {
 		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(
@@ -1221,15 +1214,8 @@ func (s *Service) DataReady(
 	}
 	// Recheck under the sandbox lock: an admitted configure may have fenced
 	// the sandbox between the first read and this acquisition.
-	fence, err = configFence(ctx, s.store.db, b.ID)
-	if err != nil {
+	if err = s.dataFence(ctx, b.ID); err != nil {
 		return b, err
-	}
-	if fence != "" {
-		return b, api.Fail(
-			api.Conflict,
-			"sandbox configuration change is pending",
-		)
 	}
 	if b.State != "running" || !time.Now().Before(b.Deadline) {
 		return b, api.Fail(api.Conflict, "sandbox lease is not active")
@@ -1271,15 +1257,14 @@ func (s *Service) DataReady(
 			}
 		}
 	}
-	if b.LastError != "" {
-		return b, api.Fail(api.Conflict, "sandbox is blocked: %s", b.LastError)
+	// Teardown or activation may have waited while a newer configure intent
+	// committed. Refresh the fence and serialize the final decision/renewal
+	// with admission, without holding this guard across those external calls.
+	b, publication, err := s.lockDataAdmission(ctx, p, id)
+	if err != nil {
+		return b, err
 	}
-	if !time.Now().Before(b.Deadline) {
-		return b, api.Fail(
-			api.Conflict,
-			"sandbox lease expired during activation",
-		)
-	}
+	defer publication()
 	if b.AutoRenew {
 		b.Deadline = time.Now().
 			UTC().

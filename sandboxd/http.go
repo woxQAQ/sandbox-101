@@ -387,14 +387,25 @@ func (s *Service) relay(
 		writeError(w, api.Fail(api.Incompatible, "HTTP/1.1 Upgrade required"))
 		return
 	}
+	_, publication, err := s.lockDataAdmission(r.Context(), p, id)
+	if err != nil {
+		_ = up.Close()
+		unlock()
+		writeError(w, err)
+		return
+	}
+	// Hijack only transfers local ownership. Both endpoints must be registered
+	// before configure can commit a fence and close the admitted streams.
 	down, rw, err := hj.Hijack()
 	if err != nil {
+		publication()
 		_ = up.Close()
 		unlock()
 		return
 	}
 	untrackUp := s.track(id, up)
 	untrackDown := s.track(id, down)
+	publication()
 	unlock()
 	defer untrackUp()
 	defer untrackDown()
@@ -591,7 +602,14 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				return nil, e
 			}
-			return s.trackedConnection(current.ID, c), nil
+			_, publication, e := s.lockDataAdmission(ctx, p, current.ID)
+			if e != nil {
+				_ = c.Close()
+				return nil, e
+			}
+			tracked := s.trackedConnection(current.ID, c)
+			publication()
+			return tracked, nil
 		},
 	}
 	defer transport.CloseIdleConnections()

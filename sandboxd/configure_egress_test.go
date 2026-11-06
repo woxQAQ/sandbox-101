@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -494,6 +495,574 @@ func requireStreamClosed(t *testing.T, conn net.Conn) {
 	var timeout net.Error
 	if n != 0 || err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 		t.Fatalf("revoked stream did not close: bytes=%d error=%v", n, err)
+	}
+}
+
+// admissionStreamAgent gates the real HTTP consumers after obtaining an owned
+// guest stream. Lifecycle calls still use the existing agent fixture.
+type admissionStreamAgent struct {
+	*fakeAgent
+
+	peers   chan net.Conn
+	entered chan struct{}
+	release chan struct{}
+	armed   atomic.Bool
+}
+
+func (a *admissionStreamAgent) stream(ctx context.Context) (net.Conn, error) {
+	up, peer := net.Pipe()
+	select {
+	case a.peers <- peer:
+	case <-ctx.Done():
+		_ = up.Close()
+		_ = peer.Close()
+		return nil, ctx.Err()
+	}
+	if a.armed.CompareAndSwap(true, false) {
+		close(a.entered)
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			_ = up.Close()
+			return nil, ctx.Err()
+		}
+	}
+	return up, nil
+}
+
+func (a *admissionStreamAgent) Connect(
+	ctx context.Context,
+	_ api.VM,
+) (net.Conn, error) {
+	return a.stream(ctx)
+}
+
+func (a *admissionStreamAgent) Forward(
+	ctx context.Context,
+	_ api.VM,
+	_ int,
+) (net.Conn, error) {
+	return a.stream(ctx)
+}
+
+// configureRevokeGate pauses only scheduling after actual Manager cleanup.
+// Submit has already committed its operation/fence and closed registered streams.
+type configureRevokeGate struct {
+	*egress.Manager
+
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *configureRevokeGate) Revoke(id string) error {
+	hold := g.armed.CompareAndSwap(true, false)
+	err := g.Manager.Revoke(id)
+	if hold {
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-time.After(5 * time.Second):
+			return errors.New("configure scheduling gate timed out")
+		}
+	}
+	return err
+}
+
+func openAdmissionGate(t *testing.T) (chan struct{}, func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(open)
+	return gate, open
+}
+
+// startAdmissionHTTP owns all endpoints and joins the actual HTTP handler, also
+// when a failure occurs before the upgrade or before receiving the guest peer.
+func startAdmissionHTTP(
+	t *testing.T,
+	s *Service,
+	a *admissionStreamAgent,
+	p Principal,
+	b Sandbox,
+	mode string,
+	buffered bool,
+) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	path := "/connect"
+	if mode == "preview" {
+		var err error
+		path, err = s.PreviewURL(
+			context.Background(),
+			p,
+			b.ID,
+			8080,
+			time.Minute,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan struct{})
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			if mode == "preview" {
+				s.preview(w, r)
+			} else {
+				s.relay(w, r, p, b.ID)
+			}
+		}),
+	)
+	client, err := net.DialTimeout(
+		"tcp",
+		server.Listener.Addr().String(),
+		2*time.Second,
+	)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+		for {
+			select {
+			case peer := <-a.peers:
+				_ = peer.Close()
+			default:
+				server.Close()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("admission HTTP handler did not exit")
+				}
+				return
+			}
+		}
+	})
+	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
+	// Relay denial must not copy workload bytes buffered with the headers.
+	payload := ""
+	if buffered {
+		payload = "buffered-workload"
+	}
+	_, err = fmt.Fprintf(
+		client,
+		"GET %s HTTP/1.1\r\nHost: sandbox\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n%s",
+		path,
+		payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, bufio.NewReader(client)
+}
+
+func admissionPeer(t *testing.T, a *admissionStreamAgent) net.Conn {
+	t.Helper()
+	select {
+	case peer := <-a.peers:
+		t.Cleanup(func() { _ = peer.Close() })
+		_ = peer.SetDeadline(time.Now().Add(5 * time.Second))
+		return peer
+	case <-time.After(5 * time.Second):
+		t.Fatal("owned admission upstream missing")
+		return nil
+	}
+}
+
+func requireAdmissionSource(
+	t *testing.T,
+	s *Service,
+	f *fakeEngine,
+	p Principal,
+	before Sandbox,
+	activations int,
+) {
+	t.Helper()
+	after, err := s.Get(context.Background(), p, before.ID)
+	if err != nil || after.State != "running" || after.Policy.Mode != "none" ||
+		after.Instance != before.Instance || after.Epoch != before.Epoch ||
+		after.ResumeAttempt != before.ResumeAttempt || !after.Deadline.Equal(before.Deadline) {
+		t.Fatal("admission changed source identity, lease or policy", err)
+	}
+	vm, err := f.GetVM(context.Background(), before.VMID)
+	if err != nil || vm.NetworkActual || vm.NetworkEnabled {
+		t.Fatal("none admission enabled NIC", err)
+	}
+	a := s.opts.Agent.(*admissionStreamAgent)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.activations) != activations {
+		t.Fatal("admission replayed activation")
+	}
+}
+
+func submitGatedConfigure(
+	t *testing.T,
+	s *Service,
+	p Principal,
+	id string,
+	gate *configureRevokeGate,
+) {
+	t.Helper()
+	gate.armed.Store(true)
+	submitted := make(chan Operation, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	go func() {
+		o, err := s.Submit(ctx, p, "concurrent-configure", Command{
+			Action:    "configure",
+			SandboxID: id,
+			Env:       map[string]EnvVar{},
+			Policy:    egress.Policy{Mode: "none"},
+		})
+		if err != nil {
+			t.Error("configure submit", err)
+		}
+		submitted <- o
+	}()
+	t.Cleanup(func() {
+		defer cancel()
+		select {
+		case o := <-submitted:
+			if o.ID != "" {
+				waitCtx, stop := context.WithTimeout(
+					context.Background(),
+					5*time.Second,
+				)
+				defer stop()
+				if _, err := s.Wait(waitCtx, p, o.ID); err != nil {
+					t.Error("configure completion", err)
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("configure submit did not exit")
+		}
+	})
+}
+
+func requirePendingConfigure(t *testing.T, s *Service, id string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fence, err := configFence(ctx, s.store.db, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fence != "" {
+			o, err := s.store.operation(ctx, fence)
+			if err != nil || o.Status != "pending" ||
+				o.Command.Action != "configure" {
+				t.Fatal("configure fence lacks durable pending intent", err)
+			}
+			return fence
+		}
+		if ctx.Err() != nil {
+			t.Fatal("configure failed to persist during blocked admission")
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestConfigureEgressAdmissionRejectsConcurrentIntent(t *testing.T) {
+	for _, boundary := range []string{"none_cleanup", "none_cleanup_autorenew", "relay_connect", "preview_forward"} {
+		t.Run(boundary, func(t *testing.T) {
+			cleanup := strings.HasPrefix(boundary, "none_cleanup")
+			s, f, original, p, _ := egressFixture(t)
+			releaseAgent, openAgent := openAdmissionGate(t)
+			a := &admissionStreamAgent{
+				fakeAgent: original,
+				peers:     make(chan net.Conn, 2),
+				entered:   make(chan struct{}),
+				release:   releaseAgent,
+			}
+			s.opts.Agent = a
+			cleanupEntered := make(chan struct{})
+			var cleanupOnce sync.Once
+			releaseCleanup, openCleanup := openAdmissionGate(t)
+			manager, err := egress.New(egress.Options{
+				InstallDirect: func(context.Context, egress.Binding, egress.Policy) (func() error, error) {
+					return func() error {
+						cleanupOnce.Do(func() { close(cleanupEntered) })
+						select {
+						case <-releaseCleanup:
+							return nil
+						case <-time.After(5 * time.Second):
+							return errors.New("actual cleanup gate timed out")
+						}
+					}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.opts.Egress.Close(); err != nil {
+				t.Fatal(err)
+			}
+			releaseSubmit, openSubmit := openAdmissionGate(t)
+			gate := &configureRevokeGate{
+				Manager: manager,
+				entered: make(chan struct{}),
+				release: releaseSubmit,
+			}
+			s.opts.Egress = gate
+			b := *claimRelay(t, s, p, "claim", map[string]EnvVar{}, egress.Policy{Mode: "none"}).Sandbox
+			a.mu.Lock()
+			activations := len(a.activations)
+			a.mu.Unlock()
+			mode := "relay"
+			if boundary == "preview_forward" {
+				mode = "preview"
+			}
+			if boundary == "none_cleanup_autorenew" {
+				b.AutoRenew = true
+				if err = saveSandbox(
+					context.Background(),
+					s.store.db,
+					b,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if cleanup {
+				vm, e := f.GetVM(context.Background(), b.VMID)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if err = manager.Bind(
+					context.Background(),
+					b.ID,
+					b.TenantID,
+					vm.VSockPath,
+					egress.Policy{Mode: "direct"},
+					nil,
+				); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				a.armed.Store(true)
+			}
+			client, reader := startAdmissionHTTP(
+				t,
+				s,
+				a,
+				p,
+				b,
+				mode,
+				mode == "relay",
+			)
+			if cleanup {
+				awaitAgent(t, cleanupEntered)
+			} else {
+				awaitAgent(t, a.entered)
+			}
+			submitGatedConfigure(t, s, p, b.ID, gate)
+			// Release and join gates before the HTTP and Submit cleanup callbacks.
+			t.Cleanup(func() { openCleanup(); openAgent(); openSubmit() })
+			fence := requirePendingConfigure(t, s, b.ID)
+			openCleanup()
+			awaitAgent(t, gate.entered)
+			openAgent()
+			var peer net.Conn
+			if !cleanup {
+				peer = admissionPeer(t, a)
+			}
+			var forwarded <-chan bool
+			if mode == "preview" {
+				probe := make(chan bool, 1)
+				probeDone := make(chan struct{})
+				t.Cleanup(func() {
+					_ = peer.Close()
+					select {
+					case <-probeDone:
+					case <-time.After(5 * time.Second):
+						t.Error("preview denial probe did not exit")
+					}
+				})
+				forwarded = probe
+				go func() {
+					defer close(probeDone)
+					reader := bufio.NewReader(peer)
+					first, readErr := reader.Peek(1)
+					var req *http.Request
+					if readErr == nil {
+						req, readErr = http.ReadRequest(reader)
+					}
+					if readErr == nil {
+						_ = req.Body.Close()
+						_, _ = io.WriteString(
+							peer,
+							"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n",
+						)
+					}
+					probe <- len(first) != 0
+				}()
+			}
+			response, err := http.ReadResponse(reader, nil)
+			if err != nil {
+				t.Fatal("admission response", err)
+			}
+			_ = response.Body.Close()
+			want := http.StatusConflict
+			if mode == "preview" {
+				want = http.StatusBadGateway
+			}
+			if response.StatusCode != want {
+				t.Errorf(
+					"fenced admission status=%d want=%d",
+					response.StatusCode,
+					want,
+				)
+				_ = client.Close()
+			}
+			if peer != nil {
+				if forwarded != nil {
+					select {
+					case copied := <-forwarded:
+						if copied {
+							t.Error(
+								"fenced preview forwarded an upstream request",
+							)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("preview probe did not exit")
+					}
+				}
+				requireStreamClosed(t, peer)
+			}
+			requireFence(t, s, b.ID, fence)
+			requirePendingConfigure(t, s, b.ID)
+			if _, bound := manager.Binding(b.ID); bound {
+				t.Fatal("actual residual cleanup incomplete")
+			}
+			s.mu.Lock()
+			registered := len(s.connections[b.ID])
+			s.mu.Unlock()
+			if registered != 0 {
+				t.Fatal("fenced admission leaked connection registrations")
+			}
+			requireAdmissionSource(t, s, f, p, b, activations)
+			openSubmit()
+		})
+	}
+}
+
+// openAdmittedStream completes the actual relay or preview upgrade and leaves
+// both endpoints live, so maintenance and later configure exercise ownership.
+func openAdmittedStream(
+	t *testing.T,
+	s *Service,
+	a *admissionStreamAgent,
+	p Principal,
+	b Sandbox,
+	mode string,
+) (net.Conn, net.Conn) {
+	t.Helper()
+	client, reader := startAdmissionHTTP(t, s, a, p, b, mode, false)
+	peer := admissionPeer(t, a)
+	var handshake <-chan error
+	if mode == "preview" {
+		done := make(chan error, 1)
+		exited := make(chan struct{})
+		t.Cleanup(func() {
+			_ = peer.Close()
+			select {
+			case <-exited:
+			case <-time.After(5 * time.Second):
+				t.Error("preview handshake did not exit during cleanup")
+			}
+		})
+		handshake = done
+		go func() {
+			defer close(exited)
+			req, err := http.ReadRequest(bufio.NewReader(peer))
+			if err == nil {
+				_ = req.Body.Close()
+				_, err = io.WriteString(
+					peer,
+					"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n",
+				)
+			}
+			done <- err
+		}()
+	}
+	response, err := http.ReadResponse(reader, nil)
+	if err != nil || response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatal("healthy admission did not upgrade", response, err)
+	}
+	if handshake != nil {
+		select {
+		case err = <-handshake:
+			if err != nil {
+				t.Fatal("preview upstream handshake", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("preview handshake did not exit")
+		}
+	}
+	exchangeWorkload(t, client, peer)
+	return client, peer
+}
+
+func TestConfigureEgressAdmissionRegistersBeforeIntent(t *testing.T) {
+	for _, mode := range []string{"relay", "preview"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f, original, p, _ := egressFixture(t)
+			a := &admissionStreamAgent{
+				fakeAgent: original,
+				peers:     make(chan net.Conn, 2),
+			}
+			s.opts.Agent = a
+			releaseSubmit, openSubmit := openAdmissionGate(t)
+			gate := &configureRevokeGate{
+				Manager: s.opts.Egress.(*egress.Manager),
+				entered: make(chan struct{}),
+				release: releaseSubmit,
+			}
+			s.opts.Egress = gate
+			b := *claimRelay(t, s, p, "claim", map[string]EnvVar{}, egress.Policy{Mode: "none"}).Sandbox
+			a.mu.Lock()
+			activations := len(a.activations)
+			a.mu.Unlock()
+			client, peer := openAdmittedStream(t, s, a, p, b, mode)
+			for range 2 {
+				s.reconcile()
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					5*time.Second,
+				)
+				_, err := s.DataReady(ctx, p, b.ID)
+				cancel()
+				if err != nil {
+					t.Fatal("healthy repeated admission", err)
+				}
+				exchangeWorkload(t, client, peer)
+			}
+			fresh, freshPeer := openAdmittedStream(t, s, a, p, b, mode)
+			exchangeWorkload(t, client, peer)
+			requireFence(t, s, b.ID, "")
+			if _, bound := gate.Binding(b.ID); bound {
+				t.Fatal("healthy none created a persistent proxy binding")
+			}
+			requireAdmissionSource(t, s, f, p, b, activations)
+			submitGatedConfigure(t, s, p, b.ID, gate)
+			t.Cleanup(openSubmit)
+			awaitAgent(t, gate.entered)
+			requirePendingConfigure(t, s, b.ID)
+			for _, stream := range []net.Conn{client, peer, fresh, freshPeer} {
+				requireStreamClosed(t, stream)
+			}
+			s.mu.Lock()
+			registered := len(s.connections[b.ID])
+			s.mu.Unlock()
+			if registered != 0 {
+				t.Fatal("configure admission retained registered connections")
+			}
+			requireAdmissionSource(t, s, f, p, b, activations)
+			openSubmit()
+		})
 	}
 }
 

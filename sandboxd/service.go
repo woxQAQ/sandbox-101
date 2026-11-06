@@ -1260,6 +1260,54 @@ func (s *Service) VM(ctx context.Context, b Sandbox) (api.VM, error) {
 	return v, nil
 }
 
+// dataFence fails closed on both a pending intent and an unreadable fence.
+func (s *Service) dataFence(ctx context.Context, id string) error {
+	fence, err := configFence(ctx, s.store.db, id)
+	if err != nil {
+		return err
+	}
+	if fence != "" {
+		return api.Fail(api.Conflict, "sandbox configuration change is pending")
+	}
+	return nil
+}
+
+// lockDataAdmission requires the sandbox lock. The returned guard serializes
+// the final local decision and connection registration with configure Submit.
+// VM/agent calls and teardown must finish before acquiring it; delivery and
+// stream IO start after releasing it.
+func (s *Service) lockDataAdmission(
+	ctx context.Context, p Principal, id string,
+) (Sandbox, func(), error) {
+	// Reject an already committed intent without waiting for its teardown to
+	// release the configuration guard.
+	if err := s.dataFence(ctx, id); err != nil {
+		return Sandbox{}, nil, err
+	}
+	unlock := s.lock("configuration:" + id)
+	b, err := s.Get(ctx, p, id)
+	if err == nil {
+		err = s.dataFence(ctx, id)
+	}
+	if err == nil && (b.State != "running" || !time.Now().Before(b.Deadline)) {
+		err = api.Fail(api.Conflict, "sandbox lease is not active")
+	}
+	if err == nil && s.CredentialsMissing(b) {
+		err = api.Fail(
+			api.Conflict,
+			"host credentials must be supplied again after daemon restart",
+		)
+	}
+	if err == nil && b.LastError != "" {
+		err = api.Fail(api.Conflict, "sandbox is blocked: %s", b.LastError)
+	}
+	if err != nil {
+		unlock()
+		return b, nil, err
+	}
+	return b, unlock, nil
+}
+
 func (s *Service) closeConnections(id string) {
 	s.mu.Lock()
 	var connections []net.Conn
