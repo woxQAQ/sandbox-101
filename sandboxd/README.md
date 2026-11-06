@@ -144,7 +144,46 @@ D denotes the shape's writable disk MiB, and M its captured memory MiB. Running 
 
 Every admitted operation persists `ChargeTenantID` separately from request/idempotency `TenantID`. Existing sandbox/checkpoint actions charge their trusted owner even when root uses its default identity or selects another tenant. Root bypasses admission limits only, while recording the same full responsibility. Maintenance and recovery allocate against the owner's ordinary budget. Public authorization, idempotency namespaces and failed client results remain unchanged.
 
-Boundary examples for D=64 and M=128: cold claim = 64; running checkpoint or resume peak = 64+192=256; running one-branch fork peak = source disk 64 + branch disk 64 + capture/backing 192 = 320; shared checkpoint/backing plus a new pause capture peak = VM disk 64 + shared SID 192 + new SID 192 = 448. The corresponding 63/255/319/447 limits reject before allocation. A running rollback retaining its original disk uses original D + restored D + checkpoint D+M = 320. Multiple holders of one SID never add another 192.
+Boundary examples for D=64 and M=128: cold claim = 64; running checkpoint or resume peak = 64+192=256; running one-branch fork peak = source disk 64 + branch disk 64 + capture/backing 192 = 320; shared checkpoint/backing plus a new pause capture peak = VM disk 64 + shared SID 192 + new SID 192 = 448. The corresponding 63/255/319/447 limits reject before allocation. A running rollback retaining its original disk uses original D + restored D + checkpoint D+M = 320. An accepted failed public restore also returns the real VMID without a successful instance witness: its additional conservative D remains billed, so original D64 + failed D64 + successful compensation D64 + SID192 = 384; 383 rejects that compensation before its restore effect. The failed D is retained responsibility, not a claim that a successful physical candidate was delivered. Deleting V retires all its D versions/backings; an independently active checkpoint retains SID192 with slot0, and only its trusted reclamation retires that remaining charge. Multiple holders of one SID never add another 192.
+
+Recovery allocations use one durable `Resolution`. `unresolved` retains pending
+responsibility; `result_known` fixes the exact keyed receipt and resulting V/SID/B
+while retaining responsibility. Only committed `active` or `cleanup` destinations,
+or proven `reclaimed`/never-dispatched `cancelled` records allow their parent to
+finish. Temporary `AllowedLifecycleWork` and `AllowedParentDone` decisions keep
+known B eligible for activation without treating fee adoption as delivery.
+Scanning includes unfinished allocations even after lifecycle ownership changes
+or a parent completion marker; the internal branch-only boolean format has no
+migration or compatibility path.
+
+| Transaction | Records committed together | Crash/replay behavior |
+| --- | --- | --- |
+| Receipt adoption | Pending to exact resource/backing refs and `result_known` proof | A failed SQL write retains the old responsibility; replay never recreates reclaimed disks |
+| First release | Terminated access marker, original tenant/S/V/A request/key and cleanup/slot refs | Dispatch marker commits before the frozen A request is sent; fresh releases reuse its sequence |
+| B handoff | Deterministic `instance_cleanup`, exact independent B delete request, cleanup/slot refs and `Resolution.cleanup` | Collector ID hashes length-prefixed domain/tenant/S/V/B in the existing recovery PK/body; original failed release Source and A intent never change |
+| Exact-B activation | Running S/V/B, active holders, optional retired-snapshot handoff and historical `Resolution.active` | Publication failure leaves `result_known`; after commit, parent errors or a later C only require historical delivery cleanup, without another restore/activation |
+| B reclamation | All V disks/backings, eligible slot retirement, collector deletion proof, allocation resolutions and matching terminated metadata | A lost reply or SQL failure keeps the same B key; receipt recovery completes accounting after one physical delete |
+
+A successful restore receipt's `result_instance` is immutable B proof; current
+VM lookup additionally verifies that V/B is still trusted and unowned. Missing
+legacy witness, foreign W/C, unverified state, another owner, receipt mismatch or
+query errors retain charges and slot. Terminated sandboxes only hand off cleanup;
+they are never reactivated. The stale A pre-admission conflict exception requires
+the frozen exact A request, immutable A→B proof and verified current B, with no
+contradictory/nonterminal receipt. Find NotFound alone proves neither dispatch
+absence nor a failed receipt.
+
+The B collector consumes its existing attempt before checking deletion refs.
+Unknown/nonterminal outcomes, missing dispatch receipts, query failure and lost
+replies reuse that exact request/key. Only an exact terminal failed receipt
+atomically appends attempt history and freezes the next B request. Fresh release
+IDs never change collector Source, Attempt or key. Ordinary A terminal-failed
+cleanup preserves the existing synthetic compensation attempts. Cleanup-only and
+explicitly transferred duplicate refs permit progress; genuine active users,
+warm consumers and engine dependencies still block deletion. Restore-version
+quota keys map through their `vm:V` holder to physical V, rather than being used
+as VMIDs. Original public failed rollback/release bodies remain immutable.
+
 
 ## Egress, Preview and boundaries
 

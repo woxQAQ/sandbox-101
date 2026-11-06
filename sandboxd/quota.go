@@ -348,6 +348,41 @@ func (s *Service) acceptQuotaReceipt(
 	if err != nil || !tracked {
 		return err
 	}
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = s.acceptQuotaReceiptTx(
+		tx,
+		o,
+		step,
+		request,
+		receipt,
+		b,
+		kind,
+		a,
+	); err != nil {
+		return err
+	}
+	if a != nil && recoveryTerminal(receipt.Status) && receipt.Key != "" {
+		if err = s.recordAllocationResultTx(tx, *a, receipt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Service) acceptQuotaReceiptTx(
+	tx *sql.Tx,
+	o Operation,
+	step string,
+	request api.Request,
+	receipt api.Operation,
+	b Sandbox,
+	kind string,
+	a *recoveryAllocation,
+) error {
 	key := receipt.VMID
 	if kind == "snapshot" {
 		key = receipt.SnapshotID
@@ -357,7 +392,7 @@ func (s *Service) acceptQuotaReceipt(
 	}
 	if key == "" {
 		if recoveryTerminal(receipt.Status) {
-			_, err = s.store.db.ExecContext(
+			_, err := tx.ExecContext(
 				s.ctx,
 				`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
 				o.ChargeTenantID,
@@ -367,11 +402,7 @@ func (s *Service) acceptQuotaReceipt(
 		}
 		return nil
 	} // Unknown dispatch retains its reservation.
-	tx, err := s.store.db.BeginTx(s.ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
+	var err error
 	var pending int
 	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`, o.ChargeTenantID, stepKey(o, step)).
 		Scan(&pending); err != nil {
@@ -387,7 +418,7 @@ func (s *Service) acceptQuotaReceipt(
 		}
 	}
 	if pending == 0 {
-		return tx.Commit()
+		return nil
 	} // Reclaimed receipts never resurrect resources.
 	storage := b.Shape.DiskMiB
 	if kind == "snapshot" {
@@ -484,7 +515,7 @@ func (s *Service) acceptQuotaReceipt(
 	); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Service) requireQuotaReservation(o Operation, step string) error {
@@ -533,6 +564,14 @@ func (s *Service) reclaimQuota(kind, key string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = s.reclaimQuotaTx(tx, kind, key); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
+	var err error
 	if kind == "vm_disk" {
 		var unresolved int
 		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs r WHERE r.kind='vm_disk' AND r.holder_kind='engine_dependency' AND (r.resource_key=? OR EXISTS(SELECT 1 FROM quota_refs v WHERE v.tenant_id=r.tenant_id AND v.kind=r.kind AND v.resource_key=r.resource_key AND v.holder_id=?))`, key, "vm:"+key).
@@ -567,7 +606,7 @@ func (s *Service) reclaimQuota(kind, key string) error {
 	if err = retireQuotaSlots(s.ctx, tx); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // A terminated sandbox retains its slot through unknown allocations and
@@ -793,6 +832,14 @@ func (s *Service) reconcileQuota() error {
 	}
 	for _, target := range targets {
 		if target.kind == "vm_disk" {
+			var collectors int
+			if err = s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM resource_recovery WHERE json_extract(body,'$.kind')='instance_cleanup' AND json_extract(body,'$.vm_id')=? AND COALESCE(json_extract(body,'$.done'),0)=0`, target.key).
+				Scan(&collectors); err != nil {
+				return err
+			}
+			if collectors > 0 {
+				continue
+			}
 			_, err = s.opts.Engine.GetVM(s.ctx, target.key)
 		} else {
 			_, err = s.opts.Engine.GetSnapshot(s.ctx, target.key)
@@ -862,10 +909,11 @@ func (s *Service) admitQuotaRecovery(
 		Shape:          b.Shape,
 		Step:           step,
 		Kind:           kind,
+		Resolution:     allocationResolution{State: "unresolved"},
 		Request:        request,
 	}
 	index := len(r.Allocations)
-	for i, previous := range r.Allocations {
+	for _, previous := range r.Allocations {
 		if previous.OperationID == o.ID && previous.Step == step {
 			if !bytes.Equal(encode(previous.Request), encode(request)) ||
 				previous.Shape != b.Shape ||
@@ -875,17 +923,7 @@ func (s *Service) admitQuotaRecovery(
 					"recovery allocation intent changed",
 				)
 			}
-			if !previous.Settled {
-				return nil
-			}
-			proof, err := s.findResourceStep(o, step, request.Action)
-			if err != nil {
-				return err
-			}
-			if proof != nil {
-				return previous.validate(*proof)
-			}
-			index = i
+			return nil
 		}
 	}
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -984,114 +1022,260 @@ func (a recoveryAllocation) validate(proof api.Operation) error {
 	return nil
 }
 
-// Receipt adoption and durable cleanup handoff precede lifecycle ownership checks.
-// A missing receipt after dispatch remains charged; it never becomes a new key.
+// Receipt resolution grants lifecycle progress separately from parent completion.
 func (s *Service) reconcileRecoveryAllocations(
 	r *resourceRecovery,
-) (bool, error) {
-	if len(r.Allocations) == 0 {
-		return true, nil
+) (recoveryProgress, error) {
+	current, err := s.loadRecovery(r.ID)
+	if err != nil {
+		return recoveryProgress{}, err
 	}
-	settled := true
+	*r = current
+	progress := recoveryProgress{
+		AllowedLifecycleWork: true,
+		AllowedParentDone:    true,
+	}
 	for i := range r.Allocations {
-		a := &r.Allocations[i]
-		if a.Settled {
+		a := r.Allocations[i]
+		if a.Resolution.delivered() {
 			continue
 		}
-		o := a.operation()
-		proof, err := s.findResourceStep(o, a.Step, a.Request.Action)
+		if a.Resolution.State != "unresolved" &&
+			a.Resolution.State != "result_known" {
+			return recoveryProgress{}, api.Fail(
+				api.ManualRecovery,
+				"invalid allocation resolution",
+			)
+		}
+		proof, err := s.findResourceStep(
+			a.operation(),
+			a.Step,
+			a.Request.Action,
+		)
 		if err != nil {
-			return false, err
+			return recoveryProgress{}, err
 		}
 		if proof == nil {
 			var dispatched int
 			if err = s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs WHERE holder_id=?`, "dispatch:"+a.Request.Key).
 				Scan(&dispatched); err != nil {
-				return false, err
+				return recoveryProgress{}, err
 			}
 			if dispatched != 0 {
-				settled = false
+				progress.AllowedLifecycleWork = false
+				progress.AllowedParentDone = false
 				continue
 			}
-			if _, err = s.store.db.ExecContext(
+			b, e := getSandbox(s.ctx, s.store.db, a.SandboxID)
+			if e != nil && !isCode(e, api.NotFound) {
+				return recoveryProgress{}, e
+			}
+			if e == nil &&
+				(b.OperationID == r.Source || strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")) &&
+				(b.State == "resuming" || b.State == "pausing") {
+				progress.AllowedParentDone = false
+				continue
+			}
+			// The durable marker is written before Submit. Its absence is the only
+			// cancellation proof; a receipt query's NotFound alone never suffices.
+			tx, err := s.store.db.BeginTx(s.ctx, nil)
+			if err != nil {
+				return recoveryProgress{}, err
+			}
+			next := *r
+			next.Allocations = append(
+				[]recoveryAllocation(nil),
+				r.Allocations...)
+			next.Allocations[i].Resolution = allocationResolution{
+				State:       "cancelled", //nolint:misspell // Preserve the durable Resolution state token.
+				Destination: "never-dispatched:" + a.Request.Key,
+			}
+			_, err = tx.ExecContext(
 				s.ctx,
 				`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
 				a.ChargeTenantID,
 				a.Request.Key,
-			); err != nil {
-				return false, err
+			)
+			if err == nil {
+				_, err = tx.ExecContext(
+					s.ctx,
+					`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=? AND NOT EXISTS(SELECT 1 FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage')`,
+					"operation:"+a.OperationID,
+					a.OperationID,
+				)
 			}
-			if _, err = s.store.db.ExecContext(
-				s.ctx,
-				`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=? AND NOT EXISTS(SELECT 1 FROM quota_resources WHERE source_operation_id=? AND kind='pending_storage')`,
-				"operation:"+o.ID,
-				o.ID,
-			); err != nil {
-				return false, err
+			if err == nil {
+				err = writeRecovery(s.ctx, tx, next)
 			}
-			a.Settled = true
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+			if err != nil {
+				return recoveryProgress{}, err
+			}
+			*r = next
 			continue
 		}
 		if err = a.validate(*proof); err != nil {
-			return false, err
+			return recoveryProgress{}, err
 		}
 		if !recoveryTerminal(proof.Status) {
-			settled = false
+			progress.AllowedLifecycleWork = false
+			progress.AllowedParentDone = false
 			continue
 		}
 		if err = s.acceptQuotaReceipt(
-			o,
+			a.operation(),
 			a.Step,
 			a.Request,
 			*proof,
 		); err != nil {
-			return false, err
+			return recoveryProgress{}, err
+		}
+		*r, err = s.loadRecovery(r.ID)
+		if err != nil {
+			return recoveryProgress{}, err
+		}
+		a = r.Allocations[i]
+		if a.Resolution.delivered() {
+			continue
 		}
 		if a.Kind == "snapshot" && proof.SnapshotID != "" {
 			ownership := s.lockResourceOwnership()
-			err = recordSnapshotOwner(
-				s.ctx,
-				s.store.db,
-				proof.SnapshotID,
-				a.ChargeTenantID,
-				a.OperationID,
-				"captured",
-			)
+			tx, err := s.store.db.BeginTx(s.ctx, nil)
+			if err == nil {
+				next := *r
+				next.Allocations = append(
+					[]recoveryAllocation(nil),
+					r.Allocations...)
+				cleanup := resourceRecovery{
+					ID:         "snapshot:" + a.OperationID + ":" + a.Step + ":" + proof.SnapshotID,
+					Source:     r.Source,
+					Step:       a.Step,
+					Kind:       "snapshot",
+					Snapshot:   proof.SnapshotID,
+					TenantID:   a.ChargeTenantID,
+					Allocation: &a,
+				}
+				err = recordSnapshotOwner(
+					s.ctx,
+					tx,
+					proof.SnapshotID,
+					a.ChargeTenantID,
+					a.OperationID,
+					"captured",
+				)
+				if err == nil {
+					_, err = tx.ExecContext(
+						s.ctx,
+						`INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING`,
+						cleanup.ID,
+						encode(cleanup),
+					)
+				}
+				if err == nil {
+					err = putQuotaRef(
+						s.ctx,
+						tx,
+						a.ChargeTenantID,
+						"snapshot",
+						proof.SnapshotID,
+						quotaRef{Kind: "cleanup", ID: "recovery:" + cleanup.ID},
+					)
+				}
+				next.Allocations[i].Resolution.State = "cleanup"
+				next.Allocations[i].Resolution.Destination = cleanup.ID
+				if err == nil {
+					_, err = tx.ExecContext(
+						s.ctx,
+						`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?`,
+						"operation:"+a.OperationID,
+					)
+				}
+				if err == nil {
+					err = writeRecovery(s.ctx, tx, next)
+				}
+				if err == nil {
+					err = tx.Commit()
+				} else {
+					_ = tx.Rollback()
+				}
+				if err == nil {
+					*r = next
+				}
+			}
 			ownership()
 			if err != nil {
-				return false, err
+				return recoveryProgress{}, err
 			}
-			cleanup := resourceRecovery{
-				ID:         "snapshot:" + a.OperationID + ":" + a.Step + ":" + proof.SnapshotID,
-				Source:     r.Source,
-				Step:       a.Step,
-				Kind:       "snapshot",
-				Snapshot:   proof.SnapshotID,
-				TenantID:   a.ChargeTenantID,
-				Allocation: a,
-			}
-			if _, err = s.store.db.ExecContext(
-				s.ctx,
-				`INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING`,
-				cleanup.ID,
-				encode(cleanup),
-			); err != nil {
-				return false, err
-			}
+			continue
 		}
-		// Restore versions retain vm/sandbox holders until deletion of that VM;
-		// they never authorize deleting a reused VM through an orphan key.
-		if _, err = s.store.db.ExecContext(
-			s.ctx,
-			`DELETE FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?`,
-			"operation:"+o.ID,
-		); err != nil {
-			return false, err
+		if proof.VMID == "" && proof.SnapshotID == "" {
+			r.Allocations[i].Resolution.State = "reclaimed"
+			r.Allocations[i].Resolution.Destination = "terminal-no-allocation:" + proof.ID
+			if err = s.saveRecovery(*r); err != nil {
+				return recoveryProgress{}, err
+			}
+			continue
 		}
-		a.Settled = true
+		b, err := getSandbox(s.ctx, s.store.db, a.SandboxID)
+		if err != nil {
+			return recoveryProgress{}, err
+		}
+		v, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
+		if err != nil {
+			return recoveryProgress{}, err
+		}
+		if b.TenantID != a.ChargeTenantID || b.VMID != proof.VMID ||
+			!v.Verified ||
+			v.OperationID != "" ||
+			v.ID != proof.VMID {
+			return recoveryProgress{}, api.Fail(
+				api.ManualRecovery,
+				"allocation destination is unverified or owned elsewhere",
+			)
+		}
+		if proof.Status == "failed" {
+			// An accepted failure's VMID conservatively bills a disk version. It is
+			// handed to proven existing V responsibility, never to a guessed candidate.
+			if v.Instance == "" || v.Instance != a.Request.ExpectedInstance ||
+				b.Instance != v.Instance {
+				return recoveryProgress{}, api.Fail(
+					api.ManualRecovery,
+					"failed allocation has no proven existing VM holder",
+				)
+			}
+			r.Allocations[i].Resolution.State = "cleanup"
+			r.Allocations[i].Resolution.Destination = "vm:" + v.ID
+			if err = s.saveRecovery(*r); err != nil {
+				return recoveryProgress{}, err
+			}
+			continue
+		}
+		if proof.ResultInstance == "" || v.Instance != proof.ResultInstance ||
+			(b.Instance != a.Request.ExpectedInstance && b.Instance != proof.ResultInstance) {
+			return recoveryProgress{}, api.Fail(
+				api.ManualRecovery,
+				"successful allocation lacks exact result instance proof",
+			)
+		}
+		if b.State == "terminated" {
+			if err = s.handoffInstanceCleanup(r, i, b, v); err != nil {
+				return recoveryProgress{}, err
+			}
+			continue
+		}
+		owned := b.OperationID == r.Source ||
+			strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
+		if !owned || b.State != "resuming" {
+			return recoveryProgress{}, api.Fail(
+				api.ManualRecovery,
+				"result has no lawful lifecycle continuation",
+			)
+		}
+		progress.AllowedParentDone = false
 	}
-	if err := s.saveRecovery(*r); err != nil {
-		return false, err
-	}
-	return settled, nil
+	return progress, nil
 }

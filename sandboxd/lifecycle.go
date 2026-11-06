@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -29,7 +30,16 @@ func (s *Service) activationFence(o Operation, id string) error {
 	return nil
 }
 
-func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
+func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
+	return s.activateTarget(o, b, reset, "")
+}
+
+func (s *Service) activateTarget(
+	o Operation,
+	b *Sandbox,
+	reset bool,
+	target string,
+) (err error) {
 	if err = s.activationFence(o, b.ID); err != nil {
 		return err
 	}
@@ -42,6 +52,17 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
 		return err
+	}
+	if target != "" && (v.ID != b.VMID || v.Instance != target) {
+		return api.Fail(
+			api.ManualRecovery,
+			"activation read returned another instance",
+		)
+	}
+	if target != "" {
+		if err = s.checkActivationTarget(o, *b, target); err != nil {
+			return err
+		}
 	}
 	if v.Phase != "running" || !v.AgentReady || !v.Verified {
 		return api.Fail(api.Conflict, "engine VM is not verified ready")
@@ -58,6 +79,11 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
 		},
 	); err != nil {
 		return err
+	}
+	if target != "" {
+		if err = s.checkActivationTarget(o, *b, target); err != nil {
+			return err
+		}
 	}
 	if err = s.opts.Agent.Info(s.ctx, v); err != nil {
 		return err
@@ -85,6 +111,11 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
 			err = errors.Join(err, s.revoke(b.ID))
 		}
 	}()
+	if target != "" {
+		if err = s.checkActivationTarget(o, *b, target); err != nil {
+			return err
+		}
+	}
 	if err = s.opts.Agent.Activate(
 		s.ctx,
 		v,
@@ -118,6 +149,11 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
 			return err
 		}
 	}
+	if target != "" {
+		if err = s.checkActivationTarget(o, *b, target); err != nil {
+			return err
+		}
+	}
 	next := *b
 	next.Instance = v.Instance
 	if b.State != "running" {
@@ -126,7 +162,7 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) (err error) {
 			Add(time.Duration(b.TTLSeconds) * time.Second)
 	}
 	next.State, next.OperationID, next.LastError = "running", "", ""
-	if err = s.commitRunning(o, &next); err != nil {
+	if err = s.commitRunning(o, &next, target); err != nil {
 		return err
 	}
 	*b = next
@@ -761,6 +797,38 @@ func (s *Service) proveReleaseInstance(o Operation, b *Sandbox) error {
 }
 
 func (s *Service) release(o *Operation, b *Sandbox) error {
+	if b.State == "terminated" {
+		intents, err := s.resourceRecoveries()
+		if err != nil {
+			return err
+		}
+		for _, r := range intents {
+			if r.SandboxID == b.ID && hasUnresolvedAllocations(r) {
+				if _, err = s.reconcileRecoveryAllocations(&r); err != nil {
+					return err
+				}
+			}
+		}
+		current, err := getSandbox(s.ctx, s.store.db, b.ID)
+		if err != nil {
+			return err
+		}
+		*b = current
+		collector, err := s.boundCollector(*b)
+		if err != nil {
+			return err
+		}
+		if collector != nil {
+			if err = s.consumeInstanceCleanup(collector); err != nil {
+				return err
+			}
+			current, err = getSandbox(s.ctx, s.store.db, b.ID)
+			if err != nil {
+				return err
+			}
+			*b = current
+		}
+	}
 	// A lost delete response can leave metadata pointing at an already reclaimed
 	// VM. Confirm absence before issuing another delete or requiring a live fence.
 	if b.VMID != "" {
@@ -786,21 +854,84 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 			return err
 		}
 	}
-	// The durable terminal marker revokes access before touching engine resources.
-	b.State = "terminated"
-	b.OperationID = o.ID
-	if err := s.saveQuotaSandbox(*b); err != nil {
+	origin, err := s.freezeRelease(*o, b)
+	if err != nil {
 		return err
 	}
 	if b.VMID != "" {
+		deletionOp := *o
+		request := api.Request{
+			Action:           "delete",
+			VMID:             b.VMID,
+			ExpectedInstance: b.Instance,
+		}
+		if origin != nil {
+			request = origin.Release.Request
+			deletionOp = origin.Release.Source
+			var proof api.Operation
+			var e error
+			if origin.Release.Dispatched {
+				proof, e = s.opts.Engine.FindOperation(s.ctx, request.Key)
+			} else {
+				e = api.Fail(api.NotFound, "release not dispatched")
+			}
+			if e != nil && !isCode(e, api.NotFound) {
+				return e
+			}
+			if e == nil {
+				if proof.Key != request.Key ||
+					!reflect.DeepEqual(proof.Request, request) {
+					return api.Fail(
+						api.ManualRecovery,
+						"release receipt differs from frozen intent",
+					)
+				}
+				if proof.Status == "failed" {
+					compensationKey := stepKey(
+						origin.operation(),
+						releaseVMStep(b.ID),
+					)
+					compensation, e := s.opts.Engine.FindOperation(
+						s.ctx,
+						compensationKey,
+					)
+					if e != nil && !isCode(e, api.NotFound) {
+						return e
+					}
+					if e == nil {
+						expected := request
+						expected.Key = compensationKey
+						if compensation.Key != compensationKey ||
+							!reflect.DeepEqual(compensation.Request, expected) {
+							return api.Fail(
+								api.ManualRecovery,
+								"A compensation receipt mismatch",
+							)
+						}
+						if compensation.Status == "failed" {
+							origin.Attempt++
+							origin.Done = false
+							if err = s.saveRecovery(*origin); err != nil {
+								return err
+							}
+						}
+					}
+					deletionOp = origin.operation()
+					deletionOp.TenantID = origin.Release.Source.TenantID
+					deletionOp.ChargeTenantID = origin.Release.Tenant
+					deletionOp.Command = origin.Release.Source.Command
+				}
+			}
+			origin.Release.Dispatched = true
+			if err = s.saveRecovery(*origin); err != nil {
+				return err
+			}
+		}
+		request.Key = ""
 		if _, err := s.engine(
-			*o,
+			deletionOp,
 			releaseVMStep(b.ID),
-			api.Request{
-				Action:           "delete",
-				VMID:             b.VMID,
-				ExpectedInstance: b.Instance,
-			},
+			request,
 		); err != nil {
 			return err
 		}

@@ -36,6 +36,26 @@ VM phases are `creating`, `created`, `running`, and `stopped`. Read `Verified`, 
 
 For `start` and `restore`, `ExpectedInstance` conditions admission on the stopped instance being replaced. An accepted operation can recover its own new candidate after a daemon restart: the VM must still name that operation, the candidate must name the target VM and a nonempty instance, and the current VM instance and complete resource record must match the journal candidate. A journal written before the VM switches still permits the original admission instance. These metadata checks only permit execution to continue; backend `Inspect` must still establish actual process identity, and restore must retain its durable material and private-memory mapping proofs. Unknown identity never establishes readiness. Other actions retain strict instance matching, and a new request conditioned on the replaced instance is rejected. The original request and fixed terminal result remain unchanged under its key; this adds no broader exactly-once guarantee.
 
+## Allocation results and mixed versions
+
+New successful `start`, `restore`, and `clone` receipts include optional
+`result_instance`: the exact candidate that operation delivered after actual
+backend Inspect, Boot/COW and Agent checks. Completion verifies the durable
+request, full journal/current resource, operation owner and running/verified/
+agent-ready state in the same SQLite transaction that publishes success,
+witness and owner/lease release. Clone requests keep `VMID` empty; their
+operation carries the allocated target. Other actions and pending/running/failed
+receipts omit the field, even when a failure retained candidate materials.
+
+The witness identifies historical B, even if the VM later runs C or is deleted.
+It grants no deletion permission by itself. `GetOperation`, `FindOperation`,
+same-key submission and restart never enrich terminal receipts. Older successful
+receipts stay byte-for-byte unchanged without a witness. A mixed-version consumer
+that needs an exact result must fail closed on that absence and retain resource
+responsibility; reading current `GetVM` cannot supply historical proof. There is
+no read-time migration. This additive JSON field does not promise compatibility
+with external strict response decoders or positional Go struct literals.
+
 ## Actions
 
 | Action | Request fields | Completion behavior |

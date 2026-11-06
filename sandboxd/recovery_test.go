@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -420,6 +421,15 @@ func (f *recoveryTestEngine) Submit(
 	ctx context.Context,
 	r api.Request,
 ) (api.Operation, error) {
+	f.mu.Lock()
+	previous, cached := f.ops[r.Key]
+	f.mu.Unlock()
+	if cached {
+		if !bytes.Equal(encode(previous.Request), encode(r)) {
+			return previous, api.Fail(api.Conflict, "key parameters differ")
+		}
+		return previous, nil
+	}
 	f.control.Lock()
 	f.requests = append(f.requests, r)
 	dropBeforeAccept := r.Action == "delete" && f.dropDeleteBeforeAccept > 0
@@ -493,6 +503,9 @@ func (f *recoveryTestEngine) Submit(
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if old, ok := f.ops[r.Key]; ok {
+			if !bytes.Equal(encode(old.Request), encode(r)) {
+				return old, api.Fail(api.Conflict, "key parameters differ")
+			}
 			return old, nil
 		}
 		o := api.Operation{
@@ -515,6 +528,9 @@ func (f *recoveryTestEngine) Submit(
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if old, ok := f.ops[r.Key]; ok {
+			if !bytes.Equal(encode(old.Request), encode(r)) {
+				return old, api.Fail(api.Conflict, "key parameters differ")
+			}
 			return old, nil
 		}
 		v, ok := f.vms[r.VMID]
@@ -539,6 +555,9 @@ func (f *recoveryTestEngine) Submit(
 			VMID:       v.ID,
 			Status:     "succeeded",
 			SnapshotID: r.SnapshotID,
+		}
+		if r.Action == "restore" {
+			o.ResultInstance = v.Instance
 		}
 		f.ops[r.Key] = o
 		return o, nil

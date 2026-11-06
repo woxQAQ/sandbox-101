@@ -77,16 +77,19 @@ type Request struct {
 	Policy *NetworkPolicy `json:"policy,omitempty"`
 }
 type Operation struct {
-	ID         string    `json:"id"`
-	Key        string    `json:"key"`
-	Request    Request   `json:"request"`
-	Status     string    `json:"status"` // pending, running, succeeded, failed
-	Step       string    `json:"step,omitempty"`
-	VMID       string    `json:"vm_id,omitempty"`
-	SnapshotID string    `json:"snapshot_id,omitempty"`
-	Error      *Error    `json:"error,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string  `json:"id"`
+	Key        string  `json:"key"`
+	Request    Request `json:"request"`
+	Status     string  `json:"status"` // pending, running, succeeded, failed
+	Step       string  `json:"step,omitempty"`
+	VMID       string  `json:"vm_id,omitempty"`
+	SnapshotID string  `json:"snapshot_id,omitempty"`
+	// ResultInstance fixes the candidate delivered by this successful start,
+	// restore or clone. Historical terminal receipts are never enriched.
+	ResultInstance string    `json:"result_instance,omitempty"`
+	Error          *Error    `json:"error,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 type VM struct {
 	ID             string `json:"id"`

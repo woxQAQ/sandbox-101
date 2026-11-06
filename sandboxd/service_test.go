@@ -21,17 +21,18 @@ import (
 )
 
 type fakeEngine struct {
-	mu           sync.Mutex
-	ops          map[string]api.Operation
-	vms          map[string]api.VM
-	snaps        map[string]api.Snapshot
-	calls        map[string]int
-	generation   map[string]int
-	failSnapshot bool
-	failNetwork  bool
-	unavailable  bool
-	cloneGate    <-chan struct{}
-	sockDir      string
+	mu              sync.Mutex
+	ops             map[string]api.Operation
+	vms             map[string]api.VM
+	snaps           map[string]api.Snapshot
+	calls           map[string]int
+	generation      map[string]int
+	physicalDeletes int
+	failSnapshot    bool
+	failNetwork     bool
+	unavailable     bool
+	cloneGate       <-chan struct{}
+	sockDir         string
 }
 
 func newFakeEngine() *fakeEngine {
@@ -104,7 +105,7 @@ func (f *fakeEngine) Submit(
 	}
 	v := f.vms[r.VMID]
 	if r.ExpectedInstance != "" && v.Instance != r.ExpectedInstance {
-		return o, api.Fail(api.Conflict, "instance mismatch")
+		return api.Operation{}, api.Fail(api.Conflict, "instance mismatch")
 	}
 	switch r.Action {
 	case "create":
@@ -166,6 +167,7 @@ func (f *fakeEngine) Submit(
 			Published: true,
 		}
 	case "delete":
+		f.physicalDeletes++
 		delete(f.vms, r.VMID)
 	case "delete_snapshot":
 		delete(f.snaps, r.SnapshotID)
@@ -183,6 +185,10 @@ func (f *fakeEngine) Submit(
 		f.vms[v.ID] = v
 	default:
 		return o, fmt.Errorf("unexpected action %s", r.Action)
+	}
+	if o.Status == "succeeded" &&
+		(r.Action == "start" || r.Action == "restore" || r.Action == "clone") {
+		o.ResultInstance = f.vms[o.VMID].Instance
 	}
 	f.ops[r.Key] = o
 	return o, nil
