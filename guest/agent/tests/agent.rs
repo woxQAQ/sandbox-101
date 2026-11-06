@@ -49,6 +49,18 @@ fn connection(agent: Arc<Agent>, portal: Portal) -> UnixStream {
     });
     a
 }
+// Variant whose server task can be joined, so a test can prove the server
+// observed a disconnect instead of inferring it from a sleep.
+fn connection_joinable(
+    agent: Arc<Agent>,
+    portal: Portal,
+) -> (UnixStream, tokio::task::JoinHandle<()>) {
+    let (a, b) = UnixStream::pair().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = serve_connection(agent, b, portal).await;
+    });
+    (a, server)
+}
 async fn next(s: &mut UnixStream) -> Frame {
     tokio::time::timeout(Duration::from_secs(10), read_frame(s))
         .await
@@ -344,13 +356,6 @@ async fn filesystem_fifo_rejection_releases_rpc_slots() {
         )
         .await,
     ));
-    // A request whose connection drops immediately must not hold a slot either.
-    let mut lost = connection(agent.clone(), Portal::Workload);
-    write_frame(&mut lost, &request("lost", "fs_read", json!({"path":fifo})))
-        .await
-        .unwrap();
-    drop(lost);
-
     // Recovery for a blocking implementation: a rescue writer FD owned by this
     // test unblocks open() calls stuck on the writer-less FIFO. This exists
     // only to finish RED runs cleanly and is not part of the product fix.
@@ -372,22 +377,9 @@ async fn filesystem_fifo_rejection_releases_rpc_slots() {
     assert_eq!(unsafe { libc::close(rescue) }, 0);
     recovered.expect("FIFO handlers did not release workload RPC permits");
 
-    // More sequential requests than the global capacity confirm permit recovery.
-    let mut stream = connection(agent.clone(), Portal::Workload);
-    for i in 0..130 {
-        let frames = rpc(&mut stream, request(&format!("seq{i}"), "info", json!({}))).await;
-        success(&frames);
-    }
-    // Concurrent ordinary requests still complete normally.
-    let mut a = connection(agent.clone(), Portal::Workload);
-    let mut b = connection(agent.clone(), Portal::Workload);
-    let (ra, rb) = tokio::join!(
-        rpc(&mut a, request("info-a", "info", json!({}))),
-        rpc(&mut b, request("info-b", "info", json!({}))),
-    );
-    success(&ra);
-    success(&rb);
-
+    // Assertions run after cleanup so a blocking implementation fails here
+    // (RED) instead of hanging the command. Nothing below may introduce a new
+    // blocked FIFO open against an old implementation.
     for (name, outcome) in outcomes {
         let frames =
             outcome.unwrap_or_else(|| panic!("{name} on a FIFO hung instead of being rejected"));
@@ -399,6 +391,78 @@ async fn filesystem_fifo_rejection_releases_rpc_slots() {
             last.error
         );
     }
+
+    // More sequential FIFO rejections than the global slot capacity prove
+    // every rejected admission released its permit: a single leak per request
+    // would surface as "request capacity exhausted" within 128 iterations,
+    // which cannot satisfy the regular-file assertion.
+    let mut stream = connection(agent.clone(), Portal::Workload);
+    for i in 0..130u32 {
+        let (method, params) = if i % 2 == 0 {
+            ("fs_read", json!({"path":fifo}))
+        } else {
+            ("fs_replace", json!({"path":fifo,"find":"a","replace":"b"}))
+        };
+        let frames = rpc_timed(
+            &mut stream,
+            request(&format!("fifo-{i}"), method, params),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_or_else(|| panic!("{method} FIFO rejection #{i} hung"));
+        let last = frames.last().unwrap();
+        assert!(
+            last.error.contains("regular"),
+            "#{i} {method} must fail as non-regular, not as capacity exhaustion: {}",
+            last.error
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if agent.requests.available_permits() == 128 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("FIFO rejection stress leaked workload RPC permits");
+
+    // Dropped-connection case, kept separate from the rescue phase above so
+    // the rescue FD cannot mask whether a dropped connection releases its
+    // slot. Joining the server task proves the disconnect was delivered (the
+    // handler itself may outlive the connection); the bounded permit poll
+    // then proves the slot came back instead of relying on a sleep snapshot.
+    let (mut lost, lost_server) = connection_joinable(agent.clone(), Portal::Workload);
+    write_frame(&mut lost, &request("lost", "fs_read", json!({"path":fifo})))
+        .await
+        .unwrap();
+    drop(lost);
+    tokio::time::timeout(Duration::from_secs(5), lost_server)
+        .await
+        .expect("server did not observe the disconnect")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if agent.requests.available_permits() == 128 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("disconnected FIFO request held a workload RPC permit");
+
+    // Concurrent ordinary requests still complete normally.
+    let mut a = connection(agent.clone(), Portal::Workload);
+    let mut b = connection(agent.clone(), Portal::Workload);
+    let (ra, rb) = tokio::join!(
+        rpc(&mut a, request("info-a", "info", json!({}))),
+        rpc(&mut b, request("info-b", "info", json!({}))),
+    );
+    success(&ra);
+    success(&rb);
+
     // Rejection must not rewrite the FIFO or turn it into a regular file.
     assert!(
         std::fs::symlink_metadata(&fifo)

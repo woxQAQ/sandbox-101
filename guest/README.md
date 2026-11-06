@@ -94,7 +94,7 @@ Each transfer/archive is capped at 1 GiB, with a combined 1 GiB expanded-data bu
 
 ## Filesystem RPC constraints
 
-`fs_read` and `fs_replace` operate on regular files only. Both open the target without blocking (`O_NONBLOCK`; `fs_replace` also keeps its `O_NOFOLLOW`) and verify the type on the acquired descriptor itself, so a writer-less FIFO, device, socket or directory is rejected promptly instead of stalling a workload RPC slot inside an uninterruptible `open`. `fs_read` still follows symlinks that resolve to a regular file; `fs_replace` rejects symlink paths. Failed requests never rewrite the target path. Prompt rejection bounds special-file admission only; it does not make arbitrary filesystem I/O hard-cancellable, and a stuck storage device can still hold a slot until the kernel returns.
+`fs_read` and `fs_replace` operate on regular files only. Both open the target with `O_NONBLOCK` (`fs_replace` also keeps its `O_NOFOLLOW`) and verify the type on the acquired descriptor itself, so a writer-less FIFO is rejected promptly instead of stalling a workload RPC slot inside an uninterruptible `open`. Devices, sockets and directories are likewise rejected, on the same acquired descriptor, once their open returns. `fs_read` still follows symlinks that resolve to a regular file; `fs_replace` rejects symlink paths. Failed requests never rewrite the target path. This guarantee covers nonblocking FIFO admission plus same-FD rejection of other acquired non-regular descriptors only: a device driver's `open` may ignore `O_NONBLOCK`, prompt rejection does not make arbitrary filesystem I/O hard-cancellable, and a stuck storage device can still hold a slot until the kernel returns.
 
 ## Validation limits
 
