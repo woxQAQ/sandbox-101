@@ -4,7 +4,12 @@ use sandbox_agent::{
     wire::{Frame, read_frame, write_frame},
 };
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    ffi::CString,
+    os::unix::{ffi::OsStrExt, fs::FileTypeExt},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
@@ -283,6 +288,208 @@ async fn files_rollback_and_watch_ready() {
     std::fs::write(tmp.path().join("changed"), b"x").unwrap();
     let event = next(&mut watcher).await;
     assert_eq!(event.params_json()["name"], "changed");
+}
+
+async fn rpc_timed(s: &mut UnixStream, f: Frame, timeout: Duration) -> Option<Vec<Frame>> {
+    let id = f.id.clone();
+    write_frame(s, &f).await.unwrap();
+    let mut frames = Vec::new();
+    tokio::time::timeout(timeout, async {
+        loop {
+            let f = read_frame(s).await.unwrap().unwrap();
+            assert_eq!(f.id, id);
+            let done = f.eof;
+            frames.push(f);
+            if done {
+                break;
+            }
+        }
+    })
+    .await
+    .ok()?;
+    Some(frames)
+}
+
+#[tokio::test]
+async fn filesystem_fifo_rejection_releases_rpc_slots() {
+    let (tmp, agent) = setup();
+    let fifo = tmp.path().join("fifo");
+    let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+
+    // Collect rejection outcomes first; assertions happen only after cleanup so
+    // a blocking implementation cannot hang this test command.
+    let mut outcomes = Vec::new();
+    let mut reader = connection(agent.clone(), Portal::Workload);
+    outcomes.push((
+        "fs_read",
+        rpc_timed(
+            &mut reader,
+            request("fifo-read", "fs_read", json!({"path":fifo})),
+            Duration::from_secs(5),
+        )
+        .await,
+    ));
+    let mut replacer = connection(agent.clone(), Portal::Workload);
+    outcomes.push((
+        "fs_replace",
+        rpc_timed(
+            &mut replacer,
+            request(
+                "fifo-replace",
+                "fs_replace",
+                json!({"path":fifo,"find":"a","replace":"b"}),
+            ),
+            Duration::from_secs(5),
+        )
+        .await,
+    ));
+    // A request whose connection drops immediately must not hold a slot either.
+    let mut lost = connection(agent.clone(), Portal::Workload);
+    write_frame(&mut lost, &request("lost", "fs_read", json!({"path":fifo})))
+        .await
+        .unwrap();
+    drop(lost);
+
+    // Recovery for a blocking implementation: a rescue writer FD owned by this
+    // test unblocks open() calls stuck on the writer-less FIFO. This exists
+    // only to finish RED runs cleanly and is not part of the product fix.
+    let rescue = unsafe { libc::open(fifo_c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK) };
+    assert!(
+        rescue >= 0,
+        "rescue open: {}",
+        std::io::Error::last_os_error()
+    );
+    let recovered = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if agent.requests.available_permits() == 128 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert_eq!(unsafe { libc::close(rescue) }, 0);
+    recovered.expect("FIFO handlers did not release workload RPC permits");
+
+    // More sequential requests than the global capacity confirm permit recovery.
+    let mut stream = connection(agent.clone(), Portal::Workload);
+    for i in 0..130 {
+        let frames = rpc(&mut stream, request(&format!("seq{i}"), "info", json!({}))).await;
+        success(&frames);
+    }
+    // Concurrent ordinary requests still complete normally.
+    let mut a = connection(agent.clone(), Portal::Workload);
+    let mut b = connection(agent.clone(), Portal::Workload);
+    let (ra, rb) = tokio::join!(
+        rpc(&mut a, request("info-a", "info", json!({}))),
+        rpc(&mut b, request("info-b", "info", json!({}))),
+    );
+    success(&ra);
+    success(&rb);
+
+    for (name, outcome) in outcomes {
+        let frames =
+            outcome.unwrap_or_else(|| panic!("{name} on a FIFO hung instead of being rejected"));
+        let last = frames.last().unwrap();
+        assert!(!last.error.is_empty(), "{name} on a FIFO must be rejected");
+        assert!(
+            last.error.contains("regular"),
+            "{name} rejection must name the regular-file requirement: {}",
+            last.error
+        );
+    }
+    // Rejection must not rewrite the FIFO or turn it into a regular file.
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+
+    // Ordinary file behavior is preserved: full read, offset/length and EOF.
+    let data = tmp.path().join("data");
+    std::fs::write(&data, b"hello world").unwrap();
+    let frames = rpc(
+        &mut stream,
+        request("full", "fs_read", json!({"path":data})),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(output(&frames), "hello world");
+    let frames = rpc(
+        &mut stream,
+        request("offset", "fs_read", json!({"path":data,"offset":6})),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(output(&frames), "world");
+    let frames = rpc(
+        &mut stream,
+        request(
+            "window",
+            "fs_read",
+            json!({"path":data,"offset":6,"length":2}),
+        ),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(output(&frames), "wo");
+    let frames = rpc(
+        &mut stream,
+        request("eof", "fs_read", json!({"path":data,"offset":11})),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(output(&frames), "");
+    assert_eq!(frames.last().unwrap().params_json()["bytes"], "0");
+
+    // fs_read still follows a symlink to a regular file.
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&data, &link).unwrap();
+    let frames = rpc(
+        &mut stream,
+        request("link-read", "fs_read", json!({"path":link})),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(output(&frames), "hello world");
+
+    // fs_replace keeps rejecting symlinks and must not rewrite the target.
+    let frames = rpc(
+        &mut stream,
+        request(
+            "link-replace",
+            "fs_replace",
+            json!({"path":link,"find":"hello","replace":"goodbye"}),
+        ),
+    )
+    .await;
+    assert!(!frames.last().unwrap().error.is_empty());
+    assert_eq!(std::fs::read(&data).unwrap(), b"hello world");
+
+    // A successful fs_replace on a regular file still works with O_NONBLOCK.
+    let frames = rpc(
+        &mut stream,
+        request(
+            "replace",
+            "fs_replace",
+            json!({"path":data,"find":"world","replace":"there"}),
+        ),
+    )
+    .await;
+    success(&frames);
+    assert_eq!(std::fs::read(&data).unwrap(), b"hello there");
+
+    // Directories are rejected promptly as non-regular files.
+    let frames = rpc(
+        &mut stream,
+        request("dir", "fs_read", json!({"path":tmp.path()})),
+    )
+    .await;
+    let last = frames.last().unwrap();
+    assert!(!last.error.is_empty());
+    assert!(last.error.contains("regular"), "{}", last.error);
 }
 
 #[tokio::test]

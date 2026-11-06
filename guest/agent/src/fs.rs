@@ -172,12 +172,18 @@ pub async fn dispatch(
     }
     match out.request.method.as_str() {
         "fs_read" => {
-            let file = access(identity, move || Ok(File::open(&target)?)).await?;
+            // O_NONBLOCK keeps a writer-less FIFO or device from stalling the
+            // RPC slot; the type check runs on the acquired descriptor itself.
+            let file = access(identity, move || {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&target)?;
+                ensure!(file.metadata()?.is_file(), "read requires a regular file");
+                Ok(file)
+            })
+            .await?;
             let mut file = tokio::fs::File::from_std(file);
-            ensure!(
-                file.metadata().await?.is_file(),
-                "read requires a regular file"
-            );
             let offset = if p.get("offset").is_some() {
                 number(&p, "offset")?
             } else {
@@ -357,7 +363,7 @@ pub async fn dispatch(
                         let replacement = string(&p, "replace")?;
                         let mut file = OpenOptions::new()
                             .read(true)
-                            .custom_flags(libc::O_NOFOLLOW)
+                            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                             .open(&target)?;
                         let m = file.metadata()?;
                         ensure!(
