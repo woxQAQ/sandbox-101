@@ -321,10 +321,7 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 		nil,
 	)
 	conn := connectTunnel(t, b.HTTPPath, "example.com:443")
-	_, _ = io.WriteString(
-		conn,
-		"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
-	)
+	_, _ = io.WriteString(conn, "G")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -336,43 +333,71 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(m.CACertPEM())
-	conn = connectTunnel(t, b.HTTPPath, "example.com:443")
-	badTLS := tls.Client(
-		conn,
-		&tls.Config{
-			ServerName: "attacker.example.com",
-			RootCAs:    pool,
-			MinVersion: tls.VersionTLS12,
-		},
-	)
-	if err := badTLS.Handshake(); err == nil {
-		t.Error("SNI mismatch accepted")
+	for _, serverName := range []string{"attacker.example.com", "93.184.216.34"} {
+		t.Run("sni_"+serverName, func(t *testing.T) {
+			// Numeric ServerName omits SNI. A remote alert proves that the proxy
+			// rejected the ClientHello before client certificate verification.
+			conn := connectTunnel(t, b.HTTPPath, "example.com:443")
+			badTLS := tls.Client(conn, &tls.Config{
+				ServerName: serverName,
+				RootCAs:    pool,
+				MinVersion: tls.VersionTLS12,
+			})
+			defer badTLS.Close()
+			var remote *net.OpError
+			if err := badTLS.Handshake(); !errors.As(err, &remote) ||
+				remote.Op != "remote error" {
+				t.Error(
+					"proxy did not reject missing or mismatched SNI with a TLS alert",
+				)
+			}
+		})
 	}
-	_ = badTLS.Close()
-	conn = connectTunnel(t, b.HTTPPath, "example.com:443")
-	goodTLS := tls.Client(
-		conn,
-		&tls.Config{
-			ServerName: "example.com",
-			RootCAs:    pool,
-			MinVersion: tls.VersionTLS12,
-		},
-	)
-	if err := goodTLS.Handshake(); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name    string
+		request string
+	}{
+		{"host", "GET / HTTP/1.1\r\nHost: attacker.example.com\r\n\r\n"},
+		{"port", "GET / HTTP/1.1\r\nHost: example.com:444\r\n\r\n"},
+		{"scheme", "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n"},
+		{"nested_connect", "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"},
+		{"upgrade", "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"},
+		{"forged_tunnel_header", "GET / HTTP/1.1\r\nHost: attacker.example.com\r\nX-Egress-Tunnel: example.com:443\r\n\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			goodTLS := mitmClient(t, m, b)
+			_, _ = io.WriteString(goodTLS, tc.request)
+			resp, err := http.ReadResponse(bufio.NewReader(goodTLS), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := readResponse(t, resp, nil)
+			if resp.StatusCode != http.StatusForbidden ||
+				body != "egress: request denied\n" {
+				t.Errorf(
+					"inner authority/protocol rejection: status=%d",
+					resp.StatusCode,
+				)
+			}
+		})
 	}
-	_, _ = io.WriteString(
-		goodTLS,
-		"GET / HTTP/1.1\r\nHost: attacker.example.com\r\nConnection: close\r\n\r\n",
-	)
-	resp, err = http.ReadResponse(bufio.NewReader(goodTLS), nil)
+	conn, err = net.Dial("unix", b.HTTPPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = resp.Body.Close()
-	_ = goodTLS.Close()
-	if resp.StatusCode != 403 || dials.Load() != 0 {
-		t.Fatal("tunnel authority mismatch reached upstream")
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(
+		conn,
+		"GET https://example.com/ HTTP/1.1\r\nHost: example.com\r\nX-Egress-Tunnel: example.com:443\r\nConnection: close\r\n\r\n",
+	)
+	resp, err = http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = readResponse(t, resp, nil)
+	if resp.StatusCode != http.StatusForbidden || dials.Load() != 0 {
+		t.Fatal("untrusted tunnel authority or protocol reached upstream")
 	}
 }
 

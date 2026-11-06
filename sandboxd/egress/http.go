@@ -6,19 +6,19 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/elazarl/goproxy"
 )
 
+// tunnel is immutable and is attached only after the CONNECT TLS handshake.
 type tunnel struct {
 	host string
 	port string
-	tls  atomic.Bool
 }
+
+type tunnelContextKey struct{}
 
 func deniedResponse(
 	r *http.Request,
@@ -89,40 +89,13 @@ func (b *binding) startHTTP() {
 				_ = b.audit("", "CONNECT", "deny", "destination")
 				return goproxy.RejectConnect, address
 			}
-			t := &tunnel{host: host, port: port}
-			ctx.UserData = t
+			t := tunnel{host: host, port: port}
 			return &goproxy.ConnectAction{
-				Action: goproxy.ConnectMitm,
-				TLSConfig: func(_ string, c *goproxy.ProxyCtx) (*tls.Config, error) {
-					cfg, err := goproxy.TLSConfigFromCA(
-						&b.manager.ca,
-					)(
-						net.JoinHostPort(host, port),
-						c,
-					)
-					if err != nil {
-						return nil, ErrDenied
-					}
-					cfg.MinVersion = tls.VersionTLS12
-					cfg.NextProtos = []string{"http/1.1"}
-					cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-						sni, err := canonicalHost(hello.ServerName)
-						_, ipErr := netip.ParseAddr(host)
-						if hello.ServerName == "" && ipErr == nil {
-							sni, err = host, nil
-						}
-						if err != nil || sni != host || b.ctx.Err() != nil {
-							return nil, ErrDenied
-						}
-						t.tls.Store(true)
-						return nil, nil
-					}
-					return cfg, nil
+				Action: goproxy.ConnectHijack,
+				Hijack: func(_ *http.Request, client net.Conn, c *goproxy.ProxyCtx) {
+					b.serveTunnel(client, c, proxy, t)
 				},
-			}, net.JoinHostPort(
-				host,
-				port,
-			)
+			}, net.JoinHostPort(host, port)
 		}))
 	proxy.OnRequest().
 		DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
@@ -154,9 +127,8 @@ func (b *binding) startHTTP() {
 			if err != nil || herr != nil || rh != host || rp != port {
 				return deny("host")
 			}
-			if t, ok := ctx.UserData.(*tunnel); ok {
-				if !t.tls.Load() || r.URL.Scheme != "https" || t.host != host ||
-					t.port != port {
+			if t, ok := r.Context().Value(tunnelContextKey{}).(tunnel); ok {
+				if r.URL.Scheme != "https" || t.host != host || t.port != port {
 					return deny("tunnel_host")
 				}
 			} else if r.URL.Scheme != "http" {
@@ -213,6 +185,15 @@ func (b *binding) startHTTP() {
 	proxy.OnResponse().
 		DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
 			if resp == nil {
+				return deniedResponse(
+					ctx.Req,
+					http.StatusBadGateway,
+					"egress: upstream unavailable\n",
+				)
+			}
+			if resp.StatusCode == http.StatusSwitchingProtocols ||
+				resp.Header.Get("Upgrade") != "" {
+				_ = resp.Body.Close()
 				return deniedResponse(
 					ctx.Req,
 					http.StatusBadGateway,
