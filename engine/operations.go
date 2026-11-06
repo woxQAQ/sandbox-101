@@ -42,7 +42,7 @@ func (e *Engine) execute(id string) {
 		if err == nil {
 			if v.VM.OperationID != id {
 				err = api.Fail(api.Conflict, "operation no longer owns VM")
-			} else if want := o.Operation.Request.ExpectedInstance; want != "" && want != v.VM.Instance {
+			} else if want := o.Operation.Request.ExpectedInstance; want != "" && want != v.VM.Instance && !ownsInstanceCandidate(o, v) {
 				err = api.Fail(api.Conflict, "running instance changed")
 			} else if action := o.Operation.Request.Action; (action == "network" || action == "network_policy") && (o.Operation.Request.ExpectedInstance == "" || v.Resource.Instance != v.VM.Instance) {
 				err = api.Fail(
@@ -69,6 +69,22 @@ func (e *Engine) execute(id string) {
 		return
 	}
 	_ = e.finish(&o, err)
+}
+
+// ownsInstanceCandidate permits an accepted start/restore to continue its own
+// successor to the admission instance. This metadata fence does not replace
+// backend Inspect's process identity checks or restore's delivery proof.
+func ownsInstanceCandidate(o opRecord, v vmRecord) bool {
+	action := o.Operation.Request.Action
+	if action != "start" && action != "restore" {
+		return false
+	}
+	r := o.Journal.Resource
+	return r != nil && r.Instance != "" &&
+		v.VM.OperationID == o.Operation.ID &&
+		o.Operation.VMID == v.VM.ID && o.Operation.Request.VMID == v.VM.ID &&
+		r.VMID == v.VM.ID && v.VM.Instance == r.Instance &&
+		reflect.DeepEqual(v.Resource, *r)
 }
 
 func (e *Engine) finish(o *opRecord, cause error) error {

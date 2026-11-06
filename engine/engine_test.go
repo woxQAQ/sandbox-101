@@ -222,7 +222,7 @@ func config() *api.Config {
 func openTest(
 	t *testing.T,
 	dir string,
-	b *testBackend,
+	b Backend,
 	init bool,
 	fault func(string) error,
 ) *Engine {
