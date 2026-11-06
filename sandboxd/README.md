@@ -101,6 +101,8 @@ _, err = conn.Call(ctx, "exec", map[string]any{
 }, consumeOutputFrame)
 ```
 
+`Call` serializes RPCs per connection and honors context cancellation in two distinct positions. A call queued behind an in-flight RPC returns `ctx.Err()` while waiting for admission: it sends nothing and consumes no RPC id. Canceling a call whose request was already sent closes the transport to interrupt that RPC; the connection is then unusable, and later calls fail instead of writing onto a torn stream. Cancellation does not preempt a blocked `consume` callback — `consume` is caller code and must return before cancellation takes effect.
+
 Use imports `github.com/woxQAQ/sandboxd`, `/sdk`, `/egress`, and the generated frame type for the output callback. A keyed exec records intent before spawn, deduplicates matching inputs and conflicts on changed inputs. An unresolved intent after agent restart returns `result_unknown` instead of rerunning side effects. Keyed stdin/session/PTY restrictions and bounded saved output are documented in the guest guide. Frame IDs alone are correlation IDs. `Call` returns terminal guest parameters even on error; `errors.As(err, &rpcError)` with `var rpcError *sdk.RPCError` exposes `Code` and `ResultState`, including `result_unknown`. Unkeyed exec is not deduplicated; the SDK never blindly retries uncertain side effects. The ledger is part of VM snapshot history: rollback to before an intent also rolls back that record, so cross-rollback deduplication requires an external host ledger/fence.
 
 CLI examples use tokens from private files:

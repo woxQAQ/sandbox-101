@@ -166,9 +166,41 @@ func (e *RPCError) Error() string { return e.Message }
 type Connection struct {
 	net.Conn
 
-	mu   sync.Mutex
-	next uint64
+	// once lazily prepares admission so a zero-value Connection works. admit
+	// holds one token; holding it grants exclusive use of the stream. next is
+	// the RPC id counter and unusable marks a transport closed by a canceled
+	// call; both are only touched while holding the token.
+	once     sync.Once
+	admit    chan struct{}
+	next     uint64
+	unusable bool
 }
+
+// acquire takes the per-connection admission token, honoring context
+// cancellation while queued. A canceled waiter never sends and never consumes
+// an RPC id.
+func (c *Connection) acquire(ctx context.Context) error {
+	c.once.Do(func() {
+		c.admit = make(chan struct{}, 1)
+		c.admit <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.admit:
+	}
+	if c.unusable {
+		c.release()
+		return errors.New("connection was closed by a canceled call")
+	}
+	if err := ctx.Err(); err != nil {
+		c.release()
+		return err
+	}
+	return nil
+}
+
+func (c *Connection) release() { c.admit <- struct{}{} }
 
 func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 	u, err := url.Parse(c.Endpoint)
@@ -257,16 +289,30 @@ func (c *Connection) Call(
 	params map[string]any,
 	consume func(*pb.Frame) error,
 ) (map[string]any, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if err := c.acquire(ctx); err != nil {
+		return nil, err
+	}
+	// done lets a departing Call wait out a cancellation callback that already
+	// started: the token must not be handed over while the callback may still
+	// be closing the transport underneath the next admitted call.
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.Close()
+		close(done)
+	})
+	defer func() {
+		if !stop() {
+			<-done
+			c.unusable = true
+		}
+		c.release()
+	}()
 	c.next++
 	id := fmt.Sprint(c.next)
 	f, err := agent.Request(id, method, params)
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
-	defer stop()
 	if err = agent.Write(c, f); err != nil {
 		return nil, err
 	}
