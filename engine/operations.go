@@ -121,11 +121,11 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 		// 010's failed-candidate fence precedes the public terminal receipt. Failure
 		// to persist it leaves both the caller and durable operation nonterminal.
 		next.Journal.RestoreBlocked = true
-		if _, err = e.db.Exec(
+		if err = requireCompletionWrite(e.db.Exec(
 			"UPDATE operations SET body=? WHERE id=?",
 			encode(next),
 			next.Operation.ID,
-		); err != nil {
+		)); err != nil {
 			return err
 		}
 	}
@@ -198,11 +198,11 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 				if cause != nil {
 					v.VM.BlockedReason = cause.Error()
 				}
-				if _, err = tx.Exec(
+				if err = requireCompletionWrite(tx.Exec(
 					"UPDATE vms SET body=? WHERE id=?",
 					encode(v),
 					v.VM.ID,
-				); err != nil {
+				)); err != nil {
 					return err
 				}
 			}
@@ -217,20 +217,23 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	next.Operation.UpdatedAt = time.Now().UTC()
 	if next.Journal.Lease && !next.Journal.RestoreBlocked {
-		if _, err = tx.Exec(
-			"DELETE FROM leases WHERE operation=?",
+		// Admission creates one lease per operation. A successful restore has
+		// already transferred it to backing and cleared Journal.Lease.
+		if err = requireCompletionWrite(tx.Exec(
+			"DELETE FROM leases WHERE operation=? AND snapshot=?",
 			next.Operation.ID,
-		); err != nil {
+			next.Operation.Request.SnapshotID,
+		)); err != nil {
 			return err
 		}
 		next.Journal.Lease = false
 	}
-	if _, err = tx.Exec(
+	if err = requireCompletionWrite(tx.Exec(
 		"UPDATE operations SET status=?,body=? WHERE id=?",
 		next.Operation.Status,
 		encode(next),
 		next.Operation.ID,
-	); err != nil {
+	)); err != nil {
 		return err
 	}
 	if e.opts.Fault != nil {
@@ -243,6 +246,25 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	*o = next
 	return e.checkpoint()
+}
+
+// Every required completion write targets one existing primary-key row. A nil
+// SQL error alone does not prove that the statement applied its intended effect.
+func requireCompletionWrite(result sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if result == nil {
+		return errors.New("completion write returned no result")
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("completion write effect unavailable: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("completion write affected %d rows, expected 1", rows)
+	}
+	return nil
 }
 
 func (e *Engine) perform(o *opRecord, v *vmRecord) error {
