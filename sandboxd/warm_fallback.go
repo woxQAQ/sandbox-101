@@ -295,20 +295,18 @@ func validateWarmSelectionDestination(
 		return bad()
 	}
 	if !groupStepsTerminal(r) || hasUnresolvedAllocations(r) {
-		n, err := count(
-			`SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='sandbox_slot' AND q.resource_key=? AND q.sandbox_slots=1 AND q.storage_mib=0 AND f.holder_id=?`,
-			r.TenantID,
-			b.ID,
-			"sandbox:"+b.ID,
-		)
-		if err != nil {
+		ref := quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID}
+		if b.State == "terminated" {
+			ref.Kind = "cleanup"
+		}
+		if err := requireQuotaResource(ctx, e, quotaResource{
+			Tenant: r.TenantID, Kind: "sandbox_slot", Key: b.ID,
+			Slots: 1, Source: r.Source,
+		}, ref); err != nil {
 			return err
 		}
-		if n != 1 {
-			return bad()
-		}
 		if g.Template.SnapshotID != "" {
-			n, err = count(
+			n, err := count(
 				`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`,
 				r.TenantID,
 				g.Template.SnapshotID,
@@ -422,29 +420,21 @@ func validateWarmSelectionDestination(
 	if err != nil {
 		return err
 	}
-	charged := func(kind, key, holder string) error {
-		n, err := count(
-			`SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.sandbox_slots=0 AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_id=?)`,
-			r.TenantID,
-			kind,
-			key,
-			a.Shape.DiskMiB,
-			r.Source,
-			holder,
-		)
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return bad()
-		}
-		return nil
+	charged := func(kind, key string, ref quotaRef) error {
+		return requireQuotaResource(ctx, e, quotaResource{
+			Tenant: r.TenantID, Kind: kind, Key: key,
+			Storage: a.Shape.DiskMiB, Source: r.Source,
+		}, ref)
 	}
 	known := func() error {
 		if g.Identity == nil || pending != 0 {
 			return bad()
 		}
-		return charged("vm_disk", g.Identity.VM, groupHolder(r))
+		return charged(
+			"vm_disk",
+			g.Identity.VM,
+			quotaRef{Kind: "cleanup", ID: groupHolder(r)},
+		)
 	}
 	switch a.Resolution.State {
 	case "unresolved", "result_known":
@@ -465,7 +455,11 @@ func validateWarmSelectionDestination(
 				pending != 1 {
 				return bad()
 			}
-			return charged("pending_storage", request.Key, groupHolder(r))
+			ref, err := groupAllocationRef(ctx, e, r, true)
+			if err != nil {
+				return err
+			}
+			return charged("pending_storage", request.Key, ref)
 		}
 		return known()
 	case "active":
@@ -484,7 +478,11 @@ func validateWarmSelectionDestination(
 			if b.Instance != g.Identity.Instance {
 				return bad()
 			}
-			if err := charged("vm_disk", b.VMID, groupHolder(r)); err != nil {
+			ref := quotaRef{Kind: "active_use", ID: groupHolder(r)}
+			if b.State == "terminated" {
+				ref.Kind = "cleanup"
+			}
+			if err := charged("vm_disk", b.VMID, ref); err != nil {
 				return err
 			}
 			if request.SnapshotID != "" {
@@ -529,7 +527,11 @@ func validateWarmSelectionDestination(
 		if err := validateAllocationDeletion(collector, r); err != nil {
 			return err
 		}
-		return charged("vm_disk", g.Identity.VM, "recovery:"+collector.ID)
+		return charged(
+			"vm_disk",
+			g.Identity.VM,
+			quotaRef{Kind: "cleanup", ID: "recovery:" + collector.ID},
+		)
 	case "reclaimed":
 		if proof == nil || pending != 0 {
 			return bad()

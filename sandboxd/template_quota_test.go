@@ -4644,3 +4644,271 @@ func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 		t.Fatal("historical corruption reached Engine")
 	}
 }
+
+// Each destination is reached through claim, receipt adoption and recovery.
+// Change only one actual reference after the producer has committed it.
+func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
+	for _, tc := range []struct{ phase, damage string }{
+		{"pending", "subject"},
+		{"pending", "slot"},
+		{"pending", "reader"},
+		{"known", "subject"},
+		{"cleanup", "collector"},
+		{"active", "subject"},
+		{"active", "backing"},
+	} {
+		t.Run(tc.phase+"/"+tc.damage, func(t *testing.T) {
+			s, base, p, tpl := warmFallbackFixture(t, true)
+			hidden := &templateQuotaEngine{
+				Client:   &recoveryTestEngine{fakeEngine: base},
+				attempts: map[string]int{}, hideClone: tc.phase != "active",
+			}
+			e := &templateQuotaSelectionClient{Client: hidden}
+			s.opts.Engine = e
+			o, err := s.Submit(
+				s.ctx,
+				p,
+				"typed-destination",
+				Command{Action: "claim", TemplateID: tpl.ID},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.Wait(s.ctx, p, o.ID)
+			if (tc.phase == "active" && err != nil) ||
+				(tc.phase != "active" && !isCode(err, api.Unknown)) {
+				t.Fatal("unexpected claim outcome", err)
+			}
+			if tc.phase == "known" || tc.phase == "cleanup" {
+				hidden.mu.Lock()
+				hidden.hideClone = false
+				hidden.mu.Unlock()
+				if tc.phase == "known" {
+					templateQuotaSQLFault(
+						t,
+						s,
+						"resource_recovery",
+						"INSERT",
+						"json_extract(NEW.body,'$.kind')='allocation_cleanup'",
+						"abort",
+					)
+				} else {
+					e.mu.Lock()
+					e.unknown = true
+					e.mu.Unlock()
+				}
+				if err = s.recoverResources(); err == nil {
+					t.Fatal("expected retained known or cleanup destination")
+				}
+				if tc.phase == "known" {
+					if _, err = s.store.db.Exec(
+						`DROP TRIGGER handoff_fault`,
+					); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			public, err := s.store.operation(s.ctx, o.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := s.loadRecovery(allocationGroupID(o))
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := r.Allocations[0]
+			states := map[string]string{
+				"pending": "unresolved",
+				"known":   "result_known",
+				"cleanup": "cleanup",
+				"active":  "active",
+			}
+			if r.Group.Selection.Stage != "fallback_reserved" ||
+				a.Resolution.State != states[tc.phase] {
+				t.Fatal("missing actual destination", encode(r))
+			}
+			// Reopen each valid phase before corrupting it. Failed unknown pending
+			// has already transferred its sandbox subject reference to cleanup.
+			s = ledgerRestart(t, s)
+			kind, key := "pending_storage", a.Request.Key
+			from := quotaRef{Kind: "cleanup", ID: "sandbox:" + r.SandboxID}
+			to := "active_use"
+			if r.Group.Identity != nil {
+				kind, key = "vm_disk", r.Group.Identity.VM
+			}
+			switch tc.damage {
+			case "slot":
+				kind, key, to = "sandbox_slot", r.SandboxID, "engine_dependency"
+			case "reader":
+				kind, key = "snapshot", tpl.SnapshotID
+				from = quotaRef{
+					Kind: "engine_dependency",
+					ID:   "operation:" + o.ID,
+				}
+				to = "cleanup"
+			case "collector":
+				from.ID = "recovery:" + a.Resolution.Destination
+			case "backing":
+				kind, key = "snapshot", tpl.SnapshotID
+				from = quotaRef{
+					Kind: "active_use",
+					ID:   "backing:" + r.Group.Identity.VM,
+				}
+				to = "cleanup"
+			}
+			var result sql.Result
+			if tc.phase == "active" && tc.damage == "subject" {
+				from.Kind = "active_use"
+				result, err = s.store.db.Exec(
+					`DELETE FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?`,
+					r.TenantID,
+					kind,
+					key,
+					from.Kind,
+					from.ID,
+				)
+			} else {
+				result, err = s.store.db.Exec(
+					`UPDATE quota_refs SET holder_kind=? WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?`,
+					to,
+					r.TenantID,
+					kind,
+					key,
+					from.Kind,
+					from.ID,
+				)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, err := result.RowsAffected(); err != nil || n != 1 {
+				t.Fatal(
+					"reference mutation must affect one producer row",
+					n,
+					err,
+				)
+			}
+			before := templateQuotaState(t, s)
+			n, finds := e.counts()
+			if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+				t.Fatal("wrong reference kind accepted at runtime", err)
+			}
+			if !bytes.Equal(before, templateQuotaState(t, s)) {
+				t.Fatal("runtime changed incomplete destination")
+			}
+			now, err := s.store.operation(s.ctx, o.ID)
+			if err != nil || !bytes.Equal(encode(public), encode(now)) {
+				t.Fatal("public history changed", err)
+			}
+			ledgerMoney(t, s, p.TenantID, 1, 256)
+			opts := s.opts
+			opts.Initialize = false
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			next, openErr := Open(opts)
+			if next != nil {
+				next.Close()
+			}
+			if !isCode(openErr, api.ManualRecovery) ||
+				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+				t.Fatal(
+					"startup accepted or repaired incomplete destination",
+					openErr,
+				)
+			}
+			if nn, ff := e.counts(); nn != n || ff != finds {
+				t.Fatal("incomplete destination reached Engine", nn-n, ff-finds)
+			}
+			hidden.mu.Lock()
+			proof := hidden.capture
+			hidden.mu.Unlock()
+			vm, instance := "", ""
+			if r.Group.Identity != nil {
+				vm, instance = r.Group.Identity.VM, r.Group.Identity.Instance
+			} else if proof != nil {
+				vm, instance = proof.VMID, proof.ResultInstance
+			}
+			v, err := base.GetVM(context.Background(), vm)
+			if err != nil || v.Instance != instance {
+				t.Fatal("original replacement V/B changed", err)
+			}
+			t.Log(
+				"typed destination rejected at runtime and actual Open; complete state, public bytes, slot1/D64/T192 and actual V/B preserved; zero Submit/Find",
+			)
+		})
+	}
+}
+
+func TestTemplateQuotaActiveAndCleanupReferenceLifecycle(t *testing.T) {
+	s, base, p, tpl := warmFallbackFixture(t, true)
+	claim := ledgerExecute(
+		t,
+		s,
+		p,
+		"typed-positive",
+		Command{Action: "claim", TemplateID: tpl.ID},
+	)
+	o, err := s.store.byKey(s.ctx, p.TenantID, "typed-positive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := encode(o)
+	r, err := s.loadRecovery(allocationGroupID(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := r.Group.Identity
+	for _, kind := range []string{"active_use", "cleanup"} {
+		var count int
+		if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND holder_kind=? AND holder_id=?`, p.TenantID, i.VM, kind, "sandbox:"+claim.Sandbox.ID).
+			Scan(&count); err != nil ||
+			count != 1 {
+			t.Fatal("missing natural coexisting holder", kind, count, err)
+		}
+	}
+	s = ledgerRestart(t, s)
+	if err = s.recoverResources(); err != nil {
+		t.Fatal(err)
+	}
+	ledgerMoney(t, s, p.TenantID, 1, 256)
+	// Release revokes access and moves the subject holder to cleanup before
+	// an unknown delete. Historical active delivery must accept that handoff.
+	e := &templateQuotaSelectionClient{
+		Client:  &recoveryTestEngine{fakeEngine: base},
+		unknown: true,
+	}
+	s.opts.Engine = e
+	release, err := s.Submit(
+		s.ctx,
+		p,
+		"typed-positive-release",
+		Command{Action: "release", SandboxID: claim.Sandbox.ID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Wait(s.ctx, p, release.ID); !isCode(err, api.Unknown) {
+		t.Fatal("expected unknown release", err)
+	}
+	s = ledgerRestart(t, s)
+	if err = s.recoverResources(); err != nil && !isCode(err, api.Unknown) {
+		t.Fatal("legitimate terminated cleanup holder rejected", err)
+	}
+	ledgerMoney(t, s, p.TenantID, 1, 256)
+	e.mu.Lock()
+	e.unknown = false
+	e.mu.Unlock()
+	if err = s.recoverResources(); err != nil {
+		t.Fatal(err)
+	}
+	s = ledgerRestart(t, s)
+	if err = s.recoverResources(); err != nil {
+		t.Fatal(err)
+	}
+	ledgerMoney(t, s, p.TenantID, 0, 192)
+	now, err := s.store.operation(s.ctx, o.ID)
+	if err != nil || !bytes.Equal(original, encode(now)) {
+		t.Fatal("later cleanup changed original successful public bytes", err)
+	}
+}

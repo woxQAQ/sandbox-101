@@ -28,6 +28,54 @@ type quotaResource struct {
 
 type quotaRef struct{ Kind, ID string }
 
+// A destination needs the producer's exact responsibility type as well as its
+// identity. EXISTS keeps coexisting cleanup and active references from counting
+// the same resource twice.
+func requireQuotaResource(
+	ctx context.Context,
+	e executor,
+	r quotaResource,
+	ref quotaRef,
+) error {
+	var count int
+	if err := e.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.sandbox_slots=? AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_kind=? AND f.holder_id=?)`, r.Tenant, r.Kind, r.Key, r.Slots, r.Storage, r.Source, ref.Kind, ref.ID).
+		Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return api.Fail(
+			api.ManualRecovery,
+			"allocation lost its cost or typed destination reference",
+		)
+	}
+	return nil
+}
+
+// Pending sandbox references move to cleanup with access revocation. Known
+// allocations already carry cleanup references until a destination is delivered.
+func groupAllocationRef(
+	ctx context.Context,
+	e executor,
+	r resourceRecovery,
+	pending bool,
+) (quotaRef, error) {
+	ref := quotaRef{Kind: "cleanup", ID: groupHolder(r)}
+	if !pending {
+		return ref, nil
+	}
+	ref.Kind = "engine_dependency"
+	if r.Group.Subject.Kind == "sandbox" {
+		b, err := getSandbox(ctx, e, r.Group.Subject.ID)
+		if err != nil {
+			return quotaRef{}, err
+		}
+		if b.State == "terminated" {
+			ref.Kind = "cleanup"
+		}
+	}
+	return ref, nil
+}
+
 func requireSQLWrite(result sql.Result, err error) error {
 	if err != nil {
 		return err
@@ -1947,16 +1995,11 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 		}
 		if g.Subject.Kind == "build" && len(r.Allocations) > 0 &&
 			(!r.Done || hasUnresolvedAllocations(r)) {
-			var slot int
-			if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='build_slot' AND q.resource_key=? AND q.sandbox_slots=1 AND q.storage_mib=0 AND q.source_operation_id=? AND f.holder_id=?`, r.TenantID, r.Source, r.Source, groupHolder(r)).
-				Scan(&slot); err != nil {
+			if err = requireQuotaResource(ctx, s.db, quotaResource{
+				Tenant: r.TenantID, Kind: "build_slot", Key: r.Source,
+				Slots: 1, Source: r.Source,
+			}, quotaRef{Kind: "active_use", ID: groupHolder(r)}); err != nil {
 				return err
-			}
-			if slot != 1 {
-				return api.Fail(
-					api.ManualRecovery,
-					"build slot has no subject responsibility",
-				)
 			}
 		}
 		for _, a := range r.Allocations {
@@ -2045,16 +2088,20 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 				if a.Kind == "snapshot" {
 					cost += a.Shape.MemoryMiB
 				}
-				var charged int
-				if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_id=?)`, r.TenantID, kind, key, cost, a.OperationID, groupHolder(r)).
-					Scan(&charged); err != nil {
-					return err
+				ref, e := groupAllocationRef(
+					ctx,
+					s.db,
+					r,
+					kind == "pending_storage",
+				)
+				if e != nil {
+					return e
 				}
-				if charged != 1 {
-					return api.Fail(
-						api.ManualRecovery,
-						"allocation lost its cost or subject reference",
-					)
+				if err = requireQuotaResource(ctx, s.db, quotaResource{
+					Tenant: r.TenantID, Kind: kind, Key: key,
+					Storage: cost, Source: a.OperationID,
+				}, ref); err != nil {
+					return err
 				}
 			}
 		}
