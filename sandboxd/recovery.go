@@ -1570,6 +1570,9 @@ func hasUnresolvedAllocations(r resourceRecovery) bool {
 }
 
 func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
+	if err := validateWarmSelection(ctx, e, r); err != nil {
+		return err
+	}
 	result, err := e.ExecContext(
 		ctx,
 		`UPDATE resource_recovery SET body=? WHERE id=?`,
@@ -1593,14 +1596,7 @@ func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 }
 
 func (s *Service) loadRecovery(id string) (resourceRecovery, error) {
-	var raw []byte
-	var r resourceRecovery
-	err := s.store.db.QueryRowContext(s.ctx, `SELECT body FROM resource_recovery WHERE id=?`, id).
-		Scan(&raw)
-	if err == nil {
-		err = json.Unmarshal(raw, &r)
-	}
-	return r, err
+	return loadRecoveryTx(s.ctx, s.store.db, id)
 }
 
 func (s *Service) recordAllocationResultTx(

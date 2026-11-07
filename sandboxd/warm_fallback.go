@@ -1,6 +1,7 @@
 package sandboxd
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,247 @@ import (
 
 	"github.com/woxQAQ/sandbox-engine/api"
 )
+
+// validateWarmSelection follows the original refill, even after the claim has
+// delivered a different replacement generation. Only frozen receipts authorize
+// cleanup; current Engine state never repairs a persisted request.
+func validateWarmSelection(
+	ctx context.Context,
+	e executor,
+	r resourceRecovery,
+) error {
+	if r.Group == nil || r.Group.Selection == nil {
+		return nil
+	}
+	bad := func() error {
+		return api.Fail(
+			api.ManualRecovery,
+			"warm selection differs from its frozen responsibility",
+		)
+	}
+	g, q := r.Group, r.Group.Selection
+	if r.Kind != "allocation_group" || r.ID != "allocation:"+r.Source ||
+		r.Source == "" ||
+		g.Subject.Kind != "sandbox" ||
+		g.Subject.ID == "" ||
+		r.SandboxID != g.Subject.ID ||
+		r.TenantID == "" ||
+		g.Template.TenantID != r.TenantID {
+		return bad()
+	}
+	if err := validateGroupSource(ctx, e, r); err != nil {
+		return errors.Join(bad(), err)
+	}
+	b, err := getSandbox(ctx, e, g.Subject.ID)
+	if err != nil {
+		return errors.Join(bad(), err)
+	}
+	if b.TenantID != r.TenantID || b.Shape != g.Template.Shape ||
+		b.TemplateID != g.Template.ID {
+		return bad()
+	}
+	var raw []byte
+	if err = e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, q.Refill).
+		Scan(&raw); err != nil {
+		return errors.Join(bad(), err)
+	}
+	var origin resourceRecovery
+	if err = json.Unmarshal(raw, &origin); err != nil {
+		return errors.Join(bad(), err)
+	}
+	if origin.Kind != "allocation_group" || origin.Source == "" ||
+		origin.ID != "allocation:"+origin.Source ||
+		q.Refill != origin.ID ||
+		origin.TenantID != r.TenantID ||
+		origin.Group == nil ||
+		origin.Group.Subject != (allocationSubject{Kind: "warm", ID: origin.Source}) ||
+		origin.Group.Selection != nil ||
+		origin.Group.Identity == nil ||
+		origin.Group.Gate != nil ||
+		!reflect.DeepEqual(*origin.Group.Identity, q.Identity) ||
+		origin.Group.Template.ID != g.Template.ID ||
+		origin.Group.Template.TenantID != r.TenantID ||
+		origin.Group.Template.Shape != g.Template.Shape ||
+		origin.Group.Template.SnapshotID != g.Template.SnapshotID ||
+		origin.Group.Template.Image != g.Template.Image ||
+		len(origin.Allocations) != 1 {
+		return bad()
+	}
+	if err = validateGroupSource(ctx, e, origin); err != nil {
+		return errors.Join(bad(), err)
+	}
+	if err = e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, origin.Source).
+		Scan(&raw); err != nil {
+		return errors.Join(bad(), err)
+	}
+	var refill Operation
+	if err = json.Unmarshal(raw, &refill); err != nil {
+		return errors.Join(bad(), err)
+	}
+	if refill.Command.Action != "refill" ||
+		refill.Command.TemplateID != g.Template.ID {
+		return bad()
+	}
+	if err = validateAllocationProvenance(origin); err != nil {
+		return err
+	}
+	i, a := q.Identity, origin.Allocations[0]
+	if i.Owner != r.TenantID || i.Shape != g.Template.Shape ||
+		i.Source != origin.Source ||
+		i.Instance == "" ||
+		i.Generation == nil ||
+		i.Generation.VMID != i.VM ||
+		i.Generation.Status != "succeeded" ||
+		i.Generation.ResultInstance != i.Instance ||
+		i.Receipt.Status != "succeeded" ||
+		i.Receipt.Key != i.Receipt.Request.Key ||
+		(i.Receipt.Request.Action != "create" && i.Receipt.Request.Action != "clone") ||
+		(i.Generation.Request.Action != "start" && i.Generation.Request.Action != "clone") ||
+		a.OperationID != origin.Source ||
+		a.TenantID != refill.TenantID ||
+		a.ChargeTenantID != r.TenantID ||
+		a.Subject != origin.Group.Subject ||
+		a.Shape != i.Shape ||
+		a.Kind != "vm_disk" ||
+		!a.RequestBound ||
+		a.Resolution.State != "active" ||
+		a.Resolution.Destination != "sandbox:"+b.ID ||
+		a.Resolution.Proof == nil ||
+		!reflect.DeepEqual(*a.Resolution.Proof, i.Receipt) ||
+		!reflect.DeepEqual(a.Request, i.Receipt.Request) ||
+		a.Request.Key != stepKey(refill, a.Step) {
+		return bad()
+	}
+	for name, step := range origin.Group.Steps {
+		if !step.Bound || !step.Dispatched ||
+			step.Request.Key != stepKey(refill, name) ||
+			step.Proof == nil ||
+			step.Proof.ID == "" ||
+			step.Proof.Key != step.Request.Key ||
+			step.Proof.Status != "succeeded" ||
+			step.Proof.Error != nil ||
+			!reflect.DeepEqual(step.Proof.Request, step.Request) {
+			return bad()
+		}
+	}
+	if i.Generation.Error != nil || i.Receipt.Error != nil {
+		return bad()
+	}
+	if i.Receipt.Request.Action == "clone" {
+		expected := api.Request{
+			Key:        stepKey(refill, a.Step),
+			Action:     "clone",
+			SnapshotID: g.Template.SnapshotID,
+		}
+		if g.Template.SnapshotID == "" || len(origin.Group.Steps) != 1 ||
+			!reflect.DeepEqual(a.Request, expected) ||
+			!reflect.DeepEqual(i.Receipt, *i.Generation) {
+			return bad()
+		}
+	} else if len(origin.Group.Steps) != 2 ||
+		i.Receipt.Request.Config == nil ||
+		i.Receipt.Request.Config.Image != g.Template.Image ||
+		!reflect.DeepEqual(
+			i.Receipt.Request,
+			api.Request{
+				Key:    i.Receipt.Key,
+				Action: "create",
+				Config: i.Receipt.Request.Config,
+			},
+		) ||
+		!reflect.DeepEqual(
+			i.Generation.Request,
+			api.Request{Key: i.Generation.Key, Action: "start", VMID: i.VM},
+		) ||
+		g.Template.SnapshotID != "" {
+		return bad()
+	}
+	if uint64(len(q.History)) != q.Attempt {
+		return bad()
+	}
+	switch q.Stage {
+	case "selected", "active":
+		if r.Done != (q.Stage == "active") ||
+			!reflect.DeepEqual(q.Deletion, allocationStep{}) ||
+			q.Attempt != 0 {
+			return bad()
+		}
+	case "rejected":
+		if r.Done || !q.Deletion.Bound || !q.Deletion.Dispatched {
+			return bad()
+		}
+	case "fallback_reserved", "cleanup_done":
+		// Actual absence may transfer responsibility before any delete dispatch.
+	default:
+		return bad()
+	}
+	if !q.Deletion.Bound {
+		if !reflect.DeepEqual(q.Deletion, allocationStep{}) || q.Attempt != 0 {
+			return bad()
+		}
+		return nil
+	}
+	if !q.Deletion.Dispatched ||
+		!reflect.DeepEqual(
+			q.Deletion.Request,
+			warmSelectionDelete(r, q.Attempt),
+		) {
+		return bad()
+	}
+	if q.Deletion.Proof != nil {
+		if err = validateWarmDeleteReceipt(
+			q.Deletion.Request,
+			*q.Deletion.Proof,
+		); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for n, h := range q.History {
+		if !reflect.DeepEqual(h.Request, warmSelectionDelete(r, uint64(n))) ||
+			h.Receipt.Status != "failed" || seen[h.Receipt.ID] {
+			return bad()
+		}
+		if err = validateWarmDeleteReceipt(h.Request, h.Receipt); err != nil {
+			return err
+		}
+		seen[h.Receipt.ID] = true
+	}
+	if q.Deletion.Proof != nil && seen[q.Deletion.Proof.ID] {
+		return bad()
+	}
+	return nil
+}
+
+func warmSelectionDelete(r resourceRecovery, attempt uint64) api.Request {
+	o := Operation{ID: r.Source}
+	if attempt != 0 {
+		o.ID += ":warm-delete:" + fmt.Sprint(attempt)
+	}
+	return api.Request{
+		Key:              stepKey(o, "warm-reject:"+r.Group.Subject.ID),
+		Action:           "delete",
+		VMID:             r.Group.Selection.Identity.VM,
+		ExpectedInstance: r.Group.Selection.Identity.Instance,
+	}
+}
+
+func validateWarmDeleteReceipt(request api.Request, proof api.Operation) error {
+	if proof.ID == "" || proof.Key != request.Key ||
+		!reflect.DeepEqual(proof.Request, request) ||
+		proof.VMID != request.VMID ||
+		proof.SnapshotID != "" ||
+		proof.ResultInstance != "" ||
+		(proof.Status != "pending" && proof.Status != "running" && proof.Status != "succeeded" && proof.Status != "failed") ||
+		(proof.Status == "failed" && proof.Error == nil) ||
+		(proof.Status != "failed" && proof.Error != nil) {
+		return api.Fail(
+			api.ManualRecovery,
+			"warm delete receipt differs from its fixed generation request",
+		)
+	}
+	return nil
+}
 
 func (s *Service) activateWarm(o Operation, b *Sandbox) error {
 	target := &activationTarget{
@@ -29,11 +271,6 @@ func (s *Service) activateWarm(o Operation, b *Sandbox) error {
 }
 
 func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
-	if s.opts.Egress != nil {
-		if err := s.revoke(b.ID); err != nil {
-			return err
-		}
-	}
 	r, err := s.loadRecovery(allocationGroupID(o))
 	if err != nil {
 		return err
@@ -45,17 +282,14 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 	if selection.Stage == "fallback_reserved" {
 		return nil
 	}
+	if s.opts.Egress != nil {
+		if err = s.revoke(b.ID); err != nil {
+			return err
+		}
+	}
 	i := selection.Identity
 	if b.Instance != "" && b.Instance != i.Instance {
 		return api.Fail(api.Conflict, "warm selection instance changed")
-	}
-	if i.Instance == "" || i.Generation == nil ||
-		i.Generation.Status != "succeeded" ||
-		i.Generation.ResultInstance != i.Instance {
-		return api.Fail(
-			api.ManualRecovery,
-			"rejected warm lacks successful witness",
-		)
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, i.VM)
 	absent := isCode(err, api.NotFound)
@@ -64,8 +298,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 	}
 	if !absent {
 		if v.ID != i.VM || v.Instance != i.Instance || !v.Verified ||
-			v.OperationID != "" ||
-			v.Config.Shape != i.Shape {
+			v.OperationID != "" || v.Config.Shape != i.Shape || v.Config.Image != r.Group.Template.Image {
 			return api.Fail(
 				api.ManualRecovery,
 				"rejected warm instance changed",
@@ -78,17 +311,10 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			e = le
 			if e == nil {
 				q := latest.Group.Selection
-				if q.Deletion.Dispatched {
-					// Receipt reconciliation happens outside ownership and SQL.
-				} else {
+				if !q.Deletion.Bound {
 					q.Stage = "rejected"
 					q.Deletion = allocationStep{
-						Request: api.Request{
-							Key:              stepKey(o, "warm-reject:"+b.ID),
-							Action:           "delete",
-							VMID:             i.VM,
-							ExpectedInstance: i.Instance,
-						},
+						Request:    warmSelectionDelete(latest, 0),
 						Bound:      true,
 						Dispatched: true,
 					}
@@ -106,67 +332,113 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 		if e != nil {
 			return e
 		}
+		// A fresh durable read qualifies even an already dispatched request
+		// before receipt lookup; NotFound never authorizes a new attempt.
+		r, err = s.loadRecovery(r.ID)
+		if err != nil {
+			return err
+		}
 		q := r.Group.Selection
-		if q.Deletion.Dispatched {
-			proof, e := s.opts.Engine.FindOperation(
-				s.ctx,
-				q.Deletion.Request.Key,
-			)
-			if e != nil && !isCode(e, api.NotFound) {
-				return e
+		proof, e := s.opts.Engine.FindOperation(s.ctx, q.Deletion.Request.Key)
+		if e != nil && !isCode(e, api.NotFound) {
+			return e
+		}
+		if e == nil {
+			if err = validateWarmDeleteReceipt(
+				q.Deletion.Request,
+				proof,
+			); err != nil {
+				return err
 			}
-			if e == nil {
-				if !reflect.DeepEqual(proof.Request, q.Deletion.Request) {
-					return api.Fail(
-						api.ManualRecovery,
-						"warm delete receipt changed",
-					)
-				}
-				if proof.Status == "failed" {
-					ownership = s.lockResourceOwnership()
-					tx, e = s.store.db.BeginTx(s.ctx, nil)
+			if q.Deletion.Proof != nil &&
+				recoveryTerminal(q.Deletion.Proof.Status) &&
+				!reflect.DeepEqual(*q.Deletion.Proof, proof) {
+				return api.Fail(
+					api.ManualRecovery,
+					"terminal warm delete receipt changed",
+				)
+			}
+			if proof.Status == "failed" {
+				ownership = s.lockResourceOwnership()
+				tx, e = s.store.db.BeginTx(s.ctx, nil)
+				if e == nil {
+					latest, le := loadRecoveryTx(s.ctx, tx, r.ID)
+					e = le
+					if e == nil &&
+						!reflect.DeepEqual(
+							latest.Group.Selection.Deletion.Request,
+							proof.Request,
+						) {
+						e = api.Fail(
+							api.ManualRecovery,
+							"warm delete attempt changed during receipt lookup",
+						)
+					}
 					if e == nil {
-						latest, le := loadRecoveryTx(s.ctx, tx, r.ID)
-						e = le
-						if e == nil {
-							next := latest.Group.Selection
-							next.History = append(
-								next.History,
-								cleanupAttempt{
-									Request: next.Deletion.Request,
-									Receipt: proof,
-								},
-							)
-							next.Attempt++
-							next.Deletion.Request.Key = stepKey(
-								Operation{
-									ID: o.ID + ":warm-delete:" + fmt.Sprint(
-										next.Attempt,
-									),
-								},
-								"warm-reject:"+b.ID,
-							)
-							e = writeRecovery(s.ctx, tx, latest)
-							r = latest
+						next := latest.Group.Selection
+						next.History = append(
+							next.History,
+							cleanupAttempt{
+								Request: next.Deletion.Request,
+								Receipt: proof,
+							},
+						)
+						next.Attempt++
+						next.Deletion = allocationStep{
+							Request: warmSelectionDelete(
+								latest,
+								next.Attempt,
+							),
+							Bound:      true,
+							Dispatched: true,
 						}
-						if e == nil {
-							e = tx.Commit()
-						} else {
-							_ = tx.Rollback()
-						}
+						e = writeRecovery(s.ctx, tx, latest)
 					}
-					ownership()
-					if e != nil {
-						return e
+					if e == nil {
+						e = tx.Commit()
+					} else {
+						_ = tx.Rollback()
 					}
+				}
+				ownership()
+				if e != nil {
+					return e
 				}
 			}
 		}
-		if _, err = api.Wait(
-			s.ctx,
-			s.opts.Engine,
-			r.Group.Selection.Deletion.Request,
-		); err != nil {
+		r, err = s.loadRecovery(r.ID)
+		if err != nil {
+			return err
+		}
+		request := r.Group.Selection.Deletion.Request
+		proof, err = api.Wait(s.ctx, s.opts.Engine, request)
+		if proof.ID != "" {
+			if e = validateWarmDeleteReceipt(request, proof); e != nil {
+				return e
+			}
+			latest, readErr := s.loadRecovery(r.ID)
+			if readErr != nil {
+				return readErr
+			}
+			if !reflect.DeepEqual(
+				latest.Group.Selection.Deletion.Request,
+				request,
+			) {
+				return api.Fail(
+					api.ManualRecovery,
+					"warm delete receipt has a different durable attempt",
+				)
+			}
+			stored := latest.Group.Selection.Deletion.Proof
+			if stored != nil && recoveryTerminal(stored.Status) &&
+				!reflect.DeepEqual(*stored, proof) {
+				return api.Fail(
+					api.ManualRecovery,
+					"terminal warm delete receipt changed",
+				)
+			}
+		}
+		if err != nil {
 			return err
 		}
 		_, err = s.opts.Engine.GetVM(s.ctx, i.VM)
@@ -316,8 +588,25 @@ func (s *Service) transferWarmFallback(
 
 func (s *Service) resolveWarmSelection(o Operation, r *resourceRecovery) error {
 	q := r.Group.Selection
+	if err := validateWarmSelection(s.ctx, s.store.db, *r); err != nil {
+		return err
+	}
 	if q.Stage == "active" {
-		return nil
+		ownership := s.lockResourceOwnership()
+		defer ownership()
+		tx, err := s.store.db.BeginTx(s.ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		latest, err := loadRecoveryTx(s.ctx, tx, r.ID)
+		if err != nil {
+			return err
+		}
+		if err = retireSelectionReaderTx(s.ctx, tx, latest); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	if q.Stage == "cleanup_done" {
 		if !groupStepsTerminal(*r) {
@@ -385,6 +674,9 @@ func (s *Service) releaseAllocation(b *Sandbox) (bool, error) {
 	}
 	var r resourceRecovery
 	if err = json.Unmarshal(raw, &r); err != nil {
+		return true, err
+	}
+	if err = validateWarmSelection(s.ctx, s.store.db, r); err != nil {
 		return true, err
 	}
 	for _, a := range r.Allocations {

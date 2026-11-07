@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"reflect"
 	"strings"
 	"time"
 
@@ -1082,6 +1083,9 @@ func loadRecoveryTx(
 	if err == nil {
 		err = json.Unmarshal(raw, &r)
 	}
+	if err == nil {
+		err = validateWarmSelection(ctx, e, r)
+	}
 	return r, err
 }
 
@@ -1094,11 +1098,12 @@ func insertRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 	); err != nil {
 		return err
 	}
-	actual, err := loadRecoveryTx(ctx, e, r.ID)
-	if err != nil {
+	var actual []byte
+	if err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, r.ID).
+		Scan(&actual); err != nil {
 		return err
 	}
-	if !bytes.Equal(encode(actual), encode(r)) {
+	if !bytes.Equal(actual, encode(r)) {
 		return api.Fail(
 			api.ManualRecovery,
 			"recovery identity conflicts with durable responsibility",
@@ -1932,6 +1937,9 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 		if err = validateGroupSource(ctx, s.db, r); err != nil {
 			return err
 		}
+		if err = validateWarmSelection(ctx, s.db, r); err != nil {
+			return err
+		}
 		if g.Identity != nil {
 			if err = validateAllocationProvenance(r); err != nil {
 				return err
@@ -2051,6 +2059,9 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 			}
 		}
 	}
+	if err = validateReadyWarmRows(ctx, s.db); err != nil {
+		return err
+	}
 	var catalogBad int
 	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM templates t WHERE COALESCE(json_extract(t.body,'$.snapshot_id'),'')!='' AND (NOT EXISTS(SELECT 1 FROM snapshot_owners o WHERE o.snapshot_id=json_extract(t.body,'$.snapshot_id') AND o.tenant_id=t.tenant) OR NOT EXISTS(SELECT 1 FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=t.tenant AND q.kind='snapshot' AND q.resource_key=json_extract(t.body,'$.snapshot_id') AND q.storage_mib=json_extract(t.body,'$.shape.disk_mib')+json_extract(t.body,'$.shape.memory_mib') AND f.holder_kind='active_use' AND f.holder_id='template:'||t.id))`).
 		Scan(&catalogBad); err != nil {
@@ -2061,6 +2072,128 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 			api.ManualRecovery,
 			"template catalog lost its snapshot cost, owner or holder",
 		)
+	}
+	return nil
+}
+
+// Ready rows retain the version originally published by their refill. A
+// rolling template replacement does not rewrite that frozen owner or shape.
+func validateReadyWarmRows(ctx context.Context, e *sql.DB) error {
+	rows, err := e.QueryContext(
+		ctx,
+		`SELECT vm_id,template_id,snapshot_id FROM warm`,
+	)
+	if err != nil {
+		return err
+	}
+	type ready struct{ vm, template, snapshot string }
+	var inventory []ready
+	for rows.Next() {
+		var item ready
+		if err = rows.Scan(
+			&item.vm,
+			&item.template,
+			&item.snapshot,
+		); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		inventory = append(inventory, item)
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, item := range inventory {
+		if err = validateReadyWarmRow(
+			ctx,
+			e,
+			item.vm,
+			item.template,
+			item.snapshot,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateReadyWarmRow(
+	ctx context.Context,
+	e executor,
+	vm, template, snapshot string,
+) error {
+	bad := func() error { return api.Fail(api.ManualRecovery, "ready warm lost its frozen cost, source or holder") }
+	var count int
+	var raw []byte
+	if err := e.QueryRowContext(ctx, `SELECT count(*),body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, vm).
+		Scan(&count, &raw); err != nil {
+		return err
+	}
+	var r resourceRecovery
+	if count != 1 || json.Unmarshal(raw, &r) != nil || r.Group == nil ||
+		r.Group.Identity == nil {
+		return bad()
+	}
+	g, i := r.Group, r.Group.Identity
+	if r.ID != "allocation:"+r.Source || r.TenantID == "" ||
+		g.Subject != (allocationSubject{Kind: "warm", ID: r.Source}) || g.Gate != nil ||
+		g.Selection != nil || g.Template.ID != template || g.Template.SnapshotID != snapshot ||
+		g.Template.TenantID != r.TenantID || i.VM != vm || i.Owner != r.TenantID ||
+		i.Shape != g.Template.Shape || i.Instance == "" || i.Generation == nil ||
+		i.Receipt.Status != "succeeded" || i.Generation.Status != "succeeded" ||
+		i.Generation.ResultInstance != i.Instance || len(r.Allocations) != 1 {
+		return bad()
+	}
+	if err := validateGroupSource(ctx, e, r); err != nil {
+		return errors.Join(bad(), err)
+	}
+	if err := validateAllocationProvenance(r); err != nil {
+		return err
+	}
+	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
+		Scan(&raw); err != nil {
+		return errors.Join(bad(), err)
+	}
+	var refill Operation
+	if json.Unmarshal(raw, &refill) != nil || refill.ID != r.Source ||
+		refill.Command.Action != "refill" ||
+		refill.Command.TemplateID != template ||
+		refill.ChargeTenantID != r.TenantID {
+		return bad()
+	}
+	a := r.Allocations[0]
+	step, ok := g.Steps[a.Step]
+	if !ok || !step.Bound || !step.Dispatched || step.Proof == nil ||
+		!reflect.DeepEqual(
+			*step.Proof,
+			i.Receipt,
+		) || !reflect.DeepEqual(a.Request, i.Receipt.Request) ||
+		a.OperationID != r.Source || a.TenantID != refill.TenantID || a.ChargeTenantID != r.TenantID || a.Shape != i.Shape ||
+		a.Subject != g.Subject || a.Kind != "vm_disk" || !a.RequestBound ||
+		a.Request.Key != stepKey(a.operation(), a.Step) ||
+		a.Resolution.State != "active" || a.Resolution.Destination != "warm:"+vm ||
+		a.Resolution.Proof == nil || !reflect.DeepEqual(*a.Resolution.Proof, i.Receipt) {
+		return bad()
+	}
+	if snapshot != "" &&
+		(!reflect.DeepEqual(a.Request, api.Request{Key: a.Request.Key, Action: "clone", SnapshotID: snapshot}) || !reflect.DeepEqual(i.Receipt, *i.Generation)) {
+		return bad()
+	}
+	if err := e.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='vm_disk' AND q.resource_key=? AND q.sandbox_slots=0 AND q.storage_mib=? AND q.source_operation_id=? AND f.holder_kind='active_use' AND f.holder_id=?`, r.TenantID, vm, i.Shape.DiskMiB, r.Source, "warm:"+vm).
+		Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return bad()
+	}
+	if snapshot != "" {
+		if err := e.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) JOIN snapshot_owners o ON o.snapshot_id=q.resource_key AND o.tenant_id=q.tenant_id WHERE q.tenant_id=? AND q.kind='snapshot' AND q.resource_key=? AND q.storage_mib=? AND f.holder_kind='active_use' AND f.holder_id=?`, r.TenantID, snapshot, i.Shape.DiskMiB+i.Shape.MemoryMiB, "backing:"+vm).
+			Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			return bad()
+		}
 	}
 	return nil
 }
@@ -2077,6 +2210,9 @@ func (s *Service) selectWarmTx(
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err = validateReadyWarmRow(ctx, tx, vm, t.ID, t.SnapshotID); err != nil {
 		return nil, err
 	}
 	var raw []byte
@@ -2232,9 +2368,69 @@ func (s *Service) commitSelectionActiveTx(
 		selection.Identity.Instance != target.Instance {
 		return api.Fail(api.Conflict, "warm selection publication changed")
 	}
+	var holders int
+	identity := selection.Identity
+	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='vm_disk' AND q.resource_key=? AND q.storage_mib=? AND q.source_operation_id=? AND f.holder_kind='active_use' AND f.holder_id=?`, r.TenantID, identity.VM, identity.Shape.DiskMiB, identity.Source, "sandbox:"+b.ID).
+		Scan(&holders); err != nil {
+		return err
+	}
+	if holders != 1 {
+		return api.Fail(
+			api.ManualRecovery,
+			"selection active destination lost its disk holder",
+		)
+	}
+	if r.Group.Template.SnapshotID != "" {
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, r.TenantID, r.Group.Template.SnapshotID, "backing:"+identity.VM).
+			Scan(&holders); err != nil {
+			return err
+		}
+		if holders != 1 {
+			return api.Fail(
+				api.ManualRecovery,
+				"selection active destination lost its backing",
+			)
+		}
+	}
 	selection.Stage = "active"
 	r.Done = true
-	return writeRecovery(s.ctx, tx, r)
+	if err = writeRecovery(s.ctx, tx, r); err != nil {
+		return err
+	}
+	return retireSelectionReaderTx(s.ctx, tx, r)
+}
+
+// The active selection is a historical transfer to the real sandbox. Later
+// pause/release operations may change its VM, without reviving the old reader.
+func retireSelectionReaderTx(
+	ctx context.Context,
+	e executor,
+	r resourceRecovery,
+) error {
+	if err := validateWarmSelection(ctx, e, r); err != nil {
+		return err
+	}
+	if r.Group == nil || r.Group.Selection == nil ||
+		r.Group.Selection.Stage != "active" ||
+		!r.Done ||
+		!groupStepsTerminal(r) ||
+		hasUnresolvedAllocations(r) {
+		return api.Fail(
+			api.ManualRecovery,
+			"selection has no completed active destination",
+		)
+	}
+	if r.Group.Template.SnapshotID == "" {
+		return nil
+	}
+	return deleteQuotaRows(
+		ctx,
+		e,
+		`FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`,
+		r.TenantID,
+		r.Group.Template.SnapshotID,
+		"operation:"+r.Source,
+	)
 }
 
 func (s *Service) poolOccupationTx(
@@ -2573,7 +2769,8 @@ func (s *Service) reconcileRecoveryAllocations(
 			next := *r
 			next.Allocations = append(
 				[]recoveryAllocation(nil),
-				r.Allocations...)
+				r.Allocations...,
+			)
 			next.Allocations[i].Resolution = allocationResolution{
 				State:       "cancelled", //nolint:misspell // Preserve the durable Resolution state token.
 				Destination: "never-dispatched:" + a.Request.Key,
@@ -2637,7 +2834,8 @@ func (s *Service) reconcileRecoveryAllocations(
 				next := *r
 				next.Allocations = append(
 					[]recoveryAllocation(nil),
-					r.Allocations...)
+					r.Allocations...,
+				)
 				cleanup := resourceRecovery{
 					ID:         "snapshot:" + a.OperationID + ":" + a.Step + ":" + proof.SnapshotID,
 					Source:     r.Source,
