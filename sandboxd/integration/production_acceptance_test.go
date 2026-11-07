@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -348,6 +349,18 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		sandboxdProcess,
 		func(attempt context.Context) error { _, err := client.List(attempt); return err },
 	)
+	// D is each distinct writable disk; S is each distinct SID's D+M charge.
+	// This fixed-allocation envelope keeps every intent charged without refunds;
+	// it is not a simultaneous peak or a hard limit on public root requests.
+	const diskMiB int64 = 512
+	snapshotMiB := diskMiB + memoryMiB
+	maxSandboxes := 1 + (1 + 2) + (1 + 1) + (1 + 1 + 1)
+	maxStorageMiB := diskMiB + // adoption
+		(5*diskMiB + 4*snapshotMiB) + // lifecycle
+		(2*diskMiB + snapshotMiB) + // golden and claimed warm
+		(4*diskMiB + 2*snapshotMiB) // TCP resource sequence
+	// Build and unclaimed warm/refill charging remain the separate 013 policy.
+	productionPutOwnerBudget(t, ctx, client, token, maxSandboxes, maxStorageMiB)
 	t.Setenv("SANDBOX_E2E_ENDPOINT", endpoint)
 	t.Setenv("SANDBOX_E2E_TOKEN_FILE", tokenPath)
 	t.Setenv("SANDBOX_E2E_IMAGE_DIGEST", image)
@@ -530,6 +543,58 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 				productionGuestTCP(t, ctx, client, ec, artifacts, image)
 			})
 		}
+	}
+}
+
+func productionPutOwnerBudget(
+	t *testing.T,
+	ctx context.Context,
+	client *sdk.Client,
+	rootBearer string,
+	slots int,
+	storageMiB int64,
+) {
+	t.Helper()
+	// Omit Token: the generated ordinary credential is intentionally ignored.
+	payload, err := json.Marshal(struct {
+		ID      string `json:"id"`
+		Slots   int    `json:"max_sandboxes"`
+		Storage int64  `json:"max_storage_mib"`
+	}{"root", slots, storageMiB})
+	if err != nil {
+		t.Fatal("owner budget: encode")
+	}
+	attempt, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		attempt,
+		http.MethodPost,
+		client.Endpoint+"/v1/tenants",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatal("owner budget: request")
+	}
+	req.Header.Set("Authorization", "Bearer "+rootBearer)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.HTTP.Do(req)
+	if err != nil {
+		t.Fatal("owner budget: transport")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("owner budget: status=%d", resp.StatusCode)
+	}
+	var got struct {
+		ID      string `json:"id"`
+		Slots   int    `json:"max_sandboxes"`
+		Storage int64  `json:"max_storage_mib"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&got) != nil {
+		t.Fatal("owner budget: decode")
+	}
+	if got.ID != "root" || got.Slots != slots || got.Storage != storageMiB {
+		t.Fatal("owner budget: response fields")
 	}
 }
 
