@@ -2661,6 +2661,9 @@ func (s *Service) commitGroupActiveTx(
 	); err != nil {
 		return err
 	}
+	if err = saveSandbox(s.ctx, tx, b); err != nil {
+		return err
+	}
 	return writeRecovery(s.ctx, tx, r)
 }
 

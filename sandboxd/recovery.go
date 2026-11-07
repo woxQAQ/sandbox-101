@@ -252,6 +252,14 @@ func (s *Service) recoverResources() error {
 	if err != nil {
 		return err
 	}
+	// Qualify every retained selection before any group's Engine observation or
+	// retirement; ordering by random IDs must not consume another responsibility
+	// before a corrupt historical transfer is discovered.
+	for _, group := range groupIntents {
+		if err = validateWarmSelection(s.ctx, s.store.db, group); err != nil {
+			return err
+		}
+	}
 	var groupFailures error
 	groupSources := map[string]bool{}
 	for _, group := range groupIntents {
@@ -2092,9 +2100,6 @@ func (s *Service) retireAllocationAbsent(
 	if !settled {
 		r.Done = false
 	}
-	if err = writeRecovery(s.ctx, tx, r); err != nil {
-		return err
-	}
 	if r.Group.Subject.Kind == "sandbox" {
 		b, e := getSandbox(s.ctx, tx, r.Group.Subject.ID)
 		if e != nil {
@@ -2112,6 +2117,9 @@ func (s *Service) retireAllocationAbsent(
 			if err = saveSandbox(s.ctx, tx, b); err != nil {
 				return err
 			}
+		}
+		if err = writeRecovery(s.ctx, tx, r); err != nil {
+			return err
 		}
 		if settled {
 			if err = quotaTerminate(s.ctx, tx, b); err != nil {
@@ -2611,6 +2619,13 @@ func (s *Service) resolveAllocationGroup(id string) error {
 			r.Done = true
 			if err == nil {
 				err = writeRecovery(s.ctx, tx, r)
+			}
+			if err == nil && r.Group.Subject.Kind == "sandbox" {
+				b, e := getSandbox(s.ctx, tx, r.Group.Subject.ID)
+				err = e
+				if err == nil && b.State == "terminated" {
+					err = quotaTerminate(s.ctx, tx, b)
+				}
 			}
 			if err == nil {
 				err = tx.Commit()

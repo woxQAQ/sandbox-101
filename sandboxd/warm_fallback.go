@@ -19,14 +19,40 @@ func validateWarmSelection(
 	e executor,
 	r resourceRecovery,
 ) error {
-	if r.Group == nil || r.Group.Selection == nil {
-		return nil
-	}
 	bad := func() error {
 		return api.Fail(
 			api.ManualRecovery,
 			"warm selection differs from its frozen responsibility",
 		)
+	}
+	if r.Kind != "allocation_group" {
+		return nil
+	}
+	if r.Group == nil {
+		return bad()
+	}
+	// The refill's transfer remains durable after replacement, pause and release.
+	// Current sandbox VM/source fields cannot establish whether a selection existed.
+	if r.Group.Subject.Kind == "sandbox" {
+		if r.SandboxID != r.Group.Subject.ID {
+			return bad()
+		}
+		if err := validateGroupSource(ctx, e, r); err != nil {
+			return errors.Join(bad(), err)
+		}
+		var transfers int
+		if err := e.QueryRowContext(ctx, `SELECT count(*) FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(r.body,'$.kind')='allocation_group' AND json_extract(r.body,'$.allocation_group.subject.kind')='warm' AND json_extract(a.value,'$.resolution.state')='active' AND json_extract(a.value,'$.resolution.destination')=?`, "sandbox:"+r.Group.Subject.ID).
+			Scan(&transfers); err != nil {
+			return err
+		}
+		if (transfers != 0 && (transfers != 1 || r.Group.Selection == nil)) ||
+			(transfers == 0 && r.Group.Selection != nil) ||
+			(r.Group.Selection == nil && len(r.Allocations) != 1) {
+			return bad()
+		}
+	}
+	if r.Group.Selection == nil {
+		return nil
 	}
 	g, q := r.Group, r.Group.Selection
 	if r.Kind != "allocation_group" || r.ID != "allocation:"+r.Source ||
@@ -180,9 +206,12 @@ func validateWarmSelection(
 			return bad()
 		}
 	case "fallback_reserved", "cleanup_done":
-		// Actual absence may transfer responsibility before any delete dispatch.
+		// Absence can precede dispatch; the durable destination is checked below.
 	default:
 		return bad()
+	}
+	if err = validateWarmSelectionDestination(ctx, e, r, b); err != nil {
+		return err
 	}
 	if !q.Deletion.Bound {
 		if !reflect.DeepEqual(q.Deletion, allocationStep{}) || q.Attempt != 0 {
@@ -220,6 +249,319 @@ func validateWarmSelection(
 		return bad()
 	}
 	return nil
+}
+
+// A stage records a transfer, not its authority. Validate the destination from
+// the original claim and its frozen version, including after later lifecycles.
+func validateWarmSelectionDestination(
+	ctx context.Context,
+	e executor,
+	r resourceRecovery,
+	b Sandbox,
+) error {
+	g, q := r.Group, r.Group.Selection
+	if q.Stage != "fallback_reserved" && q.Stage != "cleanup_done" {
+		return nil
+	}
+	bad := func() error {
+		return api.Fail(
+			api.ManualRecovery,
+			"warm selection has no qualified durable destination",
+		)
+	}
+	count := func(query string, args ...any) (int, error) {
+		var n int
+		err := e.QueryRowContext(ctx, query, args...).Scan(&n)
+		return n, err
+	}
+	absent := func(vm string) error {
+		n, err := count(`SELECT
+ (SELECT count(*) FROM quota_resources q WHERE q.kind='vm_disk' AND (q.resource_key=? OR EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_id=?)))+
+ (SELECT count(*) FROM quota_refs WHERE kind='snapshot' AND holder_id=?)+
+ (SELECT count(*) FROM warm WHERE vm_id=?)+
+ (SELECT count(*) FROM sandboxes WHERE json_extract(body,'$.vm_id')=?)`, vm, "vm:"+vm, "backing:"+vm, vm, vm)
+		if err != nil {
+			return err
+		}
+		if n != 0 {
+			return bad()
+		}
+		return nil
+	}
+	if err := absent(q.Identity.VM); err != nil {
+		return err
+	}
+	if r.Done && (g.Gate != nil || hasUnresolvedAllocations(r)) {
+		return bad()
+	}
+	if !groupStepsTerminal(r) || hasUnresolvedAllocations(r) {
+		n, err := count(
+			`SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='sandbox_slot' AND q.resource_key=? AND q.sandbox_slots=1 AND q.storage_mib=0 AND f.holder_id=?`,
+			r.TenantID,
+			b.ID,
+			"sandbox:"+b.ID,
+		)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return bad()
+		}
+		if g.Template.SnapshotID != "" {
+			n, err = count(
+				`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`,
+				r.TenantID,
+				g.Template.SnapshotID,
+				"operation:"+r.Source,
+			)
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return bad()
+			}
+		}
+	}
+	if q.Stage == "cleanup_done" {
+		if b.State != "terminated" || b.VMID != "" || b.Instance != "" ||
+			len(r.Allocations) != 0 ||
+			g.Identity != nil {
+			return bad()
+		}
+		if r.Done {
+			n, err := count(
+				`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
+				r.TenantID,
+				"operation:"+r.Source,
+			)
+			if err != nil {
+				return err
+			}
+			if n != 0 {
+				return bad()
+			}
+		}
+		return nil
+	}
+	if len(r.Allocations) != 1 {
+		return bad()
+	}
+	var raw []byte
+	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
+		Scan(&raw); err != nil {
+		return err
+	}
+	var claim Operation
+	if err := json.Unmarshal(raw, &claim); err != nil {
+		return err
+	}
+	a := r.Allocations[0]
+	request := api.Request{
+		Key:        stepKey(claim, "provision"),
+		Action:     "clone",
+		SnapshotID: g.Template.SnapshotID,
+	}
+	if g.Template.SnapshotID == "" {
+		request = api.Request{
+			Key:    request.Key,
+			Action: "create",
+			Config: &api.Config{
+				Image: g.Template.Image,
+				Shape: g.Template.Shape,
+				Labels: map[string]string{
+					"sandboxd":   "sandbox",
+					"sandbox_id": b.ID,
+				},
+			},
+		}
+	}
+	step, ok := g.Steps["provision"]
+	if !ok || a.OperationID != r.Source || a.TenantID != claim.TenantID ||
+		a.ChargeTenantID != r.TenantID ||
+		a.SandboxID != b.ID ||
+		a.Subject != g.Subject ||
+		a.Shape != g.Template.Shape ||
+		a.Kind != "vm_disk" ||
+		a.Step != "provision" ||
+		!a.RequestBound ||
+		!step.Bound ||
+		!reflect.DeepEqual(a.Request, request) ||
+		!reflect.DeepEqual(step.Request, request) ||
+		(step.Proof != nil && !step.Dispatched) {
+		return bad()
+	}
+	if step.Proof != nil {
+		p := step.Proof
+		if p.ID == "" || p.Key != request.Key ||
+			!reflect.DeepEqual(p.Request, request) ||
+			(p.Status != "pending" && p.Status != "running" && p.Status != "failed" && p.Status != "succeeded") ||
+			(p.Status == "failed") != (p.Error != nil) {
+			return bad()
+		}
+	}
+	proof := a.Resolution.Proof
+	if proof != nil &&
+		(step.Proof == nil || !reflect.DeepEqual(*proof, *step.Proof) || !recoveryTerminal(proof.Status)) {
+		return bad()
+	}
+	if g.Identity != nil {
+		if err := validateAllocationProvenance(r); err != nil {
+			return err
+		}
+		if step.Proof == nil ||
+			!reflect.DeepEqual(g.Identity.Receipt, *step.Proof) ||
+			g.Identity.VM == q.Identity.VM {
+			return bad()
+		}
+	}
+	pending, err := count(
+		`SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
+		r.TenantID,
+		request.Key,
+	)
+	if err != nil {
+		return err
+	}
+	charged := func(kind, key, holder string) error {
+		n, err := count(
+			`SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.sandbox_slots=0 AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_id=?)`,
+			r.TenantID,
+			kind,
+			key,
+			a.Shape.DiskMiB,
+			r.Source,
+			holder,
+		)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return bad()
+		}
+		return nil
+	}
+	known := func() error {
+		if g.Identity == nil || pending != 0 {
+			return bad()
+		}
+		return charged("vm_disk", g.Identity.VM, groupHolder(r))
+	}
+	switch a.Resolution.State {
+	case "unresolved", "result_known":
+		if (a.Resolution.State == "unresolved" && proof != nil) ||
+			(b.VMID != "" && (g.Identity == nil || b.VMID != g.Identity.VM)) {
+			return bad()
+		}
+		if r.Done || a.Resolution.Destination != "" {
+			return bad()
+		}
+		if a.Resolution.State == "result_known" &&
+			(proof == nil || g.Identity == nil) {
+			return bad()
+		}
+		if g.Identity == nil {
+			if a.Resolution.State != "unresolved" || proof != nil ||
+				(step.Proof != nil && step.Proof.VMID != "") ||
+				pending != 1 {
+				return bad()
+			}
+			return charged("pending_storage", request.Key, groupHolder(r))
+		}
+		return known()
+	case "active":
+		if !r.Done || (b.OperationID == r.Source && b.State != "running") {
+			return bad()
+		}
+		if a.Resolution.Destination != "sandbox:"+b.ID || proof == nil ||
+			proof.Status != "succeeded" ||
+			g.Identity == nil ||
+			g.Identity.Generation == nil ||
+			g.Identity.Instance == "" ||
+			pending != 0 {
+			return bad()
+		}
+		if b.VMID == g.Identity.VM {
+			if b.Instance != g.Identity.Instance {
+				return bad()
+			}
+			if err := charged("vm_disk", b.VMID, groupHolder(r)); err != nil {
+				return err
+			}
+			if request.SnapshotID != "" {
+				n, err := count(
+					`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`,
+					r.TenantID,
+					request.SnapshotID,
+					"backing:"+b.VMID,
+				)
+				if err != nil {
+					return err
+				}
+				if n != 1 {
+					return bad()
+				}
+			}
+		} else if err := absent(g.Identity.VM); err != nil {
+			return err
+		}
+		return nil
+	case "cleanup":
+		if proof == nil || g.Identity == nil {
+			return bad()
+		}
+		if err := known(); err != nil {
+			return err
+		}
+		if err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, a.Resolution.Destination).
+			Scan(&raw); err != nil {
+			return errors.Join(bad(), err)
+		}
+		var collector resourceRecovery
+		if err := json.Unmarshal(raw, &collector); err != nil {
+			return err
+		}
+		if collector.Kind != "allocation_cleanup" ||
+			collector.Source != r.Source ||
+			collector.TenantID != r.TenantID ||
+			collector.Done {
+			return bad()
+		}
+		if err := validateAllocationDeletion(collector, r); err != nil {
+			return err
+		}
+		return charged("vm_disk", g.Identity.VM, "recovery:"+collector.ID)
+	case "reclaimed":
+		if proof == nil || pending != 0 {
+			return bad()
+		}
+		if proof.VMID == "" {
+			if a.Resolution.Destination != "terminal-no-allocation:"+proof.ID ||
+				g.Identity != nil {
+				return bad()
+			}
+		} else {
+			if g.Identity == nil ||
+				a.Resolution.Destination != "vm-absent:"+proof.VMID {
+				return bad()
+			}
+			if err := absent(proof.VMID); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "cancelled": //nolint:misspell // Preserve the durable Resolution token.
+		if a.Resolution.Destination != "never-dispatched:"+request.Key ||
+			step.Dispatched ||
+			step.Proof != nil ||
+			proof != nil ||
+			g.Identity != nil ||
+			pending != 0 {
+			return bad()
+		}
+		return nil
+	default:
+		return bad()
+	}
 }
 
 func warmSelectionDelete(r resourceRecovery, attempt uint64) api.Request {
@@ -474,6 +816,7 @@ func (s *Service) transferWarmFallback(
 		return err
 	}
 	q := r.Group.Selection
+	t = r.Group.Template
 	if q.Stage == "fallback_reserved" || q.Stage == "cleanup_done" {
 		current, e := getSandbox(s.ctx, tx, b.ID)
 		if e == nil {
@@ -525,20 +868,16 @@ func (s *Service) transferWarmFallback(
 	if current.State == "terminated" {
 		q.Stage = "cleanup_done"
 		r.Done = groupStepsTerminal(r)
-		if err = writeRecovery(s.ctx, tx, r); err != nil {
-			return err
-		}
-		if err = deleteQuotaRows(
-			s.ctx,
-			tx,
-			`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
-			r.TenantID,
-			"operation:"+r.Source,
-		); err != nil {
-			return err
-		}
-		if err = quotaTerminate(s.ctx, tx, current); err != nil {
-			return err
+		if r.Done {
+			if err = deleteQuotaRows(
+				s.ctx,
+				tx,
+				`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
+				r.TenantID,
+				"operation:"+r.Source,
+			); err != nil {
+				return err
+			}
 		}
 	} else {
 		if current.State != "provisioning" || current.OperationID != o.ID {
@@ -578,6 +917,11 @@ func (s *Service) transferWarmFallback(
 	}
 	if err = writeRecovery(s.ctx, tx, r); err != nil {
 		return err
+	}
+	if current.State == "terminated" {
+		if err = quotaTerminate(s.ctx, tx, current); err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -636,6 +980,15 @@ func (s *Service) resolveWarmSelection(o Operation, r *resourceRecovery) error {
 				api.ManualRecovery,
 				"completed warm cleanup lost its sandbox destination",
 			)
+		}
+		if err = deleteQuotaRows(
+			s.ctx,
+			tx,
+			`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
+			latest.TenantID,
+			"operation:"+latest.Source,
+		); err != nil {
+			return err
 		}
 		latest.Done = true
 		if err = writeRecovery(s.ctx, tx, latest); err != nil {
