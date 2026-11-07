@@ -1,8 +1,8 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,15 +30,48 @@ func (s *Service) activationFence(o Operation, id string) error {
 	return nil
 }
 
+type activationTarget struct {
+	Origin   string
+	Kind     string
+	VM       string
+	Instance string
+}
+
 func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
-	return s.activateTarget(o, b, reset, "")
+	if b.State == "provisioning" {
+		group, err := s.findAllocationGroup(o)
+		if err != nil {
+			return err
+		}
+		if group != nil && group.Group.Identity != nil {
+			i := group.Group.Identity
+			if i.Instance == "" {
+				return api.Fail(
+					api.ManualRecovery,
+					"allocation activation lacks successful witness",
+				)
+			}
+			return s.activateTarget(
+				o,
+				b,
+				reset,
+				&activationTarget{
+					Origin:   group.Source,
+					Kind:     "allocation",
+					VM:       i.VM,
+					Instance: i.Instance,
+				},
+			)
+		}
+	}
+	return s.activateTarget(o, b, reset, nil)
 }
 
 func (s *Service) activateTarget(
 	o Operation,
 	b *Sandbox,
 	reset bool,
-	target string,
+	target *activationTarget,
 ) (err error) {
 	if err = s.activationFence(o, b.ID); err != nil {
 		return err
@@ -53,13 +86,13 @@ func (s *Service) activateTarget(
 	if err != nil {
 		return err
 	}
-	if target != "" && (v.ID != b.VMID || v.Instance != target) {
+	if target != nil && (v.ID != target.VM || v.Instance != target.Instance) {
 		return api.Fail(
 			api.ManualRecovery,
 			"activation read returned another instance",
 		)
 	}
-	if target != "" {
+	if target != nil {
 		if err = s.checkActivationTarget(o, *b, target); err != nil {
 			return err
 		}
@@ -80,7 +113,7 @@ func (s *Service) activateTarget(
 	); err != nil {
 		return err
 	}
-	if target != "" {
+	if target != nil {
 		if err = s.checkActivationTarget(o, *b, target); err != nil {
 			return err
 		}
@@ -111,7 +144,7 @@ func (s *Service) activateTarget(
 			err = errors.Join(err, s.revoke(b.ID))
 		}
 	}()
-	if target != "" {
+	if target != nil {
 		if err = s.checkActivationTarget(o, *b, target); err != nil {
 			return err
 		}
@@ -149,7 +182,7 @@ func (s *Service) activateTarget(
 			return err
 		}
 	}
-	if target != "" {
+	if target != nil {
 		if err = s.checkActivationTarget(o, *b, target); err != nil {
 			return err
 		}
@@ -200,11 +233,6 @@ func (s *Service) claim(o *Operation) error {
 		b.TenantID,
 	); err != nil {
 		return err
-	}
-	if b.VMID == "" && b.ProvisionSource == "" {
-		if err = s.claimWarm(t, &b); err != nil {
-			return err
-		}
 	}
 	if b.ProvisionSource == "warm" {
 		if err = s.activateWarm(*o, &b); err == nil {
@@ -279,71 +307,6 @@ func (s *Service) claim(o *Operation) error {
 	return nil
 }
 
-func (s *Service) claimWarm(t Template, b *Sandbox) error {
-	unlock := s.lockResourceOwnership()
-	defer unlock()
-	tx, err := s.store.db.BeginTx(s.ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var vmid string
-	err = tx.QueryRowContext(s.ctx, "SELECT vm_id FROM warm WHERE template_id=? AND snapshot_id=? ORDER BY created_at LIMIT 1", t.ID, t.SnapshotID).
-		Scan(&vmid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		"DELETE FROM warm WHERE vm_id=?",
-		vmid,
-	); err != nil {
-		return err
-	}
-	b.VMID = vmid
-	b.ProvisionSource = "warm"
-	o := Operation{ID: b.OperationID, ChargeTenantID: b.TenantID}
-	if err = putQuotaResource(
-		s.ctx,
-		tx,
-		quotaResource{
-			Tenant:  b.TenantID,
-			Kind:    "vm_disk",
-			Key:     vmid,
-			Storage: b.Shape.DiskMiB,
-			Source:  o.ID,
-		},
-		quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID},
-	); err != nil {
-		return err
-	}
-	if err = quotaSnapshot(
-		s.ctx,
-		tx,
-		o,
-		t.SnapshotID,
-		b.Shape,
-		quotaRef{Kind: "active_use", ID: "backing:" + vmid},
-	); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
-		b.TenantID,
-		stepKey(o, "provision"),
-	); err != nil {
-		return err
-	}
-	if err = saveSandbox(s.ctx, tx, *b); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 	if s.ctx.Err() != nil {
 		return cause
@@ -354,6 +317,16 @@ func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 			_ = saveSandbox(s.ctx, s.store.db, *b)
 			return err
 		}
+	}
+	if group, err := s.findAllocationGroup(o); err != nil {
+		return errors.Join(cause, err)
+	} else if group != nil {
+		b.State = "terminated"
+		b.LastError = cause.Error()
+		if err = s.saveQuotaSandbox(*b); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
 	if b.VMID != "" {
 		if _, err := s.engine(
@@ -797,6 +770,9 @@ func (s *Service) proveReleaseInstance(o Operation, b *Sandbox) error {
 }
 
 func (s *Service) release(o *Operation, b *Sandbox) error {
+	if handled, err := s.releaseAllocation(b); handled {
+		return err
+	}
 	if b.State == "terminated" {
 		intents, err := s.resourceRecoveries()
 		if err != nil {
@@ -978,6 +954,19 @@ func (s *Service) template(o *Operation) error {
 	t := *o.Command.Template
 	unlock := s.lock("template:" + t.ID)
 	defer unlock()
+	owner, pointer, intentErr := templateIntent(s.ctx, s.store.db, t.ID)
+	if intentErr != nil {
+		return intentErr
+	}
+	if owner == "" {
+		return api.Fail(
+			api.ManualRecovery,
+			"template ownership placeholder is missing",
+		)
+	}
+	if owner != t.TenantID || pointer != o.ID {
+		return api.Fail(api.Conflict, "template publication was superseded")
+	}
 	if o.Command.Action == "template_build" {
 		v, err := s.engine(
 			*o,
@@ -998,16 +987,30 @@ func (s *Service) template(o *Operation) error {
 			return err
 		}
 		if o.SnapshotID == "" {
-			if _, err = s.engine(
+			start, startErr := s.engine(
 				*o,
 				"build-start",
 				api.Request{Action: "start", VMID: v.VMID},
-			); err != nil {
-				return err
+			)
+			if startErr != nil {
+				return startErr
+			}
+			if start.Status != "succeeded" || start.ResultInstance == "" {
+				return api.Fail(
+					api.ManualRecovery,
+					"build start has no successful generation witness",
+				)
 			}
 			vm, err := s.opts.Engine.GetVM(s.ctx, v.VMID)
 			if err != nil {
 				return err
+			}
+			group, e := s.loadRecovery(allocationGroupID(*o))
+			if e != nil {
+				return e
+			}
+			if e = validAllocationIdentity(group, vm); e != nil {
+				return e
 			}
 			if err = s.opts.Agent.Info(s.ctx, vm); err != nil {
 				return err
@@ -1071,11 +1074,29 @@ func (s *Service) template(o *Operation) error {
 			}
 		}
 		t.SnapshotID = o.SnapshotID
-		if _, err = s.engine(
-			*o,
-			"build-delete",
-			api.Request{Action: "delete", VMID: v.VMID},
-		); err != nil {
+		if err = s.prepareBuildRetirement(*o); err != nil {
+			return err
+		}
+		group, err := s.loadRecovery(allocationGroupID(*o))
+		if err != nil {
+			return err
+		}
+		if group.Group.Identity == nil {
+			return api.Fail(api.ManualRecovery, "build identity is missing")
+		}
+		vm, lookupErr := s.opts.Engine.GetVM(s.ctx, group.Group.Identity.VM)
+		if isCode(lookupErr, api.NotFound) {
+			err = s.retireAllocationAbsent(group.ID)
+		} else if lookupErr != nil {
+			return lookupErr
+		} else {
+			collector, e := s.handoffAllocationCleanup(group.ID, vm, false)
+			if e != nil {
+				return e
+			}
+			err = s.consumeAllocationCleanup(collector)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1086,10 +1107,26 @@ func (s *Service) template(o *Operation) error {
 		if err != nil {
 			return err
 		}
-		if !snap.Published || snap.Deleting || snap.Config.Shape != t.Shape {
+		if snap.ID != t.SnapshotID || !snap.Published || snap.Deleting ||
+			snap.Config.Shape != t.Shape {
 			return api.Fail(
 				api.Incompatible,
 				"template snapshot shape or publication does not match",
+			)
+		}
+		group, e := s.findAllocationGroup(*o)
+		if e != nil {
+			return e
+		}
+		if group != nil && group.Group.SnapshotSource != nil &&
+			group.Group.SnapshotSource.Config != nil &&
+			!bytes.Equal(
+				encode(snap.Config),
+				encode(*group.Group.SnapshotSource.Config),
+			) {
+			return api.Fail(
+				api.Incompatible,
+				"snapshot Config differs from frozen source quote",
 			)
 		}
 		if t.Image == "" {
@@ -1103,6 +1140,8 @@ func (s *Service) template(o *Operation) error {
 	// catalog write. A zero match is never an UPSERT fallback.
 	// Lock order is template, then resource ownership, then SQLite transaction.
 	// No guest or engine call can extend this publication critical section.
+	pool := s.lock("pool:" + t.ID)
+	defer pool()
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -1110,6 +1149,32 @@ func (s *Service) template(o *Operation) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	previous, previousErr := getTemplateTx(s.ctx, tx, t.ID)
+	if previousErr != nil && !isCode(previousErr, api.NotFound) {
+		return previousErr
+	}
+	if previous.ID != "" && previous.SnapshotID != "" &&
+		previous.SnapshotID != t.SnapshotID {
+		if _, err = snapshotCollector(
+			s.ctx,
+			tx,
+			previous.TenantID,
+			previous.SnapshotID,
+			o.ID,
+		); err != nil {
+			return err
+		}
+		if err = deleteQuotaRows(
+			s.ctx,
+			tx,
+			`FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`,
+			previous.TenantID,
+			previous.SnapshotID,
+			"template:"+t.ID,
+		); err != nil {
+			return err
+		}
+	}
 	if t.SnapshotID != "" {
 		if err = requireSnapshotOwner(
 			s.ctx,
@@ -1142,33 +1207,55 @@ func (s *Service) template(o *Operation) error {
 			"template publication was superseded",
 		)
 	}
-	if _, err = tx.ExecContext(
+	result, err := tx.ExecContext(
 		s.ctx,
 		"INSERT INTO templates(id,tenant,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant,body=excluded.body",
 		t.ID,
 		t.TenantID,
 		encode(t),
-	); err != nil {
+	)
+	if err = requireSQLWrite(result, err); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		`DELETE FROM quota_refs WHERE holder_id=?`,
-		"template:"+t.ID,
-	); err != nil {
+	if t.SnapshotID != "" {
+		if err = putQuotaRef(
+			s.ctx,
+			tx,
+			t.TenantID,
+			"snapshot",
+			t.SnapshotID,
+			quotaRef{Kind: "active_use", ID: "template:" + t.ID},
+		); err != nil {
+			return err
+		}
+	}
+	group, err := loadRecoveryTx(s.ctx, tx, allocationGroupID(*o))
+	if err != nil {
 		return err
 	}
-	if err = referenceQuotaSnapshot(
+	for index := range group.Allocations {
+		a := &group.Allocations[index]
+		if a.Kind == "snapshot" && a.Resolution.Proof != nil &&
+			a.Resolution.Proof.SnapshotID == t.SnapshotID {
+			a.Resolution.State = "active"
+			a.Resolution.Destination = "template:" + t.ID + ":" + o.ID + ":" + t.SnapshotID
+		}
+	}
+	group.Done = true
+	if err = writeRecovery(s.ctx, tx, group); err != nil {
+		return err
+	}
+	if err = deleteQuotaRows(
 		s.ctx,
 		tx,
+		`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
 		t.TenantID,
-		t.SnapshotID,
-		quotaRef{Kind: "active_use", ID: "template:" + t.ID},
+		"operation:"+o.ID,
 	); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
-		return err
+		return fmt.Errorf("template publication commit: %w", err)
 	}
 	o.Result.Template = &t
 	return nil

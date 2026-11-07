@@ -20,7 +20,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-const storeSchemaVersion = 5
+const storeSchemaVersion = 6
 
 type store struct {
 	db      *sql.DB
@@ -159,7 +159,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	_, err = s.db.Exec(`
  CREATE TABLE IF NOT EXISTS version(version INTEGER NOT NULL);
- INSERT INTO version SELECT 5 WHERE NOT EXISTS (SELECT 1 FROM version);
+ INSERT INTO version SELECT 6 WHERE NOT EXISTS (SELECT 1 FROM version);
  CREATE TABLE IF NOT EXISTS tenants(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS sandboxes(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, state TEXT NOT NULL, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, body BLOB NOT NULL);
@@ -170,7 +170,7 @@ func openStore(dir string, initialize bool) (*store, error) {
  CREATE TABLE IF NOT EXISTS snapshot_owners(snapshot_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, source_operation_id TEXT NOT NULL, source_kind TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS configuration_fences(sandbox_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS resource_recovery(id TEXT PRIMARY KEY, body BLOB NOT NULL);
- CREATE TABLE IF NOT EXISTS quota_resources(tenant_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('sandbox_slot','vm_disk','snapshot','pending_storage')), resource_key TEXT NOT NULL, sandbox_slots INTEGER NOT NULL CHECK(sandbox_slots>=0), storage_mib INTEGER NOT NULL CHECK(storage_mib>=0), source_operation_id TEXT NOT NULL, PRIMARY KEY(tenant_id,kind,resource_key));
+ CREATE TABLE IF NOT EXISTS quota_resources(tenant_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('sandbox_slot','build_slot','vm_disk','snapshot','pending_storage')), resource_key TEXT NOT NULL, sandbox_slots INTEGER NOT NULL CHECK(sandbox_slots>=0), storage_mib INTEGER NOT NULL CHECK(storage_mib>=0), source_operation_id TEXT NOT NULL, PRIMARY KEY(tenant_id,kind,resource_key));
  CREATE TABLE IF NOT EXISTS quota_refs(tenant_id TEXT NOT NULL, kind TEXT NOT NULL, resource_key TEXT NOT NULL, holder_kind TEXT NOT NULL CHECK(holder_kind IN ('active_use','engine_dependency','cleanup')), holder_id TEXT NOT NULL, PRIMARY KEY(tenant_id,kind,resource_key,holder_kind,holder_id), FOREIGN KEY(tenant_id,kind,resource_key) REFERENCES quota_resources(tenant_id,kind,resource_key) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL, hash TEXT NOT NULL);
  `)
@@ -321,7 +321,7 @@ func recordSnapshotOwner(
 }
 
 func saveSandbox(ctx context.Context, e executor, b Sandbox) error {
-	_, err := e.ExecContext(
+	result, err := e.ExecContext(
 		ctx,
 		"INSERT INTO sandboxes(id,tenant,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body",
 		b.ID,
@@ -329,7 +329,7 @@ func saveSandbox(ctx context.Context, e executor, b Sandbox) error {
 		b.State,
 		encode(diskSandbox{b, b.Env}),
 	)
-	return err
+	return requireSQLWrite(result, err)
 }
 
 // recordConfigFence atomically admits a configure intent. A newer explicit
@@ -419,13 +419,20 @@ func reserveTemplateIntent(
 	e executor,
 	id, tenant, operation string,
 ) error {
-	_, err := e.ExecContext(
+	result, err := e.ExecContext(
 		ctx,
 		"INSERT INTO template_intents(template_id,tenant_id,operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET operation_id=excluded.operation_id",
 		id,
 		tenant,
 		operation,
 	)
+	if err = requireSQLWrite(result, err); err != nil {
+		return err
+	}
+	owner, current, err := templateIntent(ctx, e, id)
+	if err == nil && (owner != tenant || current != operation) {
+		return api.Fail(api.ManualRecovery, "template intent was not persisted")
+	}
 	return err
 }
 
@@ -443,7 +450,7 @@ func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 }
 
 func saveOp(ctx context.Context, e executor, o Operation) error {
-	_, err := e.ExecContext(
+	result, err := e.ExecContext(
 		ctx,
 		"INSERT INTO operations(id,tenant,idem_key,spec_hash,status,body) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,body=excluded.body",
 		o.ID,
@@ -453,7 +460,7 @@ func saveOp(ctx context.Context, e executor, o Operation) error {
 		o.Status,
 		encode(o),
 	)
-	return err
+	return requireSQLWrite(result, err)
 }
 
 func (s *store) operation(ctx context.Context, id string) (Operation, error) {

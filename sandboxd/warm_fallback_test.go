@@ -13,14 +13,18 @@ import (
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
-type rejectWarmAgent struct{ fakeAgent }
+type rejectWarmAgent struct {
+	fakeAgent
+
+	vm string
+}
 
 func (a *rejectWarmAgent) Activate(
 	ctx context.Context,
 	vm api.VM,
 	activation Activation,
 ) error {
-	if vm.ID == "warm-candidate" {
+	if vm.ID == a.vm {
 		return errors.New("warm guest no longer responds")
 	}
 	return a.fakeAgent.Activate(ctx, vm, activation)
@@ -48,16 +52,39 @@ func warmFallbackFixture(
 			Published: true,
 		}
 	}
-	engine.vms["warm-candidate"] = api.VM{
-		ID:         "warm-candidate",
-		Config:     config,
-		Phase:      "running",
-		Verified:   true,
-		AgentReady: true,
-		Instance:   "warm-instance",
-		VSockPath:  "/tmp/warm/vsock",
+	var created, started api.Operation
+	var err error
+	if !golden {
+		created, err = api.Wait(
+			context.Background(),
+			engine,
+			api.Request{
+				Key: stepKey(
+					Operation{ID: "fixture-warm"},
+					"fixture-create",
+				),
+				Action: "create",
+				Config: &config,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		started, err = api.Wait(
+			context.Background(),
+			engine,
+			api.Request{
+				Key:    stepKey(Operation{ID: "fixture-warm"}, "fixture-start"),
+				Action: "start",
+				VMID:   created.VMID,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	st, err := openStore(t.TempDir(), true)
+	state := t.TempDir()
+	st, err := openStore(state, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +93,10 @@ func warmFallbackFixture(
 	// the engine allocation counts being asserted by these tests.
 	service := &Service{
 		opts: Options{
+			StateDir:  state,
 			RootToken: "root-secret",
 			Engine:    engine,
-			Agent:     &rejectWarmAgent{},
+			Agent:     &rejectWarmAgent{vm: created.VMID},
 			Egress:    &fakeEgress{},
 			MaxTTL:    time.Hour,
 			MaxWarm:   32,
@@ -98,20 +126,7 @@ func warmFallbackFixture(
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.store.db.ExecContext(
-		service.ctx,
-		"INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?)",
-		"warm-candidate",
-		template.ID,
-		template.SnapshotID,
-		time.Now().UnixNano(),
-	); err != nil {
-		t.Fatal(err)
-	}
-	importer := principal
-	if golden {
-		importer = Principal{Root: true, TenantID: principal.TenantID}
-	}
+	importer := Principal{Root: true, TenantID: principal.TenantID}
 	if _, err = service.Execute(
 		context.Background(),
 		importer,
@@ -120,6 +135,21 @@ func warmFallbackFixture(
 	); err != nil {
 		t.Fatal(err)
 	}
+	if golden {
+		service.pools()
+		service.wg.Wait()
+		if err = service.store.db.QueryRow(`SELECT vm_id FROM warm WHERE template_id=?`, template.ID).
+			Scan(&engine.warmCandidate); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		seedTemplateQuotaWarm(t, service, template, created, started)
+		engine.warmCandidate = created.VMID
+	}
+	service.opts.Agent.(*rejectWarmAgent).vm = engine.warmCandidate
+	engine.mu.Lock()
+	engine.calls = map[string]int{}
+	engine.mu.Unlock() // Count replacement work after the real ready fixture.
 	return service, engine, principal, template
 }
 
@@ -132,7 +162,7 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 				result := claimTest(t, s, principal, "claim", nil)
 				if result.Sandbox.ProvisionSource == "warm" ||
 					result.Sandbox.State != "running" ||
-					result.Sandbox.VMID == "warm-candidate" {
+					result.Sandbox.VMID == engine.warmCandidate {
 					t.Fatalf(
 						"rejected warm instance was delivered: %+v",
 						result.Sandbox,
@@ -140,7 +170,7 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 				}
 				if _, err := engine.GetVM(
 					context.Background(),
-					"warm-candidate",
+					engine.warmCandidate,
 				); !isCode(
 					err,
 					api.NotFound,
@@ -170,56 +200,41 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 
 func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 	s, engine, principal, template := warmFallbackFixture(t, true)
-	b := Sandbox{
-		ID:          "recovering",
-		OperationID: "recovering-claim",
-		TenantID:    principal.TenantID,
-		State:       "provisioning",
-		TemplateID:  template.ID,
-		Shape:       template.Shape,
-		TTLSeconds:  300,
-		Policy:      egress.Policy{Mode: "none"},
-	}
-	admit := Operation{ID: b.OperationID, ChargeTenantID: b.TenantID}
-	if err := quotaSlot(s.ctx, s.store.db, admit, b); err != nil {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	o, err := s.Submit(
+		s.ctx,
+		principal,
+		"recovering-claim",
+		Command{
+			Action:     "claim",
+			TemplateID: template.ID,
+			Policy:     egress.Policy{Mode: "none"},
+		},
+	)
+	s.mu.Lock()
+	s.closing = false
+	s.mu.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reserveQuotaStep(
+	b := recoverySandbox(t, s, o.IDs[0])
+	if _, err = s.store.db.ExecContext(
 		s.ctx,
-		s.store.db,
-		admit,
-		"provision",
-		b.ID,
-		b.Shape.DiskMiB,
+		`CREATE TRIGGER fallback_metadata_fault BEFORE UPDATE ON sandboxes WHEN NEW.id='`+b.ID+`' AND json_extract(NEW.body,'$.vm_id') IS NULL BEGIN SELECT RAISE(ABORT,'fallback metadata fault'); END`,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.saveSandboxReference(b); err != nil {
-		t.Fatal(err)
+	if err = s.claim(&o); err == nil {
+		t.Fatal("fallback metadata fault was not observed")
 	}
-	if err := s.claimWarm(template, &b); err != nil {
-		t.Fatal(err)
+	if engine.count("delete") != 1 {
+		t.Fatal("fault did not follow physical warm deletion")
 	}
-	b.ProvisionSource = "warm-rejected"
-	b.Instance = "warm-instance"
-	if err := s.saveSandboxReference(b); err != nil {
-		t.Fatal(err)
-	}
-	o := Operation{
-		ID:             "recovering-claim",
-		TenantID:       principal.TenantID,
-		ChargeTenantID: principal.TenantID,
-		IDs:            []string{b.ID},
-		Command:        Command{Action: "claim", Template: &template},
-	}
-	if _, err := s.engine(
-		o,
-		"warm-reject:"+b.ID,
-		api.Request{
-			Action:           "delete",
-			VMID:             b.VMID,
-			ExpectedInstance: b.Instance,
-		},
+	if _, err = s.store.db.ExecContext(
+		s.ctx,
+		`DROP TRIGGER fallback_metadata_fault`,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -238,15 +253,26 @@ func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 }
 
 func TestWarmFallbackPreservesChangedInstance(t *testing.T) {
-	s, engine, _, template := warmFallbackFixture(t, true)
-	b := Sandbox{
-		ID:              "review",
-		VMID:            "warm-candidate",
-		Instance:        "old-instance",
-		ProvisionSource: "warm-rejected",
+	s, engine, principal, template := warmFallbackFixture(t, true)
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	o, err := s.Submit(
+		s.ctx,
+		principal,
+		"review",
+		Command{Action: "claim", TemplateID: template.ID},
+	)
+	s.mu.Lock()
+	s.closing = false
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
 	}
+	b := recoverySandbox(t, s, o.IDs[0])
+	b.Instance = "old-instance"
 	if err := s.discardWarm(
-		Operation{ID: "review"},
+		o,
 		&b,
 		template,
 	); !isCode(

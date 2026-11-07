@@ -27,6 +27,7 @@ type fakeEngine struct {
 	snaps           map[string]api.Snapshot
 	calls           map[string]int
 	generation      map[string]int
+	warmCandidate   string
 	physicalDeletes int
 	failSnapshot    bool
 	failNetwork     bool

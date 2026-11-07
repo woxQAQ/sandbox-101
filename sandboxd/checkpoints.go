@@ -77,16 +77,18 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(
+	result, err := tx.ExecContext(
 		s.ctx,
 		"DELETE FROM checkpoints WHERE id=?",
 		cp.ID,
-	); err != nil {
+	)
+	if err = requireSQLWrite(result, err); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(
+	if err = deleteQuotaRows(
 		s.ctx,
-		`UPDATE quota_refs SET holder_kind='cleanup' WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_id=?`,
+		tx,
+		`FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_id=?`,
 		cp.TenantID,
 		cp.SnapshotID,
 		"checkpoint:"+cp.ID,

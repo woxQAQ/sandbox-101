@@ -91,11 +91,11 @@ sandboxd 管理可按需认领、分支、休眠和销毁的隔离编程环境�
 1. **启动构建实例**：按目标 `Base OCI Digest` 与 `resource_shape` 调用 `engine.create` 与 `engine.start`。若预热脚本需访问外部仓库，临时绑定受控出网。
 2. **执行预热与清理**：通过 Workload 通道执行用户或镜像定义的 `warmup` 动作（例如启动常驻运行时、预加载大型语言模型或依赖库、等待本地端口就绪）。预热完成后，构建方清理应用特有的凭据与历史记录；随后通过 Admin 2046 调用 `prepare_template`，排空 Workload RPC/会话，清理 agent 身份、环境与保留日志并同步文件系统。该操作保留分离运行的应用进程，无法通用清理它们的内存、环境或外部注册状态。
 3. **静默捕获**：关闭构建 VM 的网络接入，确认 Admin `prepare_template` 已完成、Workload 无在途 RPC/会话后，调用 `engine.snapshot` 生成黄金快照。
-4. **原子晋升与池滚动**：将新 `snapshot_id` 登记到 `sandboxd` 模板目录，调用 `engine.delete` 销毁临时构建 VM。通知预热池管理器按新快照补充（refill）新预热实例，并逐步排空旧版本预热实例。
+4. **回收后晋升与池滚动**：使用本次成功 start receipt 固定的非空实例 B 清理临时 VM；D/build_slot 与回收 destination 同事务退休成功后，才把新 `snapshot_id`、模板 holder 和旧 SID cleanup 交接原子发布。预热池按新快照补充，并保留旧实例及 backing 的费用直至可信回收。
 
-快照授权来源由 `sandboxd` schema 5 的不可变 `snapshot_owners` 记录持久化：本层捕获以原 operation 和 engine receipt 证明来源，外部黄金快照仅允许 root 为明确目标租户导入。普通租户登记、模板发布与所有 clone/refill/恢复消费都核验同租户来源；engine 的 published 状态和继承 labels 不构成授权。单个 snapshot ID 不跨租户共享或转移，授权记录本身不是 GC 保活引用。schema 1–4 与未来版本在 DDL 前拒绝，旧 JSON 不用于推断账本或迁移所有权，启动前须备份并另行审查显式迁移。
+快照授权来源由 `sandboxd` schema 6 的不可变 `snapshot_owners` 记录持久化：本层捕获以原 operation 和 engine receipt 证明来源，外部黄金快照仅允许 root 为明确目标租户导入。普通租户登记、模板发布与所有 clone/refill/恢复消费都核验同租户来源；engine 的 published 状态和继承 labels 不构成授权。单个 snapshot ID 不跨租户共享或转移，授权记录本身不是 GC 保活引用。schema 1–5 与未来版本在 DDL 前拒绝，旧 JSON 不用于推断账本或迁移所有权，启动前须备份并另行审查显式迁移。
 
-租户配额只汇总 `quota_resources` 持久资源表，`quota_refs` 记录实际使用、在途依赖和清理责任。slot 与访问状态分离：`terminated` 立即撤销访问，但 VM、未知分配或独占休眠清理未被可信证明回收前仍占 slot。独立 VM 盘按 D MiB、snapshot 按 D+M MiB 计量；相同 SID 的 checkpoint、休眠、模板、VM/warm backing 与 cleanup 引用只计一次。clone/restore 的内存 hardlink 仍占空间时，删除 snapshot catalog 或清空 `Sandbox.SnapshotID` 都不清账。独立 restore 盘版本保守留费至 VM 删除，因为公开 engine API 没有单版本 GC 证明。准入、pending→receipt、引用发布与 terminal→cleanup 交接使用 SQLite 事务；未知响应、查询错误和未知实例不能退费。`Operation.ChargeTenantID` 固定可信资源 owner，root 默认或选择其他请求租户只绕过准入拒绝，仍完整记录原 owner 费用；维护按 owner 普通预算准入。现有配置 fence、模板归属与 publication guard 保持原有职责，构建及 warm 准入政策留给 013。详见 [资源责任矩阵](sandboxd/README.md#durable-quota-responsibility)。
+租户配额只汇总 `quota_resources` 持久资源表，`quota_refs` 记录实际使用、在途依赖和清理责任。slot 与访问状态分离：`terminated` 立即撤销访问，但 VM、未知分配或独占休眠清理未被可信证明回收前仍占 slot。独立 VM 盘按 D MiB、snapshot 按 D+M MiB 计量；相同 SID 的 checkpoint、休眠、模板、VM/warm backing 与 cleanup 引用只计一次。clone/restore 的内存 hardlink 仍占空间时，删除 snapshot catalog 或清空 `Sandbox.SnapshotID` 都不清账。独立 restore 盘版本保守留费至 VM 删除，因为公开 engine API 没有单版本 GC 证明。准入、pending→receipt、引用发布与 terminal→cleanup 交接使用 SQLite 事务；未知响应、查询错误和未知实例不能退费。`Operation.ChargeTenantID` 固定可信资源 owner，root 默认或选择其他请求租户只绕过准入拒绝，仍完整记录原 owner 费用；维护按 owner 普通预算准入。现有配置 fence、模板归属与 publication guard 保持原有职责，构建同事务预留 1 个消耗 MaxSandboxes 的 build_slot、D 构建盘与 D+M 捕获；不创建用户 sandbox/token。模板按可信完整 Shape 为实际 SID 去重收费。warm refill 在普通 owner 预算中先预留 D，无用户 slot；ready、pending、已知未交付和未知 cleanup 均持续占目标池位。Submit 领取 warm 时同事务创建真实 sandbox slot，并把既有 D holder 从 warm 转交给该 S，不再预扣第二份 D；坏 warm 可信删除后同事务把旧 D 转为原 claim 的 fallback pending D，竞争准入无法取得中间退款。新主体通过私有 allocation_group 冻结原请求、步骤、receipt、owner/Shape、selection 与唯一 Resolution。缺成功非空 generation witness 的 VM 保留费用、相应 slot/池位和只观察门禁，不能根据 created/当前实例或 generic orphan 路径自动删除；actual GetVM NotFound 仅允许逐资源的合格账务退休，未知 SID/pending/必要 slot 保留。恢复备份的确认不增加删除权限。详见 [资源责任矩阵](sandboxd/README.md#durable-quota-responsibility)。
 
 ### 预热池（Warm Pool）管理
 
@@ -103,7 +103,8 @@ sandboxd 管理可按需认领、分支、休眠和销毁的隔离编程环境�
 
 - **预热实例状态**：池中每台 VM 均已通过 `engine.clone` 恢复执行、完成基础 `reseed` 与时钟同步，且通过了 Workload 2048 端口的存活探测（`info` 握手）。
 - **池内安全边界**：预热实例在池中运行期间，从未接触任何租户数据或环境变量，底层网络接口保持关闭，也不绑定任何宿主出网代理端口。
-- **故障退避与健康巡检**：周期巡检池中 VM；若发现底层 VMM 意外退出或数据面探测超时，立即从池中摘除并调用 `engine.delete` 清理。当节点容量耗尽（如收到 `engine` 的空间不足或资源预算拒绝错误）或连续克隆失败时，按指数退避暂停 `refill`，避免雪崩重试。
+- **池目标权限与预算**：普通租户首次 target 为 0，更新保持已发布 target；任何方向的 target 变更都要求 root 明确选择该永久 owner。自动 refill 使用 owner 普通有限预算，缺 tenant row 不自动建账。
+- **故障退避与健康巡检**：周期巡检池中 VM；失效实例先持久交接 cleanup 并停止领取，长 Engine 等待在池/归属短锁外进行。只有冻结成功 clone/start 的非空 B 及当前完整身份/依赖资格才能提交 exact-B 删除；缺 witness 保留费用与池位、继续观察原 receipt 和实际 absence。当 owner 或 Engine 预算拒绝、或连续克隆失败时，沿原持久指数退避暂停 refill。
 
 ## 1.2 沙箱状态机与租约（Lease / TTL）
 

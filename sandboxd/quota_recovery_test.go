@@ -1057,7 +1057,7 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	ledgerExecute(
 		t,
 		s,
-		p,
+		Principal{Root: true, TenantID: p.TenantID},
 		"golden",
 		Command{
 			Action: "template_put",
@@ -1071,7 +1071,7 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	)
 	s.pools()
 	s.wg.Wait()
-	ledgerMoney(t, s, p.TenantID, 1, 256)
+	ledgerMoney(t, s, p.TenantID, 1, 320)
 	ledgerExecute(
 		t,
 		s,
@@ -1086,7 +1086,7 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 		"release",
 		Command{Action: "release", SandboxID: b.ID},
 	)
-	ledgerMoney(t, s, p.TenantID, 0, 192)
+	ledgerMoney(t, s, p.TenantID, 0, 256)
 	f.mu.Lock()
 	f.snaps["new-golden"] = api.Snapshot{
 		ID: "new-golden",
@@ -1114,7 +1114,7 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	if err := s.recoverResources(); err != nil {
 		t.Fatal(err)
 	}
-	ledgerMoney(t, s, p.TenantID, 0, 192)
+	ledgerMoney(t, s, p.TenantID, 0, 448)
 	if _, err := f.GetSnapshot(s.ctx, cp.SnapshotID); err != nil {
 		t.Fatal("warm source deleted", err)
 	}
@@ -1122,7 +1122,7 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	if err := s.recoverResources(); err != nil {
 		t.Fatal(err)
 	}
-	ledgerMoney(t, s, p.TenantID, 0, 0)
+	ledgerMoney(t, s, p.TenantID, 0, 192)
 }
 
 func TestQuotaLedgerMissingResumeVMUsesAbsenceProof(t *testing.T) {

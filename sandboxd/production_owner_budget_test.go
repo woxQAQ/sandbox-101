@@ -81,10 +81,13 @@ type ownerEngine struct {
 	vms                map[string]ownerPhysical
 	snaps              map[string]api.Snapshot
 	calls              map[string]int
+	deleteAttempts     int
 	snapshotQueryError bool
 	gateMu             sync.Mutex
 	inventory          int
 	quiet              *ownerGate
+	roundPermit        chan struct{}
+	roundPark          chan struct{}
 	deletion           *ownerGate
 }
 
@@ -108,6 +111,18 @@ func (e *ownerEngine) Submit(
 	ctx context.Context,
 	input api.Request,
 ) (api.Operation, error) {
+	if input.Action == "delete" {
+		e.mu.Lock()
+		e.deleteAttempts++
+		e.mu.Unlock()
+		if (strings.Contains(input.Key, "allocation-cleanup:") || strings.HasSuffix(input.Key, ":step:build-delete") || strings.Contains(input.Key, ":step:warm-reject:")) &&
+			input.ExpectedInstance == "" {
+			return api.Operation{}, api.Fail(
+				api.Invalid,
+				"new template allocation delete requires immutable instance witness",
+			)
+		}
+	}
 	// Gates never hold the engine mutex while Service transactions or RO queries run.
 	e.gateMu.Lock()
 	gate := e.deletion
@@ -335,10 +350,22 @@ func (e *ownerEngine) ListVMs(ctx context.Context) ([]api.VM, error) {
 	e.gateMu.Lock()
 	e.inventory++
 	n, g := e.inventory, e.quiet
+	permit, park := e.roundPermit, e.roundPark
 	e.gateMu.Unlock()
-	// reconcile and recoverResources each take one inventory. Reaching the
-	// third proves the complete first reconcile/reap/pools iteration returned.
-	if n >= 3 && g != nil {
+	// Each odd inventory starts a maintenance round. A next-round park proves
+	// the previous loop returned; worker publication is observed separately.
+	if n >= 3 && permit != nil && n%2 == 1 {
+		select {
+		case park <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		select {
+		case <-permit:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	} else if n >= 3 && permit == nil && g != nil {
 		if err := g.wait(ctx); err != nil {
 			return nil, err
 		}
@@ -637,6 +664,8 @@ func (f *ownerFixture) open(initialize bool) {
 	f.quiet = newOwnerGate()
 	f.engine.gateMu.Lock()
 	f.engine.inventory = 0
+	f.engine.roundPermit = nil
+	f.engine.roundPark = nil
 	f.engine.quiet = f.quiet
 	f.engine.gateMu.Unlock()
 	out := &ownerEgress{cleanups: map[string]func() error{}}
@@ -1393,14 +1422,60 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		t.Fatal("finite owner row did not persist")
 	}
 
-	// Build is intentionally unbilled by source90; golden/warm claims each own D
-	// and share exactly one T. Actual maintenance publishes the ready warm row.
+	// Build retires its own D/slot before publication; permanent T remains billed.
+	// Each maintenance round admits at most one occupied successor under target1.
 	built := f.template(f.root, "tiers", shape, true)
 	sids[built.SnapshotID] = true
 	if built.SnapshotID == "" || built.State != "ready" {
 		t.Fatal("build did not publish template")
 	}
-	f.assertLedger("build-unclaimed-013", "root", 0, nil, nil, shape)
+	f.assertLedger(
+		"build-unclaimed-013",
+		"root",
+		0,
+		nil,
+		[]string{built.SnapshotID},
+		shape,
+	)
+	var buildOperation string
+	for _, o := range f.ops() {
+		if o.Command.Action == "template_build" &&
+			o.Command.Template.ID == built.ID {
+			buildOperation = o.ID
+		}
+	}
+	if buildOperation == "" {
+		t.Fatal("build operation identity missing")
+	}
+	buildProofs := map[string]api.Operation{}
+	for _, step := range []string{"build-create", "build-start", "build-snapshot", "build-delete"} {
+		proof, e := f.engine.FindOperation(
+			f.ctx,
+			"sbx-op:"+buildOperation+":step:"+step,
+		)
+		if e != nil || proof.Status != "succeeded" {
+			t.Fatal("build receipt missing", step, e)
+		}
+		buildProofs[step] = proof
+	}
+	buildVM := buildProofs["build-create"].VMID
+	if buildProofs["build-start"].ResultInstance == "" ||
+		buildProofs["build-delete"].Request.ExpectedInstance != buildProofs["build-start"].ResultInstance ||
+		buildProofs["build-snapshot"].SnapshotID != built.SnapshotID {
+		t.Fatal("build generation or snapshot receipt mismatch")
+	}
+	if _, e := f.engine.GetVM(f.ctx, buildVM); !ownerCode(e, api.NotFound) {
+		t.Fatal("build VM did not actually retire", e)
+	}
+	if f.scalar(
+		`SELECT count(*) FROM quota_resources WHERE kind='build_slot'`,
+	) != 0 ||
+		f.scalar(
+			`SELECT count(*) FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE r.id=? AND json_extract(a.value,'$.kind')='vm_disk' AND json_extract(a.value,'$.resolution.state')='reclaimed'`,
+			"allocation:"+buildOperation,
+		) != 1 {
+		t.Fatal("build responsibility did not retire before publication")
+	}
 	golden := *f.claim(f.root, "tiers", "tier-golden", egress.Policy{Mode: "none"}).Sandbox
 	record(golden)
 	f.info(f.root, golden.ID, "")
@@ -1419,16 +1494,8 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	built.TargetWarm = 1
 	result, err := f.root.PutTemplate(f.ctx, "tier-enable", built, false)
 	ownerMust(t, result, err)
-	f.quiet.open()
-	f.until(
-		"ready warm row",
-		func() bool { return f.scalar("SELECT count(*) FROM warm WHERE template_id=?", built.ID) == 1 },
-	)
-	var warmID string
-	if err = f.db.QueryRowContext(f.ctx, "SELECT vm_id FROM warm WHERE template_id=?", built.ID).
-		Scan(&warmID); err != nil {
-		t.Fatal(err)
-	}
+	f.beginRounds()
+	warmID, _ := f.readyWarm(built.ID)
 	warmBefore, err := f.engine.GetVM(f.ctx, warmID)
 	if err != nil {
 		t.Fatal(err)
@@ -1437,7 +1504,7 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		"unclaimed-warm-013",
 		"root",
 		0,
-		nil,
+		[]string{warmID},
 		[]string{built.SnapshotID},
 		shape,
 	)
@@ -1456,9 +1523,35 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		[]string{built.SnapshotID},
 		shape,
 	)
+	f.nextRound()
+	successor, successorSource := f.readyWarm(built.ID)
+	if successor == warmID {
+		t.Fatal("claimed warm remained in pool")
+	}
+	f.assertLedger(
+		"claimed-and-successor",
+		"root",
+		1,
+		[]string{warmID, successor},
+		[]string{built.SnapshotID},
+		shape,
+	)
 	built.TargetWarm = 0
 	result, err = f.root.PutTemplate(f.ctx, "tier-disable", built, false)
 	ownerMust(t, result, err)
+	f.nextRound()
+	f.until("successor actual absence and destination retired", func() bool {
+		_, e := f.engine.GetVM(f.ctx, successor)
+		return ownerCode(e, api.NotFound) &&
+			f.scalar(
+				`SELECT count(*) FROM quota_resources WHERE kind='vm_disk' AND resource_key=?`,
+				successor,
+			) == 0 &&
+			f.scalar(
+				`SELECT count(*) FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE r.id=? AND json_extract(a.value,'$.resolution.state')='reclaimed'`,
+				"allocation:"+successorSource,
+			) == 1
+	})
 	f.change(f.root, warm.ID, "tier-warm-release", "release")
 	f.until("pool disabled and settled", func() bool {
 		return f.scalar("SELECT count(*) FROM warm") == 0 &&
@@ -1573,6 +1666,33 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 			len(slots),
 		)
 	}
+	if disks[buildVM] || disks[successor] || buildVM == successor {
+		t.Fatal("extra build/refill identities overlap original12")
+	}
+	warmReceipts := map[string]bool{}
+	f.engine.mu.Lock()
+	for _, proof := range f.engine.ops {
+		if proof.Request.Action == "clone" &&
+			proof.Request.SnapshotID == built.SnapshotID &&
+			strings.HasSuffix(proof.Key, ":step:warm-clone") {
+			warmReceipts[proof.VMID] = true
+		}
+	}
+	f.engine.mu.Unlock()
+	if len(warmReceipts) != 2 || !warmReceipts[warmID] ||
+		!warmReceipts[successor] {
+		t.Fatal(
+			"maintenance admitted more than the controlled W and Q identities",
+		)
+	}
+	t.Logf(
+		"Plan013 extra allocation identities build=%s successor=%s original12=%d total=%d source=%s",
+		buildVM,
+		successor,
+		len(disks),
+		len(disks)+2,
+		successorSource,
+	)
 	allocationIDs := func(set map[string]bool) []string {
 		out := []string{}
 		for id := range set {
@@ -1587,6 +1707,59 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		allocationIDs(sids),
 		allocationIDs(slots),
 	)
+}
+
+func (f *ownerFixture) beginRounds() {
+	f.t.Helper()
+	f.engine.gateMu.Lock()
+	f.engine.roundPermit = make(chan struct{})
+	f.engine.roundPark = make(chan struct{}, 1)
+	park := f.engine.roundPark
+	f.engine.gateMu.Unlock()
+	f.quiet.open()
+	ownerAwait(f.t, f.ctx, park, "next maintenance round parked")
+}
+
+func (f *ownerFixture) nextRound() {
+	f.t.Helper()
+	f.engine.gateMu.Lock()
+	permit, park := f.engine.roundPermit, f.engine.roundPark
+	f.engine.gateMu.Unlock()
+	select {
+	case permit <- struct{}{}:
+	case <-f.ctx.Done():
+		f.t.Fatal("maintenance permit timeout")
+	}
+	ownerAwait(f.t, f.ctx, park, "following maintenance round parked")
+}
+
+func (f *ownerFixture) readyWarm(template string) (string, string) {
+	f.t.Helper()
+	f.until(
+		"ready warm row",
+		func() bool { return f.scalar(`SELECT count(*) FROM warm WHERE template_id=?`, template) == 1 },
+	)
+	var vm, source string
+	if err := f.db.QueryRowContext(f.ctx, `SELECT w.vm_id,q.source_operation_id FROM warm w JOIN quota_resources q ON q.kind='vm_disk' AND q.resource_key=w.vm_id WHERE w.template_id=?`, template).
+		Scan(&vm, &source); err != nil {
+		f.t.Fatal(err)
+	}
+	f.until("original clone terminal receipt", func() bool {
+		proof, err := f.engine.FindOperation(
+			f.ctx,
+			"sbx-op:"+source+":step:warm-clone",
+		)
+		return err == nil && proof.Status == "succeeded" && proof.VMID == vm &&
+			proof.ResultInstance != ""
+	})
+	f.until("warm group active destination", func() bool {
+		return f.scalar(
+			`SELECT count(*) FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE r.id=? AND json_extract(a.value,'$.resolution.state')='active' AND json_extract(a.value,'$.resolution.destination')=?`,
+			"allocation:"+source,
+			"warm:"+vm,
+		) == 1
+	})
+	return vm, source
 }
 
 func (f *ownerFixture) until(stage string, condition func() bool) {

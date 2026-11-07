@@ -350,8 +350,13 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		func(attempt context.Context) error { _, err := client.List(attempt); return err },
 	)
 	// D is each distinct writable disk; S is each distinct SID's D+M charge.
-	// This fixed-allocation envelope keeps every intent charged without refunds;
-	// it is not a simultaneous peak or a hard limit on public root requests.
+	// This finite capacity is compared with active ledger responsibility. The
+	// conservative normal trace retains 6D+4S after life, reaches 7D+5S during
+	// build and 8D+5S with claimed W plus one occupied successor Q. Build D/slot
+	// retire before publication; G retires before warm enable, and W retires
+	// before TCP. Even delayed Q cleanup then fits 11D+7S, below 12D+7S.
+	// Permanent template T remains billed. Unknown Q responsibility occupies
+	// target1 until retirement; arbitrary failure history can exhaust budget.
 	const diskMiB int64 = 512
 	snapshotMiB := diskMiB + memoryMiB
 	maxSandboxes := 1 + (1 + 2) + (1 + 1) + (1 + 1 + 1)
@@ -359,7 +364,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		(5*diskMiB + 4*snapshotMiB) + // lifecycle
 		(2*diskMiB + snapshotMiB) + // golden and claimed warm
 		(4*diskMiB + 2*snapshotMiB) // TCP resource sequence
-	// Build and unclaimed warm/refill charging remain the separate 013 policy.
+	// Root only bypasses manual admission comparisons; refill uses owner quota.
 	productionPutOwnerBudget(t, ctx, client, token, maxSandboxes, maxStorageMiB)
 	t.Setenv("SANDBOX_E2E_ENDPOINT", endpoint)
 	t.Setenv("SANDBOX_E2E_TOKEN_FILE", tokenPath)

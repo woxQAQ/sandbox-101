@@ -715,7 +715,7 @@ func TestTemplateAdmissionPublicationOwnershipGate(t *testing.T) {
 	update.TargetWarm = 1
 	op, err := s.Submit(
 		ctx,
-		p,
+		Principal{Root: true, TenantID: p.TenantID},
 		"update-golden",
 		Command{Action: "template_put", Template: &update},
 	)

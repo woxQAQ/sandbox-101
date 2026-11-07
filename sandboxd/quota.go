@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
+	"time"
 
 	"github.com/woxQAQ/sandbox-engine/api"
 )
@@ -24,6 +26,37 @@ type quotaResource struct {
 }
 
 type quotaRef struct{ Kind, ID string }
+
+func requireSQLWrite(result sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return api.Fail(
+			api.ManualRecovery,
+			"required responsibility write did not affect one row",
+		)
+	}
+	return nil
+}
+
+// Subjects identify responsibility without manufacturing a user sandbox.
+type allocationSubject struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type allocationContext struct {
+	Subject        allocationSubject
+	ChargeTenantID string
+	Shape          api.Shape
+	Holder         string
+	Sandbox        *Sandbox
+}
 
 func putQuotaResource(
 	ctx context.Context,
@@ -76,6 +109,15 @@ func putQuotaRef(
 		ref.Kind,
 		ref.ID,
 	)
+	if err != nil {
+		return err
+	}
+	var present int
+	err = e.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?`, tenant, kind, key, ref.Kind, ref.ID).
+		Scan(&present)
+	if err == nil && present != 1 {
+		return api.Fail(api.ManualRecovery, "quota reference was not persisted")
+	}
 	return err
 }
 
@@ -250,26 +292,29 @@ func quotaSlot(ctx context.Context, e executor, o Operation, b Sandbox) error {
 	)
 }
 
-// quotaAllocation describes only plan012 sandbox allocations. Template builds
-// and pool admission policy remain separate work; existing warm transfers use
-// the same sandbox reservation and physical identities as ordinary claims.
+// quotaAllocation supplies trusted billing inputs for a real subject.
 func (s *Service) quotaAllocation(
 	o Operation,
 	step string,
-) (Sandbox, string, bool, error) {
+) (allocationContext, string, bool, error) {
 	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
-		return Sandbox{}, "", true, err
+		return allocationContext{}, "", true, err
 	} else if a != nil {
 		if a.ChargeTenantID != o.ChargeTenantID {
-			return Sandbox{}, "", true, api.Fail(
+			return allocationContext{}, "", true, api.Fail(
 				api.ManualRecovery,
 				"recovery charge owner mismatch",
 			)
 		}
-		return Sandbox{
-			ID:       a.SandboxID,
-			TenantID: a.ChargeTenantID,
-			Shape:    a.Shape,
+		subject := a.Subject
+		if subject.Kind == "" {
+			subject = allocationSubject{Kind: "sandbox", ID: a.SandboxID}
+		}
+		return allocationContext{
+			Subject:        subject,
+			ChargeTenantID: a.ChargeTenantID,
+			Shape:          a.Shape,
+			Holder:         subject.Kind + ":" + subject.ID,
 		}, a.Kind, true, nil
 	}
 	var id, kind string
@@ -312,19 +357,25 @@ func (s *Service) quotaAllocation(
 		}
 	}
 	if kind == "" {
-		return Sandbox{}, "", false, nil
+		return allocationContext{}, "", false, nil
 	}
 	b, err := getSandbox(s.ctx, s.store.db, id)
 	if err != nil {
-		return b, kind, true, err
+		return allocationContext{}, kind, true, err
 	}
 	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
-		return b, kind, true, api.Fail(
+		return allocationContext{}, kind, true, api.Fail(
 			api.ManualRecovery,
 			"allocation has no trusted charge owner",
 		)
 	}
-	return b, kind, true, nil
+	return allocationContext{
+		Subject:        allocationSubject{Kind: "sandbox", ID: b.ID},
+		ChargeTenantID: b.TenantID,
+		Shape:          b.Shape,
+		Holder:         "sandbox:" + b.ID,
+		Sandbox:        &b,
+	}, kind, true, nil
 }
 
 // acceptQuotaReceipt atomically replaces an unknown allocation reservation
@@ -379,7 +430,7 @@ func (s *Service) acceptQuotaReceiptTx(
 	step string,
 	request api.Request,
 	receipt api.Operation,
-	b Sandbox,
+	b allocationContext,
 	kind string,
 	a *recoveryAllocation,
 ) error {
@@ -477,9 +528,9 @@ func (s *Service) acceptQuotaReceiptTx(
 		); err != nil {
 			return err
 		}
-		holder := quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID}
-		if a != nil || b.State == "terminated" ||
-			(recoveryTerminal(o.Status) && b.VMID != receipt.VMID) {
+		holder := quotaRef{Kind: "active_use", ID: b.Holder}
+		if a != nil || b.Sandbox == nil || b.Sandbox.State == "terminated" ||
+			(recoveryTerminal(o.Status) && b.Sandbox.VMID != receipt.VMID) {
 			holder.Kind = "cleanup"
 		}
 		if err = putQuotaRef(
@@ -573,6 +624,14 @@ func (s *Service) reclaimQuota(kind, key string) error {
 func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 	var err error
 	if kind == "vm_disk" {
+		var protected int
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND (json_extract(body,'$.allocation_group.identity.vm')=? OR json_extract(body,'$.allocation_group.selection.identity.vm')=?) AND (json_extract(body,'$.allocation_group.gate.reason') IS NOT NULL OR json_extract(body,'$.allocation_group.selection.stage') IN ('selected','rejected') OR EXISTS(SELECT 1 FROM json_each(body,'$.allocations') a WHERE json_extract(a.value,'$.kind')='vm_disk' AND json_extract(a.value,'$.resolution.state') IN ('unresolved','result_known','cleanup')))`, key, key).
+			Scan(&protected); err != nil {
+			return err
+		}
+		if protected != 0 {
+			return nil
+		}
 		var unresolved int
 		// A late receipt still owns its frozen physical target even after release
 		// clears sandbox metadata. Only its destination transaction can retire it.
@@ -658,6 +717,7 @@ func retireQuotaSlots(ctx context.Context, e executor) error {
 		e,
 		`FROM quota_resources AS slot WHERE slot.kind='sandbox_slot'
  AND EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.kind=slot.kind AND r.resource_key=slot.resource_key AND r.holder_kind='cleanup')
+ AND NOT EXISTS(SELECT 1 FROM resource_recovery rr WHERE json_extract(rr.body,'$.kind')='allocation_group' AND json_extract(rr.body,'$.allocation_group.subject.kind')='sandbox' AND json_extract(rr.body,'$.allocation_group.subject.id')=slot.resource_key AND COALESCE(json_extract(rr.body,'$.done'),0)=0)
  AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.holder_id='sandbox:'||slot.resource_key AND r.kind IN ('vm_disk','pending_storage'))
  AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=slot.tenant_id AND r.holder_id='sandbox:'||slot.resource_key AND r.kind='snapshot'
  AND NOT EXISTS(SELECT 1 FROM quota_refs live WHERE live.tenant_id=r.tenant_id AND live.kind=r.kind AND live.resource_key=r.resource_key AND live.holder_kind='active_use' AND live.holder_id!=r.holder_id))`,
@@ -735,7 +795,7 @@ func (s *Service) saveQuotaSandbox(b Sandbox) error {
 func (s *store) validateQuota(ctx context.Context) error {
 	var bad int
 	err := s.db.QueryRowContext(ctx, `SELECT
- (SELECT count(*) FROM quota_resources WHERE tenant_id='' OR resource_key='' OR source_operation_id='' OR sandbox_slots<0 OR storage_mib<0 OR kind NOT IN ('sandbox_slot','vm_disk','snapshot','pending_storage') OR (kind='sandbox_slot' AND (sandbox_slots!=1 OR storage_mib!=0)) OR (kind!='sandbox_slot' AND sandbox_slots!=0))+
+ (SELECT count(*) FROM quota_resources WHERE tenant_id='' OR resource_key='' OR source_operation_id='' OR sandbox_slots<0 OR storage_mib<0 OR kind NOT IN ('sandbox_slot','build_slot','vm_disk','snapshot','pending_storage') OR (kind IN ('sandbox_slot','build_slot') AND (sandbox_slots!=1 OR storage_mib!=0)) OR (kind NOT IN ('sandbox_slot','build_slot') AND sandbox_slots!=0))+
  (SELECT count(*) FROM quota_refs r LEFT JOIN quota_resources q USING(tenant_id,kind,resource_key) WHERE q.resource_key IS NULL OR r.holder_id='' OR r.holder_kind NOT IN ('active_use','engine_dependency','cleanup'))+
  (SELECT count(*) FROM quota_resources WHERE typeof(sandbox_slots)!='integer' OR typeof(storage_mib)!='integer')+
  (SELECT count(*) FROM sandboxes b WHERE b.state!='terminated' AND NOT EXISTS(SELECT 1 FROM quota_resources q WHERE q.tenant_id=b.tenant AND q.kind='sandbox_slot' AND q.resource_key=b.id))`).Scan(&bad)
@@ -748,10 +808,15 @@ func (s *store) validateQuota(ctx context.Context) error {
 			"quota ledger contains inconsistent responsibility",
 		)
 	}
-	return nil
+	return s.validateAllocationGroups(ctx)
 }
 
 func (s *Service) finishQuotaOperation(o Operation) error {
+	if group, err := s.findAllocationGroup(o); err != nil {
+		return err
+	} else if group != nil {
+		return nil // The group resolver owns every terminal dependency and destination.
+	}
 	// Only a trusted terminal receipt without an allocated identity can cancel
 	// an allocation. Absence of a receipt is not evidence of non-dispatch.
 	steps := recoveryAllocationSteps(o)
@@ -842,7 +907,7 @@ func (s *Service) finishQuotaOperation(o Operation) error {
 	}
 	_, err = s.store.db.ExecContext(
 		s.ctx,
-		`DELETE FROM quota_resources WHERE kind='sandbox_slot' AND EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=quota_resources.tenant_id AND r.kind=quota_resources.kind AND r.resource_key=quota_resources.resource_key AND r.holder_kind='cleanup') AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=quota_resources.tenant_id AND r.holder_id='sandbox:'||quota_resources.resource_key AND r.kind IN ('vm_disk','snapshot','pending_storage'))`,
+		`DELETE FROM quota_resources WHERE kind='sandbox_slot' AND NOT EXISTS(SELECT 1 FROM resource_recovery rr WHERE json_extract(rr.body,'$.kind')='allocation_group' AND json_extract(rr.body,'$.allocation_group.subject.kind')='sandbox' AND json_extract(rr.body,'$.allocation_group.subject.id')=quota_resources.resource_key AND COALESCE(json_extract(rr.body,'$.done'),0)=0) AND EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=quota_resources.tenant_id AND r.kind=quota_resources.kind AND r.resource_key=quota_resources.resource_key AND r.holder_kind='cleanup') AND NOT EXISTS(SELECT 1 FROM quota_refs r WHERE r.tenant_id=quota_resources.tenant_id AND r.holder_id='sandbox:'||quota_resources.resource_key AND r.kind IN ('vm_disk','snapshot','pending_storage'))`,
 	)
 	return err
 }
@@ -852,7 +917,7 @@ func (s *Service) finishQuotaOperation(o Operation) error {
 func (s *Service) reconcileQuota() error {
 	rows, err := s.store.db.QueryContext(
 		s.ctx,
-		`SELECT 'snapshot',resource_key FROM quota_resources WHERE kind='snapshot' UNION SELECT 'vm_disk',substr(holder_id,9) FROM quota_refs WHERE holder_id LIKE 'backing:%' ORDER BY 1 DESC`,
+		`SELECT 'snapshot',resource_key FROM quota_resources q WHERE kind='snapshot' AND NOT EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_kind='active_use' AND f.holder_id LIKE 'template:%') UNION SELECT 'vm_disk',substr(holder_id,9) FROM quota_refs WHERE holder_id LIKE 'backing:%' ORDER BY 1 DESC`,
 	)
 	if err != nil {
 		return err
@@ -893,37 +958,6 @@ func (s *Service) reconcileQuota() error {
 		}
 	}
 	return nil
-}
-
-func (s *Service) reserveWarmReplacement(o Operation, b Sandbox) error {
-	tx, err := s.store.db.BeginTx(s.ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err = s.quota(
-		s.ctx,
-		tx,
-		Principal{TenantID: b.TenantID},
-		0,
-		b.Shape.DiskMiB,
-	); err != nil {
-		return err
-	}
-	if err = reserveQuotaStep(
-		s.ctx,
-		tx,
-		o,
-		"provision",
-		b.ID,
-		b.Shape.DiskMiB,
-	); err != nil {
-		return err
-	}
-	if err = saveSandbox(s.ctx, tx, b); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (s *Service) admitQuotaRecovery(
@@ -1027,22 +1061,1433 @@ func (s *Service) admitQuotaRecovery(
 	return nil
 }
 
-// Recovery billing never reconstructs shape or owner from mutable public state.
-func (s *Service) quotaRecoveryAllocation(
-	o Operation,
-	step string,
-) (*recoveryAllocation, error) {
-	if !strings.HasPrefix(o.ID, "recovery:") {
-		return nil, nil
+// Allocation groups share the ledger with sandbox recovery, but retain their
+// real subject and frozen inputs instead of borrowing a sandbox identity.
+func allocationGroupID(o Operation) string {
+	if o.Origin != "" {
+		return "allocation:" + o.Origin
 	}
+	return "allocation:" + o.ID
+}
+
+func loadRecoveryTx(
+	ctx context.Context,
+	e executor,
+	id string,
+) (resourceRecovery, error) {
 	var raw []byte
-	err := s.store.db.QueryRowContext(s.ctx, `SELECT a.value FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.operation_id')=? AND json_extract(a.value,'$.step')=?`, o.ID, step).
+	var r resourceRecovery
+	err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, id).
 		Scan(&raw)
+	if err == nil {
+		err = json.Unmarshal(raw, &r)
+	}
+	return r, err
+}
+
+func insertRecovery(ctx context.Context, e executor, r resourceRecovery) error {
+	if _, err := e.ExecContext(
+		ctx,
+		`INSERT INTO resource_recovery(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING`,
+		r.ID,
+		encode(r),
+	); err != nil {
+		return err
+	}
+	actual, err := loadRecoveryTx(ctx, e, r.ID)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(encode(actual), encode(r)) {
+		return api.Fail(
+			api.ManualRecovery,
+			"recovery identity conflicts with durable responsibility",
+		)
+	}
+	return nil
+}
+
+func (s *Service) findAllocationGroup(o Operation) (*resourceRecovery, error) {
+	r, err := loadRecoveryTx(s.ctx, s.store.db, allocationGroupID(o))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if r.Kind != "allocation_group" || r.Group == nil {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"allocation group is malformed",
+		)
+	}
+	return &r, nil
+}
+
+func newAllocationGroup(
+	o Operation,
+	subject allocationSubject,
+	t Template,
+) resourceRecovery {
+	return resourceRecovery{
+		ID: allocationGroupID(
+			o,
+		),
+		Source:    o.ID,
+		TenantID:  o.ChargeTenantID,
+		Kind:      "allocation_group",
+		SandboxID: o.Command.SandboxID,
+		Group: &allocationGroup{
+			Subject:  subject,
+			Template: t,
+			Steps:    map[string]allocationStep{},
+		},
+	}
+}
+
+func validateGroupSource(
+	ctx context.Context,
+	e executor,
+	r resourceRecovery,
+) error {
+	var raw []byte
+	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
+		Scan(&raw); err != nil {
+		return err
+	}
+	var source Operation
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return err
+	}
+	if r.Group == nil || source.ID != r.Source ||
+		source.ChargeTenantID != r.TenantID ||
+		source.Command.Template == nil ||
+		!bytes.Equal(
+			encode(*source.Command.Template),
+			encode(r.Group.Template),
+		) {
+		return api.Fail(
+			api.ManualRecovery,
+			"allocation group differs from original public intent",
+		)
+	}
+	if r.Group.Subject.Kind == "sandbox" {
+		found := false
+		for _, id := range source.IDs {
+			if id == r.Group.Subject.ID {
+				found = true
+			}
+		}
+		if source.Command.Action != "claim" || !found {
+			return api.Fail(
+				api.ManualRecovery,
+				"allocation subject is not its original sandbox",
+			)
+		}
+	}
+	if source.Command.Action == "template_put" &&
+		r.Group.Template.SnapshotID != "" {
+		q := r.Group.SnapshotSource
+		if q == nil || q.ID == "" || q.Owner != r.TenantID ||
+			q.SnapshotID != r.Group.Template.SnapshotID ||
+			q.Shape != r.Group.Template.Shape ||
+			q.SourceOperation == "" ||
+			q.SourceKind == "" ||
+			(q.Kind != "checkpoint" && q.Kind != "sleep" && q.Kind != "group" && q.Kind != "external") ||
+			(q.Config != nil && q.Config.Shape != q.Shape) ||
+			(q.Kind == "external" && (q.Config == nil || q.ID != q.SnapshotID)) {
+			return api.Fail(
+				api.ManualRecovery,
+				"template quote lost its frozen source",
+			)
+		}
+		var owners int
+		if err := e.QueryRowContext(ctx, `SELECT count(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind=?`, q.SnapshotID, q.Owner, q.SourceOperation, q.SourceKind).
+			Scan(&owners); err != nil {
+			return err
+		}
+		if owners != 1 {
+			return api.Fail(
+				api.ManualRecovery,
+				"template source provenance changed",
+			)
+		}
+	}
+	return nil
+}
+
+func groupHolder(
+	r resourceRecovery,
+) string {
+	return r.Group.Subject.Kind + ":" + r.Group.Subject.ID
+}
+
+func addGroupAllocation(
+	ctx context.Context,
+	tx *sql.Tx,
+	r *resourceRecovery,
+	o Operation,
+	step, kind string,
+	storage int64,
+	request api.Request,
+	bound bool,
+) error {
+	request.Key = stepKey(o, step)
+	a := recoveryAllocation{
+		OperationID:    o.ID,
+		TenantID:       o.TenantID,
+		ChargeTenantID: o.ChargeTenantID,
+		Shape:          r.Group.Template.Shape,
+		Subject:        r.Group.Subject,
+		Step:           step,
+		Kind:           kind,
+		Request:        request,
+		RequestBound:   bound,
+		Resolution:     allocationResolution{State: "unresolved"},
+	}
+	if r.Group.Subject.Kind == "sandbox" {
+		a.SandboxID = r.Group.Subject.ID
+	}
+	if err := putQuotaResource(
+		ctx,
+		tx,
+		quotaResource{
+			Tenant:  o.ChargeTenantID,
+			Kind:    "pending_storage",
+			Key:     request.Key,
+			Storage: storage,
+			Source:  o.ID,
+		},
+		quotaRef{Kind: "engine_dependency", ID: groupHolder(*r)},
+	); err != nil {
+		return err
+	}
+	r.Allocations = append(r.Allocations, a)
+	r.Group.Steps[step] = allocationStep{Request: request, Bound: bound}
+	return nil
+}
+
+func (s *Service) admitBuildTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	o Operation,
+	t Template,
+) error {
+	r := newAllocationGroup(o, allocationSubject{Kind: "build", ID: o.ID}, t)
+	if err := putQuotaResource(
+		ctx,
+		tx,
+		quotaResource{
+			Tenant: o.ChargeTenantID,
+			Kind:   "build_slot",
+			Key:    o.ID,
+			Slots:  1,
+			Source: o.ID,
+		},
+		quotaRef{Kind: "active_use", ID: groupHolder(r)},
+	); err != nil {
+		return err
+	}
+	request := api.Request{
+		Action: "create",
+		Config: &api.Config{
+			Image: t.Image,
+			Shape: t.Shape,
+			Labels: map[string]string{
+				"sandboxd":     "build",
+				"operation_id": o.ID,
+			},
+		},
+	}
+	if err := addGroupAllocation(
+		ctx,
+		tx,
+		&r,
+		o,
+		"build-create",
+		"vm_disk",
+		t.Shape.DiskMiB,
+		request,
+		true,
+	); err != nil {
+		return err
+	}
+	if err := addGroupAllocation(
+		ctx,
+		tx,
+		&r,
+		o,
+		"build-snapshot",
+		"snapshot",
+		t.Shape.DiskMiB+t.Shape.MemoryMiB,
+		api.Request{Action: "snapshot"},
+		false,
+	); err != nil {
+		return err
+	}
+	return insertRecovery(ctx, tx, r)
+}
+
+func groupAllocation(r *resourceRecovery, step string) *recoveryAllocation {
+	for i := range r.Allocations {
+		if r.Allocations[i].Step == step {
+			return &r.Allocations[i]
+		}
+	}
+	return nil
+}
+
+func (s *Service) allocationEngine(
+	o Operation,
+	step string,
+	request api.Request,
+) (api.Operation, error) {
+	request.Key = stepKey(o, step)
+	if o.Origin != "" {
+		step = request.Key
+	}
+	ownership := s.lockResourceOwnership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		ownership()
+		return api.Operation{}, err
+	}
+	r, err := loadRecoveryTx(s.ctx, tx, allocationGroupID(o))
+	if err == nil {
+		var raw []byte
+		err = tx.QueryRowContext(s.ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
+			Scan(&raw)
+		var current Operation
+		if err == nil {
+			err = json.Unmarshal(raw, &current)
+		}
+		if err == nil && recoveryTerminal(current.Status) {
+			err = api.Fail(
+				api.ManualRecovery,
+				"terminal allocation intent cannot dispatch lifecycle work",
+			)
+		}
+	}
+	if err == nil && (r.Group == nil || r.Group.Gate != nil) {
+		err = api.Fail(api.ManualRecovery, "allocation lifecycle is gated")
+	}
+	if err == nil && request.Action == "delete" {
+		err = api.Fail(
+			api.ManualRecovery,
+			"allocation deletion requires a qualified durable destination",
+		)
+	}
+	if err == nil &&
+		(request.Action == "create" || request.Action == "clone" || request.Action == "snapshot" || request.Action == "restore") {
+		a := groupAllocation(&r, step)
+		if a == nil {
+			err = api.Fail(
+				api.ManualRecovery,
+				"allocation step has no reservation descriptor",
+			)
+		} else {
+			var pending int
+			err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`, r.TenantID, a.Request.Key).
+				Scan(&pending)
+			if err == nil && pending != 1 && a.Resolution.Proof == nil {
+				err = api.Fail(
+					api.ManualRecovery,
+					"allocation step has no durable pending responsibility",
+				)
+			}
+		}
+	}
+	var frozen allocationStep
+	if err == nil {
+		var exists bool
+		frozen, exists = r.Group.Steps[step]
+		if exists && frozen.Bound &&
+			!bytes.Equal(encode(frozen.Request), encode(request)) {
+			err = api.Fail(api.ManualRecovery, "allocation request changed")
+		}
+		if err == nil && (!exists || !frozen.Bound) {
+			if request.Action == "snapshot" || request.Action == "start" {
+				identity := r.Group.Identity
+				if identity == nil || identity.VM != request.VMID {
+					err = api.Fail(
+						api.ManualRecovery,
+						"step has no frozen VM identity",
+					)
+				}
+				if err == nil && request.Action == "snapshot" &&
+					(identity.Instance == "" || request.ExpectedInstance != identity.Instance) {
+					err = api.Fail(
+						api.ManualRecovery,
+						"capture has no successful generation witness",
+					)
+				}
+				if err == nil && request.Action == "snapshot" {
+					var disks int
+					err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND storage_mib=?`, r.TenantID, identity.VM, identity.Shape.DiskMiB).
+						Scan(&disks)
+					if err == nil && disks != 1 {
+						err = api.Fail(
+							api.ManualRecovery,
+							"capture lost its source disk responsibility",
+						)
+					}
+				}
+			}
+			frozen = allocationStep{Request: request, Bound: true}
+			if a := groupAllocation(&r, step); a != nil {
+				a.Request = request
+				a.RequestBound = true
+			}
+		}
+		if err == nil {
+			frozen.Dispatched = true
+			r.Group.Steps[step] = frozen
+			err = writeRecovery(s.ctx, tx, r)
+		}
+	}
+	if err == nil {
+		err = tx.Commit()
+	} else {
+		_ = tx.Rollback()
+	}
+	ownership()
+	if err != nil {
+		return api.Operation{}, err
+	}
+	proof, engineErr := api.Wait(s.ctx, s.opts.Engine, request)
+	if proof.Key == "" {
+		return proof, engineErr
+	}
+	if err = s.adoptGroupReceipt(r.ID, step, proof); err != nil {
+		return proof, errors.Join(engineErr, err)
+	}
+	return proof, engineErr
+}
+
+func (s *Service) adoptGroupReceipt(
+	id, step string,
+	proof api.Operation,
+) error {
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	r, err := loadRecoveryTx(s.ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err = validateGroupSource(s.ctx, tx, r); err != nil {
+		return err
+	}
+	frozen, ok := r.Group.Steps[step]
+	if !ok || !frozen.Bound || proof.ID == "" ||
+		proof.Key != frozen.Request.Key ||
+		!bytes.Equal(encode(proof.Request), encode(frozen.Request)) {
+		return api.Fail(
+			api.ManualRecovery,
+			"receipt differs from frozen group request",
+		)
+	}
+	if frozen.Proof != nil && recoveryTerminal(frozen.Proof.Status) &&
+		!bytes.Equal(encode(*frozen.Proof), encode(proof)) {
+		return api.Fail(
+			api.ManualRecovery,
+			"terminal allocation receipt changed",
+		)
+	}
+	frozen.Proof = &proof
+	r.Group.Steps[step] = frozen
+	a := groupAllocation(&r, step)
+	if a != nil && !a.Resolution.delivered() {
+		key := proof.VMID
+		if a.Kind == "snapshot" {
+			key = proof.SnapshotID
+		}
+		var pending int
+		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`, r.TenantID, a.Request.Key).
+			Scan(&pending); err != nil {
+			return err
+		}
+		if key != "" && pending == 1 {
+			cost := a.Shape.DiskMiB
+			if a.Kind == "snapshot" {
+				cost += a.Shape.MemoryMiB
+			}
+			if err = putQuotaResource(
+				s.ctx,
+				tx,
+				quotaResource{
+					Tenant:  r.TenantID,
+					Kind:    a.Kind,
+					Key:     key,
+					Storage: cost,
+					Source:  a.OperationID,
+				},
+				quotaRef{Kind: "cleanup", ID: groupHolder(r)},
+			); err != nil {
+				return err
+			}
+			if a.Kind == "vm_disk" {
+				if err = putQuotaRef(
+					s.ctx,
+					tx,
+					r.TenantID,
+					a.Kind,
+					key,
+					quotaRef{Kind: "cleanup", ID: "vm:" + key},
+				); err != nil {
+					return err
+				}
+				if a.Request.SnapshotID != "" {
+					if err = putQuotaRef(
+						s.ctx,
+						tx,
+						r.TenantID,
+						"snapshot",
+						a.Request.SnapshotID,
+						quotaRef{Kind: "active_use", ID: "backing:" + key},
+					); err != nil {
+						return err
+					}
+				}
+			} else {
+				if err = recordSnapshotOwner(
+					s.ctx,
+					tx,
+					key,
+					r.TenantID,
+					a.OperationID,
+					"captured",
+				); err != nil {
+					return err
+				}
+				if err = putQuotaRef(
+					s.ctx,
+					tx,
+					r.TenantID,
+					"snapshot",
+					key,
+					quotaRef{
+						Kind: "engine_dependency",
+						ID:   "operation:" + r.Source,
+					},
+				); err != nil {
+					return err
+				}
+			}
+			if err = deleteQuotaRows(
+				s.ctx,
+				tx,
+				`FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
+				r.TenantID,
+				a.Request.Key,
+			); err != nil {
+				return err
+			}
+		}
+		if key == "" && recoveryTerminal(proof.Status) {
+			if err = deleteQuotaRows(
+				s.ctx,
+				tx,
+				`FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
+				r.TenantID,
+				a.Request.Key,
+			); err != nil {
+				return err
+			}
+			a.Resolution = allocationResolution{
+				State:       "reclaimed",
+				Proof:       &proof,
+				Destination: "terminal-no-allocation:" + proof.ID,
+			}
+		} else if recoveryTerminal(proof.Status) {
+			a.Resolution = allocationResolution{
+				State: "result_known",
+				Proof: &proof,
+			}
+		}
+		if key != "" && a.Kind == "vm_disk" {
+			if r.Group.Identity == nil {
+				r.Group.Identity = &allocationIdentity{
+					VM:      key,
+					Owner:   r.TenantID,
+					Shape:   a.Shape,
+					Source:  a.OperationID,
+					Receipt: proof,
+				}
+			}
+			if r.Group.Identity.VM != key {
+				return api.Fail(
+					api.ManualRecovery,
+					"allocation returned another VM",
+				)
+			}
+			if recoveryTerminal(proof.Status) {
+				r.Group.Identity.Receipt = proof
+			}
+			if proof.Status == "succeeded" && proof.Request.Action == "clone" &&
+				proof.ResultInstance != "" {
+				r.Group.Identity.Instance = proof.ResultInstance
+				r.Group.Identity.Generation = &proof
+			}
+		}
+	}
+	if proof.Request.Action == "start" && proof.Status == "succeeded" &&
+		proof.ResultInstance != "" {
+		identity := r.Group.Identity
+		if identity == nil || identity.VM != proof.VMID ||
+			proof.Request.VMID != identity.VM {
+			return api.Fail(api.ManualRecovery, "start returned another VM")
+		}
+		identity.Instance = proof.ResultInstance
+		identity.Generation = &proof
+	}
+	if err = writeRecovery(s.ctx, tx, r); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Full shape is obtained from a durable capture or import, before admission's
+// write lock. Authorization is checked before reporting missing provenance.
+func groupSnapshotSource(r resourceRecovery, sid string) bool {
+	if r.Group == nil {
+		return false
+	}
+	if r.Group.Template.SnapshotID == sid {
+		return true
+	}
+	for _, a := range r.Allocations {
+		if a.Kind == "snapshot" && a.Resolution.Proof != nil &&
+			a.Resolution.Proof.SnapshotID == sid {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) templateSource(
+	ctx context.Context,
+	p Principal,
+	t Template,
+) (*templateSnapshotSource, error) {
+	ownerErr := requireSnapshotOwner(ctx, s.store.db, t.SnapshotID, p.TenantID)
+	if ownerErr != nil && (!p.Root || !isCode(ownerErr, api.NotFound)) {
+		return nil, ownerErr
+	}
+	var foreign int
+	if err := s.store.db.QueryRowContext(ctx, `SELECT count(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id!=?`, t.SnapshotID, p.TenantID).
+		Scan(&foreign); err != nil {
+		return nil, err
+	}
+	if foreign != 0 {
+		return nil, api.Fail(api.NotFound, "not found")
+	}
+	quote := &templateSnapshotSource{
+		SnapshotID: t.SnapshotID,
+		Owner:      p.TenantID,
+		Shape:      t.Shape,
+	}
+	var raw []byte
+	err := s.store.db.QueryRowContext(ctx, `SELECT 'checkpoint',id,body FROM checkpoints WHERE tenant=? AND json_extract(body,'$.snapshot_id')=? UNION ALL SELECT 'sleep',id,body FROM sandboxes WHERE tenant=? AND json_extract(body,'$.snapshot_id')=? LIMIT 1`, p.TenantID, t.SnapshotID, p.TenantID, t.SnapshotID).
+		Scan(&quote.Kind, &quote.ID, &raw)
+	if err == nil {
+		var source struct {
+			Shape api.Shape `json:"shape"`
+		}
+		if err = json.Unmarshal(raw, &source); err != nil {
+			return nil, err
+		}
+		if source.Shape != t.Shape {
+			return nil, api.Fail(
+				api.Conflict,
+				"template shape differs from trusted snapshot",
+			)
+		}
+		return quote, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	groups, err := s.resourceRecoveries()
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range groups {
+		if r.TenantID != p.TenantID || !groupSnapshotSource(r, t.SnapshotID) {
+			continue
+		}
+		if r.Group.Template.Shape != t.Shape {
+			return nil, api.Fail(
+				api.Conflict,
+				"template shape differs from frozen capture",
+			)
+		}
+		quote.Kind = "group"
+		quote.ID = r.ID
+		if r.Group.SnapshotSource != nil &&
+			r.Group.SnapshotSource.Config != nil {
+			config := *r.Group.SnapshotSource.Config
+			config.Labels = maps.Clone(config.Labels)
+			quote.Config = &config
+		}
+		if quote.Config == nil && r.Group.Identity != nil &&
+			r.Group.Identity.Receipt.Request.Config != nil {
+			config := *r.Group.Identity.Receipt.Request.Config
+			config.Labels = maps.Clone(config.Labels)
+			quote.Config = &config
+		}
+		return quote, nil
+	}
+	if !p.Root {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"snapshot has no trusted full shape",
+		)
+	}
+	snap, err := s.opts.Engine.GetSnapshot(ctx, t.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	if snap.ID != t.SnapshotID || !snap.Published || snap.Deleting ||
+		snap.Config.Shape != t.Shape {
+		return nil, api.Fail(
+			api.Incompatible,
+			"import snapshot shape or publication differs",
+		)
+	}
+	quote.Kind = "external"
+	quote.ID = snap.ID
+	config := snap.Config
+	config.Labels = maps.Clone(config.Labels)
+	quote.Config = &config
+	return quote, nil
+}
+
+func recheckTemplateSource(
+	ctx context.Context,
+	q executor,
+	source *templateSnapshotSource,
+	t Template,
+	owner string,
+) error {
+	if source == nil || source.Owner != owner ||
+		source.SnapshotID != t.SnapshotID ||
+		source.Shape != t.Shape {
+		return api.Fail(
+			api.ManualRecovery,
+			"template source quote differs from admission",
+		)
+	}
+	if source.Config != nil && source.Config.Shape != t.Shape {
+		return api.Fail(
+			api.ManualRecovery,
+			"template source Config differs from its shape",
+		)
+	}
+	var raw []byte
+	var err error
+	switch source.Kind {
+	case "checkpoint":
+		err = q.QueryRowContext(ctx, `SELECT body FROM checkpoints WHERE id=? AND tenant=?`, source.ID, owner).
+			Scan(&raw)
+	case "sleep":
+		err = q.QueryRowContext(ctx, `SELECT body FROM sandboxes WHERE id=? AND tenant=?`, source.ID, owner).
+			Scan(&raw)
+	case "group":
+		var r resourceRecovery
+		r, err = loadRecoveryTx(ctx, q, source.ID)
+		if err == nil &&
+			(r.TenantID != owner || !groupSnapshotSource(r, t.SnapshotID) || r.Group.Template.Shape != t.Shape) {
+			err = api.Fail(api.Conflict, "frozen snapshot source changed")
+		}
+		if err == nil {
+			err = validateGroupSource(ctx, q, r)
+		}
+		return err
+	case "external":
+		if source.ID != t.SnapshotID || source.Config == nil {
+			return api.Fail(
+				api.ManualRecovery,
+				"external snapshot quote is incomplete",
+			)
+		}
+		return nil
+	default:
+		return api.Fail(api.ManualRecovery, "unknown template source")
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return api.Fail(
+			api.Conflict,
+			"template source retired during admission",
+		)
+	}
+	if err != nil {
+		return err
+	}
+	var current struct {
+		TenantID   string    `json:"tenant_id"`
+		SnapshotID string    `json:"snapshot_id"`
+		Shape      api.Shape `json:"shape"`
+	}
+	if err = json.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.TenantID != owner || current.SnapshotID != source.SnapshotID ||
+		current.Shape != source.Shape {
+		return api.Fail(
+			api.Conflict,
+			"template source changed during admission",
+		)
+	}
+	return nil
+}
+
+func (s *store) validateAllocationGroups(ctx context.Context) error {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind') IN ('allocation_group','allocation_cleanup')`,
+	)
+	if err != nil {
+		return err
+	}
+	var groups []resourceRecovery
+	for rows.Next() {
+		var raw []byte
+		var r resourceRecovery
+		if err = rows.Scan(&raw); err == nil {
+			err = json.Unmarshal(raw, &r)
+		}
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		groups = append(groups, r)
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, r := range groups {
+		if r.TenantID == "" || r.Source == "" {
+			return api.Fail(api.ManualRecovery, "group has no owner or source")
+		}
+		if r.Kind == "allocation_cleanup" {
+			if r.Deletion == nil || r.Deletion.Identity.Instance == "" ||
+				r.ID != allocationCollectorID(
+					r.TenantID,
+					r.Deletion.Subject,
+					r.Deletion.Identity.VM,
+					r.Deletion.Identity.Instance,
+				) {
+				return api.Fail(
+					api.ManualRecovery,
+					"cleanup identity is invalid",
+				)
+			}
+			parent, e := loadRecoveryTx(ctx, s.db, r.Deletion.Group)
+			if e != nil {
+				return e
+			}
+			if e = validateAllocationDeletion(r, parent); e != nil {
+				return e
+			}
+			continue
+		}
+		g := r.Group
+		if g == nil || r.ID != "allocation:"+r.Source || g.Subject.ID == "" ||
+			(g.Subject.Kind != "build" && g.Subject.Kind != "warm" && g.Subject.Kind != "sandbox") ||
+			g.Template.Shape.VCPUs < 1 ||
+			g.Template.Shape.DiskMiB < 64 ||
+			g.Template.Shape.MemoryMiB < 128 {
+			return api.Fail(
+				api.ManualRecovery,
+				"allocation subject or shape is invalid",
+			)
+		}
+		if g.Gate != nil &&
+			(g.Gate.Reason != "generation_witness_missing" || g.Gate.Mode != "observe_absence_only" || r.Done) {
+			return api.Fail(
+				api.ManualRecovery,
+				"invalid allocation observation gate",
+			)
+		}
+		for _, step := range g.Steps {
+			if step.Dispatched && !step.Bound {
+				return api.Fail(
+					api.ManualRecovery,
+					"unbound allocation step was dispatched",
+				)
+			}
+			if step.Proof != nil &&
+				(!step.Dispatched || !step.Bound || step.Proof.ID == "" || step.Proof.Key != step.Request.Key || !bytes.Equal(encode(step.Proof.Request), encode(step.Request))) {
+				return api.Fail(
+					api.ManualRecovery,
+					"step receipt differs from frozen request",
+				)
+			}
+		}
+		if err = validateGroupSource(ctx, s.db, r); err != nil {
+			return err
+		}
+		if g.Identity != nil {
+			if err = validateAllocationProvenance(r); err != nil {
+				return err
+			}
+		}
+		if g.Subject.Kind == "build" && len(r.Allocations) > 0 &&
+			(!r.Done || hasUnresolvedAllocations(r)) {
+			var slot int
+			if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=? AND q.kind='build_slot' AND q.resource_key=? AND q.sandbox_slots=1 AND q.storage_mib=0 AND q.source_operation_id=? AND f.holder_id=?`, r.TenantID, r.Source, r.Source, groupHolder(r)).
+				Scan(&slot); err != nil {
+				return err
+			}
+			if slot != 1 {
+				return api.Fail(
+					api.ManualRecovery,
+					"build slot has no subject responsibility",
+				)
+			}
+		}
+		for _, a := range r.Allocations {
+			if a.Subject != g.Subject || a.Shape != g.Template.Shape ||
+				a.ChargeTenantID != r.TenantID ||
+				a.OperationID != r.Source ||
+				a.Request.Key != stepKey(a.operation(), a.Step) {
+				return api.Fail(
+					api.ManualRecovery,
+					"allocation provenance conflicts",
+				)
+			}
+			if !a.Resolution.delivered() &&
+				a.Resolution.State != "unresolved" &&
+				a.Resolution.State != "result_known" {
+				return api.Fail(
+					api.ManualRecovery,
+					"invalid allocation resolution",
+				)
+			}
+			if a.Resolution.Proof != nil {
+				if err = a.validate(*a.Resolution.Proof); err != nil {
+					return err
+				}
+			}
+			if a.Kind == "vm_disk" && a.Request.SnapshotID != "" &&
+				!a.Resolution.delivered() {
+				var dependency int
+				if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`, r.TenantID, a.Request.SnapshotID, "operation:"+r.Source).
+					Scan(&dependency); err != nil {
+					return err
+				}
+				if dependency != 1 {
+					return api.Fail(
+						api.ManualRecovery,
+						"allocation lost its source snapshot dependency",
+					)
+				}
+			}
+			if a.Kind == "snapshot" {
+				step := g.Steps[a.Step]
+				if step.Proof != nil && step.Proof.SnapshotID != "" {
+					var liveParent int
+					if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM operations WHERE id=? AND status IN ('pending','running')`, r.Source).
+						Scan(&liveParent); err != nil {
+						return err
+					}
+					if !a.Resolution.delivered() ||
+						(a.Resolution.State == "cleanup" && liveParent != 0) {
+						var dependency int
+						if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`, r.TenantID, step.Proof.SnapshotID, "operation:"+r.Source).
+							Scan(&dependency); err != nil {
+							return err
+						}
+						if dependency != 1 {
+							return api.Fail(
+								api.ManualRecovery,
+								"capture lost its publication reader",
+							)
+						}
+					}
+				}
+			}
+			if !a.Resolution.delivered() {
+				step, ok := g.Steps[a.Step]
+				if !ok || step.Bound != a.RequestBound ||
+					!bytes.Equal(encode(step.Request), encode(a.Request)) {
+					return api.Fail(
+						api.ManualRecovery,
+						"allocation step binding conflicts",
+					)
+				}
+				kind, key := a.Kind, ""
+				proof := step.Proof
+				if proof != nil {
+					key = proof.VMID
+					if kind == "snapshot" {
+						key = proof.SnapshotID
+					}
+				}
+				if key == "" {
+					kind = "pending_storage"
+					key = a.Request.Key
+				}
+				cost := a.Shape.DiskMiB
+				if a.Kind == "snapshot" {
+					cost += a.Shape.MemoryMiB
+				}
+				var charged int
+				if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_id=?)`, r.TenantID, kind, key, cost, a.OperationID, groupHolder(r)).
+					Scan(&charged); err != nil {
+					return err
+				}
+				if charged != 1 {
+					return api.Fail(
+						api.ManualRecovery,
+						"allocation lost its cost or subject reference",
+					)
+				}
+			}
+		}
+	}
+	var catalogBad int
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM templates t WHERE COALESCE(json_extract(t.body,'$.snapshot_id'),'')!='' AND (NOT EXISTS(SELECT 1 FROM snapshot_owners o WHERE o.snapshot_id=json_extract(t.body,'$.snapshot_id') AND o.tenant_id=t.tenant) OR NOT EXISTS(SELECT 1 FROM quota_resources q JOIN quota_refs f USING(tenant_id,kind,resource_key) WHERE q.tenant_id=t.tenant AND q.kind='snapshot' AND q.resource_key=json_extract(t.body,'$.snapshot_id') AND q.storage_mib=json_extract(t.body,'$.shape.disk_mib')+json_extract(t.body,'$.shape.memory_mib') AND f.holder_kind='active_use' AND f.holder_id='template:'||t.id))`).
+		Scan(&catalogBad); err != nil {
+		return err
+	}
+	if catalogBad != 0 {
+		return api.Fail(
+			api.ManualRecovery,
+			"template catalog lost its snapshot cost, owner or holder",
+		)
+	}
+	return nil
+}
+
+func (s *Service) selectWarmTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	t Template,
+) (*resourceRecovery, error) {
+	var vm string
+	err := tx.QueryRowContext(ctx, `SELECT vm_id FROM warm WHERE template_id=? AND snapshot_id=? ORDER BY created_at,vm_id LIMIT 1`, t.ID, t.SnapshotID).
+		Scan(&vm)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var raw []byte
+	err = tx.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, vm).
+		Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"ready warm VM has no durable provenance",
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r resourceRecovery
+	if err = json.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	g := r.Group
+	if g == nil || g.Identity == nil || g.Gate != nil ||
+		r.TenantID != t.TenantID ||
+		g.Template.ID != t.ID ||
+		g.Template.SnapshotID != t.SnapshotID ||
+		g.Template.Shape != t.Shape ||
+		g.Identity.Instance == "" ||
+		g.Identity.Generation == nil ||
+		g.Identity.Generation.Status != "succeeded" ||
+		g.Identity.Generation.ResultInstance != g.Identity.Instance ||
+		g.Identity.Generation.VMID != vm ||
+		len(r.Allocations) != 1 ||
+		r.Allocations[0].Resolution.State != "active" ||
+		r.Allocations[0].Resolution.Destination != "warm:"+vm {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"ready warm provenance does not match template",
+		)
+	}
+	var cost int64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_mib FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=?`, t.TenantID, vm).
+		Scan(&cost); err != nil {
+		return nil, err
+	}
+	if cost != t.Shape.DiskMiB {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"ready warm disk cost mismatch",
+		)
+	}
+	var refs int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, t.TenantID, vm, "warm:"+vm).
+		Scan(&refs); err != nil {
+		return nil, err
+	}
+	if refs != 1 {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"ready warm disk holder is missing",
+		)
+	}
+	if t.SnapshotID != "" {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, t.TenantID, t.SnapshotID, "backing:"+vm).
+			Scan(&refs); err != nil {
+			return nil, err
+		}
+		if refs != 1 {
+			return nil, api.Fail(
+				api.ManualRecovery,
+				"ready warm backing holder is missing",
+			)
+		}
+	}
+	return &r, nil
+}
+
+func (s *Service) claimWarmTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	o Operation,
+	b *Sandbox,
+	t Template,
+	refill resourceRecovery,
+) error {
+	i := *refill.Group.Identity
+	result, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?`,
+		i.VM,
+		t.ID,
+		t.SnapshotID,
+	)
+	if err = requireSQLWrite(result, err); err != nil {
+		return err
+	}
+	if err = deleteQuotaRows(
+		ctx,
+		tx,
+		`FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`,
+		t.TenantID,
+		i.VM,
+		"warm:"+i.VM,
+	); err != nil {
+		return err
+	}
+	if err = putQuotaRef(
+		ctx,
+		tx,
+		t.TenantID,
+		"vm_disk",
+		i.VM,
+		quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID},
+	); err != nil {
+		return err
+	}
+	refill.Allocations[0].Resolution.Destination = "sandbox:" + b.ID
+	if err = writeRecovery(ctx, tx, refill); err != nil {
+		return err
+	}
+	r := newAllocationGroup(o, allocationSubject{Kind: "sandbox", ID: b.ID}, t)
+	r.SandboxID = b.ID
+	r.Group.Selection = &warmSelection{
+		Refill:   refill.ID,
+		Identity: i,
+		Stage:    "selected",
+	}
+	b.VMID = i.VM
+	b.Instance = i.Instance
+	b.ProvisionSource = "warm"
+	return insertRecovery(ctx, tx, r)
+}
+
+func (s *Service) commitSelectionActiveTx(
+	tx *sql.Tx,
+	o Operation,
+	b Sandbox,
+	target *activationTarget,
+) error {
+	r, err := loadRecoveryTx(s.ctx, tx, "allocation:"+target.Origin)
+	if err != nil {
+		return err
+	}
+	selection := r.Group.Selection
+	current, err := getSandbox(s.ctx, tx, b.ID)
+	if err != nil {
+		return err
+	}
+	if selection == nil || selection.Stage != "selected" ||
+		current.State != "provisioning" ||
+		current.OperationID != target.Origin ||
+		current.VMID != target.VM ||
+		current.Instance != target.Instance ||
+		current.TenantID != r.TenantID ||
+		selection.Identity.VM != target.VM ||
+		selection.Identity.Instance != target.Instance {
+		return api.Fail(api.Conflict, "warm selection publication changed")
+	}
+	selection.Stage = "active"
+	r.Done = true
+	return writeRecovery(s.ctx, tx, r)
+}
+
+func (s *Service) poolOccupationTx(
+	ctx context.Context,
+	e executor,
+	t Template,
+) (int, error) {
+	var count int
+	err := e.QueryRowContext(ctx, `SELECT count(*) FROM resource_recovery r WHERE json_extract(r.body,'$.kind')='allocation_group' AND json_extract(r.body,'$.allocation_group.subject.kind')='warm' AND json_extract(r.body,'$.allocation_group.template.id')=? AND EXISTS(SELECT 1 FROM json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.resolution.state') IN ('unresolved','result_known','cleanup') OR (json_extract(a.value,'$.resolution.state')='active' AND json_extract(a.value,'$.resolution.destination') LIKE 'warm:%'))`, t.ID).
+		Scan(&count)
+	return count, err
+}
+
+func (s *Service) admitRefill(t Template) (*Operation, error) {
+	pool := s.lock("pool:" + t.ID)
+	defer pool()
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	current, err := getTemplateTx(s.ctx, tx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	if current.State != "ready" || current.TenantID != t.TenantID ||
+		current.Shape != t.Shape ||
+		current.SnapshotID != t.SnapshotID {
+		return nil, nil
+	}
+	occupied, err := s.poolOccupationTx(s.ctx, tx, current)
+	if err != nil {
+		return nil, err
+	}
+	if occupied >= current.TargetWarm {
+		return nil, nil
+	}
+	s.mu.Lock()
+	draining := s.draining
+	s.mu.Unlock()
+	if draining {
+		return nil, nil
+	}
+	o := Operation{
+		ID:             newID("op_"),
+		Key:            newID("refill_"),
+		TenantID:       t.TenantID,
+		ChargeTenantID: t.TenantID,
+		Command: Command{
+			Action:     "refill",
+			TemplateID: t.ID,
+			Template:   &current,
+		},
+		Status:    "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	o.Hash = s.store.sign(o.ID)
+	if err = s.quota(
+		s.ctx,
+		tx,
+		Principal{TenantID: t.TenantID},
+		0,
+		t.Shape.DiskMiB,
+	); err != nil {
+		if !isCode(err, api.Exhausted) && !isCode(err, api.NotFound) {
+			return nil, err
+		}
+		o.Status = "failed"
+		o.FinishedAt = time.Now().UTC()
+		o.Error = internalError(err)
+		if err = saveOp(s.ctx, tx, o); err != nil {
+			return nil, err
+		}
+		return nil, tx.Commit()
+	}
+	if err = requireSnapshotOwner(
+		s.ctx,
+		tx,
+		t.SnapshotID,
+		t.TenantID,
+	); err != nil {
+		return nil, err
+	}
+	r := newAllocationGroup(
+		o,
+		allocationSubject{Kind: "warm", ID: o.ID},
+		current,
+	)
+	if err = addGroupAllocation(
+		s.ctx,
+		tx,
+		&r,
+		o,
+		"warm-clone",
+		"vm_disk",
+		t.Shape.DiskMiB,
+		api.Request{Action: "clone", SnapshotID: t.SnapshotID},
+		true,
+	); err != nil {
+		return nil, err
+	}
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		t.TenantID,
+		"snapshot",
+		t.SnapshotID,
+		quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
+	); err != nil {
+		return nil, err
+	}
+	if err = insertRecovery(s.ctx, tx, r); err != nil {
+		return nil, err
+	}
+	if err = saveOp(s.ctx, tx, o); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (s *Service) prepareBuildRetirement(o Operation) error {
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	r, err := loadRecoveryTx(s.ctx, tx, allocationGroupID(o))
+	if err != nil {
+		return err
+	}
+	for index := range r.Allocations {
+		a := &r.Allocations[index]
+		if a.Kind != "snapshot" || a.Resolution.delivered() {
+			continue
+		}
+		if a.Resolution.Proof == nil ||
+			a.Resolution.Proof.Status != "succeeded" ||
+			a.Resolution.Proof.SnapshotID == "" {
+			return api.Fail(
+				api.ManualRecovery,
+				"build capture has not delivered its identity",
+			)
+		}
+		c, e := snapshotCollector(
+			s.ctx,
+			tx,
+			r.TenantID,
+			a.Resolution.Proof.SnapshotID,
+			r.Source,
+		)
+		if e != nil {
+			return e
+		}
+		a.Resolution.State = "cleanup"
+		a.Resolution.Destination = c.ID
+		if err = putQuotaRef(
+			s.ctx,
+			tx,
+			r.TenantID,
+			"snapshot",
+			a.Resolution.Proof.SnapshotID,
+			quotaRef{Kind: "engine_dependency", ID: "operation:" + o.ID},
+		); err != nil {
+			return err
+		}
+	}
+	if err = writeRecovery(s.ctx, tx, r); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) commitGroupActiveTx(
+	tx *sql.Tx,
+	b Sandbox,
+	target *activationTarget,
+) error {
+	r, err := loadRecoveryTx(s.ctx, tx, "allocation:"+target.Origin)
+	if err != nil {
+		return err
+	}
+	current, err := getSandbox(s.ctx, tx, b.ID)
+	if err != nil {
+		return err
+	}
+	if r.Group == nil || r.Group.Identity == nil ||
+		current.State != "provisioning" ||
+		current.OperationID != target.Origin ||
+		current.TenantID != r.TenantID ||
+		current.VMID != target.VM ||
+		r.Group.Identity.VM != target.VM ||
+		r.Group.Identity.Instance != target.Instance ||
+		b.Instance != target.Instance {
+		return api.Fail(api.Conflict, "allocation publication changed")
+	}
+	for index := range r.Allocations {
+		a := &r.Allocations[index]
+		if a.Kind == "vm_disk" && a.Resolution.Proof != nil &&
+			a.Resolution.Proof.VMID == target.VM {
+			a.Resolution.State = "active"
+			a.Resolution.Destination = "sandbox:" + b.ID
+		}
+	}
+	r.Done = true
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		r.TenantID,
+		"vm_disk",
+		target.VM,
+		quotaRef{Kind: "active_use", ID: "sandbox:" + b.ID},
+	); err != nil {
+		return err
+	}
+	if err = deleteQuotaRows(
+		s.ctx,
+		tx,
+		`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
+		r.TenantID,
+		"operation:"+r.Source,
+	); err != nil {
+		return err
+	}
+	return writeRecovery(s.ctx, tx, r)
+}
+
+// Recovery billing never reconstructs shape or owner from mutable public state.
+func (s *Service) quotaRecoveryAllocation(
+	o Operation,
+	step string,
+) (*recoveryAllocation, error) {
+	var raw []byte
+	var matches int
+	err := s.store.db.QueryRowContext(s.ctx, `SELECT a.value,count(*) OVER() FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.operation_id')=? AND json_extract(a.value,'$.step')=?`, o.ID, step).
+		Scan(&raw, &matches)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if matches != 1 {
+		return nil, api.Fail(
+			api.ManualRecovery,
+			"allocation step has multiple descriptors",
+		)
 	}
 	var a recoveryAllocation
 	if err = json.Unmarshal(raw, &a); err != nil {

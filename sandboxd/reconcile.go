@@ -264,109 +264,75 @@ func (s *Service) pools() {
 		}
 		rows, e := s.store.db.QueryContext(
 			s.ctx,
-			"SELECT vm_id,snapshot_id FROM warm WHERE template_id=?",
+			`SELECT vm_id,snapshot_id FROM warm WHERE template_id=? ORDER BY created_at,vm_id`,
 			t.ID,
 		)
 		if e != nil {
 			continue
 		}
-		type member struct{ vm, snap string }
+		type member struct{ vm, sid string }
 		var members []member
 		for rows.Next() {
 			var m member
-			if e = rows.Scan(&m.vm, &m.snap); e != nil {
+			if e = rows.Scan(&m.vm, &m.sid); e != nil {
 				break
 			}
 			members = append(members, m)
 		}
-		re := errors.Join(rows.Err(), rows.Close())
-		if e != nil || re != nil {
+		if re := errors.Join(rows.Err(), rows.Close()); e != nil || re != nil {
 			continue
 		}
 		healthy := 0
 		for _, m := range members {
-			v, e := s.opts.Engine.GetVM(s.ctx, m.vm)
-			if e != nil && !isCode(e, api.NotFound) {
+			var raw []byte
+			if e = s.store.db.QueryRowContext(s.ctx, `SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, m.vm).
+				Scan(&raw); e != nil {
 				continue
 			}
-			if m.snap == t.SnapshotID && e == nil && v.Verified &&
+			var group resourceRecovery
+			if e = json.Unmarshal(raw, &group); e != nil {
+				continue
+			}
+			v, lookup := s.opts.Engine.GetVM(s.ctx, m.vm)
+			if lookup != nil && !isCode(lookup, api.NotFound) {
+				continue
+			}
+			if lookup == nil && validAllocationIdentity(group, v) == nil &&
+				m.sid == t.SnapshotID &&
 				v.Phase == "running" &&
 				v.AgentReady &&
-				!v.NetworkActual {
+				!v.NetworkActual &&
+				healthy < t.TargetWarm {
 				probe, cancel := context.WithTimeout(s.ctx, time.Second)
 				e = s.opts.Agent.Info(probe, v)
 				cancel()
-				if e == nil && healthy < t.TargetWarm {
+				if e == nil {
 					healthy++
 					continue
 				}
 			}
-			// Transfer out of the pool and delete under the same guard as claim.
-			unlock := s.lock("pool:" + t.ID)
-			ownership := s.lockResourceOwnership()
-			res, e := s.store.db.ExecContext(
-				s.ctx,
-				"DELETE FROM warm WHERE vm_id=?",
-				m.vm,
-			)
-			n := int64(0)
+			pool := s.lock("pool:" + t.ID)
+			if isCode(lookup, api.NotFound) {
+				_ = s.retireAllocationAbsent(group.ID)
+				pool()
+				continue
+			}
+			collector, e := s.handoffAllocationCleanup(group.ID, v, true)
+			pool()
 			if e == nil {
-				n, _ = res.RowsAffected()
+				_ = s.consumeAllocationCleanup(collector)
 			}
-			if n == 1 {
-				_, cleanupErr := api.Wait(
-					s.ctx,
-					s.opts.Engine,
-					api.Request{
-						Key:    "warm-evict:" + m.vm,
-						Action: "delete",
-						VMID:   m.vm,
-					},
-				)
-				if cleanupErr == nil {
-					_ = s.reclaimQuota("vm_disk", m.vm)
-				}
-			}
-			ownership()
-			unlock()
-		}
-		if healthy >= t.TargetWarm {
-			continue
-		}
-		s.mu.Lock()
-		draining := s.draining
-		s.mu.Unlock()
-		if draining {
-			continue
-		}
-		var pending int
-		if e = s.store.db.QueryRowContext(s.ctx, "SELECT count(*) FROM operations WHERE status IN ('pending','running') AND json_extract(body,'$.command.action')='refill' AND json_extract(body,'$.command.template_id')=?", t.ID).
-			Scan(&pending); e != nil {
-			continue
 		}
 		backoff, e := s.refillBackoff(t.ID, time.Now())
 		if e != nil || backoff {
 			continue
 		}
-		for n := healthy + pending; n < t.TargetWarm; n++ {
-			o := Operation{
-				ID:             newID("op_"),
-				Key:            newID("refill_"),
-				TenantID:       t.TenantID,
-				ChargeTenantID: t.TenantID,
-				Command: Command{
-					Action:     "refill",
-					TemplateID: t.ID,
-					Template:   &t,
-				},
-				Status:    "pending",
-				CreatedAt: time.Now().UTC(),
-			}
-			o.Hash = s.store.sign(o.ID)
-			if e = saveOp(s.ctx, s.store.db, o); e != nil {
+		for n := 0; n < t.TargetWarm; n++ {
+			o, e := s.admitRefill(t)
+			if e != nil || o == nil {
 				break
 			}
-			s.start(o)
+			s.start(*o)
 		}
 	}
 }
@@ -377,11 +343,11 @@ func (s *Service) refill(o *Operation) error {
 		s.ctx,
 		s.store.db,
 		t.SnapshotID,
-		o.TenantID,
+		o.ChargeTenantID,
 	); err != nil {
 		return err
 	}
-	v, err := s.engine(
+	proof, err := s.engine(
 		*o,
 		"warm-clone",
 		api.Request{Action: "clone", SnapshotID: t.SnapshotID},
@@ -389,68 +355,133 @@ func (s *Service) refill(o *Operation) error {
 	if err != nil {
 		return err
 	}
-	vm, err := s.opts.Engine.GetVM(s.ctx, v.VMID)
+	group, err := s.loadRecovery(allocationGroupID(*o))
 	if err != nil {
 		return err
 	}
-	if vm.NetworkActual {
-		return api.Fail(api.Conflict, "warm instance network is enabled")
-	}
-	if err = s.opts.Agent.Info(s.ctx, vm); err == nil {
-		err = s.opts.Agent.Activate(
-			s.ctx,
-			vm,
-			Activation{
-				SandboxID:     "warm-" + vm.ID,
-				Hostname:      "sandbox-warm",
-				ResetIdentity: true,
-				Env:           map[string]string{},
-				Network:       "none",
-			},
-		)
-	}
-	if err != nil {
-		_, cleanup := s.engine(
-			*o,
-			"warm-reject",
-			api.Request{Action: "delete", VMID: vm.ID},
-		)
-		if cleanup != nil {
-			return errors.Join(err, cleanup)
-		}
-		return err
-	}
-	unlock := s.lock("template:" + t.ID)
-	defer unlock()
-	current, err := s.store.template(s.ctx, t.ID)
+	vm, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
 	if err != nil {
 		return err
 	}
-	if current.SnapshotID != t.SnapshotID {
-		_, err = s.engine(
-			*o,
-			"warm-stale",
-			api.Request{Action: "delete", VMID: vm.ID},
-		)
+	if err = validAllocationIdentity(group, vm); err != nil {
 		return err
 	}
-	ownership := s.lockResourceOwnership()
-	defer ownership()
-	if err = requireSnapshotOwner(
+	if vm.Phase != "running" || !vm.AgentReady || vm.NetworkActual {
+		return api.Fail(api.Conflict, "warm instance is not isolated and ready")
+	}
+	if err = s.opts.Agent.Info(s.ctx, vm); err != nil {
+		return err
+	}
+	if err = s.opts.Agent.Activate(
 		s.ctx,
-		s.store.db,
-		t.SnapshotID,
-		o.TenantID,
+		vm,
+		Activation{
+			SandboxID:     "warm-" + vm.ID,
+			Hostname:      "sandbox-warm",
+			ResetIdentity: true,
+			Env:           map[string]string{},
+			Network:       "none",
+		},
 	); err != nil {
 		return err
 	}
-	_, err = s.store.db.ExecContext(
+	// Recheck after guest IO before acquiring publication locks.
+	currentVM, err := s.opts.Engine.GetVM(s.ctx, vm.ID)
+	if err != nil {
+		return err
+	}
+	if err = validAllocationIdentity(group, currentVM); err != nil {
+		return err
+	}
+	template := s.lock("template:" + t.ID)
+	defer template()
+	pool := s.lock("pool:" + t.ID)
+	defer pool()
+	ownership := s.lockResourceOwnership()
+	defer ownership()
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	current, err := getTemplateTx(s.ctx, tx, t.ID)
+	if err != nil {
+		return err
+	}
+	if current.TenantID != t.TenantID || current.SnapshotID != t.SnapshotID ||
+		current.Shape != t.Shape ||
+		current.State != "ready" ||
+		current.TargetWarm == 0 {
+		return api.Fail(api.Conflict, "warm publication was superseded")
+	}
+	var ready int
+	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM warm WHERE template_id=? AND snapshot_id=? AND vm_id!=?`, t.ID, t.SnapshotID, vm.ID).
+		Scan(&ready); err != nil {
+		return err
+	}
+	if ready >= current.TargetWarm {
+		return api.Fail(api.Conflict, "warm pool is full")
+	}
+	group, err = loadRecoveryTx(s.ctx, tx, group.ID)
+	if err != nil {
+		return err
+	}
+	if err = validAllocationIdentity(group, currentVM); err != nil {
+		return err
+	}
+	if err = requireSnapshotOwner(
 		s.ctx,
-		"INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?) ON CONFLICT(vm_id) DO NOTHING",
+		tx,
+		t.SnapshotID,
+		t.TenantID,
+	); err != nil {
+		return err
+	}
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		t.TenantID,
+		"vm_disk",
+		vm.ID,
+		quotaRef{Kind: "active_use", ID: "warm:" + vm.ID},
+	); err != nil {
+		return err
+	}
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		t.TenantID,
+		"snapshot",
+		t.SnapshotID,
+		quotaRef{Kind: "active_use", ID: "backing:" + vm.ID},
+	); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(
+		s.ctx,
+		`INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?) ON CONFLICT(vm_id) DO UPDATE SET template_id=excluded.template_id,snapshot_id=excluded.snapshot_id`,
 		vm.ID,
 		t.ID,
 		t.SnapshotID,
 		time.Now().UnixNano(),
 	)
-	return err
+	if err = requireSQLWrite(result, err); err != nil {
+		return err
+	}
+	group.Allocations[0].Resolution.State = "active"
+	group.Allocations[0].Resolution.Destination = "warm:" + vm.ID
+	group.Done = true
+	if err = writeRecovery(s.ctx, tx, group); err != nil {
+		return err
+	}
+	if err = deleteQuotaRows(
+		s.ctx,
+		tx,
+		`FROM quota_refs WHERE tenant_id=? AND holder_kind='engine_dependency' AND holder_id=?`,
+		t.TenantID,
+		"operation:"+o.ID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

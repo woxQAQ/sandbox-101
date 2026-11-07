@@ -408,6 +408,22 @@ func (s *Service) Submit(
 		configuration := s.lock("configuration:" + c.SandboxID)
 		defer configuration()
 	}
+	// Source inspection precedes ownership/SQL; trusted captures need no Engine query.
+	var snapshotSource *templateSnapshotSource
+	if c.Action == "template_put" && c.Template != nil &&
+		c.Template.SnapshotID != "" {
+		if snapshotSource, err = s.templateSource(
+			ctx,
+			p,
+			*c.Template,
+		); err != nil {
+			return o, err
+		}
+	}
+	if c.Action == "claim" {
+		pool := s.lock("pool:" + c.TemplateID)
+		defer pool()
+	}
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(ctx, nil)
@@ -431,7 +447,7 @@ func (s *Service) Submit(
 			if err != nil {
 				return o, err
 			}
-			if !p.Root && t.TenantID != p.TenantID {
+			if t.TenantID != p.TenantID {
 				return o, api.Fail(api.NotFound, "not found")
 			}
 			if t.State != "ready" {
@@ -519,12 +535,23 @@ func (s *Service) Submit(
 		if e != nil {
 			return o, e
 		}
+		var warm *resourceRecovery
+		if c.Action == "claim" {
+			warm, err = s.selectWarmTx(ctx, tx, t)
+			if err != nil {
+				return o, err
+			}
+		}
+		diskCost := t.Shape.DiskMiB * int64(count)
+		if warm != nil {
+			diskCost = 0
+		}
 		if err = s.quota(
 			ctx,
 			tx,
 			Principal{Root: p.Root, TenantID: o.ChargeTenantID},
 			count,
-			t.Shape.DiskMiB*int64(count)+o.ReservedMiB+sharedCost,
+			diskCost+o.ReservedMiB+sharedCost,
 		); err != nil {
 			return o, err
 		}
@@ -593,7 +620,11 @@ func (s *Service) Submit(
 			if c.Action == "fork" {
 				step = "fork-clone:" + b.ID
 			}
-			if err = reserveQuotaStep(
+			if warm != nil {
+				if err = s.claimWarmTx(ctx, tx, o, &b, t, *warm); err != nil {
+					return o, err
+				}
+			} else if err = reserveQuotaStep(
 				ctx,
 				tx,
 				o,
@@ -849,6 +880,18 @@ func (s *Service) Submit(
 				)
 			}
 		}
+		if !p.Root {
+			target := 0
+			if existing.ID != "" {
+				target = existing.TargetWarm
+			}
+			if t.TargetWarm != target {
+				return o, api.Fail(
+					api.Conflict,
+					"root access required to change pool target",
+				)
+			}
+		}
 		if p.TenantID == "" {
 			return o, api.Fail(api.Invalid, "target tenant required")
 		}
@@ -888,6 +931,19 @@ func (s *Service) Submit(
 						return o, e
 					}
 				}
+				if e := recheckTemplateSource(
+					ctx,
+					tx,
+					snapshotSource,
+					t,
+					p.TenantID,
+				); e != nil {
+					return o, e
+				}
+				if e := tx.QueryRowContext(ctx, `SELECT source_operation_id,source_kind FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=?`, t.SnapshotID, p.TenantID).
+					Scan(&snapshotSource.SourceOperation, &snapshotSource.SourceKind); e != nil {
+					return o, e
+				}
 			}
 			if t.SnapshotID == "" && t.Image == "" {
 				return o, api.Fail(
@@ -897,6 +953,52 @@ func (s *Service) Submit(
 			}
 		}
 		o.Command.Template = &t
+		if c.Action == "template_build" {
+			if err = s.quota(
+				ctx,
+				tx,
+				p,
+				1,
+				2*t.Shape.DiskMiB+t.Shape.MemoryMiB,
+			); err != nil {
+				return o, err
+			}
+			if err = s.admitBuildTx(ctx, tx, o, t); err != nil {
+				return o, err
+			}
+		} else {
+			cost, e := quoteSnapshot(ctx, tx, p.TenantID, t.SnapshotID, t.Shape)
+			if e != nil {
+				return o, e
+			}
+			if t.SnapshotID != "" {
+				if err = s.quota(ctx, tx, p, 0, cost); err != nil {
+					return o, err
+				}
+				if err = quotaSnapshot(
+					ctx,
+					tx,
+					o,
+					t.SnapshotID,
+					t.Shape,
+					quotaRef{
+						Kind: "engine_dependency",
+						ID:   "operation:" + o.ID,
+					},
+				); err != nil {
+					return o, err
+				}
+			}
+			r := newAllocationGroup(
+				o,
+				allocationSubject{Kind: "build", ID: o.ID},
+				t,
+			)
+			r.Group.SnapshotSource = snapshotSource
+			if err = insertRecovery(ctx, tx, r); err != nil {
+				return o, err
+			}
+		}
 	default:
 		return o, api.Fail(api.Invalid, "unsupported action %q", c.Action)
 	}
@@ -904,7 +1006,7 @@ func (s *Service) Submit(
 		return o, err
 	}
 	if err = tx.Commit(); err != nil {
-		return o, err
+		return o, fmt.Errorf("operation admission commit: %w", err)
 	}
 	if c.Action == "configure" {
 		// Revoke any binding published by a worker before this admission.
@@ -1075,6 +1177,11 @@ func (s *Service) engine(
 	r api.Request,
 ) (api.Operation, error) {
 	r.Key = stepKey(o, step)
+	if group, err := s.findAllocationGroup(o); err != nil {
+		return api.Operation{}, err
+	} else if group != nil {
+		return s.allocationEngine(o, step, r)
+	}
 	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
 		return api.Operation{}, err
 	} else if a != nil && !bytes.Equal(encode(a.Request), encode(r)) {
@@ -1189,6 +1296,11 @@ func (s *Service) run(o Operation) {
 		}
 		o = current
 	}
+	current, currentErr := s.store.operation(s.ctx, o.ID)
+	if currentErr != nil || recoveryTerminal(current.Status) {
+		return
+	}
+	o = current
 	o.Status = "running"
 	if err := saveOp(s.ctx, s.store.db, o); err != nil {
 		return
@@ -1220,6 +1332,10 @@ func (s *Service) run(o Operation) {
 		if s.ctx.Err() != nil {
 			return
 		} // Preserve resumable intent on daemon shutdown.
+		current, e := s.store.operation(s.ctx, o.ID)
+		if e != nil || recoveryTerminal(current.Status) {
+			return
+		}
 		if err != nil {
 			o.Status = "failed"
 			o.Error = internalError(err)
@@ -1232,7 +1348,13 @@ func (s *Service) run(o Operation) {
 			o.Status = "failed"
 			o.Error = internalError(errors.Join(err, e))
 		}
-		_ = s.reconcileQuota()
+		group, groupErr := s.findAllocationGroup(o)
+		if groupErr != nil {
+			o.Status = "failed"
+			o.Error = internalError(errors.Join(err, groupErr))
+		} else if group == nil {
+			_ = s.reconcileQuota()
+		}
 		if e := saveOp(s.ctx, s.store.db, o); e != nil {
 			return
 		}
