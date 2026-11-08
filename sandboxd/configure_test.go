@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -152,17 +153,6 @@ func restartEgress(
 	}
 	t.Cleanup(func() { reopened.Close() })
 	return reopened
-}
-
-func requireFence(t *testing.T, s *Service, id, operation string) {
-	t.Helper()
-	fence, err := configFence(context.Background(), s.store.db, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fence != operation {
-		t.Fatalf("configuration fence = %q, want %q", fence, operation)
-	}
 }
 
 func requireDataReadyBlocked(t *testing.T, s *Service, p Principal, id string) {
@@ -2839,4 +2829,73 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 			t.Fatal("maintenance changed identity or lease")
 		}
 	})
+}
+
+func TestHostSecretNeverPersistedAndRestartFailsClosed(t *testing.T) {
+	s, f, a, p := fixture(t)
+	no := false
+	secret := "a-secret-that-must-not-exist-on-disk-123"
+	r, err := s.Execute(
+		context.Background(),
+		p,
+		"claim",
+		Command{
+			Action:     "claim",
+			TemplateID: "python",
+			Policy:     egress.Policy{Mode: "relay"},
+			Env: map[string]EnvVar{
+				"TOKEN": {
+					Value: secret,
+					Guest: &no,
+					Inject: &Injection{
+						Hosts:       []string{"api.example.com"},
+						Header:      "Authorization",
+						Placeholder: "phantom",
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	act := a.activations[len(a.activations)-1]
+	a.mu.Unlock()
+	if act.Env["TOKEN"] != "phantom" {
+		t.Fatal("secret exposed in activation")
+	}
+	if err := s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", r.OperationID).
+		Scan(new([]byte)); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(s.opts.StateDir, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		b, _ := os.ReadFile(file)
+		if strings.Contains(string(b), secret) {
+			t.Fatalf("host secret persisted in %s", file)
+		}
+	}
+	opts := s.opts
+	opts.Initialize = false
+	s.Close()
+	s2, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, err = s2.DataReady(
+		context.Background(),
+		p,
+		r.Sandbox.ID,
+	); !isCode(
+		err,
+		api.Conflict,
+	) {
+		t.Fatalf("restart served sandbox without credentials: %v", err)
+	}
+	_ = f
 }

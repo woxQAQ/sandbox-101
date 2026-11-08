@@ -58,7 +58,9 @@ func newOwnerGate() *ownerGate {
 		release: make(chan struct{}),
 	}
 }
+
 func (g *ownerGate) open() { g.once.Do(func() { close(g.release) }) }
+
 func (g *ownerGate) wait(ctx context.Context) error {
 	g.enteredOnce.Do(func() { close(g.entered) })
 	select {
@@ -74,6 +76,7 @@ type ownerPhysical struct {
 	Disks    map[string]bool
 	Backings map[string]bool
 }
+
 type ownerEngine struct {
 	mu                 sync.Mutex
 	next               int
@@ -859,6 +862,7 @@ type ownerResource struct {
 	Slots, Storage    int64
 	Source            string
 }
+
 type (
 	ownerRef    struct{ Tenant, Kind, Key, Holder, ID string }
 	ownerLedger struct {

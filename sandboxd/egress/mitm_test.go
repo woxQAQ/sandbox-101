@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -19,27 +18,6 @@ import (
 )
 
 const testMITMHeaderBytes = 1 << 20
-
-func mitmClient(t *testing.T, m *Manager, b Binding) *tls.Conn {
-	t.Helper()
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(m.CACertPEM()) {
-		t.Fatal("invalid proxy CA")
-	}
-	conn := tls.Client(
-		connectTunnel(t, b.HTTPPath, "example.com:443"),
-		&tls.Config{
-			ServerName: "example.com",
-			RootCAs:    pool,
-			MinVersion: tls.VersionTLS12,
-		},
-	)
-	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	return conn
-}
 
 func mitmBoundsFixture(
 	t *testing.T,

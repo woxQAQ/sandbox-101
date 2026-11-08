@@ -3,14 +3,13 @@ package sandboxd
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -382,7 +381,9 @@ func (f *fakeEgress) Revoke(id string) error {
 	delete(f.bindings, id)
 	return nil
 }
+
 func (f *fakeEgress) Close() error { return nil }
+
 func fixture(t *testing.T) (*Service, *fakeEngine, *fakeAgent, Principal) {
 	t.Helper()
 	f := newFakeEngine()
@@ -462,639 +463,1349 @@ func claimTest(
 	return r
 }
 
-func TestSandboxTokenCannotReadForkOperation(t *testing.T) {
-	s, _, _, p := fixture(t)
-	source := claimTest(t, s, p, "source", nil)
-	r, err := s.Execute(
-		context.Background(),
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 2},
-	)
+func requireFence(t *testing.T, s *Service, id, operation string) {
+	t.Helper()
+	fence, err := configFence(context.Background(), s.store.db, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp := Principal{TenantID: p.TenantID, SandboxID: source.Sandbox.ID}
-	if _, err := s.Operation(
-		context.Background(),
-		sp,
-		r.OperationID,
+	if fence != operation {
+		t.Fatalf("configuration fence = %q, want %q", fence, operation)
+	}
+}
+
+type directTestEngine struct {
+	*fakeEngine
+
+	requestMu  sync.Mutex
+	requests   []api.Request
+	failRevoke bool
+}
+
+func (f *directTestEngine) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	f.requestMu.Lock()
+	f.requests = append(f.requests, r)
+	fail := r.Action == "network_policy" && r.Policy == nil && f.failRevoke
+	if fail {
+		f.failRevoke = false
+	}
+	f.requestMu.Unlock()
+	if r.Action != "network_policy" {
+		return f.fakeEngine.Submit(ctx, r)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if old, ok := f.ops[r.Key]; ok {
+		return old, nil
+	}
+	v, ok := f.vms[r.VMID]
+	if !ok {
+		return api.Operation{}, api.Fail(api.NotFound, "VM missing")
+	}
+	if v.Instance != r.ExpectedInstance {
+		return api.Operation{}, api.Fail(api.Conflict, "instance changed")
+	}
+	o := api.Operation{
+		ID:      r.Key,
+		Key:     r.Key,
+		VMID:    r.VMID,
+		Request: r,
+		Status:  "succeeded",
+	}
+	if fail || v.NetworkActual {
+		o.Status = "failed"
+		o.Error = &api.Error{
+			Code:    api.Conflict,
+			Message: "policy replacement failed",
+		}
+	} else {
+		v.NetworkPolicy = r.Policy
+		v.NetworkPolicyInstance = v.Instance
+		f.vms[v.ID] = v
+	}
+	f.ops[r.Key] = o
+	return o, nil
+}
+
+func ledgerLimit(
+	t *testing.T,
+	s *Service,
+	p Principal,
+	slots int,
+	storage int64,
+) {
+	t.Helper()
+	if _, err := s.PutTenant(
+		s.ctx,
+		Principal{Root: true},
+		Tenant{
+			ID:            p.TenantID,
+			Token:         "alice-token",
+			MaxSandboxes:  slots,
+			MaxStorageMiB: storage,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ledgerRejectClaim(
+	t *testing.T,
+	s *Service,
+	f *recoveryTestEngine,
+	p Principal,
+	key string,
+) {
+	t.Helper()
+	before := f.count("create") + f.count("clone")
+	ctx, cancel := context.WithTimeout(s.ctx, time.Second)
+	defer cancel()
+	if _, err := s.Submit(
+		ctx,
+		p,
+		key,
+		Command{Action: "claim", TemplateID: "python"},
 	); !isCode(
 		err,
-		api.NotFound,
+		api.Exhausted,
 	) {
-		t.Fatalf("fork operation visible to source: %v", err)
+		t.Fatalf("wanted Exhausted before engine effects, got %v", err)
 	}
-	h := s.Handler()
-	get := func(id string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("GET", "/v1/operations/"+id, nil)
-		req.Header.Set(
-			"Authorization",
-			"Bearer "+source.Tokens[source.Sandbox.ID],
-		)
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		return w
+	if after := f.count("create") + f.count("clone"); after != before {
+		t.Fatal("rejected admission reached engine")
 	}
-	foreign, missing := get(r.OperationID), get("missing")
-	if foreign.Code != 404 || foreign.Body.String() != missing.Body.String() {
+}
+
+func ledgerMoney(
+	t *testing.T,
+	s *Service,
+	tenant string,
+	slots, storage int64,
+) {
+	t.Helper()
+	var actualSlots, actualStorage int64
+	if err := s.store.db.QueryRowContext(s.ctx, `SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id=?`, tenant).
+		Scan(&actualSlots, &actualStorage); err != nil {
+		t.Fatal(err)
+	}
+	if actualSlots != slots || actualStorage != storage {
 		t.Fatalf(
-			"foreign response differs: %d %s",
-			foreign.Code,
-			foreign.Body.String(),
+			"%s responsibility: got slots=%d storage=%d; want slots=%d storage=%d",
+			tenant,
+			actualSlots,
+			actualStorage,
+			slots,
+			storage,
 		)
 	}
 }
 
-func TestSandboxTokenCanPollOwnLeaseOperations(t *testing.T) {
-	s, _, _, p := fixture(t)
-	source := claimTest(t, s, p, "source", nil)
-	sp := Principal{TenantID: p.TenantID, SandboxID: source.Sandbox.ID}
-	for _, action := range []string{"renew", "release"} {
-		o, err := s.Submit(
-			context.Background(),
-			sp,
-			action,
-			Command{Action: action, SandboxID: sp.SandboxID, TTLSeconds: 60},
+func ledgerExecute(
+	t *testing.T,
+	s *Service,
+	p Principal,
+	key string,
+	c Command,
+) Result {
+	t.Helper()
+	r, err := s.Execute(s.ctx, p, key, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func ledgerRestart(t *testing.T, s *Service) *Service {
+	t.Helper()
+	opts := s.opts
+	opts.Initialize = false
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { next.Close() })
+	next.cancel()
+	next.wg.Wait()
+	next.ctx, next.cancel = context.WithCancel(context.Background())
+	return next
+}
+
+type recoveryTestEngine struct {
+	*fakeEngine
+
+	control                sync.Mutex
+	failDeletes            int
+	dropDeleteResponses    int
+	dropDeleteBeforeAccept int
+	failNetwork            bool
+	failSnapshotDeletes    int
+	snapshotDeleteUnknown  bool
+	snapshotDeleteEntered  chan struct{}
+	snapshotDeleteGate     <-chan struct{}
+	snapshotEntered        chan struct{}
+	snapshotGate           <-chan struct{}
+	snapshotError          error
+	findError              error
+	requests               []api.Request
+	deleteEntered          chan struct{}
+	deleteGate             <-chan struct{}
+}
+
+func (f *recoveryTestEngine) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	f.mu.Lock()
+	previous, cached := f.ops[r.Key]
+	f.mu.Unlock()
+	if cached {
+		if !bytes.Equal(encode(previous.Request), encode(r)) {
+			return previous, api.Fail(api.Conflict, "key parameters differ")
+		}
+		return previous, nil
+	}
+	f.control.Lock()
+	f.requests = append(f.requests, r)
+	dropBeforeAccept := r.Action == "delete" && f.dropDeleteBeforeAccept > 0
+	if dropBeforeAccept {
+		f.dropDeleteBeforeAccept--
+	}
+	dropDelete := r.Action == "delete" && f.dropDeleteResponses > 0
+	if dropDelete {
+		f.dropDeleteResponses--
+	}
+	fail := r.Action == "delete" && f.failDeletes > 0
+	if fail {
+		f.failDeletes--
+	}
+	if r.Action == "delete_snapshot" && f.failSnapshotDeletes > 0 {
+		fail = true
+		f.failSnapshotDeletes--
+	}
+	entered, gate := f.deleteEntered, f.deleteGate
+	unknown := f.snapshotDeleteUnknown
+	failNetwork := f.failNetwork
+	snapshotEntered := f.snapshotEntered
+	snapshotGate := f.snapshotGate
+	if r.Action == "delete_snapshot" {
+		entered, gate = f.snapshotDeleteEntered, f.snapshotDeleteGate
+	}
+	f.control.Unlock()
+	if r.Action == "network" && failNetwork {
+		return api.Operation{}, api.Fail(
+			api.Internal,
+			"network request failed before receipt",
 		)
-		if err != nil {
-			t.Fatal(err)
+	}
+	if r.Action == "delete_snapshot" && unknown {
+		return api.Operation{}, api.Fail(api.Unknown, "delete response unknown")
+	}
+	if (r.Action == "delete" || r.Action == "delete_snapshot") &&
+		entered != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
 		}
-		r, err := s.Wait(context.Background(), sp, o.ID)
-		if err != nil {
-			t.Fatal(err)
+		select {
+		case <-ctx.Done():
+			return api.Operation{}, ctx.Err()
+		case <-gate:
 		}
-		if action == "release" && len(r.Tokens) != 0 {
-			t.Fatal("terminated token issued")
+	}
+	if dropBeforeAccept {
+		return api.Operation{}, api.Fail(
+			api.Unknown,
+			"delete transport failed before acceptance",
+		)
+	}
+	if dropDelete {
+		f.mu.Lock()
+		f.ops[r.Key] = api.Operation{
+			ID:      r.Key,
+			Key:     r.Key,
+			Request: r,
+			VMID:    r.VMID,
+			Status:  "running",
 		}
-		for _, other := range []Principal{{TenantID: p.TenantID, SandboxID: "other"}, {TenantID: "other"}} {
-			if _, err := s.Operation(
-				context.Background(),
-				other,
-				o.ID,
-			); !isCode(
-				err,
-				api.NotFound,
-			) {
-				t.Fatalf("foreign read: %v", err)
+		f.mu.Unlock()
+		return api.Operation{}, api.Fail(
+			api.Unknown,
+			"accepted delete response lost",
+		)
+	}
+	if fail {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if old, ok := f.ops[r.Key]; ok {
+			if !bytes.Equal(encode(old.Request), encode(r)) {
+				return old, api.Fail(api.Conflict, "key parameters differ")
+			}
+			return old, nil
+		}
+		o := api.Operation{
+			ID:         r.Key,
+			Key:        r.Key,
+			Request:    r,
+			VMID:       r.VMID,
+			SnapshotID: r.SnapshotID,
+			Status:     "failed",
+			Error: &api.Error{
+				Code:    api.Internal,
+				Message: "temporary delete failure",
+			},
+		}
+		f.ops[r.Key] = o
+		f.calls[r.Action]++
+		return o, nil
+	}
+	if r.Action == "stop" || r.Action == "restore" {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if old, ok := f.ops[r.Key]; ok {
+			if !bytes.Equal(encode(old.Request), encode(r)) {
+				return old, api.Fail(api.Conflict, "key parameters differ")
+			}
+			return old, nil
+		}
+		v, ok := f.vms[r.VMID]
+		if !ok {
+			return api.Operation{}, api.Fail(api.NotFound, "not found")
+		}
+		if r.ExpectedInstance != "" && v.Instance != r.ExpectedInstance {
+			return api.Operation{}, api.Fail(api.Conflict, "instance mismatch")
+		}
+		f.calls[r.Action]++
+		if r.Action == "stop" {
+			v.Phase, v.AgentReady = "stopped", false
+		} else {
+			v.Phase, v.AgentReady, v.Instance = "running", true, newID("run_")
+		}
+		v.NetworkActual, v.NetworkEnabled = false, false
+		f.vms[v.ID] = v
+		o := api.Operation{
+			ID:         r.Key,
+			Key:        r.Key,
+			Request:    r,
+			VMID:       v.ID,
+			Status:     "succeeded",
+			SnapshotID: r.SnapshotID,
+		}
+		if r.Action == "restore" {
+			o.ResultInstance = v.Instance
+		}
+		f.ops[r.Key] = o
+		return o, nil
+	}
+	o, err := f.fakeEngine.Submit(ctx, r)
+	if r.Action == "snapshot" && snapshotEntered != nil {
+		select {
+		case snapshotEntered <- struct{}{}:
+		default:
+		}
+		if snapshotGate != nil {
+			select {
+			case <-snapshotGate:
+			case <-ctx.Done():
+				return o, ctx.Err()
 			}
 		}
 	}
+	return o, err
 }
 
-func TestOperationResultTokensRespectPrincipal(t *testing.T) {
-	s, _, _, p := fixture(t)
-	source := claimTest(t, s, p, "source", nil)
-	r, err := s.Execute(
-		context.Background(),
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 2},
+func (f *recoveryTestEngine) ListSnapshots(
+	ctx context.Context,
+) ([]api.Snapshot, error) {
+	f.control.Lock()
+	err := f.snapshotError
+	f.control.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return f.fakeEngine.ListSnapshots(ctx)
+}
+
+func (f *recoveryTestEngine) FindOperation(
+	ctx context.Context,
+	key string,
+) (api.Operation, error) {
+	f.control.Lock()
+	err := f.findError
+	f.control.Unlock()
+	if err != nil {
+		return api.Operation{}, err
+	}
+	return f.fakeEngine.FindOperation(ctx, key)
+}
+
+func recoveryFixture(
+	t *testing.T,
+) (*Service, *recoveryTestEngine, *fakeAgent, Principal) {
+	t.Helper()
+	s, engine, agent, p := fixture(t)
+	// Keep the existing fixture, database and lifecycle implementation, but drive
+	// reconciliation explicitly so fault injection has no timing dependency.
+	s.cancel()
+	s.wg.Wait()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	f := &recoveryTestEngine{fakeEngine: engine}
+	s.opts.Engine = f
+	return s, f, agent, p
+}
+
+func recoverySandbox(t *testing.T, s *Service, id string) Sandbox {
+	t.Helper()
+	b, err := getSandbox(s.ctx, s.store.db, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// The first create boundary leaves admission observable while another template
+// competes for the same tenant budget. The gate never holds the engine mutex.
+type templateQuotaEngine struct {
+	api.Client
+
+	mu                  sync.Mutex
+	entered             chan struct{}
+	gate                chan struct{}
+	gateAction          string
+	first               bool
+	attempts            map[string]int
+	afterDelete         func(api.Request, api.Operation) error
+	afterCreate         func(api.Request, api.Operation) error
+	failCloneEmpty      bool
+	failStart           bool
+	snapshotEntered     chan struct{}
+	snapshotGate        <-chan struct{}
+	snapshotOnce        bool
+	queryEntered        chan struct{}
+	queryGate           <-chan struct{}
+	queryOnce           bool
+	hideCapture         bool
+	missingCloneWitness bool
+	hideStart           bool
+	hideClone           bool
+	hideNetwork         bool
+	capture             *api.Operation
+}
+
+func templateQuotaCopy[T any](value T) T {
+	var copy T
+	if err := json.Unmarshal(encode(value), &copy); err != nil {
+		panic(err)
+	}
+	return copy
+}
+
+func (e *templateQuotaEngine) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	e.mu.Lock()
+	e.attempts[r.Action]++
+	action := e.gateAction
+	if action == "" {
+		action = "create"
+	}
+	park := r.Action == action && !e.first && e.gate != nil
+	if park {
+		e.first = true
+		close(e.entered)
+	}
+	e.mu.Unlock()
+	if park {
+		select {
+		case <-ctx.Done():
+			return api.Operation{}, ctx.Err()
+		case <-e.gate:
+		}
+	}
+	if r.Action == "delete" && r.ExpectedInstance == "" {
+		return api.Operation{}, api.Fail(
+			api.Invalid,
+			"strict fixture requires nonempty delete witness",
+		)
+	}
+	e.mu.Lock()
+	failStart := e.failStart
+	e.mu.Unlock()
+	e.mu.Lock()
+	failEmpty := e.failCloneEmpty
+	e.mu.Unlock()
+	if r.Action == "clone" && failEmpty {
+		f := e.Client.(*recoveryTestEngine)
+		f.mu.Lock()
+		o, ok := f.ops[r.Key]
+		if !ok {
+			o = api.Operation{
+				ID:      r.Key,
+				Key:     r.Key,
+				Request: r,
+				Status:  "failed",
+				Error: &api.Error{
+					Code:    api.Internal,
+					Message: "controlled clone failure before allocation",
+				},
+			}
+			f.ops[r.Key] = o
+			f.calls[r.Action]++
+		}
+		f.mu.Unlock()
+		return o, nil
+	}
+	if r.Action == "start" && failStart {
+		f := e.Client.(*recoveryTestEngine)
+		f.mu.Lock()
+		o, ok := f.ops[r.Key]
+		if !ok {
+			o = api.Operation{
+				ID:      r.Key,
+				Key:     r.Key,
+				Request: r,
+				VMID:    r.VMID,
+				Status:  "failed",
+				Error: &api.Error{
+					Code:    api.Internal,
+					Message: "controlled start failure",
+				},
+			}
+			f.ops[r.Key] = o
+			f.calls[r.Action]++
+		}
+		f.mu.Unlock()
+		return o, nil
+	}
+	proof, err := e.Client.Submit(ctx, templateQuotaCopy(r))
+	proof = templateQuotaCopy(proof)
+	if err == nil && r.Action == "delete" && e.afterDelete != nil {
+		if hookErr := e.afterDelete(r, proof); hookErr != nil {
+			return api.Operation{}, hookErr
+		}
+	}
+	if err == nil && r.Action == "create" && e.afterCreate != nil {
+		if hookErr := e.afterCreate(r, proof); hookErr != nil {
+			return api.Operation{}, hookErr
+		}
+	}
+	e.mu.Lock()
+	missing := e.missingCloneWitness && r.Action == "clone"
+	e.mu.Unlock()
+	if missing && err == nil {
+		proof.ResultInstance = ""
+		f := e.Client.(*recoveryTestEngine)
+		f.mu.Lock()
+		f.ops[r.Key] = proof
+		f.mu.Unlock()
+	}
+	e.mu.Lock()
+	hidden := (e.hideCapture && r.Action == "snapshot") ||
+		(e.hideClone && r.Action == "clone") ||
+		(e.hideStart && r.Action == "start") ||
+		(e.hideNetwork && r.Action == "network" && (e.capture == nil || e.capture.Key == r.Key))
+	if hidden {
+		copy := proof
+		e.capture = &copy
+	}
+	e.mu.Unlock()
+	if hidden {
+		return api.Operation{}, api.Fail(api.Unknown, "capture reply lost")
+	}
+	return proof, err
+}
+
+func (e *templateQuotaEngine) FindOperation(
+	ctx context.Context,
+	key string,
+) (api.Operation, error) {
+	e.mu.Lock()
+	hidden := (e.hideCapture || e.hideClone || e.hideStart || e.hideNetwork) &&
+		e.capture != nil &&
+		e.capture.Key == key
+	e.mu.Unlock()
+	if hidden {
+		return api.Operation{}, api.Fail(api.NotFound, "receipt not visible")
+	}
+	proof, err := e.Client.FindOperation(ctx, key)
+	return templateQuotaCopy(proof), err
+}
+
+func (e *templateQuotaEngine) GetOperation(
+	ctx context.Context,
+	id string,
+) (api.Operation, error) {
+	proof, err := e.Client.GetOperation(ctx, id)
+	return templateQuotaCopy(proof), err
+}
+
+func (e *templateQuotaEngine) GetSnapshot(
+	ctx context.Context,
+	id string,
+) (api.Snapshot, error) {
+	snapshot, err := e.Client.GetSnapshot(ctx, id)
+	e.mu.Lock()
+	park := e.snapshotGate != nil && !e.snapshotOnce
+	gate := e.snapshotGate
+	if park {
+		e.snapshotOnce = true
+		close(e.snapshotEntered)
+	}
+	e.mu.Unlock()
+	if park {
+		select {
+		case <-ctx.Done():
+			return api.Snapshot{}, ctx.Err()
+		case <-gate:
+		}
+	}
+	return templateQuotaCopy(snapshot), err
+}
+
+func (e *templateQuotaEngine) GetVM(
+	ctx context.Context,
+	id string,
+) (api.VM, error) {
+	v, err := e.Client.GetVM(ctx, id)
+	e.mu.Lock()
+	gate := e.queryGate
+	park := gate != nil && !e.queryOnce
+	if park {
+		e.queryOnce = true
+		close(e.queryEntered)
+	}
+	e.mu.Unlock()
+	if park {
+		select {
+		case <-ctx.Done():
+			return api.VM{}, ctx.Err()
+		case <-gate:
+		}
+	}
+	var copy api.VM
+	if err == nil {
+		err = json.Unmarshal(encode(v), &copy)
+	}
+	return copy, err
+}
+
+func templateQuotaBuild(name string) Command {
+	return Command{Action: "template_build", Template: &Template{
+		ID:    name,
+		Image: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+	}}
+}
+
+// Ready fixture allocations carry real Engine create/start receipts; no user
+// sandbox is introduced for the preexisting cold-pool control case.
+func seedTemplateQuotaWarm(
+	t *testing.T,
+	s *Service,
+	template Template,
+	created, started api.Operation,
+) {
+	t.Helper()
+	o := Operation{
+		ID:             "fixture-warm",
+		Key:            "fixture-warm",
+		TenantID:       template.TenantID,
+		ChargeTenantID: template.TenantID,
+		Command: Command{
+			Action:     "refill",
+			TemplateID: template.ID,
+			Template:   &template,
+		},
+		Status:     "succeeded",
+		CreatedAt:  time.Now().UTC(),
+		FinishedAt: time.Now().UTC(),
+	}
+	o.hash = s.store.sign(o.ID)
+	r := newAllocationGroup(
+		o,
+		allocationSubject{Kind: "warm", ID: o.ID},
+		template,
 	)
+	r.Group.Identity = &allocationIdentity{
+		VM:         created.VMID,
+		Owner:      template.TenantID,
+		Shape:      template.Shape,
+		Source:     o.ID,
+		Receipt:    created,
+		Instance:   started.ResultInstance,
+		Generation: &started,
+	}
+	r.Allocations = []recoveryAllocation{
+		{
+			OperationID:    o.ID,
+			TenantID:       o.TenantID,
+			ChargeTenantID: o.ChargeTenantID,
+			Subject:        r.Group.Subject,
+			Shape:          template.Shape,
+			Step:           "warm-clone",
+			Kind:           "vm_disk",
+			Request:        created.Request,
+			RequestBound:   true,
+			Resolution: allocationResolution{
+				State:       "active",
+				Proof:       &created,
+				Destination: "warm:" + created.VMID,
+			},
+		},
+	}
+	r.Allocations[0].Step = "fixture-create"
+	r.Group.Steps["fixture-create"] = allocationStep{
+		Request:    created.Request,
+		Bound:      true,
+		Dispatched: true,
+		Proof:      &created,
+	}
+	r.Group.Steps["fixture-start"] = allocationStep{
+		Request:    started.Request,
+		Bound:      true,
+		Dispatched: true,
+		Proof:      &started,
+	}
+	r.Done = true
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := s.store.operation(context.Background(), r.OperationID)
-	if err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if err = putQuotaResource(
+		s.ctx,
+		tx,
+		quotaResource{
+			Tenant:  template.TenantID,
+			Kind:    "vm_disk",
+			Key:     created.VMID,
+			Storage: template.Shape.DiskMiB,
+			Source:  o.ID,
+		},
+		quotaRef{Kind: "active_use", ID: "warm:" + created.VMID},
+	); err != nil {
 		t.Fatal(err)
 	}
-	o.Result.Tokens = map[string]string{"forged": "credential"}
-	if err := saveOp(context.Background(), s.store.db, o); err != nil {
+	if err = putQuotaRef(
+		s.ctx,
+		tx,
+		template.TenantID,
+		"vm_disk",
+		created.VMID,
+		quotaRef{Kind: "cleanup", ID: "vm:" + created.VMID},
+	); err != nil {
 		t.Fatal(err)
 	}
-	for _, principal := range []Principal{p, {Root: true}} {
-		got, err := s.Wait(context.Background(), principal, o.ID)
+	if template.SnapshotID != "" {
+		if err = putQuotaRef(
+			s.ctx,
+			tx,
+			template.TenantID,
+			"snapshot",
+			template.SnapshotID,
+			quotaRef{Kind: "active_use", ID: "backing:" + created.VMID},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = saveOp(s.ctx, tx, o); err != nil {
+		t.Fatal(err)
+	}
+	if err = insertRecovery(s.ctx, tx, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?)`,
+		created.VMID,
+		template.ID,
+		template.SnapshotID,
+		time.Now().UnixNano(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func templateQuotaState(t *testing.T, s *Service) []byte {
+	t.Helper()
+	state := map[string][]string{}
+	for _, table := range []string{"quota_resources", "quota_refs", "resource_recovery", "sandboxes", "templates", "warm", "snapshot_owners", "operations", "template_intents"} {
+		rows, err := s.store.db.QueryContext(s.ctx, "SELECT * FROM "+table)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Tokens) != 2 || got.Tokens["forged"] != "" {
-			t.Fatal("tokens were not rebuilt")
+		cols, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	for _, credential := range []string{"alice-token", "root-secret"} {
-		req := httptest.NewRequest(http.MethodGet, "/v1/operations/"+o.ID, nil)
-		req.Header.Set("Authorization", "Bearer "+credential)
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, req)
-		var got Operation
-		if err := json.Unmarshal(
-			w.Body.Bytes(),
-			&got,
-		); err != nil || w.Code != 200 || len(got.Result.Tokens) != 2 ||
-			got.Result.Tokens["forged"] != "" {
-			t.Fatalf(
-				"HTTP result tokens were not rebuilt: status=%d decode=%v",
-				w.Code,
-				err,
-			)
+		for rows.Next() {
+			values := make([]any, len(cols))
+			pointers := make([]any, len(cols))
+			for i := range values {
+				pointers[i] = &values[i]
+			}
+			if err = rows.Scan(pointers...); err != nil {
+				t.Fatal(err)
+			}
+			state[table] = append(state[table], string(encode(values)))
 		}
+		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+			t.Fatal(err)
+		}
+		sort.Strings(state[table])
 	}
-	o.Result.Sandboxes[0].TenantID = "foreign"
-	if err := saveOp(context.Background(), s.store.db, o); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Operation(
-		context.Background(),
+	return encode(state)
+}
+
+func templateQuotaGolden(
+	t *testing.T,
+) (*Service, *recoveryTestEngine, Principal, Template) {
+	t.Helper()
+	s, f, _, p := recoveryFixture(t)
+	built := ledgerExecute(
+		t,
+		s,
 		p,
-		o.ID,
-	); !isCode(
-		err,
-		api.NotFound,
-	) {
-		t.Fatalf("foreign result exposed: %v", err)
+		"golden-build",
+		templateQuotaBuild("golden-quota"),
+	)
+	ledgerMoney(t, s, p.TenantID, 0, 192)
+	return s, f, p, *built.Template
+}
+
+func templateQuotaTarget(
+	t *testing.T,
+	s *Service,
+	p Principal,
+	template Template,
+	target int,
+) Template {
+	t.Helper()
+	template.TargetWarm = target
+	return *ledgerExecute(t, s, Principal{Root: true, TenantID: p.TenantID}, fmt.Sprintf("target-%d-%s", target, newID("")), Command{Action: "template_put", Template: &template}).Template
+}
+
+func templateQuotaMarkConnection(t *testing.T, s *Service) {
+	t.Helper()
+	if _, err := s.store.db.Exec(
+		`CREATE TEMP TABLE handoff_connection_marker(value INTEGER); INSERT INTO handoff_connection_marker VALUES(1)`,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
-	s, f, _, p := fixture(t)
-	b := claimTest(t, s, p, "source", nil)
-	cp, err := s.Execute(
-		context.Background(),
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: b.Sandbox.ID},
+func templateQuotaReuseConnection(t *testing.T, s *Service, fault string) {
+	t.Helper()
+	if fault != "commit" {
+		return
+	}
+	var marker, enabled int
+	if err := s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).
+		Scan(&marker); err != nil ||
+		marker != 1 {
+		t.Fatal("physical SQLite connection replaced after COMMIT error", err)
+	}
+	if err := s.store.db.QueryRow(`PRAGMA foreign_keys`).
+		Scan(&enabled); err != nil ||
+		enabled != 1 {
+		t.Fatal("foreign keys disabled", err)
+	}
+	tx, err := s.store.db.BeginTx(s.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(
+		s.ctx,
+		`UPDATE handoff_connection_marker SET value=2`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal("same-connection ordinary transaction failed", err)
+	}
+	if err = s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).
+		Scan(&marker); err != nil ||
+		marker != 2 {
+		t.Fatal(err)
+	}
+	if _, err = s.store.db.Exec(
+		`UPDATE handoff_connection_marker SET value=1`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(
+		"deferred COMMIT failed; same physical SQLite connection queried and committed an ordinary transaction",
+	)
+}
+
+func templateQuotaSQLFault(
+	t *testing.T,
+	s *Service,
+	table, event, condition, fault string,
+) {
+	t.Helper()
+	timing, body := "BEFORE", "SELECT RAISE(ABORT,'handoff fault');"
+	if fault == "ignore" {
+		body = "SELECT RAISE(IGNORE);"
+	}
+	if fault == "commit" {
+		templateQuotaMarkConnection(t, s)
+		if _, err := s.store.db.Exec(
+			`CREATE TABLE handoff_parent(id INTEGER PRIMARY KEY); CREATE TABLE handoff_fk(id INTEGER REFERENCES handoff_parent(id) DEFERRABLE INITIALLY DEFERRED)`,
+		); err != nil {
+			t.Fatal(err)
+		}
+		timing = "AFTER"
+		body = "INSERT INTO handoff_fk VALUES(1);"
+	}
+	if _, err := s.store.db.Exec(
+		"CREATE TRIGGER handoff_fault " + timing + " " + event + " ON " + table + " WHEN " + condition + " BEGIN " + body + " END",
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
+	var s *Service
+	var f *recoveryTestEngine
+	var p Principal
+	var template Template
+	var o Operation
+	var err error
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unpark := func() { once.Do(func() { close(release) }) }
+	defer unpark()
+	gate := func(context.Context) error {
+		select {
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	switch stage {
+	case "fallback", "fallback-destination":
+		service, engine, principal, tpl := warmFallbackFixture(t, true)
+		s = service
+		p = principal
+		template = tpl
+		f = &recoveryTestEngine{fakeEngine: engine}
+		e := &templateQuotaEngine{
+			Client:      f,
+			attempts:    map[string]int{},
+			afterDelete: func(api.Request, api.Operation) error { close(entered); return gate(s.ctx) },
+		}
+		s.opts.Engine = e
+		table, event, condition := "quota_resources", "DELETE", "OLD.kind='vm_disk'"
+		if stage == "fallback-destination" {
+			table, event, condition = "sandboxes", "UPDATE", "COALESCE(json_extract(OLD.body,'$.vm_id'),'')!='' AND COALESCE(json_extract(NEW.body,'$.vm_id'),'')=''"
+		}
+		templateQuotaSQLFault(t, s, table, event, condition, fault)
+		o, err = s.Submit(
+			s.ctx,
+			p,
+			"handoff-fallback",
+			Command{Action: "claim", TemplateID: template.ID},
+		)
+	case "known":
+		s, f, _, p = recoveryFixture(t)
+		e := &templateQuotaEngine{
+			Client:      f,
+			attempts:    map[string]int{},
+			afterCreate: func(api.Request, api.Operation) error { close(entered); return gate(s.ctx) },
+		}
+		s.opts.Engine = e
+		templateQuotaSQLFault(
+			t,
+			s,
+			"quota_resources",
+			"INSERT",
+			"NEW.kind='vm_disk'",
+			fault,
+		)
+		o, err = s.Submit(
+			s.ctx,
+			p,
+			"handoff-known",
+			templateQuotaBuild("handoff-known"),
+		)
+	default:
+		s, f, p, template = templateQuotaGolden(t)
+		template = templateQuotaTarget(t, s, p, template, 1)
+		if stage == "ready" {
+			agent := s.opts.Agent.(*fakeAgent)
+			agent.mu.Lock()
+			agent.activateEntered = entered
+			agent.activateGate = release
+			agent.mu.Unlock()
+			templateQuotaSQLFault(t, s, "warm", "INSERT", "1", fault)
+			s.pools()
+		} else {
+			s.pools()
+			s.wg.Wait()
+			templateQuotaSQLFault(t, s, "warm", "DELETE", "1", fault)
+			before := templateQuotaState(t, s)
+			effects := f.count("clone")
+			_, err = s.Submit(
+				s.ctx,
+				p,
+				"handoff-selection",
+				Command{Action: "claim", TemplateID: template.ID},
+			)
+			if err == nil {
+				t.Fatal("selection fault missing")
+			}
+			if !bytes.Equal(before, templateQuotaState(t, s)) {
+				t.Fatal(
+					"selection fault lost warm row, D holder, slot, op or group",
+				)
+			}
+			if f.count("clone") != effects {
+				t.Fatal("failed selection dispatched Engine")
+			}
+			if fault == "commit" &&
+				!strings.Contains(err.Error(), "operation admission commit") {
+				t.Fatal("selection did not fail at actual Commit", err)
+			}
+			templateQuotaReuseConnection(t, s, fault)
+			if _, err = s.store.db.Exec(
+				`DROP TRIGGER handoff_fault`,
+			); err != nil {
+				t.Fatal(err)
+			}
+			ledgerExecute(
+				t,
+				s,
+				p,
+				"handoff-selection",
+				Command{Action: "claim", TemplateID: template.ID},
+			)
+			ledgerMoney(t, s, p.TenantID, 1, 256)
+			return
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handoff did not reach controlled pre-transaction boundary")
+	}
+	before := templateQuotaWithoutOperations(t, s)
+	if stage == "ready" {
+		ops, e := s.resourceOperations()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, candidate := range ops {
+			if candidate.Command.Action == "refill" {
+				o = candidate
+			}
+		}
+	}
+	unpark()
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	_, err = s.Wait(ctx, p, o.ID)
+	if err == nil {
+		t.Fatal("handoff fault missing")
+	}
+	if fault == "commit" && !strings.Contains(err.Error(), "FOREIGN KEY") {
+		t.Fatal("handoff did not fail on deferred FK Commit", err)
+	}
+	t.Logf("handoff stage=%s fault=%s actual=%v", stage, fault, err)
+	templateQuotaReuseConnection(t, s, fault)
+	if !bytes.Equal(before, templateQuotaWithoutOperations(t, s)) {
+		t.Fatal(
+			"handoff failure partially published ledger, reference, metadata or destination",
+		)
+	}
+	if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.recoverResources(); err != nil {
+		t.Fatal(err)
+	}
+	if stage == "known" {
+		ledgerMoney(t, s, p.TenantID, 1, 64)
+		r, e := s.loadRecovery(allocationGroupID(o))
+		if e != nil {
+			t.Fatal(e)
+		}
+		vm := r.Group.Identity.VM
+		started, e := api.Wait(
+			s.ctx,
+			f,
+			api.Request{Key: "known-external-start", Action: "start", VMID: vm},
+		)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = api.Wait(
+			s.ctx,
+			f,
+			api.Request{
+				Key:              "known-external-delete",
+				Action:           "delete",
+				VMID:             vm,
+				ExpectedInstance: started.ResultInstance,
+			},
+		); e != nil {
+			t.Fatal(e)
+		}
+		if err = s.recoverResources(); err != nil {
+			t.Fatal(err)
+		}
+		ledgerMoney(t, s, p.TenantID, 0, 0)
+	} else {
+		ledgerMoney(t, s, p.TenantID, 0, 192)
+	}
+	s = ledgerRestart(t, s)
+	if err = s.recoverResources(); err != nil {
+		t.Fatal(err)
+	}
+	if stage == "known" {
+		ledgerMoney(t, s, p.TenantID, 0, 0)
+	} else {
+		ledgerMoney(t, s, p.TenantID, 0, 192)
+	}
+}
+
+func templateQuotaWithoutOperations(t *testing.T, s *Service) []byte {
+	t.Helper()
+	var state map[string][]string
+	if err := json.Unmarshal(templateQuotaState(t, s), &state); err != nil {
+		t.Fatal(err)
+	}
+	delete(state, "operations")
+	return encode(state)
+}
+
+// Attempts are counted before strict rejection, independently of physical effects.
+type templateQuotaSelectionClient struct {
+	api.Client
+
+	mu       sync.Mutex
+	requests []api.Request
+	finds    []string
+	unknown  bool
+	forged   *api.Operation
+	findHook func(string)
+}
+
+func (e *templateQuotaSelectionClient) Submit(
+	ctx context.Context,
+	r api.Request,
+) (api.Operation, error) {
+	e.mu.Lock()
+	e.requests = append(e.requests, templateQuotaCopy(r))
+	unknown := e.unknown
+	e.mu.Unlock()
+	if r.Action == "delete" {
+		if r.ExpectedInstance == "" {
+			return api.Operation{}, api.Fail(
+				api.Invalid,
+				"strict empty predicate",
+			)
+		}
+		if unknown {
+			return api.Operation{}, api.Fail(
+				api.Unknown,
+				"delete transport unknown before acceptance",
+			)
+		}
+	}
+	return e.Client.Submit(ctx, r)
+}
+
+func (e *templateQuotaSelectionClient) FindOperation(
+	ctx context.Context,
+	key string,
+) (api.Operation, error) {
+	e.mu.Lock()
+	e.finds = append(e.finds, key)
+	forged := templateQuotaCopy(e.forged)
+	hook := e.findHook
+	e.mu.Unlock()
+	if hook != nil {
+		hook(key)
+	}
+	if forged != nil && strings.Contains(key, ":step:warm-reject:") {
+		return *forged, nil
+	}
+	return e.Client.FindOperation(ctx, key)
+}
+
+func (e *templateQuotaSelectionClient) counts() (int, int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.requests), len(e.finds)
+}
+
+func templateQuotaReadOnlyState(t *testing.T, opts Options) []byte {
+	t.Helper()
+	db, err := sql.Open(
+		"sqlite",
+		"file:"+filepath.Join(opts.StateDir, "sandboxd.db")+"?mode=ro",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.PutTenant(
+	defer db.Close()
+	return templateQuotaState(
+		t,
+		&Service{ctx: context.Background(), store: &store{db: db}},
+	)
+}
+
+type rejectWarmAgent struct {
+	fakeAgent
+
+	vm string
+}
+
+func (a *rejectWarmAgent) Activate(
+	ctx context.Context,
+	vm api.VM,
+	activation Activation,
+) error {
+	if vm.ID == a.vm {
+		return errors.New("warm guest no longer responds")
+	}
+	return a.fakeAgent.Activate(ctx, vm, activation)
+}
+
+func warmFallbackFixture(
+	t *testing.T,
+	golden bool,
+) (*Service, *fakeEngine, Principal, Template) {
+	t.Helper()
+	engine := newFakeEngine()
+	template := Template{
+		ID:         "python",
+		TenantID:   "alice",
+		Image:      "sha256:" + strings.Repeat("1", 64),
+		Shape:      api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
+		TargetWarm: 1,
+	}
+	config := api.Config{Image: template.Image, Shape: template.Shape}
+	if golden {
+		template.SnapshotID = "golden"
+		engine.snaps[template.SnapshotID] = api.Snapshot{
+			ID:        template.SnapshotID,
+			Config:    config,
+			Published: true,
+		}
+	}
+	var created, started api.Operation
+	var err error
+	if !golden {
+		created, err = api.Wait(
+			context.Background(),
+			engine,
+			api.Request{
+				Key: stepKey(
+					Operation{ID: "fixture-warm"},
+					"fixture-create",
+				),
+				Action: "create",
+				Config: &config,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		started, err = api.Wait(
+			context.Background(),
+			engine,
+			api.Request{
+				Key:    stepKey(Operation{ID: "fixture-warm"}, "fixture-start"),
+				Action: "start",
+				VMID:   created.VMID,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := t.TempDir()
+	st, err := openStore(state, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Exercise durable lifecycle replay without background pool refills changing
+	// the engine allocation counts being asserted by these tests.
+	service := &Service{
+		opts: Options{
+			StateDir:  state,
+			RootToken: "root-secret",
+			Engine:    engine,
+			Agent:     &rejectWarmAgent{vm: created.VMID},
+			Egress:    &fakeEgress{},
+			MaxTTL:    time.Hour,
+			MaxWarm:   32,
+		},
+		store:       st,
+		ctx:         ctx,
+		cancel:      cancel,
+		epoch:       "test-daemon",
+		locks:       map[string]*sync.Mutex{},
+		active:      map[string]chan struct{}{},
+		secrets:     map[string]map[string]egress.Secret{},
+		opSecrets:   map[string]map[string]egress.Secret{},
+		bindings:    map[string]string{},
+		connections: map[string]map[net.Conn]struct{}{},
+	}
+	t.Cleanup(func() { service.Close() })
+	principal := Principal{TenantID: "alice"}
+	if _, err = service.PutTenant(
 		context.Background(),
 		Principal{Root: true},
 		Tenant{
-			ID:            "bob",
-			Token:         "bob-token",
-			MaxSandboxes:  10,
+			ID:            "alice",
+			Token:         "alice-token",
+			MaxSandboxes:  5,
 			MaxStorageMiB: 1 << 20,
 		},
 	); err != nil {
 		t.Fatal(err)
 	}
-	bob := Principal{TenantID: "bob"}
-	template := Template{
-		ID:         "imported",
-		Shape:      b.Sandbox.Shape,
-		SnapshotID: cp.Checkpoint.SnapshotID,
-	}
-	if _, err = s.Execute(
+	importer := Principal{Root: true, TenantID: principal.TenantID}
+	if _, err = service.Execute(
 		context.Background(),
-		bob,
-		"foreign",
-		Command{Action: "template_put", Template: &template},
-	); !isCode(
-		err,
-		api.NotFound,
-	) {
-		t.Fatalf("foreign snapshot accepted: %v", err)
-	}
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"own",
+		importer,
+		"template",
 		Command{Action: "template_put", Template: &template},
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Execute(
-		context.Background(),
-		Principal{TenantID: p.TenantID, SandboxID: b.Sandbox.ID},
-		"sandbox-import",
-		Command{Action: "template_put", Template: &template},
-	); !isCode(
-		err,
-		api.NotFound,
-	) {
-		t.Fatal(err)
-	}
-	h := s.Handler()
-	get := func(snapshot string) *httptest.ResponseRecorder {
-		template.ID = "bob-template"
-		template.SnapshotID = snapshot
-		req := httptest.NewRequest(
-			"POST",
-			"/v1/templates",
-			strings.NewReader(string(encode(Command{Template: &template}))),
-		)
-		req.Header.Set("Authorization", "Bearer bob-token")
-		req.Header.Set("Idempotency-Key", snapshot)
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		return w
-	}
-	foreign, unknown := get(cp.Checkpoint.SnapshotID), get("unknown")
-	if foreign.Code != 404 || unknown.Code != 404 ||
-		foreign.Body.String() != unknown.Body.String() {
-		t.Fatalf(
-			"authorization responses differ: %d %s / %d %s",
-			foreign.Code,
-			foreign.Body.String(),
-			unknown.Code,
-			unknown.Body.String(),
-		)
-	}
-	f.mu.Lock()
-	f.snaps["external"] = api.Snapshot{
-		ID:        "external",
-		Config:    api.Config{Shape: b.Sandbox.Shape},
-		Published: true,
-	}
-	f.mu.Unlock()
-	template.ID = "golden"
-	template.SnapshotID = "external"
-	if _, err = s.Execute(
-		context.Background(),
-		Principal{Root: true, TenantID: "bob"},
-		"root-import",
-		Command{Action: "template_put", Template: &template},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Execute(
-		context.Background(),
-		Principal{Root: true, TenantID: "bob"},
-		"root-foreign",
-		Command{
-			Action: "template_put",
-			Template: &Template{
-				ID:         "no-transfer",
-				Shape:      b.Sandbox.Shape,
-				SnapshotID: cp.Checkpoint.SnapshotID,
-			},
-		},
-	); !isCode(
-		err,
-		api.NotFound,
-	) {
-		t.Fatal("root transferred ownership", err)
-	}
-	if f.count("clone") != 0 {
-		t.Fatal("import cloned before authorization")
-	}
-}
-
-func TestClaimIdempotencyAndTenantIsolation(t *testing.T) {
-	s, f, _, p := fixture(t)
-	r := claimTest(t, s, p, "claim-1", nil)
-	again := claimTest(t, s, p, "claim-1", nil)
-	if r.Sandbox.ID != again.Sandbox.ID ||
-		r.Tokens[r.Sandbox.ID] != again.Tokens[r.Sandbox.ID] ||
-		f.count("create") != 1 {
-		t.Fatal("retry created a second sandbox or changed token")
-	}
-	_, err := s.Execute(
-		context.Background(),
-		p,
-		"claim-1",
-		Command{Action: "claim", TemplateID: "python", TTLSeconds: 20},
-	)
-	if !isCode(err, api.Conflict) {
-		t.Fatalf("expected conflict: %v", err)
-	}
-	h := s.Handler()
-	foreign := httptest.NewRequest(
-		http.MethodGet,
-		"/v1/sandboxes/"+r.Sandbox.ID,
-		nil,
-	)
-	foreign.Header.Set("Authorization", "Bearer unknown")
-	w1 := httptest.NewRecorder()
-	h.ServeHTTP(w1, foreign)
-	missing := httptest.NewRequest(http.MethodGet, "/v1/sandboxes/missing", nil)
-	missing.Header.Set("Authorization", "Bearer alice-token")
-	w2 := httptest.NewRecorder()
-	h.ServeHTTP(w2, missing)
-	if w1.Code != 404 || w2.Code != 404 ||
-		w1.Body.String() != w2.Body.String() {
-		t.Fatal("foreign and missing responses differ")
-	}
-	principal, err := s.Authenticate(
-		context.Background(),
-		r.Tokens[r.Sandbox.ID],
-	)
-	if err != nil || principal.SandboxID != r.Sandbox.ID {
-		t.Fatal("sandbox token rejected")
-	}
-	if _, err = s.Execute(
-		context.Background(),
-		principal,
-		"forbidden-claim",
-		Command{Action: "claim", TemplateID: "python"},
-	); !isCode(
-		err,
-		api.NotFound,
-	) {
-		t.Fatal("sandbox token created resources")
-	}
-}
-
-func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
-	s, f, _, p := fixture(t)
-	r := claimTest(t, s, p, "claim", nil)
-	id := r.Sandbox.ID
-	f.mu.Lock()
-	f.failSnapshot = true
-	f.mu.Unlock()
-	_, err := s.Execute(
-		context.Background(),
-		p,
-		"pause-fails",
-		Command{Action: "pause", SandboxID: id},
-	)
-	if !isCode(err, api.Exhausted) {
-		t.Fatalf("expected exhaustion: %v", err)
-	}
-	b, _ := s.Get(context.Background(), p, id)
-	if b.State != "running" || f.count("delete") != 0 {
-		t.Fatal("failed hibernate destroyed state")
-	}
-	f.mu.Lock()
-	f.failSnapshot = false
-	f.mu.Unlock()
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	); err != nil {
-		t.Fatal(err)
-	}
-	b, _ = s.Get(context.Background(), p, id)
-	if b.State != "paused" || b.VMID != "" || b.SnapshotID == "" {
-		t.Fatal("pause did not free VM")
-	}
-	before := f.count("clone")
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"release",
-		Command{Action: "release", SandboxID: id},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if f.count("clone") != before || f.count("delete_snapshot") != 1 {
-		t.Fatal("paused release woke source or leaked snapshot")
-	}
-}
-
-func TestConcurrentAutoResumeHasOneCloneAndPreservesIdentity(t *testing.T) {
-	s, f, a, p := fixture(t)
-	r := claimTest(t, s, p, "claim", nil)
-	id := r.Sandbox.ID
-	if _, err := s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	); err != nil {
-		t.Fatal(err)
-	}
-	before := f.count("clone")
-	var wg sync.WaitGroup
-	errs := make(chan error, 20)
-	for range 20 {
-		wg.Go(
-			func() { ; _, err := s.DataReady(context.Background(), p, id); errs <- err },
-		)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
+	if golden {
+		service.pools()
+		service.wg.Wait()
+		if err = service.store.db.QueryRow(`SELECT vm_id FROM warm WHERE template_id=?`, template.ID).
+			Scan(&engine.warmCandidate); err != nil {
 			t.Fatal(err)
 		}
+	} else {
+		seedTemplateQuotaWarm(t, service, template, created, started)
+		engine.warmCandidate = created.VMID
 	}
-	if f.count("clone")-before != 1 {
-		t.Fatal("concurrent wake cloned more than once")
-	}
-	a.mu.Lock()
-	last := a.activations[len(a.activations)-1]
-	a.mu.Unlock()
-	if last.ResetIdentity {
-		t.Fatal("resume reset guest identity")
-	}
-}
-
-func TestHostSecretNeverPersistedAndRestartFailsClosed(t *testing.T) {
-	s, f, a, p := fixture(t)
-	no := false
-	secret := "a-secret-that-must-not-exist-on-disk-123"
-	r, err := s.Execute(
-		context.Background(),
-		p,
-		"claim",
-		Command{
-			Action:     "claim",
-			TemplateID: "python",
-			Policy:     egress.Policy{Mode: "relay"},
-			Env: map[string]EnvVar{
-				"TOKEN": {
-					Value: secret,
-					Guest: &no,
-					Inject: &Injection{
-						Hosts:       []string{"api.example.com"},
-						Header:      "Authorization",
-						Placeholder: "phantom",
-					},
-				},
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.mu.Lock()
-	act := a.activations[len(a.activations)-1]
-	a.mu.Unlock()
-	if act.Env["TOKEN"] != "phantom" {
-		t.Fatal("secret exposed in activation")
-	}
-	if err := s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", r.OperationID).
-		Scan(new([]byte)); err != nil {
-		t.Fatal(err)
-	}
-	files, err := filepath.Glob(filepath.Join(s.opts.StateDir, "*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		b, _ := os.ReadFile(file)
-		if strings.Contains(string(b), secret) {
-			t.Fatalf("host secret persisted in %s", file)
-		}
-	}
-	opts := s.opts
-	opts.Initialize = false
-	s.Close()
-	s2, err := Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s2.Close()
-	if _, err = s2.DataReady(
-		context.Background(),
-		p,
-		r.Sandbox.ID,
-	); !isCode(
-		err,
-		api.Conflict,
-	) {
-		t.Fatalf("restart served sandbox without credentials: %v", err)
-	}
-	_ = f
-}
-
-func TestForkIdentityAndEnvironmentIsolation(t *testing.T) {
-	s, _, a, p := fixture(t)
-	source := claimTest(
-		t,
-		s,
-		p,
-		"claim",
-		map[string]EnvVar{"OLD": {Value: "source-only"}},
-	)
-	r, err := s.Execute(
-		context.Background(),
-		p,
-		"fork",
-		Command{
-			Action:    "fork",
-			SandboxID: source.Sandbox.ID,
-			Count:     2,
-			Env:       map[string]EnvVar{"NEW": {Value: "branch"}},
-			Policy:    egress.Policy{Mode: "none"},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.Sandboxes) != 2 || r.Sandboxes[0].ID == r.Sandboxes[1].ID ||
-		r.Tokens[r.Sandboxes[0].ID] == r.Tokens[r.Sandboxes[1].ID] {
-		t.Fatal("fork did not allocate independent branches")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, act := range a.activations[len(a.activations)-2:] {
-		if !act.ResetIdentity || act.Env["OLD"] != "" ||
-			act.Env["NEW"] != "branch" {
-			t.Fatal("fork leaked source environment or identity")
-		}
-	}
-}
-
-func TestConcurrentQuotaAdmission(t *testing.T) {
-	s, _, _, p := fixture(t)
-	_, err := s.PutTenant(
-		context.Background(),
-		Principal{Root: true},
-		Tenant{
-			ID:            p.TenantID,
-			MaxSandboxes:  2,
-			MaxStorageMiB: 10000,
-			Token:         "alice-token",
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	success := 0
-	for i := range 10 {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, e := s.Execute(
-				context.Background(),
-				p,
-				fmt.Sprint("claim", i),
-				Command{
-					Action:     "claim",
-					TemplateID: "python",
-					Policy:     egress.Policy{Mode: "none"},
-				},
-			)
-			if e == nil {
-				mu.Lock()
-				success++
-				mu.Unlock()
-			} else if !isCode(e, api.Exhausted) {
-				t.Errorf("unexpected admission error %v", e)
-			}
-		}(i)
-	}
-	wg.Wait()
-	if success != 2 {
-		t.Fatalf("quota admitted %d", success)
-	}
-}
-
-func TestPreviewBoundToEpochAndLease(t *testing.T) {
-	s, _, _, p := fixture(t)
-	r := claimTest(t, s, p, "claim", nil)
-	u, err := s.PreviewURL(
-		context.Background(),
-		p,
-		r.Sandbox.ID,
-		8080,
-		time.Hour,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := strings.Split(strings.TrimPrefix(u, "/preview/"), ".")
-	if len(parts) != 2 {
-		t.Fatal("unsigned preview")
-	}
-	_, err = s.Execute(
-		context.Background(),
-		p,
-		"release",
-		Command{Action: "release", SandboxID: r.Sandbox.ID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", u, nil))
-	if w.Code != 404 {
-		t.Fatalf("released preview accepted: %d", w.Code)
-	}
-}
-
-func TestReconcileQueryFailureDoesNotEraseState(t *testing.T) {
-	s, f, _, p := fixture(t)
-	r := claimTest(t, s, p, "claim", nil)
-	f.mu.Lock()
-	f.unavailable = true
-	f.mu.Unlock()
-	s.reconcile()
-	b, err := s.Get(context.Background(), p, r.Sandbox.ID)
-	if err != nil || b.State != "running" {
-		t.Fatal("query failure treated as resource absence")
-	}
-}
-
-func TestStoreWriterGuardAndMissingDBRecovery(t *testing.T) {
-	dir := t.TempDir()
-	s, err := openStore(dir, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = openStore(dir, false); !isCode(err, api.Conflict) {
-		t.Fatal("second writer allowed")
-	}
-	s.close()
-	if err = os.Remove(filepath.Join(dir, "sandboxd.db")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = openStore(dir, true); !isCode(err, api.ManualRecovery) {
-		t.Fatal("lost DB silently reinitialized")
-	}
-}
-
-func TestOperationJSONDoesNotExposeEnv(t *testing.T) {
-	b, _ := json.Marshal(Sandbox{Env: map[string]string{"PASSWORD": "secret"}})
-	if strings.Contains(string(b), "PASSWORD") ||
-		strings.Contains(string(b), `"secret"`) {
-		t.Fatal("sandbox API exposes env")
-	}
+	service.opts.Agent.(*rejectWarmAgent).vm = engine.warmCandidate
+	engine.mu.Lock()
+	engine.calls = map[string]int{}
+	engine.mu.Unlock() // Count replacement work after the real ready fixture.
+	return service, engine, principal, template
 }

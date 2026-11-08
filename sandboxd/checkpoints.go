@@ -1,61 +1,14 @@
 package sandboxd
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+
 	"github.com/woxQAQ/sandbox-engine/api"
 )
-
-// retireSnapshot holds the shared sandbox reference lock until engine deletion
-// finishes. A checkpoint may share a sleeping sandbox's immutable capture.
-func (s *Service) retireSnapshot(
-	o Operation,
-	snapshot, excludeSandbox, excludeCheckpoint string,
-) error {
-	if snapshot == "" {
-		return nil
-	}
-	unlock := s.lockResourceOwnership()
-	defer unlock()
-	return s.retireSnapshotOwned(o, snapshot, excludeSandbox, excludeCheckpoint)
-}
-
-func (s *Service) retireSnapshotOwned(
-	o Operation,
-	snapshot, excludeSandbox, excludeCheckpoint string,
-) error {
-	return s.retireSnapshotOwnedExcept(
-		o,
-		snapshot,
-		excludeSandbox,
-		excludeCheckpoint,
-		o.ID,
-	)
-}
-
-func (s *Service) retireSnapshotOwnedExcept(
-	o Operation,
-	snapshot, excludeSandbox, excludeCheckpoint, excludeOperation string,
-) error {
-	var users int
-	if err := s.store.db.QueryRowContext(s.ctx, `SELECT
- (SELECT count(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=? AND holder_kind IN ('active_use','engine_dependency') AND holder_id NOT LIKE 'backing:%' AND holder_id NOT IN (?,?,?)) +
- (SELECT count(*) FROM sandboxes WHERE id!=? AND json_extract(body,'$.snapshot_id')=?) +
- (SELECT count(*) FROM checkpoints WHERE id!=? AND json_extract(body,'$.snapshot_id')=?) +
- (SELECT count(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=?) +
- (SELECT count(*) FROM warm WHERE snapshot_id=?) +
- (SELECT count(*) FROM operations WHERE id!=? AND status IN ('pending','running') AND
-   (json_extract(body,'$.snapshot_id')=? OR json_extract(body,'$.command.template.snapshot_id')=?))`, snapshot, "sandbox:"+excludeSandbox, "checkpoint:"+excludeCheckpoint, "operation:"+excludeOperation, excludeSandbox, snapshot, excludeCheckpoint, snapshot, snapshot, snapshot, excludeOperation, snapshot, snapshot).Scan(&users); err != nil {
-		return err
-	}
-	if users > 0 {
-		return nil
-	}
-	_, err := s.engine(
-		o,
-		"retire-snapshot:"+snapshot,
-		api.Request{Action: "delete_snapshot", SnapshotID: snapshot},
-	)
-	return err
-}
 
 func (s *Service) deleteCheckpoint(o *Operation) error {
 	unlock := s.lock("checkpoint:" + o.Command.CheckpointID)
@@ -131,7 +84,7 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 	); err != nil {
 		return err
 	}
-	if s.CredentialsMissing(*b) {
+	if s.credentialsMissing(*b) {
 		return api.Fail(
 			api.Conflict,
 			"host credentials must be supplied before rollback",
@@ -197,4 +150,80 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 		return err
 	}
 	return s.finishResume(o, b)
+}
+
+// Checkpoints lists a tenant's checkpoints, or all checkpoints for root callers.
+// Sandbox-scoped principals cannot list checkpoints.
+func (s *Service) Checkpoints(
+	ctx context.Context,
+	p Principal,
+) ([]Checkpoint, error) {
+	if p.SandboxID != "" {
+		return nil, api.Fail(api.Conflict, "tenant access required")
+	}
+	rows, err := s.store.db.QueryContext(
+		ctx,
+		"SELECT body FROM checkpoints ORDER BY id",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []Checkpoint{}
+	for rows.Next() {
+		var raw []byte
+		var cp Checkpoint
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(raw, &cp); err != nil {
+			return nil, err
+		}
+		if p.Root || p.TenantID == cp.TenantID {
+			out = append(out, cp)
+		}
+	}
+	return out, rows.Err()
+}
+
+func getCheckpointTx(
+	ctx context.Context,
+	e executor,
+	id string,
+) (Checkpoint, error) {
+	var b []byte
+	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
+		Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Checkpoint{}, api.Fail(api.NotFound, "not found")
+	}
+	var cp Checkpoint
+	if err == nil {
+		err = json.Unmarshal(b, &cp)
+	}
+	return cp, err
+}
+
+func (s *store) checkpoint(ctx context.Context, id string) (Checkpoint, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
+		Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Checkpoint{}, api.Fail(api.NotFound, "not found")
+	}
+	var cp Checkpoint
+	if err == nil {
+		err = json.Unmarshal(raw, &cp)
+	}
+	return cp, err
+}
+
+// Checkpoint identifies a sandbox capture retained independently of its live VM.
+type Checkpoint struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	SandboxID  string    `json:"sandbox_id"`
+	SnapshotID string    `json:"snapshot_id"`
+	Shape      api.Shape `json:"shape"`
+	CreatedAt  time.Time `json:"created_at"`
 }

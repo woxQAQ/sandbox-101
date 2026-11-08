@@ -1,157 +1,14 @@
 package sandboxd
 
 import (
+	"bytes"
 	"context"
-	"errors"
-	"net"
-	"strings"
-	"sync"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
-
-type rejectWarmAgent struct {
-	fakeAgent
-
-	vm string
-}
-
-func (a *rejectWarmAgent) Activate(
-	ctx context.Context,
-	vm api.VM,
-	activation Activation,
-) error {
-	if vm.ID == a.vm {
-		return errors.New("warm guest no longer responds")
-	}
-	return a.fakeAgent.Activate(ctx, vm, activation)
-}
-
-func warmFallbackFixture(
-	t *testing.T,
-	golden bool,
-) (*Service, *fakeEngine, Principal, Template) {
-	t.Helper()
-	engine := newFakeEngine()
-	template := Template{
-		ID:         "python",
-		TenantID:   "alice",
-		Image:      "sha256:" + strings.Repeat("1", 64),
-		Shape:      api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
-		TargetWarm: 1,
-	}
-	config := api.Config{Image: template.Image, Shape: template.Shape}
-	if golden {
-		template.SnapshotID = "golden"
-		engine.snaps[template.SnapshotID] = api.Snapshot{
-			ID:        template.SnapshotID,
-			Config:    config,
-			Published: true,
-		}
-	}
-	var created, started api.Operation
-	var err error
-	if !golden {
-		created, err = api.Wait(
-			context.Background(),
-			engine,
-			api.Request{
-				Key: stepKey(
-					Operation{ID: "fixture-warm"},
-					"fixture-create",
-				),
-				Action: "create",
-				Config: &config,
-			},
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		started, err = api.Wait(
-			context.Background(),
-			engine,
-			api.Request{
-				Key:    stepKey(Operation{ID: "fixture-warm"}, "fixture-start"),
-				Action: "start",
-				VMID:   created.VMID,
-			},
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	state := t.TempDir()
-	st, err := openStore(state, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	// Exercise durable lifecycle replay without background pool refills changing
-	// the engine allocation counts being asserted by these tests.
-	service := &Service{
-		opts: Options{
-			StateDir:  state,
-			RootToken: "root-secret",
-			Engine:    engine,
-			Agent:     &rejectWarmAgent{vm: created.VMID},
-			Egress:    &fakeEgress{},
-			MaxTTL:    time.Hour,
-			MaxWarm:   32,
-		},
-		store:       st,
-		ctx:         ctx,
-		cancel:      cancel,
-		epoch:       "test-daemon",
-		locks:       map[string]*sync.Mutex{},
-		active:      map[string]chan struct{}{},
-		secrets:     map[string]map[string]egress.Secret{},
-		opSecrets:   map[string]map[string]egress.Secret{},
-		bindings:    map[string]string{},
-		connections: map[string]map[net.Conn]struct{}{},
-	}
-	t.Cleanup(func() { service.Close() })
-	principal := Principal{TenantID: "alice"}
-	if _, err = service.PutTenant(
-		context.Background(),
-		Principal{Root: true},
-		Tenant{
-			ID:            "alice",
-			Token:         "alice-token",
-			MaxSandboxes:  5,
-			MaxStorageMiB: 1 << 20,
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-	importer := Principal{Root: true, TenantID: principal.TenantID}
-	if _, err = service.Execute(
-		context.Background(),
-		importer,
-		"template",
-		Command{Action: "template_put", Template: &template},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if golden {
-		service.pools()
-		service.wg.Wait()
-		if err = service.store.db.QueryRow(`SELECT vm_id FROM warm WHERE template_id=?`, template.ID).
-			Scan(&engine.warmCandidate); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		seedTemplateQuotaWarm(t, service, template, created, started)
-		engine.warmCandidate = created.VMID
-	}
-	service.opts.Agent.(*rejectWarmAgent).vm = engine.warmCandidate
-	engine.mu.Lock()
-	engine.calls = map[string]int{}
-	engine.mu.Unlock() // Count replacement work after the real ready fixture.
-	return service, engine, principal, template
-}
 
 func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 	for _, golden := range []bool{false, true} {
@@ -283,5 +140,268 @@ func TestWarmFallbackPreservesChangedInstance(t *testing.T) {
 	}
 	if engine.count("delete") != 0 || b.VMID == "" {
 		t.Fatal("changed instance was destroyed or forgotten")
+	}
+}
+
+func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
+	for _, damage := range []string{"none", "owner", "namespace", "shape", "key", "source", "reservation", "duplicate", "missing-selection"} {
+		t.Run(damage, func(t *testing.T) {
+			s, base, p, tpl := warmFallbackFixture(t, true)
+			f := &recoveryTestEngine{fakeEngine: base}
+			hidden := &templateQuotaEngine{
+				Client:    f,
+				attempts:  map[string]int{},
+				hideClone: true,
+			}
+			e := &templateQuotaSelectionClient{Client: hidden}
+			s.opts.Engine = e
+			o, err := s.Submit(
+				s.ctx,
+				p,
+				"destination-pending",
+				Command{Action: "claim", TemplateID: tpl.ID},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.Unknown) {
+				t.Fatal("missing real unknown replacement", err)
+			}
+			r, err := s.loadRecovery(allocationGroupID(o))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Group.Selection.Stage != "fallback_reserved" ||
+				r.Group.Identity != nil ||
+				len(r.Allocations) != 1 ||
+				!r.Group.Steps["provision"].Dispatched {
+				t.Fatal("missing fallback pending destination")
+			}
+			public, _ := s.store.operation(s.ctx, o.ID)
+			if damage == "none" {
+				s = ledgerRestart(t, s)
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+				ledgerMoney(t, s, p.TenantID, 1, 256)
+				hidden.mu.Lock()
+				hidden.hideClone = false
+				hidden.mu.Unlock()
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+				s = ledgerRestart(t, s)
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+				ledgerMoney(t, s, p.TenantID, 0, 192)
+				now, _ := s.store.operation(s.ctx, o.ID)
+				if !bytes.Equal(encode(public), encode(now)) {
+					t.Fatal("late receipt changed failed public bytes")
+				}
+				return
+			}
+			a := &r.Allocations[0]
+			switch damage {
+			case "owner":
+				a.ChargeTenantID = "bob"
+			case "namespace":
+				a.TenantID = "bob"
+			case "shape":
+				a.Shape.VCPUs++
+			case "key":
+				a.Request.Key += ":other"
+			case "source":
+				a.Request.SnapshotID = "other-SID"
+			case "reservation":
+				if _, err = s.store.db.Exec(
+					`DELETE FROM quota_resources WHERE kind='pending_storage' AND resource_key=?`,
+					a.Request.Key,
+				); err != nil {
+					t.Fatal(err)
+				}
+			case "duplicate":
+				r.Allocations = append(r.Allocations, *a)
+			case "missing-selection":
+				r.Group.Selection = nil
+			}
+			if _, err = s.store.db.Exec(
+				`UPDATE resource_recovery SET body=? WHERE id=?`,
+				encode(r),
+				r.ID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			before := templateQuotaState(t, s)
+			n, finds := e.counts()
+			if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+				t.Fatal("unqualified pending destination consumed", err)
+			}
+			if !bytes.Equal(before, templateQuotaState(t, s)) {
+				t.Fatal("runtime repaired corrupt destination")
+			}
+			opts := s.opts
+			opts.Initialize = false
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			next, err := Open(opts)
+			if next != nil {
+				next.Close()
+			}
+			if !isCode(err, api.ManualRecovery) ||
+				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+				t.Fatal("startup accepted or repaired destination", err)
+			}
+			if nn, ff := e.counts(); nn != n || ff != finds {
+				t.Fatal("corruption reached Engine", nn-n, ff-finds)
+			}
+		})
+	}
+}
+
+func TestTemplateQuotaFallbackCancelledAndUnknownStep(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		t.Run(fmt.Sprint(unknown), func(t *testing.T) {
+			s, base, p, tpl := warmFallbackFixture(t, true)
+			e := &templateQuotaEngine{
+				Client:      &recoveryTestEngine{fakeEngine: base},
+				attempts:    map[string]int{},
+				hideNetwork: unknown,
+			}
+			s.opts.Engine = e
+			if !unknown {
+				templateQuotaSQLFault(
+					t,
+					s,
+					"resource_recovery",
+					"UPDATE",
+					"json_extract(NEW.body,'$.allocation_group.steps.provision.dispatched')=1",
+					"abort",
+				)
+			}
+			o, err := s.Submit(
+				s.ctx,
+				p,
+				"destination-unfinished",
+				Command{Action: "claim", TemplateID: tpl.ID},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Wait(s.ctx, p, o.ID); err == nil {
+				t.Fatal("expected unfinished original responsibility")
+			}
+			public, _ := s.store.operation(s.ctx, o.ID)
+			if !unknown {
+				if _, err = s.store.db.Exec(
+					`DROP TRIGGER handoff_fault`,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = s.recoverResources(); err != nil {
+				t.Fatal(err)
+			}
+			r, err := s.loadRecovery(allocationGroupID(o))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unknown {
+				if r.Done || groupStepsTerminal(r) {
+					t.Fatal("unknown original step lost responsibility")
+				}
+				ledgerMoney(t, s, p.TenantID, 1, 192)
+				s = ledgerRestart(t, s)
+				e.mu.Lock()
+				e.hideNetwork = false
+				e.mu.Unlock()
+				if err = s.recoverResources(); err != nil {
+					t.Fatal(err)
+				}
+			} else if r.Allocations[0].Resolution.State != "cancelled" { //nolint:misspell // Durable token.
+				t.Fatal("undispatched replacement did not cancel")
+			}
+			s = ledgerRestart(t, s)
+			if err = s.recoverResources(); err != nil {
+				t.Fatal(err)
+			}
+			ledgerMoney(t, s, p.TenantID, 0, 192)
+			now, _ := s.store.operation(s.ctx, o.ID)
+			if !bytes.Equal(encode(public), encode(now)) {
+				t.Fatal("private retirement changed public terminal bytes")
+			}
+		})
+	}
+}
+
+func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
+	s, _, p, tpl := warmFallbackFixture(t, true)
+	claim := ledgerExecute(
+		t,
+		s,
+		p,
+		"historical-fallback-context",
+		Command{Action: "claim", TemplateID: tpl.ID},
+	)
+	o, err := s.store.byKey(s.ctx, p.TenantID, "historical-fallback-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgerExecute(
+		t,
+		s,
+		p,
+		"historical-context-pause",
+		Command{Action: "pause", SandboxID: claim.Sandbox.ID},
+	)
+	ledgerExecute(
+		t,
+		s,
+		p,
+		"historical-context-release",
+		Command{Action: "release", SandboxID: claim.Sandbox.ID},
+	)
+	s = ledgerRestart(t, s)
+	r, err := s.loadRecovery(allocationGroupID(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Group.Selection == nil || r.Group.Identity == nil ||
+		r.Group.Selection.Identity.Instance == r.Group.Identity.Instance {
+		t.Fatal("missing distinct historical generations")
+	}
+	r.Group.Selection = nil
+	if _, err = s.store.db.Exec(
+		`UPDATE resource_recovery SET body=? WHERE id=?`,
+		encode(r),
+		r.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	e := &templateQuotaSelectionClient{Client: s.opts.Engine}
+	s.opts.Engine = e
+	before := templateQuotaState(t, s)
+	if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+		t.Fatal("later lifecycle hid required selection", err)
+	}
+	if !bytes.Equal(before, templateQuotaState(t, s)) {
+		t.Fatal("historical context was repaired")
+	}
+	opts := s.opts
+	opts.Initialize = false
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := Open(opts)
+	if next != nil {
+		next.Close()
+	}
+	if !isCode(err, api.ManualRecovery) ||
+		!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+		t.Fatal("startup lost historical transfer", err)
+	}
+	if n, f := e.counts(); n != 0 || f != 0 {
+		t.Fatal("historical corruption reached Engine")
 	}
 }

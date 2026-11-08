@@ -3,69 +3,12 @@ package sandboxd
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
-
-type directTestEngine struct {
-	*fakeEngine
-
-	requestMu  sync.Mutex
-	requests   []api.Request
-	failRevoke bool
-}
-
-func (f *directTestEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
-	f.requestMu.Lock()
-	f.requests = append(f.requests, r)
-	fail := r.Action == "network_policy" && r.Policy == nil && f.failRevoke
-	if fail {
-		f.failRevoke = false
-	}
-	f.requestMu.Unlock()
-	if r.Action != "network_policy" {
-		return f.fakeEngine.Submit(ctx, r)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if old, ok := f.ops[r.Key]; ok {
-		return old, nil
-	}
-	v, ok := f.vms[r.VMID]
-	if !ok {
-		return api.Operation{}, api.Fail(api.NotFound, "VM missing")
-	}
-	if v.Instance != r.ExpectedInstance {
-		return api.Operation{}, api.Fail(api.Conflict, "instance changed")
-	}
-	o := api.Operation{
-		ID:      r.Key,
-		Key:     r.Key,
-		VMID:    r.VMID,
-		Request: r,
-		Status:  "succeeded",
-	}
-	if fail || v.NetworkActual {
-		o.Status = "failed"
-		o.Error = &api.Error{
-			Code:    api.Conflict,
-			Message: "policy replacement failed",
-		}
-	} else {
-		v.NetworkPolicy = r.Policy
-		v.NetworkPolicyInstance = v.Instance
-		f.vms[v.ID] = v
-	}
-	f.ops[r.Key] = o
-	return o, nil
-}
 
 func TestDirectPolicyActivationAndRetryableRevocation(t *testing.T) {
 	engine := &directTestEngine{fakeEngine: newFakeEngine()}
