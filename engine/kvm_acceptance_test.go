@@ -59,7 +59,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	}
 	t.Logf("persistent acceptance artifacts: %s", run)
 	version, err := exec.Command(hypervisor, "--version").CombinedOutput()
-	if err != nil || !strings.Contains(string(version), CloudHypervisorCommit) {
+	if err != nil || !strings.Contains(string(version), cloudHypervisorCommit) {
 		t.Fatalf("wrong pinned hypervisor: %s: %v", version, err)
 	}
 	kvmTool(t, "readelf", "-l", hypervisor)

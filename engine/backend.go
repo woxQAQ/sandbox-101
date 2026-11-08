@@ -3,7 +3,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/woxQAQ/sandbox-engine/api"
 )
@@ -60,46 +59,4 @@ type Observation struct {
 	PID        int
 	StartTime  uint64
 	Network    bool
-}
-
-type Manifest struct {
-	Format          int               `json:"format"`
-	Backend         string            `json:"backend"`
-	Architecture    string            `json:"architecture"`
-	CPU             string            `json:"cpu"`
-	Config          api.Config        `json:"config"`
-	MemoryMode      string            `json:"memory_mode"`
-	PublicationMode string            `json:"publication_mode"`
-	Files           map[string]string `json:"files"`
-	Image           json.RawMessage   `json:"image"`
-}
-
-type vmRecord struct {
-	VM       api.VM   `json:"vm"`
-	Resource Resource `json:"resource"`
-}
-type snapshotRecord struct {
-	Snapshot api.Snapshot `json:"snapshot"`
-	Dir      string       `json:"dir"`
-}
-type journal struct {
-	RestoreDeletion  *gcDeletion       `json:"restore_deletion,omitempty"`
-	RestoreMaterials *restoreMaterials `json:"restore_materials,omitempty"`
-	RestoreBlocked   bool              `json:"restore_blocked,omitempty"`
-	RestoreCleaned   bool              `json:"restore_cleaned,omitempty"`
-	BlockedRestoreID string            `json:"blocked_restore_id,omitempty"`
-	CaptureBoundary  *captureBoundary  `json:"capture_boundary,omitempty"`
-	Materialized     bool              `json:"materialized,omitempty"`
-	CaptureFiles     map[string]string `json:"capture_files,omitempty"`
-	ArtifactsSynced  bool              `json:"artifacts_synced,omitempty"`
-	ResumeRequired   bool              `json:"resume_required,omitempty"`
-	Captured         bool              `json:"captured,omitempty"`
-	Resource         *Resource         `json:"resource,omitempty"`
-	Old              *Resource         `json:"old,omitempty"`
-	Lease            bool              `json:"lease,omitempty"`
-	Manifest         *Manifest         `json:"manifest,omitempty"`
-}
-type opRecord struct {
-	Operation api.Operation `json:"operation"`
-	Journal   journal       `json:"journal"`
 }

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -302,17 +301,4 @@ func openTapInNamespace(r Resource) (*os.File, error) {
 		return nil, openErr
 	}
 	return os.NewFile(uintptr(fd), "tap0"), nil
-}
-
-func (b *CloudHypervisor) Agent(
-	ctx context.Context,
-	r Resource,
-	restore bool,
-) error {
-	return systemAgent(
-		ctx,
-		filepath.Join(r.RunDir, "io", "vsock"),
-		r.Instance,
-		restore,
-	)
 }

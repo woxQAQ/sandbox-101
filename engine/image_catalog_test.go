@@ -14,7 +14,8 @@ import (
 
 type catalogBackend struct{ *testBackend }
 
-func (*catalogBackend) RequiresImageCatalog() bool              { return true }
+func (*catalogBackend) RequiresImageCatalog() bool { return true }
+
 func (*catalogBackend) Prepare(context.Context, Resource) error { return nil }
 
 func TestImagePublicationRejectsOrphansAndChangedMaterialization(t *testing.T) {
@@ -113,35 +114,5 @@ func TestImagePublicationRejectsOrphansAndChangedMaterialization(t *testing.T) {
 		captured,
 	); err == nil {
 		t.Fatal("different captured image materialization accepted")
-	}
-}
-
-func TestRestoreBackupRefusesSQLiteSidecars(t *testing.T) {
-	for _, name := range []string{"metadata.db-wal", "metadata.db-shm"} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, name)
-			if err := os.WriteFile(
-				path,
-				[]byte("retained evidence"),
-				0o600,
-			); err != nil {
-				t.Fatal(err)
-			}
-			err := RestoreBackup(dir, filepath.Join(dir, "absent-backup"))
-			a, ok := err.(*api.Error)
-			if !ok || a.Code != api.Conflict {
-				t.Fatalf(
-					"expected sidecar conflict before inspecting backup, got %v",
-					err,
-				)
-			}
-			if data, err := os.ReadFile(
-				path,
-			); err != nil ||
-				string(data) != "retained evidence" {
-				t.Fatalf("sidecar changed: %q %v", data, err)
-			}
-		})
 	}
 }

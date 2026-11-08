@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,8 +35,10 @@ type testBackend struct {
 
 func newTestBackend() *testBackend { return &testBackend{states: map[string]Observation{}} }
 
-func (b *testBackend) Compatibility() string                   { return "test-only/v1" }
+func (b *testBackend) Compatibility() string { return "test-only/v1" }
+
 func (b *testBackend) Check(context.Context, api.Config) error { return nil }
+
 func (b *testBackend) Prepare(_ context.Context, r Resource) error {
 	for _, p := range []string{filepath.Dir(r.Disk), r.ImageDir, filepath.Join(r.Dir, "capture")} {
 		if e := os.MkdirAll(p, 0o700); e != nil {
@@ -152,46 +157,6 @@ func (b *testBackend) Capture(
 	return nil
 }
 
-func TestSnapshotRejectsUntrustedArtifactsAndResumes(t *testing.T) {
-	b := newTestBackend()
-	b.captureDamage = "symlink"
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	final := awaitStatus(t, e, op.ID)
-	snap, err := e.GetSnapshot(context.Background(), op.SnapshotID)
-	if err != nil || final.Status != "failed" || snap.Published {
-		t.Fatalf("invalid capture published: %+v %+v %v", final, snap, err)
-	}
-	v, err := e.loadVM(context.Background(), vm.VMID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b.mu.Lock()
-	paused := b.states[v.Resource.Instance].Paused
-	resumes := b.resumes
-	b.mu.Unlock()
-	if paused || resumes != 1 {
-		t.Fatalf(
-			"failed capture did not resume: paused=%v resumes=%d",
-			paused,
-			resumes,
-		)
-	}
-}
-
 func (b *testBackend) Resume(_ context.Context, r Resource) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -211,7 +176,9 @@ func (b *testBackend) Network(_ context.Context, r Resource, on bool) error {
 	b.states[r.Instance] = o
 	return nil
 }
+
 func (b *testBackend) Remove(context.Context, Resource) error { return nil }
+
 func config() *api.Config {
 	return &api.Config{
 		Image: "sha256:" + strings.Repeat("a", 64),
@@ -426,500 +393,6 @@ func TestLifecycleIdempotencyAndIndependentDeletion(t *testing.T) {
 	}
 }
 
-func TestStartupAdoptsLiveInstanceWithoutRelaunch(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestBackend()
-	var hit atomic.Bool
-	e := openTest(t, dir, b, true, func(step string) error {
-		if step == "launched" && hit.CompareAndSwap(false, true) {
-			return ErrInterrupted
-		}
-		return nil
-	})
-	a := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	o, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "start", Action: "start", VMID: a.VMID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	awaitStep(t, e, o.ID, "launched")
-	e.Close()
-	e = openTest(t, dir, b, false, nil)
-	defer e.Close()
-	op := awaitStatus(t, e, o.ID)
-	if op.Status != "succeeded" {
-		t.Fatalf("adoption failed %+v", op)
-	}
-	b.mu.Lock()
-	launches := b.launches
-	b.mu.Unlock()
-	if launches != 1 {
-		t.Fatalf("recovery relaunched VMM %d times", launches)
-	}
-}
-
-func TestSnapshotCrashRejectsUnprovenPublication(t *testing.T) {
-	for _, damage := range []string{"legacy-journal", "staging-inode", "legacy-proof"} {
-		t.Run(damage, func(t *testing.T) {
-			b := newTestBackend()
-			dir := t.TempDir()
-			var hit atomic.Bool
-			step := "capture_materialized"
-			if damage == "legacy-journal" {
-				step = "captured"
-			}
-			e := openTest(t, dir, b, true, func(s string) error {
-				if s == step && hit.CompareAndSwap(false, true) {
-					return ErrInterrupted
-				}
-				return nil
-			})
-			vm := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
-			wait(
-				t,
-				e,
-				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
-			)
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			awaitStep(t, e, op.ID, step)
-			lock := e.vmLock(vm.VMID)
-			lock.Lock()
-			o, err := e.loadOp(context.Background(), op.ID)
-			lock.Unlock()
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := o.Journal.CaptureBoundary.Path
-			switch damage {
-			case "legacy-journal":
-				o.Journal.CaptureBoundary = nil
-				if err = e.saveOp(&o, "captured"); err != nil {
-					t.Fatal(err)
-				}
-			case "legacy-proof":
-				o.Journal.CaptureFiles = nil
-				if err = e.saveOp(&o, step); err != nil {
-					t.Fatal(err)
-				}
-			default:
-				stage := filepath.Join(path, "publication")
-				if err = os.Rename(
-					stage,
-					filepath.Join(t.TempDir(), "retained-publication"),
-				); err != nil {
-					t.Fatal(err)
-				}
-				if err = os.Mkdir(stage, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			e.Close()
-			e = openTest(t, dir, b, false, nil)
-			defer e.Close()
-			final := awaitStatus(t, e, op.ID)
-			s, err := e.GetSnapshot(context.Background(), op.SnapshotID)
-			if err != nil || final.Status != "failed" || s.Published {
-				t.Fatalf(
-					"unproven capture published: %+v %+v %v",
-					final,
-					s,
-					err,
-				)
-			}
-			if _, err = os.Stat(path); err != nil {
-				t.Fatal("recovery destroyed diagnostic capture", err)
-			}
-			v, _ := e.loadVM(context.Background(), vm.VMID)
-			b.mu.Lock()
-			paused := b.states[v.Resource.Instance].Paused
-			launches := b.launches
-			b.mu.Unlock()
-			if paused || launches != 1 {
-				t.Fatalf(
-					"unsafe recovery: paused=%v launches=%d",
-					paused,
-					launches,
-				)
-			}
-		})
-	}
-}
-
-func TestCloneRejectsLegacyPublication(t *testing.T) {
-	b := newTestBackend()
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	op := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-	)
-	lock := e.vmLock(vm.VMID)
-	lock.Lock()
-	s, err := e.loadSnapshot(context.Background(), op.SnapshotID)
-	lock.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest Manifest
-	if err = json.Unmarshal(s.Snapshot.Manifest, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	manifest.PublicationMode = ""
-	s.Snapshot.Manifest = encode(manifest)
-	if err = e.saveSnapshot(s); err != nil {
-		t.Fatal(err)
-	}
-	clone, err := e.Submit(
-		context.Background(),
-		api.Request{
-			Key:        "legacy-clone",
-			Action:     "clone",
-			SnapshotID: op.SnapshotID,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	final := awaitStatus(t, e, clone.ID)
-	if final.Status != "failed" || final.Error == nil ||
-		final.Error.Code != api.Incompatible {
-		t.Fatalf("legacy publication trusted: %+v", final)
-	}
-	b.mu.Lock()
-	launches := b.launches
-	b.mu.Unlock()
-	if launches != 1 {
-		t.Fatal("legacy publication launched another VMM")
-	}
-	if err = verifyFiles(s.Dir, manifest.Files); err != nil {
-		t.Fatal("legacy evidence altered", err)
-	}
-}
-
-// Filesystem damage models the persisted names with lost/changed data that a
-// process-only close/open cannot exercise. Recovery must never bless those bytes
-// by calculating a new publication manifest.
-func TestSnapshotCrashRejectsLostOrDamagedMaterials(t *testing.T) {
-	for _, step := range []string{"captured", "source_resumed", "capture_copied", "capture_materialized", "artifacts_synced", "publish_intent"} {
-		files := []string{"disk.raw"}
-		if step != "captured" && step != "source_resumed" {
-			files = append(files, "ch/memory-ranges")
-		}
-		for _, file := range files {
-			for _, damage := range []string{"truncate", "zero", "lost"} {
-				t.Run(step+"/"+file+"/"+damage, func(t *testing.T) {
-					b := newTestBackend()
-					dir := t.TempDir()
-					var hit atomic.Bool
-					e := openTest(t, dir, b, true, func(s string) error {
-						if s == step && hit.CompareAndSwap(false, true) {
-							return ErrInterrupted
-						}
-						return nil
-					})
-					vm := wait(
-						t,
-						e,
-						api.Request{
-							Key:    "create",
-							Action: "create",
-							Config: config(),
-						},
-					)
-					wait(
-						t,
-						e,
-						api.Request{
-							Key:    "start",
-							Action: "start",
-							VMID:   vm.VMID,
-						},
-					)
-					op, err := e.Submit(
-						context.Background(),
-						api.Request{
-							Key:    "snapshot",
-							Action: "snapshot",
-							VMID:   vm.VMID,
-						},
-					)
-					if err != nil {
-						t.Fatal(err)
-					}
-					awaitStep(t, e, op.ID, step)
-					lock := e.vmLock(vm.VMID)
-					lock.Lock()
-					o, err := e.loadOp(context.Background(), op.ID)
-					lock.Unlock()
-					if err != nil {
-						t.Fatal(err)
-					}
-					capture := o.Journal.CaptureBoundary.Path
-					stage := filepath.Join(capture, "publication")
-					if step == "publish_intent" {
-						s, x := e.loadSnapshot(
-							context.Background(),
-							op.SnapshotID,
-						)
-						if x != nil {
-							t.Fatal(x)
-						}
-						stage = s.Dir
-					}
-					if err = e.Close(); err != nil {
-						t.Fatal(err)
-					}
-					path := filepath.Join(stage, file)
-					st, err := os.Stat(path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err = os.Chmod(path, 0o600); err != nil {
-						t.Fatal(err)
-					}
-					switch damage {
-					case "truncate":
-						err = os.Truncate(path, 0)
-					case "zero":
-						err = os.WriteFile(path, make([]byte, st.Size()), 0o600)
-					case "lost":
-						err = os.Remove(path)
-					}
-					if err != nil {
-						t.Fatal(err)
-					}
-					e = openTest(t, dir, b, false, nil)
-					defer e.Close()
-					final := awaitStatus(t, e, op.ID)
-					s, err := e.GetSnapshot(context.Background(), op.SnapshotID)
-					if err != nil || final.Status != "failed" || s.Published {
-						t.Fatalf(
-							"damaged capture published: status=%s published=%v error=%v get=%v",
-							final.Status,
-							s.Published,
-							final.Error,
-							err,
-						)
-					}
-					if _, err = os.Stat(capture); err != nil {
-						t.Fatal("diagnostic capture removed", err)
-					}
-					if damage == "lost" {
-						if _, err = os.Stat(path); !os.IsNotExist(err) {
-							t.Fatal(
-								"lost file rebuilt from current source",
-								err,
-							)
-						}
-					}
-					v, err := e.loadVM(context.Background(), vm.VMID)
-					if err != nil {
-						t.Fatal(err)
-					}
-					b.mu.Lock()
-					paused := b.states[v.Resource.Instance].Paused
-					launches, resumes, captures := b.launches, b.resumes, b.captures
-					b.mu.Unlock()
-					if paused || launches != 1 || resumes != 1 ||
-						captures != 1 {
-						t.Fatalf(
-							"unsafe source recovery: paused=%v launches=%d resumes=%d captures=%d",
-							paused,
-							launches,
-							resumes,
-							captures,
-						)
-					}
-				})
-			}
-		}
-	}
-}
-
-func TestSnapshotCrashBoundaries(t *testing.T) {
-	for _, step := range []string{"capture_prepared", "pause_intent", "paused", "captured", "source_resumed", "capture_copied", "capture_materialized", "artifacts_synced", "publish_intent"} {
-		t.Run(step, func(t *testing.T) {
-			dir := t.TempDir()
-			b := newTestBackend()
-			var hit atomic.Bool
-			e := openTest(t, dir, b, true, func(s string) error {
-				if s == step && hit.CompareAndSwap(false, true) {
-					return ErrInterrupted
-				}
-				return nil
-			})
-			a := wait(
-				t,
-				e,
-				api.Request{Key: "c", Action: "create", Config: config()},
-			)
-			wait(t, e, api.Request{Key: "s", Action: "start", VMID: a.VMID})
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "capture", Action: "snapshot", VMID: a.VMID},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			awaitStep(t, e, op.ID, step)
-			e.Close()
-			e = openTest(t, dir, b, false, nil)
-			defer e.Close()
-			final := awaitStatus(t, e, op.ID)
-			snap, _ := e.GetSnapshot(context.Background(), op.SnapshotID)
-			if step == "pause_intent" || step == "paused" ||
-				step == "captured" ||
-				step == "source_resumed" ||
-				step == "capture_copied" {
-				if final.Status != "failed" || snap.Published {
-					t.Fatalf(
-						"incomplete capture published %+v %+v",
-						final,
-						snap,
-					)
-				}
-			} else {
-				if final.Status != "succeeded" || !snap.Published {
-					t.Fatalf(
-						"completed capture not recovered %+v %+v",
-						final,
-						snap,
-					)
-				}
-				s, err := e.loadSnapshot(context.Background(), op.SnapshotID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for file, want := range map[string]string{"disk.raw": "disk-generation-1", "ch/memory-ranges": "ram-generation-1"} {
-					data, err := os.ReadFile(filepath.Join(s.Dir, file))
-					if err != nil || string(data) != want {
-						t.Fatalf(
-							"replay changed captured generation: file=%s data=%q error=%v",
-							file,
-							data,
-							err,
-						)
-					}
-				}
-			}
-			v, _ := e.loadVM(context.Background(), a.VMID)
-			b.mu.Lock()
-			paused := b.states[v.Resource.Instance].Paused
-			b.mu.Unlock()
-			if paused {
-				t.Fatal("source left paused after recovery")
-			}
-		})
-	}
-}
-
-func TestCloneRecoveryAfterBackingTransferAndSnapshotDeletion(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestBackend()
-	var hit atomic.Bool
-	e := openTest(t, dir, b, true, func(s string) error {
-		if s == "restore_resources_ready" && hit.CompareAndSwap(false, true) {
-			return ErrInterrupted
-		}
-		return nil
-	})
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	wait(t, e, api.Request{Key: "boot", Action: "start", VMID: a.VMID})
-	s := wait(t, e, api.Request{Key: "snap", Action: "snapshot", VMID: a.VMID})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	awaitStep(t, e, op.ID, "restore_resources_ready")
-	wait(
-		t,
-		e,
-		api.Request{
-			Key:        "del-snapshot",
-			Action:     "delete_snapshot",
-			SnapshotID: s.SnapshotID,
-		},
-	)
-	e.Close()
-	e = openTest(t, dir, b, false, nil)
-	defer e.Close()
-	final := awaitStatus(t, e, op.ID)
-	if final.Status != "succeeded" {
-		t.Fatalf("clone still depends on deleted source snapshot %+v", final)
-	}
-}
-
-func TestReservationBeforePause(t *testing.T) {
-	b := newTestBackend()
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	wait(t, e, api.Request{Key: "s", Action: "start", VMID: a.VMID})
-	free, err := freeBytes(e.opts.StateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.opts.SafetyBytes = free
-	if _, err = e.Submit(
-		context.Background(),
-		api.Request{Key: "full", Action: "snapshot", VMID: a.VMID},
-	); err == nil {
-		t.Fatal("insufficient storage admitted")
-	}
-	b.mu.Lock()
-	captures, resumes := b.captures, b.resumes
-	b.mu.Unlock()
-	if captures != 0 || resumes != 0 {
-		t.Fatal("reservation rejected after pausing")
-	}
-	e.opts.SafetyBytes = 1
-	s := wait(
-		t,
-		e,
-		api.Request{Key: "budgeted", Action: "snapshot", VMID: a.VMID},
-	)
-	var bytes int64
-	if err = e.db.QueryRow("SELECT bytes FROM reservations WHERE owner=?", s.SnapshotID).
-		Scan(&bytes); err != nil {
-		t.Fatal(err)
-	}
-	shape := config().Shape
-	minimum := (2*shape.MemoryMiB + shape.DiskMiB + 160) << 20
-	if bytes < minimum {
-		t.Fatalf(
-			"reservation %d cannot cover two RAM copies, disk and bounded JSON %d",
-			bytes,
-			minimum,
-		)
-	}
-}
-
 func TestSingleWriterAndMissingMetadata(t *testing.T) {
 	dir := t.TempDir()
 	b := newTestBackend()
@@ -936,148 +409,298 @@ func TestSingleWriterAndMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestAgentFailureStopsColdBoot(t *testing.T) {
-	b := newTestBackend()
-	b.agentError = errors.New("guest agent unavailable")
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "s", Action: "start", VMID: a.VMID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	op = awaitStatus(t, e, op.ID)
-	if op.Status != "failed" {
-		t.Fatal("agent failure accepted")
-	}
-	v, _ := e.GetVM(context.Background(), a.VMID)
-	if v.Phase != "stopped" || v.PID != 0 || v.AgentReady {
-		t.Fatalf("unverified cold boot still running %+v", v)
-	}
-}
-
-func TestUnknownIdentityNeverStopsOrDeletes(t *testing.T) {
-	b := newTestBackend()
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	wait(t, e, api.Request{Key: "s", Action: "start", VMID: a.VMID})
-	l := e.vmLock(a.VMID)
-	l.Lock()
-	l.Unlock() //nolint:staticcheck // Synchronize with terminal publication before inspecting resources.
-	b.mu.Lock()
-	b.inspectError = api.Fail(api.ManualRecovery, "PID reused")
-	b.mu.Unlock()
-	_ = e.Reconcile(context.Background())
-	v, _ := e.GetVM(context.Background(), a.VMID)
-	if v.Verified || v.BlockedReason == "" {
-		t.Fatal("unknown identity treated as confirmed")
-	}
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "delete", Action: "delete", VMID: a.VMID},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	final := awaitStatus(t, e, op.ID)
-	if final.Status != "failed" {
-		t.Fatal("unconfirmed resource deleted")
-	}
-	if _, err = e.GetVM(context.Background(), a.VMID); err != nil {
-		t.Fatal("ownership record removed despite uncertainty")
-	}
-}
-
-func TestBackupRecoveryRequiresExplicitReview(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestBackend()
-	e := openTest(t, dir, b, true, nil)
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	backup := filepath.Join(t.TempDir(), "backup.db")
-	point, err := e.Backup(context.Background(), backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if point.ID == "" || point.DatabaseSHA256 == "" {
-		t.Fatal("missing recovery point")
-	}
-	e.Close()
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err = os.Remove(
-			filepath.Join(dir, "metadata.db") + suffix,
-		); err != nil &&
-			!os.IsNotExist(err) {
+func layerFixture(t *testing.T, headers ...*tar.Header) (string, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, h := range headers {
+		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
+		if h.Size > 0 {
+			if _, err := tw.Write(make([]byte, h.Size)); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	if err = RestoreBackup(dir, backup); err != nil {
+	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if other, x := Open(Options{StateDir: dir, Backend: b}); x == nil {
-		other.Close()
-		t.Fatal("restored backup automatically trusted")
-	}
-	if err = AcknowledgeRecovery(
-		dir,
-		"reviewed running scopes and retained files",
-	); err != nil {
+	file := filepath.Join(t.TempDir(), "layer.tar")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e = openTest(t, dir, b, false, nil)
-	defer e.Close()
-	v, err := e.GetVM(context.Background(), a.VMID)
-	if err != nil || v.ID != a.VMID {
-		t.Fatal("recovery lost known VM", err)
-	}
+	h := sha256.Sum256(buf.Bytes())
+	return file, "sha256:" + hex.EncodeToString(h[:])
 }
 
-func TestRestoreUsesFreshInstanceAndDefaultNetworkBlock(t *testing.T) {
-	b := newTestBackend()
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	wait(t, e, api.Request{Key: "s", Action: "start", VMID: a.VMID})
-	before, _ := e.GetVM(context.Background(), a.VMID)
-	s := wait(t, e, api.Request{Key: "snap", Action: "snapshot", VMID: a.VMID})
-	wait(t, e, api.Request{Key: "off", Action: "stop", VMID: a.VMID})
+// Count effects at the Backend boundary while the real Engine persists and replays.
+type instanceRecoveryBackend struct {
+	*testBackend
+
+	boundary    string
+	armed       atomic.Bool
+	interrupted chan struct{}
+	stops       atomic.Int32
+	launchCalls atomic.Int32
+	removes     atomic.Int32
+	networkOn   atomic.Int32
+}
+
+func (b *instanceRecoveryBackend) Launch(
+	ctx context.Context,
+	r Resource,
+	restore bool,
+) error {
+	b.launchCalls.Add(1)
+	interrupt := b.armed.Load() &&
+		(b.boundary == "instance_persisted" || b.boundary == "launch_unrecorded")
+	if interrupt && b.boundary == "instance_persisted" {
+		b.armed.Store(false)
+		close(b.interrupted)
+		return ErrInterrupted
+	}
+	if err := b.testBackend.Launch(ctx, r, restore); err != nil {
+		return err
+	}
+	if interrupt {
+		b.armed.Store(false)
+		close(b.interrupted)
+		return ErrInterrupted
+	}
+	return nil
+}
+
+func (b *instanceRecoveryBackend) Stop(ctx context.Context, r Resource) error {
+	b.stops.Add(1)
+	return b.testBackend.Stop(ctx, r)
+}
+
+func (b *instanceRecoveryBackend) Remove(
+	ctx context.Context,
+	r Resource,
+) error {
+	b.removes.Add(1)
+	return b.testBackend.Remove(ctx, r)
+}
+
+func (b *instanceRecoveryBackend) Network(
+	ctx context.Context,
+	r Resource,
+	on bool,
+) error {
+	if on {
+		b.networkOn.Add(1)
+	}
+	return b.testBackend.Network(ctx, r, on)
+}
+
+type instanceRecoveryFixture struct {
+	e       *Engine
+	dir     string
+	b       *instanceRecoveryBackend
+	request api.Request
+	op      api.Operation
+	old     api.VM
+	record  opRecord
+}
+
+func newInstanceRecoveryFixture(
+	t *testing.T,
+	action, boundary string,
+) *instanceRecoveryFixture {
+	t.Helper()
+	b := &instanceRecoveryBackend{
+		testBackend: newTestBackend(),
+		boundary:    boundary,
+		interrupted: make(chan struct{}),
+	}
+	f := &instanceRecoveryFixture{dir: t.TempDir(), b: b}
+	f.e = openTest(t, f.dir, b, true, func(step string) error {
+		if step == boundary && b.armed.CompareAndSwap(true, false) {
+			close(b.interrupted)
+			return ErrInterrupted
+		}
+		return nil
+	})
+	t.Cleanup(func() { _ = f.e.Close() })
+	vm := wait(
+		t,
+		f.e,
+		api.Request{Key: "create", Action: "create", Config: config()},
+	)
 	wait(
 		t,
-		e,
-		api.Request{
-			Key:        "restore",
-			Action:     "restore",
-			VMID:       a.VMID,
-			SnapshotID: s.SnapshotID,
-		},
+		f.e,
+		api.Request{Key: "first-start", Action: "start", VMID: vm.VMID},
 	)
-	after, _ := e.GetVM(context.Background(), a.VMID)
-	if after.Instance == before.Instance || after.ID != before.ID ||
-		after.NetworkActual ||
-		after.NetworkEnabled ||
-		!after.AgentReady {
-		t.Fatalf("bad restore identity %+v", after)
+	f.request = api.Request{Key: "conditional", Action: action, VMID: vm.VMID}
+	if action == "restore" {
+		snapshot := wait(
+			t,
+			f.e,
+			api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
+		)
+		f.request.SnapshotID = snapshot.SnapshotID
+	}
+	wait(t, f.e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
+	var err error
+	f.old, err = f.e.GetVM(context.Background(), vm.VMID)
+	if err != nil || f.old.Instance == "" || f.old.Phase != "stopped" {
+		t.Fatalf("missing stopped instance A: %+v %v", f.old, err)
+	}
+	f.request.ExpectedInstance = f.old.Instance
+	b.armed.Store(true)
+	f.op, err = f.e.Submit(context.Background(), f.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-b.interrupted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("instance recovery fault was not reached")
+	}
+	lock := f.e.vmLock(vm.VMID)
+	lock.Lock()
+	f.record, err = f.e.loadOp(context.Background(), f.op.ID)
+	lock.Unlock()
+	if err != nil || f.record.Journal.Resource == nil {
+		t.Fatalf("missing candidate journal: %+v %v", f.record, err)
+	}
+	return f
+}
+
+func (f *instanceRecoveryFixture) restart(t *testing.T) {
+	t.Helper()
+	if err := f.e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.e = openTest(t, f.dir, f.b, false, nil)
+}
+
+type instanceRecoveryEffects struct {
+	launches  int32
+	stops     int32
+	removes   int32
+	networkOn int32
+}
+
+func (b *instanceRecoveryBackend) effects() instanceRecoveryEffects {
+	return instanceRecoveryEffects{
+		b.launchCalls.Load(),
+		b.stops.Load(),
+		b.removes.Load(),
+		b.networkOn.Load(),
 	}
 }
 
-func TestTerminalOperationRecordIsImmutable(t *testing.T) {
+func (f *instanceRecoveryFixture) mutate(
+	t *testing.T,
+	change func(*opRecord, *vmRecord),
+) {
+	t.Helper()
+	lock := f.e.vmLock(f.op.VMID)
+	lock.Lock()
+	defer lock.Unlock()
+	o, err := f.e.loadOp(context.Background(), f.op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.e.loadVM(context.Background(), f.op.VMID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change(&o, &v)
+	if err = f.e.saveVM(v); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.e.saveOp(&o, o.Operation.Step); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The fixture uses lifecycle capture, then stops a clone at a durable boundary.
+func restoreCandidateFixture(
+	t *testing.T,
+	boundary string,
+	actions ...string,
+) (string, *testBackend, api.Operation, opRecord, snapshotRecord) {
+	t.Helper()
+	dir := t.TempDir()
 	b := newTestBackend()
-	e := openTest(t, t.TempDir(), b, true, nil)
-	defer e.Close()
-	r := api.Request{Key: "a", Action: "create", Config: config()}
-	a := wait(t, e, r)
-	first, _ := json.Marshal(a)
-	for range 8 {
-		same, err := e.Submit(context.Background(), r)
-		if err != nil {
-			t.Fatal(err)
+	var armed atomic.Bool
+	e := openTest(t, dir, b, true, func(step string) error {
+		if armed.Load() && step == boundary {
+			return ErrInterrupted
 		}
-		next, _ := json.Marshal(same)
-		if string(first) != string(next) {
-			t.Fatal("terminal idempotency response changed")
-		}
+		return nil
+	})
+	vm := wait(
+		t,
+		e,
+		api.Request{Key: "create", Action: "create", Config: config()},
+	)
+	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
+	snap := wait(
+		t,
+		e,
+		api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
+	)
+	request := api.Request{
+		Key:        "clone",
+		Action:     "clone",
+		SnapshotID: snap.SnapshotID,
+	}
+	if len(actions) != 0 && actions[0] == "restore" {
+		wait(
+			t,
+			e,
+			api.Request{Key: "stop-source", Action: "stop", VMID: vm.VMID},
+		)
+		request.Action, request.VMID = "restore", vm.VMID
+	}
+	armed.Store(true)
+	op, err := e.Submit(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitStep(t, e, op.ID, boundary)
+	// Read under the lifecycle lock after the faulted worker has returned.
+	lock := e.vmLock(op.VMID)
+	lock.Lock()
+	record, err := e.loadOp(context.Background(), op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := e.loadSnapshot(context.Background(), snap.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Unlock()
+	if err = e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir, b, op, record, source
+}
+
+func damageRestoreCandidate(t *testing.T, path, damage string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	switch damage {
+	case "truncate":
+		err = os.Truncate(path, 1)
+	case "rewrite":
+		err = os.WriteFile(path, bytes.Repeat([]byte{'x'}, len(data)), 0o600)
+	case "remove":
+		err = os.Remove(path)
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }

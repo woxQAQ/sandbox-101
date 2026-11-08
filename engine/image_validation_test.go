@@ -3,39 +3,10 @@ package engine
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
-	"path/filepath"
 	"testing"
 
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
-
-func layerFixture(t *testing.T, headers ...*tar.Header) (string, string) {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	for _, h := range headers {
-		if err := tw.WriteHeader(h); err != nil {
-			t.Fatal(err)
-		}
-		if h.Size > 0 {
-			if _, err := tw.Write(make([]byte, h.Size)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "layer.tar")
-	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := sha256.Sum256(buf.Bytes())
-	return file, "sha256:" + hex.EncodeToString(h[:])
-}
 
 func TestLayerValidationRejectsTraversalSpecialFilesAndBounds(t *testing.T) {
 	for _, h := range []*tar.Header{{Name: "../../escape", Typeflag: tar.TypeReg}, {Name: "/absolute", Typeflag: tar.TypeReg}, {Name: "bad//path", Typeflag: tar.TypeReg}, {Name: "dev/evil", Typeflag: tar.TypeChar}, {Name: "pipe", Typeflag: tar.TypeFifo}, {Name: "link", Typeflag: tar.TypeLink, Linkname: "../outside"}, {Name: ".wh.hidden", Typeflag: tar.TypeReg, Size: 1}} {
@@ -158,26 +129,5 @@ func TestLayerValidationPreservesLinuxBackslashNames(t *testing.T) {
 				t.Fatalf("traversal accepted: %q", name)
 			}
 		}
-	}
-}
-
-func TestWritableCloneIsIndependent(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "source")
-	dst := filepath.Join(dir, "clone")
-	if err := os.WriteFile(src, []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := copyFile(src, dst, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(src, []byte("modified"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	a, _ := os.Stat(src)
-	b, _ := os.Stat(dst)
-	data, err := os.ReadFile(dst)
-	if err != nil || string(data) != "original" || os.SameFile(a, b) {
-		t.Fatal("writable disk copy shared mutable inode")
 	}
 }

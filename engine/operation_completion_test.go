@@ -15,6 +15,25 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
+func TestTerminalOperationRecordIsImmutable(t *testing.T) {
+	b := newTestBackend()
+	e := openTest(t, t.TempDir(), b, true, nil)
+	defer e.Close()
+	r := api.Request{Key: "a", Action: "create", Config: config()}
+	a := wait(t, e, r)
+	first, _ := json.Marshal(a)
+	for range 8 {
+		same, err := e.Submit(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, _ := json.Marshal(same)
+		if string(first) != string(next) {
+			t.Fatal("terminal idempotency response changed")
+		}
+	}
+}
+
 func resultInstance(t *testing.T, o api.Operation) string {
 	t.Helper()
 	var wire struct {

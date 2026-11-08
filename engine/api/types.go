@@ -2,7 +2,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -41,6 +40,7 @@ type Shape struct {
 	MemoryMiB int64 `json:"memory_mib"`
 	DiskMiB   int64 `json:"disk_mib"`
 }
+
 type Config struct {
 	Image  string            `json:"image"`
 	Shape  Shape             `json:"shape"`
@@ -76,6 +76,7 @@ type Request struct {
 	// Both network_policy and network require a nonempty ExpectedInstance.
 	Policy *NetworkPolicy `json:"policy,omitempty"`
 }
+
 type Operation struct {
 	ID         string  `json:"id"`
 	Key        string  `json:"key"`
@@ -91,6 +92,7 @@ type Operation struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
+
 type VM struct {
 	ID             string `json:"id"`
 	Config         Config `json:"config"`
@@ -114,6 +116,7 @@ type VM struct {
 	Deleting              bool           `json:"deleting"`
 	CreatedAt             time.Time      `json:"created_at"`
 }
+
 type Snapshot struct {
 	ID         string          `json:"id"`
 	SourceVMID string          `json:"source_vm_id"`
@@ -122,42 +125,4 @@ type Snapshot struct {
 	Deleting   bool            `json:"deleting"`
 	CreatedAt  time.Time       `json:"created_at"`
 	Manifest   json.RawMessage `json:"manifest,omitempty"`
-}
-type Client interface {
-	Submit(context.Context, Request) (Operation, error)
-	GetOperation(context.Context, string) (Operation, error)
-	FindOperation(context.Context, string) (Operation, error)
-	GetVM(context.Context, string) (VM, error)
-	ListVMs(context.Context) ([]VM, error)
-	GetSnapshot(context.Context, string) (Snapshot, error)
-	ListSnapshots(context.Context) ([]Snapshot, error)
-}
-
-func Wait(ctx context.Context, c Client, r Request) (Operation, error) {
-	op, err := c.Submit(ctx, r)
-	if err != nil {
-		return op, err
-	}
-	t := time.NewTicker(10 * time.Millisecond)
-	defer t.Stop()
-	for {
-		switch op.Status {
-		case "succeeded":
-			return op, nil
-		case "failed":
-			if op.Error != nil {
-				return op, op.Error
-			}
-			return op, Fail(Internal, "operation failed")
-		}
-		select {
-		case <-ctx.Done():
-			return op, ctx.Err()
-		case <-t.C:
-		}
-		op, err = c.GetOperation(ctx, op.ID)
-		if err != nil {
-			return op, err
-		}
-	}
 }
