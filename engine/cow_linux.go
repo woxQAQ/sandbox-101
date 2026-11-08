@@ -139,21 +139,21 @@ func verifyCOWFileMappings(
 		if len(fields) < 5 {
 			return api.Fail(api.ManualRecovery, "invalid process map entry")
 		}
-		inode, e := strconv.ParseUint(fields[4], 10, 64)
-		if e != nil {
-			return e
+		inode, err := strconv.ParseUint(fields[4], 10, 64)
+		if err != nil {
+			return err
 		}
 		majorText, minorText, ok := strings.Cut(fields[3], ":")
 		if !ok {
 			return api.Fail(api.ManualRecovery, "invalid process map device")
 		}
-		major, e := strconv.ParseUint(majorText, 16, 32)
-		if e != nil {
-			return e
+		major, err := strconv.ParseUint(majorText, 16, 32)
+		if err != nil {
+			return err
 		}
-		minor, e := strconv.ParseUint(minorText, 16, 32)
-		if e != nil {
-			return e
+		minor, err := strconv.ParseUint(minorText, 16, 32)
+		if err != nil {
+			return err
 		}
 		if inode != backing.Ino ||
 			unix.Mkdev(uint32(major), uint32(minor)) != uint64(backing.Dev) {
@@ -166,17 +166,17 @@ func verifyCOWFileMappings(
 				"COW backing is not mapped private writable",
 			)
 		}
-		start, e := strconv.ParseUint(startText, 16, 64)
-		if e != nil {
-			return e
+		start, err := strconv.ParseUint(startText, 16, 64)
+		if err != nil {
+			return err
 		}
-		end, e := strconv.ParseUint(endText, 16, 64)
-		if e != nil {
-			return e
+		end, err := strconv.ParseUint(endText, 16, 64)
+		if err != nil {
+			return err
 		}
-		offset, e := strconv.ParseUint(fields[2], 16, 64)
-		if e != nil {
-			return e
+		offset, err := strconv.ParseUint(fields[2], 16, 64)
+		if err != nil {
+			return err
 		}
 		if end <= start || end-start > size || offset > size-(end-start) {
 			return api.Fail(

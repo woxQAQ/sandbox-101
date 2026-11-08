@@ -69,9 +69,7 @@ func netNames(r Resource) (ns, host, peer, mapped, hostIP, peerIP string) {
 		)
 }
 
-func netAlias(
-	r Resource,
-) string {
+func netAlias(r Resource) string {
 	return "sandbox-engine:" + r.VMID + ":" + r.NetworkToken
 }
 
