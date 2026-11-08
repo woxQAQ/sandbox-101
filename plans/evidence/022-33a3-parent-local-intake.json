@@ -1,0 +1,43 @@
+{
+  "stage":"PARENT_LOCAL_INTAKE_VERIFIED_SOURCE_REVIEW_PENDING",
+  "accepted_final":false,
+  "candidate":"33a3f829e70969a0f4269b999fed437398e0c54a",
+  "tree":"56c1e1e319ae401b7b84b4a9cb5309284db2b98f",
+  "baseline":"47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "commits":["418486a49dbad9fed67ab643ce04f8eab004917e","33a3f829e70969a0f4269b999fed437398e0c54a"],
+  "worktree":"/home/woxQAQ/.t3/worktrees/sandbox-101/t3-8a03fb80",
+  "report":"/tmp/plan022-implementation-t3-8a03fb80/handoff.json",
+  "parent_independent_checks":{
+    "fresh_head_tree_clean":true,
+    "commits_after_baseline":2,
+    "changed_paths":119,
+    "scope_all_only_approved_engine_root_api_sandboxd_root_egress_tests":true,
+    "current_git_blob_oid_mode_regular_source_matches":676,
+    "current_git_blob_oid_mode_symlink_matches":2,
+    "gitlinks":12,
+    "all_8_gate_exit_waitreturn_and_raw_stdout_stderr_sha256":true,
+    "engine_full_race":{"run":448,"pass":448,"fail":0,"test_skip":0,"race":0,"each_once":true,"wall_seconds":199.4310337229981,"pair_sha256":"a2a4959ba24810cb8e30036dd402032de5a2cbf3e2202100326d732d3c6774cc"},
+    "sandboxd_full_race":{"run":678,"pass":678,"fail":0,"test_skip":0,"race":0,"each_once":true,"wall_seconds":360.4759573980118,"pair_sha256":"064c984304643c2f0d6668ad6fd202c8db126495ba7a0996709b725164b7f5da"},
+    "protocol_race":{"run":3,"pass":3,"fail":0,"test_skip":0,"race":0,"each_once":true,"pair_sha256":"d2b48f72b97d6f003b53f4e597b6aa7e891b1af071c1295d73f35d710792d96b"},
+    "source_records_current_sha256_size_mode_matches":678,
+    "all_8_snapshots_source_semantic_index_gitlinks_references_equal":true,
+    "fresh_fixture_inputs_stage1_and_candidate_bytes_modes_match":34,
+    "fresh_fixture_sha256":"ce62e84ee4b0ad6bb825f679811010733e825a21dc84826d1473ae56269b32d9",
+    "fresh_known_positive_pgid_absent":9,
+    "owned_short_tmp_absent":true,
+    "read_full_public_comment_changes":23,
+    "read_package_doc_move":1,
+    "read_all_execution_notes_and_tool_failure_history":true
+  },
+  "executor_claims_not_yet_independently_accepted_by_parent":{
+    "complete_decl_ast_token_literal_comments_equivalence":true,
+    "typed_binding_methodset_satisfaction_init_build_dependency_equivalence":true,
+    "exact_7_api_objects_43_identifier_closure":true,
+    "review_must_audit_method_selection_ordinal_normalization_and_complete_coverage":true
+  },
+  "source_review_task":"node:delegated-task:command%3Amcp%3A05d5e0a3-8b67-4db9-ac44-3b0b4cb6e514%3Adelegate-task%3Areview022-source-equivalence-candidate33a3-r1",
+  "parent_source_edits_or_product_gate_reruns":false,
+  "VM_authorized_or_run":false,
+  "target_updated":false,
+  "note":"New local gates are actual candidate results. Old production/KVM/Rust49 remain exact47f5 historical evidence and are not transferred to the new source. Independent SOURCE approval and target-owner FF still required."
+}

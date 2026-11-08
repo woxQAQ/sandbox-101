@@ -62,7 +62,7 @@ Engine 工作区：`/home/woxQAQ/.t3/worktrees/sandbox-101/t3-43b862e6`。
 
 ## 组合验证
 
-全部通过。完整报告、每条命令、日志、退出码和耗时位于 [REPORT.txt](../build/implementation-final/run.Jd1dCRzq/REPORT.txt)。下表耗时均为命令 wall time，production 另列测试本身耗时。
+全部通过。完整报告、每条命令、日志、退出码和耗时位于 [REPORT.txt](../../build/implementation-final/run.Jd1dCRzq/REPORT.txt)。下表耗时均为命令 wall time，production 另列测试本身耗时。
 
 | 最终组合门禁 | 结果 | 耗时 |
 |---|---|---|
@@ -78,7 +78,7 @@ Engine 工作区：`/home/woxQAQ/.t3/worktrees/sandbox-101/t3-43b862e6`。
 | 组合 production microVM | 通过；测试本身 99.56 秒 | 103.966 秒 |
 | Working / index diff check | 通过 | 0.107 秒 |
 
-Production 证据位于 [production/run.eVLB3y9x](../build/implementation-final/run.Jd1dCRzq/production/run.eVLB3y9x/)，清理和身份核验见 [production-audit.json](../build/implementation-final/run.Jd1dCRzq/production-audit.json)。覆盖 live daemon adoption、完整生命周期、golden/warm 供应与真实 guest TCP；guest 512 MiB，VMM 内存上限仍为 640 MiB。before/after/warm 均为 UID/GID 65534、空附加组、五组 capability 全零、NoNewPrivs=1、Seccomp=2。13 个 VMM scope 均无 OOM kill。临时 service 退出 0/SUCCESS，复查为 inactive/not-found，所属 cgroup 已消失，VM 槽位已释放。
+Production 证据位于 [production/run.eVLB3y9x](../../build/implementation-final/run.Jd1dCRzq/production/run.eVLB3y9x/)，清理和身份核验见 [production-audit.json](../../build/implementation-final/run.Jd1dCRzq/production-audit.json)。覆盖 live daemon adoption、完整生命周期、golden/warm 供应与真实 guest TCP；guest 512 MiB，VMM 内存上限仍为 640 MiB。before/after/warm 均为 UID/GID 65534、空附加组、五组 capability 全零、NoNewPrivs=1、Seccomp=2。13 个 VMM scope 均无 OOM kill。临时 service 退出 0/SUCCESS，复查为 inactive/not-found，所属 cgroup 已消失，VM 槽位已释放。
 
 初始 harness 将 TMPDIR 放在过深的证据目录，造成 Unix socket 超长；home 祖先权限还阻止降权 writer 执行。原始失败日志均保留。改用该次新建的短临时目录后，受影响门禁逐项重跑全部通过，没有修改源码。没有遗留失败或跳过的必需门禁；普通 Go 非 verbose 输出不能枚举内部可选测试的 skip。
 

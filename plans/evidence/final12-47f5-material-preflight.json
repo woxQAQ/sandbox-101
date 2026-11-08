@@ -1,0 +1,47 @@
+{
+  "observed_at_utc": "2026-11-07T15:21:45.246099+00:00",
+  "result": "READONLY_MATERIAL_AND_SLOT_PREFLIGHT_PASS_NO_VM",
+  "candidate": "47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "tree": "3e8cc8a12cb70dd36fffc428f9aff83d8712fe73",
+  "freshly_hashed_files": {"pinned_CH_kernel_and_material_receipts":10,"new_guest":3},
+  "old_unchanged_expected_material_hash_receipt": "/tmp/p013-production-1414b4e/inputs-before.json",
+  "new_guest_handoff": "/tmp/final12-guest-material-t3-9b274dc7/guest-handoff.json",
+  "new_build": {
+    "dry_run_only_project_drv": true,
+    "fetch_count": 0,
+    "single_attempt_exit": 0,
+    "wall_seconds": 80.26419791497756,
+    "source_local_compilation": true,
+    "package": "/nix/store/3flcc8knv5sg03kskj1qrafvxn8c7xdk-sandbox-guest-static-x86_64-unknown-linux-musl-0.1.0",
+    "drv": "/nix/store/ln2ahc0q9m4lq1kiigf8lx8dmyav2cbh-sandbox-guest-static-x86_64-unknown-linux-musl-0.1.0.drv",
+    "filtered_source": "/nix/store/dd3sa2q2naa0vxgjg2f1v1sds87lfld3-source",
+    "filtered27_manifest_sha256": "e4d7dda9fdc7edc8934b3c5b93bf68e3efdb507c380cfc6c07ddd05179e64ddc",
+    "filesystem_fixtures_default": false
+  },
+  "guest_dir": "/home/woxQAQ/.t3/worktrees/sandbox-101/t3-9b274dc7/build/guest",
+  "guest_sha256": {
+    "sandbox-agent": "c7c3efa8a6473ef4aeee45d7d88b47d3e6430d20f29a69cdb93253c864b94011",
+    "sandbox-init": "6ef7d992c9e95688ac3455f539226aee1efb7c3534f63d1eccd181c7f5dfc015",
+    "initramfs": "fa30e046b478fa0f772d644ca10ad09139c7046acf1db5b5fe37c9bacf4a1699"
+  },
+  "previous_production": {
+    "all_89_recorded_PID_starttime_identities_ended_freshly_checked": true,
+    "unit": "sandbox-production-acceptance-1794045606-1183581.service",
+    "fresh_properties": {"LoadState":"not-found","ActiveState":"inactive","SubState":"dead","MainPID":"0","ControlGroup":""},
+    "owned_cgroup_absent": true
+  },
+  "active_production_user_units": 0,
+  "all_83_cached_runtime_closure_paths_present": true,
+  "kvm_character_device_rw": true,
+  "artifact_mount_source": "/dev/nvme0n1p6[/root]",
+  "artifact_filesystem": "btrfs",
+  "physical_block_parent": "nvme0n1",
+  "physical_major_minor": "259:0",
+  "io_max_required": "259:0 wbps=1048576",
+  "fresh_throughput_or_VM_probe": false,
+  "all_four_old_production_grants_false_expired": true,
+  "source_review": "PENDING",
+  "new_OCI": "PENDING",
+  "vm_authorized": false,
+  "final_combination_done": false
+}

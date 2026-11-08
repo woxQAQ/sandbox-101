@@ -1,0 +1,36 @@
+{
+  "result":"NEW_GUEST_AND_FRESH_RUST49_PARENT_ACCEPTED",
+  "candidate":"47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "report":"/tmp/final12-guest-material-t3-9b274dc7/report.md",
+  "decision":"/tmp/final12-guest-material-t3-9b274dc7/decision.json",
+  "guest_dir":"/home/woxQAQ/.t3/worktrees/sandbox-101/t3-9b274dc7/build/guest",
+  "new_build":{"attempts":1,"only_project_drv":true,"fetches":0,"other_Nix_dependency_builds":0,"exit":0,"wall_seconds":80.26419791497756,"offline_source_compilation":true},
+  "parent_actual_checks":{
+    "filtered27_store_file_bytes_equal_final_git":true,
+    "filtered27_manifest":"e4d7dda9fdc7edc8934b3c5b93bf68e3efdb507c380cfc6c07ddd05179e64ddc",
+    "actual_package_NAR_dump_SHA256":"sha256-oGjS5a3sCYEUrC1LGa3lr40SsLm69BBWy7Kc1Vcxe2c=",
+    "actual_package_NAR_dump_bytes":6964112,
+    "all_new_guest_file_hashes_fresh_checked":true,
+    "raw_native_suite_outer_PASS_counts":[4,7,7,2,10,2,10,7],
+    "actual_outer_PASS":49,
+    "outer_FAIL_ignored_filtered_skip":0,
+    "dual_required7_named_PASS":true,
+    "daemon_proof_count":7,
+    "workload_proof_count":7,
+    "original_inside_strict_all7_confirmation":true
+  },
+  "scope_notes":[
+    "Fresh cached binaries directly executed, no claim of historical binary-hash attestation or full original make entry rerun.",
+    "Actual required test is original unmodified runner --inside after copied exact feature binary in fresh owned namespaces; original UID/caps/sentinel guards and90s+5s deadline retained.",
+    "First parent raw parser selected nested probe summary1PASS6filtered and positive no-skips message; corrected to final outer7PASS0filtered plus7 real names. No test/source rerun or modification.",
+    "Build libc::time_t deprecation warning and intake helper KeyError preserved in child receipt; no source correction, build/test failed attempt or retry.",
+    "Initial complete raw index snapshot followed first HEAD/status observation and app branch renaming; no reconstructed earlier evidence."
+  ],
+  "cleanup_accepted":{"all_owned_workers_waited_ended":true,"native_subreaper_reaped_own_keyed_crash_child":true,"scratch_removed":true,"parent_namespace_unchanged":true,"reference_actual_counts_own0_stage1_10_preserved":true,"gitlinks12_preserved":true,"source625_actual_git_match_unchanged":true},
+  "new_OCI":"not generated",
+  "source_review":"still owned active aggregate; read formal verdict before newVMgrant",
+  "VM_authorized":false,
+  "VM_started":0,
+  "final_combined_done":false,
+  "parent_merge_push":false
+}

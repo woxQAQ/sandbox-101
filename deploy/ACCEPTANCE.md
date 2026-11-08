@@ -37,7 +37,7 @@ The materials receipt includes derivations, source/config identities and ELF che
 
 ## Final composed verification of plans 001–005
 
-All five implementations and their review revisions were applied together to the root checkout, based on `da513a6`, without creating a parent-branch commit. Independent second-round code reviews approved both sandboxd and engine changes. The final combined run rebuilt and tested the actual root-checkout code; its full command/exit/time records are in [REPORT.txt](../build/implementation-final/run.Jd1dCRzq/REPORT.txt), with the implementation summary in [plans/IMPLEMENTATION.md](../plans/IMPLEMENTATION.md).
+All five implementations and their review revisions were applied together to the root checkout, based on `da513a6`, without creating a parent-branch commit. Independent second-round code reviews approved both sandboxd and engine changes. The final combined run rebuilt and tested the actual root-checkout code; its full command/exit/time records are in [REPORT.txt](../build/implementation-final/run.Jd1dCRzq/REPORT.txt), with the implementation summary in [.agents/archive/IMPLEMENTATION.md](../.agents/archive/IMPLEMENTATION.md).
 
 | Final combined gate | Result |
 |---|---|
