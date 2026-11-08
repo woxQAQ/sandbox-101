@@ -2,6 +2,20 @@
 
 The single-host implementation has passed real production-daemon lifecycle, launcher/adoption, golden/warm provisioning, guest/TAP TCP, standalone VMM/guest and kernel-isolation acceptance, alongside unit/race tests, Rust transport integration and actual daemon/CLI smoke. Production acceptance used fresh isolated resources and the unchanged runtime limits. This record identifies the materials, evidence and deployment-specific boundaries; the design documents' latency figures remain targets.
 
+## Current HEAD revalidation — 2026-11-08
+
+Commit `b4f2b2f750d63a5c36e49f13d58ad91d926b9a24` passed fresh standalone KVM and production acceptance in the root checkout. Both production daemons and the tagged acceptance binaries were compiled from this commit. Guest sources, acceptance scripts and Nix definitions are unchanged from `47f5ce71`; the existing matching guest, pinned kernel/VMM and bootable OCI were reused after SHA256 verification, including all six reachable OCI descriptors. Source HEAD/status and kernel/VMM/guest hashes remained unchanged through execution.
+
+| Fresh gate | Result |
+|---|---|
+| Full `make kvm-e2e` | Exit 0, command 13.370 s; layered 5.53 s and merged 4.66 s, both PASS, no FAIL/SKIP |
+| Full `make production-e2e` | Exit 0, command 144.060 s; top-level test and all four subtests PASS, no FAIL/SKIP |
+| Production subtests | Live daemon adoption 3.99 s; complete lifecycle 40.36 s; golden/warm provisioning 22.19 s; real guest TCP 43.38 s |
+| Limits and identity | Guest RAM/disk 512 MiB; VMM memory limit 640 MiB; 13 retained VMM memory records with oom=0/oom_kill=0; before/after/warm records show UID 65534, empty groups, all five capability sets zero, NNP=1 and seccomp=2 |
+| Cleanup | Transient service not-found/inactive/dead, MainPID=0; its service cgroup absent; no pinned VMM processes or owned host mounts remain |
+
+Fresh evidence: [KVM log](../build/head-vm-pu14c8xn/kvm.log), [production log](../build/head-vm-pu14c8xn/production/run.xqFAZHtS/test.log), and [run report](../build/head-vm-pu14c8xn/REPORT.md). Standalone KVM used a new private 24 GiB tmpfs and namespace-local subordinate-ID files; the host mappings were not changed. Synthetic standalone RAM/disk payloads were released after copying diagnostics. The retention filter also omitted the newly generated OCI, so production used the separately verified existing OCI for the unchanged guest; no KVM retry was needed. Production retained its normal state archive. This run does not repeat kernel-isolation enforcement, throughput measurements or cross-host qualification.
+
 ## Reproduce
 
 On an x86_64 Linux host with Nix, working user namespaces and user-authorized KVM/TUN:
