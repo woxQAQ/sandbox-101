@@ -7,6 +7,7 @@
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
+| [023：结构化错误与上下文设计](023-structured-error-design.md) | TODO / 未实施 | 面向动作的 Guest RPC `error_code`、`#[track_caller]` 位置上下文与 Go 操作步骤上下文收敛 |
 
 ## 恢复工作前
 
