@@ -1,11 +1,11 @@
 # Plan 016：将原生 OCI/EROFS 验证与 lint 工具链纳入持续门禁
 
-> 本节描述当前待实施合同；下方历史复核仅绑定原隔离候选，不表示当前工作树已有 `test-native` 或 gate 脚本。工具前提见 [README](../README.md#build-and-local-verification) 和 [image materialization](../docs/image-materialization.md#validation)，环境准备不属于 gate。此计划不授权修改当前宿主配置、安装工具、推送 CI 或继续已暂停的实现。
+> 当前合同已按本次请求实现 `test-native`、通用 gate 和独立 CI job；开发 devShell 中真实原生正向/负向已通过，root/分支 CI 验收仍 BLOCKED，详见下方本次证据。历史复核仅绑定原隔离候选。工具前提见 [README](../README.md#build-and-local-verification) 和 [image materialization](../docs/image-materialization.md#validation)，环境准备不属于 gate。本轮已获专用分支 `ci/native-image-016` 的提交、推送和 CI 修复重跑授权；不授权共享分支合入、当前宿主提权/配置变更、系统/用户 profile 修改，也不恢复其他暂停计划。
 
 ## 状态
 
 - Priority：P2；Effort：M；Risk：LOW；Depends on：无。
-- Category：tests / dx；Planned at：`b93fc24`，2026-11-06；Status：PAUSED（原隔离候选复核通过，外部门禁 BLOCKED；当前合同已去除环境提供者绑定，尚未重新实现/验收）。
+- Category：tests / dx；Planned at：`b93fc24`，2026-11-06；Status：IMPLEMENTED / BLOCKED（提供者无关实现已交付；项目 devShell 中完整原生正向/负向与 lint 已通过，真实 root 和分支 CI 未通过验收，不能标 DONE）。
 - 审计映射：发现 11。后续 OCI/EROFS 修改应以本门禁为前置。
 
 ## 问题与目标
@@ -95,12 +95,58 @@ git diff --check
 
 ## 完成标准
 
-- [ ] 当前候选具有 make test-native 与正/负向脚本，required 参数由入口强制设置。
-- [ ] 指定 native 场景实际 pass，缺 bwrap 时子命令必失败；工具与结果已保存，实际 root namespace/mapping 已验证。
-- [ ] 通用 gate 不调用环境提供者，不要求包管理器路径；所有入口使用相同测试和判定。
-- [ ] 准备好的工具环境执行 make lint，core/static guest jobs 保留。
+- [x] 当前候选具有 make test-native 与正/负向脚本，required 参数由入口强制设置。
+- [x] 指定 native 场景实际 pass，缺 bwrap 时子命令必失败；工具与结果已保存。
+- [ ] 实际 root namespace/full identity mapping 已验证。
+- [x] 通用 gate 不调用环境提供者，不要求包管理器路径；所有入口使用相同测试和判定。
+- [x] 准备好的开发工具环境执行 make lint，core/static guest jobs 保留。（项目 devShell 中通过；CI 选定工具链仍待实际 CI 验收。）
 - [ ] 新 native-image CI 实际运行成功，保留精确候选与 run URL；未运行不得标 DONE。
-- [ ] 文档、Scope、diff check、索引状态准确，无当前宿主或业务测试语义修改。
+- [x] 文档、Scope、diff check、索引状态准确，无当前宿主或业务测试语义修改。
+
+## 本次实现与证据（提供者无关合同）
+
+实现基准为 `dacf00e6645153e2d43bd356da509758ea5602f8`；本轮获准将候选提交并推送到 `origin/ci/native-image-016` 运行 CI，不合入 `main`/`dev`。最终范围限于当前 Scope 和计划/索引状态，未更改 flake.nix/flake.lock、engine 源码或测试语义。后续复核使用项目已有 `nix develop` 临时工具环境，未修改系统/用户 profile、执行 sudo 或修改宿主 namespace/AppArmor 设置。
+
+- `make test-native` 固定执行完整 Engine required race JSON suite，300s timeout，recipe 不回显。
+- `scripts/check-native-gate.nu` 提供完整门禁、`--preflight` 和 `--negative`。每次创建独占日志目录，分别保存 stdout/stderr/原始 exit code，记录源码 revision、入口 SHA256、身份、skip 和最终判定。缺少 HOME 的干净环境自行创建 mode 0700 私有 runtime HOME，不透传 runner 凭据。
+- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1 源码/发布包，及固定版本 umoci 0.6.0、golangci-lint 2.11.3；发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。lint 使用普通用户，原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
+
+### 真实执行
+
+本机为非 root UID 1000。首轮只使用裸 shell：Go 1.27.3、Nushell 0.116.1、golangci-lint 2.14.0，其 PATH 无 bwrap、mkfs/fsck/dump.erofs 和 umoci。这不是项目缺少工具配置；首轮未进入已有 devShell 是验证遗漏，裸 shell 的失败不能代替开发环境验证。本机工具版本不代替 CI 选定工具链的运行证据。
+
+| 命令 | 实际结果 |
+|---|---|
+| `nu scripts/check-native-gate.nu --negative` | PASS，脚本 exit 0；实际 Go 子命令 exit 1，9 行纯 JSON，包含选定测试的精确 `incompatible: required OCI tool missing: bwrap` 诊断及 fail 事件；工具视图已清理。日志 `build/native-gate/run.Z9ZJN1UMzU/` |
+| `nu scripts/check-native-gate.nu --preflight` | 按合同拒绝非 root，exit 1；没有自动提权，没有执行真实 namespace/mapping probe。日志 `build/native-gate/run.GYHuswwhXU/` |
+| `nu scripts/check-native-gate.nu` | FAIL / 环境 BLOCKED，脚本 exit 1、make 子命令 exit 2；保存 1608 行纯 Go JSON，24 个原生测试失败诊断均为缺 bwrap，另含父测试/package fail；四个指定 pass 不成立。日志 `build/native-gate/run.aHrVcajNIs/` |
+| `make lint` | PASS，exit 0，0 issues；未造成额外源码改动 |
+| `nu --no-config-file -c 'nu-check scripts/check-native-gate.nu'` | `true`，语法通过 |
+| Python/PyYAML 读取 workflow + 各 `run` 块 `bash -n` | PASS；仅证明 YAML 结构、保留的 jobs 与 shell 语法，不证明 GitHub Actions 或安装步骤成功 |
+| `git diff --check` | PASS |
+
+后续按用户指出的项目 `flake.nix` 重新验证：正常 `nix develop --no-write-lock-file` 成功，提供 Go 1.26.8、Nushell 0.116.1、bubblewrap 0.12.0、erofs-utils 1.9.4、umoci 0.6.0、unshare 2.42.3、golangci-lint 2.14.0，且设置 `SANDBOX_IMAGE_TOOL_ROOTS=/nix/store`。事先尝试的 `--offline` 进入在 config.guess/config.sub 装配阶段失败（404），不代表正常 devShell 不可用，也未作为门禁结果。
+
+| devShell 命令 | 实际结果 |
+|---|---|
+| `nix develop --no-write-lock-file --command nu scripts/check-native-gate.nu --negative` | PASS，脚本 exit 0、实际 Go 子命令 exit 1，精确 missing-bwrap 测试诊断与 fail 事件成立，私有工具视图已清理；日志 `build/native-gate/run.XJx6lBfGYD/` |
+| `nix develop --no-write-lock-file --command nu scripts/check-native-gate.nu` | 四个指定 native 测试实际 pass，但完整 suite 因继承的长 TMPDIR 导致 `TestSystemAgentWaitsForGuestVsockListener` 的 Unix socket 路径过长、bind invalid argument 而失败；日志 `build/native-gate/run.sbuafzx5i6/`。不记作完整通过 |
+| `nix develop --no-write-lock-file --command nu --no-config-file -c 'with-env {TMPDIR: "/tmp"} { ^nu scripts/check-native-gate.nu }'` | **PASS**，脚本与 make 子命令均 exit 0，1762 行纯 Go JSON，四个指定 native pass、零 test skip、零 fail，完整 Engine race 包耗时 175.328s；日志 `build/native-gate/run.OLBchZNARC/`。仅对本次进程设置短 TMPDIR，所有测试和断言不变 |
+| `nix develop --no-write-lock-file --command make lint` | PASS，exit 0、0 issues。既有 `go fix` 自动改写 engine/sandboxd 三处 `fmt.Sprintf` 转换；已只撤回这三处范围外改动，上述最终完整 PASS 在恢复原源码后重跑取得 |
+
+上述裸 shell 与 devShell 原生日志绑定同一套入口 SHA256：
+
+| 入口 | SHA256 |
+|---|---|
+| `Makefile` | `ecfa603e5c5683c18391252b0a7a9e4a67b82270c9b76c91cc6297cd487ba9d7` |
+| `scripts/check-native-gate.nu` | `159385078619191d3dc979c86f38c9cc9e6fb5c69d0262c40edcbf85075b89bd` |
+| `.github/workflows/check.yml` | `5e98daf95e4ec61577078830ce947af079fa828be8dc2b3575f669658561c5f6` |
+
+### 入口判定回归与未运行边界
+
+使用 per-turn scratch 中的合成 make/go/id/bwrap/unshare 输出，实际调用完整脚本验证 27 个入口场景：四指定 pass 接受、package-only/缺 pass/非零退出/混合或非法 JSON 拒绝、额外 native skip 拒绝、无关 skip 记录、精确 root skip 例外与非 root/错误原因/无 source/多余后缀拒绝、负向编译错误/错误工具/零退出拒绝，以及版本不匹配、错误身份、短 mapping、未变化 namespace、production probe skip 拒绝。另验证无 HOME/LAST_EXIT_CODE 的干净环境与 mode 0700 runtime HOME，以及正常成功/失败后的工具视图清理。这些仅证明包装器判定，不证明 root 身份、namespace、native tools 或生产导入实际可用；合成日志标记为 synthetic，不挪作原生通过记录。
+
+最初一次完整 gate 冷编译被 terminal 的 120s 外层时限中止，未作为结果；随后以足够外层时限完成上述真实命令。项目 devShell 的原生 shared/merged/GC 完整正向、实际负向与 lint 已通过；仍未运行 root namespace/full identity mapping、CI 装配或分支 GitHub CI，无 run URL，整体仍 BLOCKED。KVM、kernel-isolation、Rust guest fixture、integration/smoke 及 production 不在本次新增门禁验收范围，未运行；完整 Engine suite 内的 Go guest 测试已随正向 gate 执行。
 
 ## 历史实施与复核结果（原提供者绑定方案）
 

@@ -123,15 +123,86 @@ Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d
 
 ## Validation
 
-Tests use the caller's prepared toolchain under the same contract for every environment provider. Actual tools exercised are erofs-utils 1.9.4, umoci 0.6.0, bubblewrap 0.12.0 and util-linux unshare with the caller's subordinate mappings. Missing tools/namespaces/mappings produce an explicit test skip. Set `SANDBOX_REQUIRE_EROFS_TESTS=1` to make these conditions fail instead:
+Tests use the caller's prepared toolchain under the same contract for every
+environment provider. `make test` is the quick entrypoint and may skip native
+tests for missing tools/namespaces/mappings. `make test-native` forces
+`SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=300s`;
+missing prerequisites fail, and stdout contains only Go JSON.
 
-```sh
-PATH=/path/to/umoci/bin:/path/to/erofs-utils/bin:$PATH SANDBOX_REQUIRE_EROFS_TESTS=1 \
-  GOWORK=off go -C engine test -run 'TestActual|TestLayerValidation|TestLegacyNativeLayered|TestSharedCached|TestMergedOCI|TestGCActual' -count=1 -v .
-PATH=/path/to/umoci/bin:/path/to/erofs-utils/bin:$PATH SANDBOX_REQUIRE_EROFS_TESTS=1 \
-  GOWORK=off go -C engine test -race ./...
-GOWORK=off go -C engine vet ./...
+The gate additionally checks the original command exit code and individual
+pass events for `TestActualLayeredEROFSImportAndExtraction`,
+`TestActualSharedOCIHardlinksAndMetadata`,
+`TestActualMergedOCIHardlinksAndMetadata`, and
+`TestGCActualLayerCacheAndCompletedImport`. A package pass alone is insufficient.
+It rejects non-JSON output and skipped native tests (`TestActual*`,
+`TestGCActual*`, `TestLayerValidation*`, `TestLegacyNativeLayered*`,
+`TestSharedCached*`, `TestMergedOCI*`). The only exception is effective UID 0
+skipping `TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner` with
+the exact source diagnostic `root can identity-map all owners`. Other skips,
+including package skips for packages without tests and unrelated KVM/capture
+tests, are recorded separately in `skips.json` and do not supply native coverage.
+
+Prepare Go with race/C compiler support, make, git, Nushell, coreutils,
+golangci-lint, bubblewrap, util-linux unshare, matching mkfs/fsck.erofs
+**>=1.9.4 and <2**, dump.erofs and umoci **0.6.0**. Declare alternate readonly
+dependency roots using `SANDBOX_IMAGE_TOOL_ROOTS` as above. Executable realpaths
+and versions are evidence, not a package-manager or installation-prefix
+allowlist. A nonroot caller needs usable namespaces and subordinate UID/GID
+mappings with working helpers for merged imports; root needs a new user
+namespace with full `0:0:4294967295` UID and GID identity maps.
+
+```nu
+nu scripts/check-native-gate.nu --negative
+nu scripts/check-native-gate.nu
 ```
+
+The complete Engine suite also creates Unix sockets. If an inherited `TMPDIR`
+has a long prefix, the generated socket path can exceed Linux's Unix-domain
+socket path limit even when every native image test passes. Use a short
+temporary root for that invocation, without changing the tests:
+
+```nu
+with-env {TMPDIR: "/tmp"} { nu scripts/check-native-gate.nu }
+```
+
+`--negative` retains the normal compiler/base-tool PATH projection except
+for bwrap, then actually runs the single required layered test. Success means
+the child failed and emitted the exact `required OCI tool missing: bwrap`
+test diagnostic, not a compiler error or some other missing tool. The view is
+private to that command and removed on normal success or failure.
+
+On a **prepared, disposable root CI runner**, also run:
+
+```nu
+nu scripts/check-native-gate.nu --preflight
+```
+
+Preflight checks versions and actual executable paths, proves bwrap's new
+user/mount/PID/network namespaces and UID/GID 0 with readonly system/dependency
+roots, private proc/dev and temporary tmp. It separately runs pinned unshare
+with `--user --map-users=0:0:4294967295 --map-groups=0:0:4294967295 --keep-caps`,
+checks real/effective identities and both complete maps, then executes
+`TestActualMergedOCIExplicitSelectionAndVerification` through the production
+mapped helper. Full shared/merged coverage still comes from the complete gate.
+Preflight never switches identity or relaxes host namespace/AppArmor policy.
+
+The GitHub `native-image` job uses Ubuntu 24.04, source-pinned erofs-utils
+1.9.4 and unshare 2.41.3, umoci 0.6.0, Nushell 0.116.1, golangci-lint 2.11.3,
+and distribution bubblewrap/coreutils. Only its separate preparation step
+installs tools. Lint runs without sudo; the native probes/tests receive only
+the controlled PATH and `GOTOOLCHAIN=local` through `sudo env -i` (an alternate
+provider may also forward necessary `SANDBOX_IMAGE_TOOL_ROOTS`). The gate
+creates private runtime HOME when none is supplied, rather than forwarding
+runner credentials. Cache keys include workflow/tool-source identity, Go
+module sums and Cargo.lock; restored caches never bypass the gate.
+
+Each invocation retains separate stdout/stderr/exit-code files, source
+revision, entrypoint hashes and its verdict in a fresh, gitignored
+`build/native-gate/run.*` directory. The CI artifact allowlist includes only
+diagnostic files, not private runtime HOME, PATH views, databases, tokens or
+the full environment. This job proves native host materialization and GC,
+not guest RPC, KVM, kernel isolation or production acceptance. Committed
+workflow configuration is not evidence that GitHub has executed it.
 
 Actual shared tool tests import gzip/uncompressed OCI fixtures, read the final external-device filesystem with native fsck, inspect chunk layout and UID/GID using native dump, and verify file contents, reversed layer order, boot extraction, repeated layers and the 16-device boundary. Broader namespace regressions cover root ownership/mode/xattrs/nanosecond time, inherited directories, implicit parents, cross-layer and symlink inode identity, forward chains, old inode retention through duplicate replacement, overwritten pending links, ancestor replacement, root/nonroot opaque, whiteout/replacement in either order, setuid/setgid, native v2/v3 capabilities and named-user ACLs. Cache-only rebuild repeats forward-link content checks after deleting original tar blobs. Independent imports compare complete output hashes for determinism. A legacy-native fixture is built with the frozen old profile, verified and reimported from its existing catalog unchanged.
 

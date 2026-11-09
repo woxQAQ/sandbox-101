@@ -18,10 +18,116 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: python3 -I scripts/test_acceptance_environment.py
       - run: GOWORK=off go -C engine test -tags=kvm ./... -run '^TestAcceptanceRootfsOCI$' -count=1
       - run: make test check test-race integration smoke
+  native-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: native-ubuntu24-go1.26.5-source-v1-${{ hashFiles('.github/workflows/check.yml', '**/go.sum', 'Cargo.lock') }}
+      # Only this disposable runner installs tools. The gate never installs,
+      # downloads, invokes an environment provider or changes host policy.
+      - name: Prepare native toolchain
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap coreutils util-linux build-essential \
+            autoconf automake libtool pkg-config curl ca-certificates xz-utils \
+            jq uuid-dev liblz4-dev liblzma-dev libzstd-dev libdeflate-dev libxxhash-dev zlib1g-dev
+          prefix=/usr/local/native-image-tools
+          mkdir -p "$RUNNER_TEMP/native-image-sources"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" "$prefix" "$prefix/bin"
+          cd "$RUNNER_TEMP/native-image-sources"
+          download() {
+            curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$1" -o "$2"
+            printf '%s  %s\n' "$3" "$2" | sha256sum --check --strict
+          }
+          # Hashes: nixpkgs' pinned erofs source, kernel.org sha256sums.asc,
+          # and the Nushell release asset digest, respectively.
+          download https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git/snapshot/erofs-utils-1.9.4.tar.gz \
+            erofs.tar.gz 7d135aa2550326a5acf20f53c518aea5a8900015ce50700044e40f818c31dd80
+          tar -xf erofs.tar.gz
+          (
+            cd erofs-utils-1.9.4
+            autoreconf -fi
+            ./configure --prefix="$prefix" --enable-multithreading --disable-fuse --without-selinux MAX_BLOCK_SIZE=4096
+            make -j2
+            make install
+          )
+          download https://www.kernel.org/pub/linux/utils/util-linux/v2.41/util-linux-2.41.3.tar.xz \
+            util-linux.tar.xz 3330d873f0fceb5560b89a7dc14e4f3288bbd880e96903ed9b50ec2b5799e58b
+          tar -xf util-linux.tar.xz
+          (
+            cd util-linux-2.41.3
+            ./configure --disable-all-programs --enable-unshare --disable-nls --without-systemd
+            make -j2 unshare
+            install -m0755 unshare "$prefix/bin/unshare"
+          )
+          download https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-x86_64-unknown-linux-gnu.tar.gz \
+            nu.tar.gz d6d8ace4be491ed8abba4026e73b60c0470b4671d7039307e7d772282ef863da
+          tar -xf nu.tar.gz
+          install -m0755 nu-0.116.1-x86_64-unknown-linux-gnu/nu "$prefix/bin/nu"
+          # umoci has a replace directive, so go install module@version cannot
+          # build it. Use its checksummed module source and original go.mod.
+          umoci_source=$(GOWORK=off go mod download -json github.com/opencontainers/umoci@v0.6.0 | jq -er .Dir)
+          cp -a "$umoci_source" umoci-0.6.0
+          chmod -R u+w umoci-0.6.0
+          (
+            cd umoci-0.6.0
+            GOWORK=off go build -mod=mod -o "$prefix/bin/umoci" ./cmd/umoci
+          )
+          GOBIN="$prefix/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+          # All privileged commands use this closed PATH, not the runner PATH.
+          echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v go)"):/usr/bin:/bin" >> "$GITHUB_ENV"
+      - name: Lint as the ordinary runner user
+        run: PATH="$NATIVE_PATH" GOTOOLCHAIN=local make lint
+      - name: Verify native namespaces and mapping
+        run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu --preflight
+      - name: Verify missing-bwrap failure
+        run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu --negative
+      - name: Require actual native coverage
+        run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu
+      - name: Expose only diagnostic log directories to artifact collection
+        if: always()
+        shell: bash
+        run: |
+          for run in build/native-gate/run.*; do
+            if [ -d "$run" ]; then sudo chmod 0755 "$run"; fi
+          done
+      - name: Retain native gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-image-${{ github.sha }}-${{ github.run_attempt }}
+          # Do not upload private runtime HOME, tool views, databases or state.
+          path: |
+            build/native-gate/run.*/*.stdout
+            build/native-gate/run.*/*.stderr
+            build/native-gate/run.*/*.exit-code
+            build/native-gate/run.*/*.json
+            build/native-gate/run.*/result.txt
+          if-no-files-found: warn
   static-guest:
     runs-on: ubuntu-24.04
     steps:
@@ -30,5 +136,7 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: static-guest-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler musl-tools cpio ripgrep
       - run: make guest

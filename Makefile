@@ -13,7 +13,7 @@ KERNEL_ARTIFACTS_DIR ?= $(ROOT)/build/kernel-isolation-acceptance
 PRODUCTION_OCI_LAYOUT ?=
 PRODUCTION_ARTIFACTS_DIR ?= $(ROOT)/build/production-acceptance
 
-.PHONY: all build test test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e capture-isolation-e2e guest-fs-isolation-e2e
+.PHONY: all build test test-native test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e capture-isolation-e2e guest-fs-isolation-e2e
 all: build
 
 build:
@@ -26,6 +26,9 @@ build:
 test:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test ./... -count=1 -timeout=120s; done
 	cargo test --locked --workspace --all-targets
+
+test-native:
+	@SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=300s
 
 test-race:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=180s; done

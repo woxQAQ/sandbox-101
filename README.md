@@ -24,13 +24,35 @@ The repository root is a Go workspace, not a module. `make lint` checks all four
 
 Binaries are written to `bin/{engined,sandboxd,sandboxctl}`. `make integration` launches the Rust agent fixture and exercises exec, file transfer, HTTP Upgrade, raw forwarding and Preview through the Go service and SDK. `make smoke` launches the actual daemons and CLI in temporary private state, verifies control-plane traffic and restart idempotency, and takes an offline metadata backup. It does not boot a VM.
 
-Image tests use native erofs-utils and umoci when available. To require the layered EROFS tests instead of skipping missing tools:
+The quick tests above may skip native image tests when tools or namespaces are
+unavailable. `make test-native` instead forces `SANDBOX_REQUIRE_EROFS_TESTS=1`
+and runs the complete Engine race suite with a 300s test timeout. Its stdout is
+only Go test JSON. To also require actual pass events for shared/merged
+materialization and native GC, and reject unexpected native skips:
 
-```sh
-SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test ./... -count=1
+```nu
+nu scripts/check-native-gate.nu --negative
+nu scripts/check-native-gate.nu
 ```
 
-See [image materialization](docs/image-materialization.md) for compatibility test requirements and the supported OCI contracts.
+Prepare matching mkfs/fsck.erofs >=1.9.4 and <2, dump.erofs, umoci 0.6.0,
+bubblewrap, util-linux unshare, coreutils and Nushell on a controlled PATH;
+Go/race also needs a C compiler. The gate does not install/download tools or
+invoke an environment provider. `--negative` creates a private PATH without
+bwrap and succeeds only after observing the selected required test fail for
+that exact missing tool; it never removes installed tools. Logs, separate
+stdout/stderr and original child exit codes are retained under fresh
+gitignored `build/native-gate/run.*` directories.
+
+The `native-image` CI job prepares these tools on a disposable Ubuntu 24.04
+runner, runs lint as the ordinary user, then runs `--preflight`, `--negative`
+and the full gate as root with a minimal environment. `--preflight` requires
+effective UID 0, proves fresh namespaces and full identity mappings, and runs
+the actual mapped merged importer. It is not a request to run sudo on a
+developer host. Nonroot local imports need usable user/mount namespaces and
+subordinate mappings for merged images. See
+[image materialization](docs/image-materialization.md#validation) for the
+exact capabilities, skip policy and separation from KVM/production acceptance.
 
 ## HTTP and configuration
 
