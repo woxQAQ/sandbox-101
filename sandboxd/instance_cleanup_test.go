@@ -58,7 +58,7 @@ func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(
 		t.Fatal("fresh failed compensation not reached")
 	}
 	s = ledgerRestart(t, s)
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		_ = s.recoverResources()
 	}
 	ledgerMoney(t, s, p.TenantID, 0, 0)
@@ -124,7 +124,7 @@ func TestQuotaLedgerReleaseIntentAtomicity(t *testing.T) {
 					Command{Action: "release", SandboxID: b.ID},
 				)
 			} else {
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					_ = s.recoverResources()
 				}
 			}

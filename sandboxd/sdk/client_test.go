@@ -331,9 +331,7 @@ func TestConnectionConcurrentCallsStaySerialized(t *testing.T) {
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
 	for i := range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			marker := float64(i)
 			params, err := conn.Call(
 				context.Background(),
@@ -352,7 +350,7 @@ func TestConnectionConcurrentCallsStaySerialized(t *testing.T) {
 					params,
 				)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

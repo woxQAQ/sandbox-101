@@ -144,7 +144,7 @@ func TestQuotaLedgerLostDeleteResponse(t *testing.T) {
 
 func TestQuotaLedgerPauseResumeCheckpointSharing(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
-	for cycle := 0; cycle < 3; cycle++ {
+	for cycle := range 3 {
 		b := *claimTest(t, s, p, fmt.Sprintf("claim-%d", cycle), nil).Sandbox
 		ledgerMoney(t, s, p.TenantID, 1, 64)
 		key := fmt.Sprintf("cycle-%d-", cycle)
@@ -219,10 +219,8 @@ func TestQuotaLedgerAdmissionIsAtomic(t *testing.T) {
 		start := make(chan struct{})
 		results := make(chan error, 8)
 		var workers sync.WaitGroup
-		for n := 0; n < 8; n++ {
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
+		for n := range 8 {
+			workers.Go(func() {
 				<-start
 				_, err := s.Execute(
 					s.ctx,
@@ -231,7 +229,7 @@ func TestQuotaLedgerAdmissionIsAtomic(t *testing.T) {
 					Command{Action: "fork", SandboxID: b.ID, Count: 1},
 				)
 				results <- err
-			}()
+			})
 		}
 		close(start)
 		workers.Wait()

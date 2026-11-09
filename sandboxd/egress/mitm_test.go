@@ -229,7 +229,7 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 		}
 	}
 	reader := bufio.NewReader(conn)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if i != 0 {
 			if _, err := io.WriteString(
 				conn,

@@ -258,13 +258,13 @@ func (x *r3RestoreScenario) resultAllocation(
 
 func (x *r3RestoreScenario) finishAbsentResult(t *testing.T) {
 	t.Helper()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if err := x.s.recoverResources(); err != nil {
 			t.Fatal("recover", i, err)
 		}
 	}
 	x.s = ledgerRestart(t, x.s)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if err := x.s.recoverResources(); err != nil {
 			t.Fatal("reopen recover", i, err)
 		}
@@ -335,7 +335,7 @@ func (x *r3RestoreScenario) finishAbsentResult(t *testing.T) {
 		"absent-delete-independent-cp",
 		Command{Action: "delete_checkpoint", CheckpointID: x.cp.ID},
 	)
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if err = x.s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}
@@ -363,7 +363,7 @@ func (x *r3RestoreScenario) finishAbsentResult(t *testing.T) {
 	ledgerMoney(t, x.s, x.p.TenantID, 1, 64)
 	// Old receipt replay during further scans cannot recreate/refund the old disk
 	// or affect the new sandbox's responsibility.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err = x.s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}
@@ -709,7 +709,7 @@ func TestQuotaLedgerRecoveryRestoreCollectorContinuations(t *testing.T) {
 				); err != nil {
 					t.Fatal(err)
 				}
-				for i := 0; i < 4; i++ {
+				for range 4 {
 					_ = x.s.recoverResources()
 				}
 				x.assertImmutable(t)
@@ -825,7 +825,7 @@ func TestQuotaLedgerRecoveryRestoreResolutionProgress(t *testing.T) {
 					t.Fatal(err)
 				}
 				x.s = ledgerRestart(t, x.s)
-				for i := 0; i < 4; i++ {
+				for range 4 {
 					_ = x.s.recoverResources()
 				}
 				state = recoverySandbox(t, x.s, x.b.ID)
@@ -880,7 +880,7 @@ func TestQuotaLedgerRecoveryRestoreTransactions(t *testing.T) {
 				); err != nil {
 					t.Fatal(err)
 				}
-				for i := 0; i < 4; i++ {
+				for range 4 {
 					_ = x.s.recoverResources()
 				}
 				ledgerMoney(t, x.s, x.p.TenantID, 0, 192)
@@ -946,7 +946,7 @@ func TestQuotaLedgerRecoveryRestoreAcceptedFailureCosts(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		_ = x.s.recoverResources()
 	}
 	ledgerMoney(t, x.s, x.p.TenantID, 1, 384)
@@ -1287,7 +1287,7 @@ func TestQuotaLedgerRecoveryRestoreCleanupReferencesAndKeys(t *testing.T) {
 				}
 				x.s = ledgerRestart(t, x.s)
 			}
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				_ = x.s.recoverResources()
 			}
 			final := x.collector(t)
@@ -1410,7 +1410,7 @@ func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
 					Command{Action: "release", SandboxID: b.ID},
 				)
 				s = ledgerRestart(t, s)
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					_ = s.recoverResources()
 				}
 				ledgerExecute(
@@ -1420,7 +1420,7 @@ func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
 					"delete-cp-first",
 					Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
 				)
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					_ = s.recoverResources()
 				}
 				ledgerMoney(t, s, p.TenantID, 0, 0)
@@ -1462,7 +1462,7 @@ func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
 				}
 			}
 			s = ledgerRestart(t, s)
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				_ = s.recoverResources()
 			}
 			if f.count("restore") != 1 ||
@@ -1486,7 +1486,7 @@ func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
 				"release",
 				Command{Action: "release", SandboxID: b.ID},
 			)
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				_ = s.recoverResources()
 			}
 			ledgerMoney(t, s, p.TenantID, 0, 0)
@@ -1584,11 +1584,11 @@ func TestQuotaLedgerRecoveryRestoreReleaseFirst(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				_ = s.recoverResources()
 			}
 			s = ledgerRestart(t, s)
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				_ = s.recoverResources()
 			}
 			_, _ = s.Execute(
@@ -1597,7 +1597,7 @@ func TestQuotaLedgerRecoveryRestoreReleaseFirst(t *testing.T) {
 				"release-again",
 				Command{Action: "release", SandboxID: b.ID},
 			)
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				_ = s.recoverResources()
 			}
 			var after []byte
@@ -1801,7 +1801,7 @@ func TestQuotaLedgerRecoveryCaptureReconcilesIndependently(t *testing.T) {
 				f.control.Lock()
 				f.findError = nil
 				f.control.Unlock()
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					if err = s.recoverResources(); err != nil {
 						t.Fatal(err)
 					}
@@ -1816,7 +1816,7 @@ func TestQuotaLedgerRecoveryCaptureReconcilesIndependently(t *testing.T) {
 					)
 				}
 				s = ledgerRestart(t, s)
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					if err = s.recoverResources(); err != nil {
 						t.Fatal(err)
 					}
@@ -1921,7 +1921,7 @@ func TestQuotaLedgerRecoveryRestoreReconcilesIndependently(t *testing.T) {
 			f.control.Lock()
 			f.findError = nil
 			f.control.Unlock()
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				if err = s.recoverResources(); err != nil {
 					t.Fatal(err)
 				}
@@ -1963,7 +1963,7 @@ func TestQuotaLedgerRecoveryRestoreReconcilesIndependently(t *testing.T) {
 				Command{Action: "release", SandboxID: b.ID},
 			)
 			s = ledgerRestart(t, s)
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				if err = s.recoverResources(); err != nil {
 					t.Fatal(err)
 				}

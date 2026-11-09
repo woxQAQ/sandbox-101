@@ -242,7 +242,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			s.opts.Engine = e
 			s.pools()
 			s.wg.Wait()
-			for n := 0; n < 3; n++ {
+			for range 3 {
 				if err := s.recoverResources(); err != nil &&
 					!isCode(err, api.ManualRecovery) {
 					t.Fatal(err)
@@ -310,7 +310,7 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 	if _, err = s.Wait(s.ctx, p, o.ID); err == nil {
 		t.Fatal("replacement start failure missing")
 	}
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}

@@ -525,7 +525,7 @@ type recoveryAllocation struct {
 	Step           string               `json:"step"`
 	Kind           string               `json:"kind"`
 	Request        api.Request          `json:"request"`
-	Subject        allocationSubject    `json:"subject,omitempty"`
+	Subject        allocationSubject    `json:"subject"`
 	RequestBound   bool                 `json:"request_bound,omitempty"`
 	Resolution     allocationResolution `json:"resolution"`
 }

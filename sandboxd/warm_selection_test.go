@@ -48,7 +48,7 @@ func TestTemplateQuotaSelectedReaderRetirement(t *testing.T) {
 		"reader-rebuild",
 		templateQuotaBuild(tpl.ID),
 	)
-	for round := 0; round < 2; round++ {
+	for range 2 {
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}

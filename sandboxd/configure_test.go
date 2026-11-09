@@ -1270,7 +1270,7 @@ func TestConfigureEgressClosesOldWorkloadConnections(t *testing.T) {
 				}
 			}
 			fresh, freshGuest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
-			for pass := 0; pass < 2; pass++ {
+			for range 2 {
 				s.reconcile()
 				exchangeWorkload(t, fresh, freshGuest)
 			}
@@ -1612,7 +1612,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					)
 				}
 				requireFence(t, s, before.ID, "")
-				for pass := 0; pass < 2; pass++ {
+				for range 2 {
 					arm()
 					if _, err = s.DataReady(
 						ctx,
@@ -1708,7 +1708,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					}
 				}
 				fresh, freshGuest := openWorkloadRelay(t, s, a, p, before.ID)
-				for pass := 0; pass < 2; pass++ {
+				for range 2 {
 					s.reconcile()
 					if _, err = s.DataReady(ctx, p, before.ID); err != nil {
 						t.Fatal(err)
@@ -1767,7 +1767,7 @@ func TestConfigureEgressNoneAdmissionWithoutManager(t *testing.T) {
 		egress.Policy{Mode: "none"},
 	)
 	client, guest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
-	for pass := 0; pass < 2; pass++ {
+	for range 2 {
 		s.reconcile()
 		if _, err := s.DataReady(
 			context.Background(),

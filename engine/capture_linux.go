@@ -30,7 +30,7 @@ func openCaptureDir(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, component := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+	for component := range strings.SplitSeq(strings.TrimPrefix(path, "/"), "/") {
 		next, x := unix.Openat(
 			fd,
 			component,

@@ -1465,7 +1465,7 @@ func templateQuotaWitnessless(t *testing.T) {
 		t.Run(fmt.Sprint(beforeStart), func(t *testing.T) {
 			s, f, e, p, o := templateQuotaFailedBuild(t, beforeStart)
 			original := encode(o)
-			for n := 0; n < 2; n++ {
+			for range 2 {
 				if err := s.recoverResources(); err != nil {
 					t.Fatal(err)
 				}
@@ -1549,7 +1549,7 @@ func templateQuotaWitnessless(t *testing.T) {
 			); err != nil {
 				t.Fatal(err)
 			}
-			for n := 0; n < 3; n++ {
+			for range 3 {
 				if err = s.recoverResources(); err != nil {
 					t.Fatal(err)
 				}
@@ -1914,7 +1914,7 @@ func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 		"checkpoint",
 		Command{Action: "checkpoint", SandboxID: b.ID},
 	).Checkpoint
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ledgerExecute(
 			t,
 			s,
@@ -2151,7 +2151,7 @@ func templateQuotaBackupGate(t *testing.T) {
 		t.Fatal("backup/Ack changed frozen gate, costs, keys or public result")
 	}
 	ledgerMoney(t, reopened, p.TenantID, 1, 64)
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		if err = reopened.recoverResources(); err != nil {
 			t.Fatal(err)
 		}

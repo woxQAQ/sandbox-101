@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"maps"
 	"os"
 	"reflect"
 	"testing"
@@ -83,9 +84,7 @@ func TestInstanceConditionRejectsForeignCandidate(t *testing.T) {
 				candidate := *f.record.Journal.Resource
 				f.b.mu.Lock()
 				states := make(map[string]Observation, len(f.b.states))
-				for id, obs := range f.b.states {
-					states[id] = obs
-				}
+				maps.Copy(states, f.b.states)
 				f.b.mu.Unlock()
 				effects := f.b.effects()
 				f.restart(t)

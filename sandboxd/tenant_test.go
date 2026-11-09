@@ -1188,8 +1188,7 @@ func (f *ownerFixture) info(c *sdk.Client, id, selected string) {
 }
 
 func ownerErrorCode(err error) api.Code {
-	var typed *api.Error
-	if errors.As(err, &typed) {
+	if typed, ok := errors.AsType[*api.Error](err); ok {
 		return typed.Code
 	}
 	return api.Internal

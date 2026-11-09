@@ -35,6 +35,7 @@ check:
 	cargo clippy --locked --workspace --all-targets -- -D warnings
 
 lint:
+	go fix $(GO_WORK_PACKAGES)
 	golangci-lint run $(GO_WORK_PACKAGES)
 
 lint-fix:
