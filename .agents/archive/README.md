@@ -23,6 +23,7 @@
 | [013](013-template-build-quota.md) | build/template/warm 配额及冻结分配责任 |
 | [014](014-sdk-call-cancellation.md) | SDK 排队调用取消 |
 | [015](015-schily-xattr-names.md) | SCHILY xattr 字面属性名 |
+| [016](016-native-image-ci.md) | Python 标准库原生镜像门禁、官方 lint action 与真实 root/分支 CI；见[接受收据](evidence/016-native-ci-acceptance.json) |
 | [018](018-tree-push-cleanup-outcomes.md) | tree push 发布与后置清理的独立结果 |
 | [019](019-tree-pull-identity-investigation.md) | 双 UID 调查、保留 FD 与身份约束；未确认泄露 |
 | [022](022-responsibility-and-api-boundaries.md) | 职责/测试单元/API 重组，见 [结果](022-RESULT.md) |

@@ -1,11 +1,11 @@
 # Plan 016：将原生 OCI/EROFS 验证与 lint 工具链纳入持续门禁
 
-> 当前合同已按本次请求实现 `test-native`、通用 gate 和独立 CI job；开发 devShell 中真实原生正向/负向已通过，root/分支 CI 验收仍 BLOCKED，详见下方本次证据。历史复核仅绑定原隔离候选。工具前提见 [README](../README.md#build-and-local-verification) 和 [image materialization](../docs/image-materialization.md#validation)，环境准备不属于 gate。本轮已获专用分支 `ci/native-image-016` 的提交、推送和 CI 修复重跑授权；不授权共享分支合入、当前宿主提权/配置变更、系统/用户 profile 修改，也不恢复其他暂停计划。
+> 已完成并归档。Python 标准库门禁及官方 lint action 的候选 `741cb9d` 已通过真实 Ubuntu root 验收和全部分支 CI，见[最终证据](evidence/016-native-ci-acceptance.json)与[CI run](https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287)。下方合同、失败记录与历史授权保留其当时含义；当前工具前提见 [README](../../README.md#build-and-local-verification) 和 [image materialization](../../docs/image-materialization.md#validation)。本轮仅发布专用 CI 分支，未合入共享分支、未在当前宿主提权，也未恢复其他计划。
 
 ## 状态
 
 - Priority：P2；Effort：M；Risk：LOW；Depends on：无。
-- Category：tests / dx；Planned at：`b93fc24`，2026-11-06；Status：IMPLEMENTED / BLOCKED（提供者无关实现已交付；项目 devShell 中完整原生正向/负向与 lint 已通过，真实 root 和分支 CI 未通过验收，不能标 DONE）。
+- Category：tests / dx；Planned at：`b93fc24`，2026-11-06；Status：DONE（`741cb9dfcf284ef29148e34dee56e6a2aadb0768`，真实 root namespace/full mapping、原生正负向、lint、core/static-guest 及 cache 收尾全部成功；未合入共享分支）。
 - 审计映射：发现 11。后续 OCI/EROFS 修改应以本门禁为前置。
 
 ## 问题与目标
@@ -30,7 +30,7 @@ if os.Getenv("SANDBOX_REQUIRE_EROFS_TESTS") == "1" { t.Fatal(err) }
 t.Skipf("actual EROFS tool test unavailable: %v", err)
 ```
 
-`Makefile` 已有 test/check/lint/integration。[镜像契约](../docs/image-materialization.md#validation) 要求匹配 mkfs/fsck >=1.9.4 且 <2、umoci=0.6.0，以及可用 user/mount namespace 和映射。两套格式均不可用时不能改用另一套通过。工具通过受控 PATH 和必要的只读依赖根提供，不检查它们来自哪个包管理器。
+`Makefile` 已有 test/check/lint/integration。[镜像契约](../../docs/image-materialization.md#validation) 要求匹配 mkfs/fsck >=1.9.4 且 <2、umoci=0.6.0，以及可用 user/mount namespace 和映射。两套格式均不可用时不能改用另一套通过。工具通过受控 PATH 和必要的只读依赖根提供，不检查它们来自哪个包管理器。
 
 实际已确认：普通 make test/check/lint/integration 在审计机器通过；TestActual 全部因工具缺失 Skip。当前本机未准备完整原生前提，不能宣称已验证 CI 方案。
 
@@ -98,10 +98,10 @@ git diff --check
 
 - [x] 当前候选具有 make test-native 与正/负向脚本，required 参数由入口强制设置。
 - [x] 指定 native 场景实际 pass，缺 bwrap 时子命令必失败；工具与结果已保存。
-- [ ] 实际 root namespace/full identity mapping 已验证。
+- [x] 实际 root namespace/full identity mapping 已验证。
 - [x] 通用 gate 不调用环境提供者，不要求包管理器路径；所有入口使用相同测试和判定。
-- [x] 准备好的开发工具环境执行 make lint，core/static guest jobs 保留。（项目 devShell 中通过；CI 选定工具链仍待实际 CI 验收。）
-- [ ] 新 native-image CI 实际运行成功，保留精确候选与 run URL；未运行不得标 DONE。
+- [x] 准备好的开发与 CI 工具环境执行 make lint，core/static guest jobs 保留并实际通过。
+- [x] 新 native-image CI 实际运行成功，保留精确候选与 run URL。
 - [x] 文档、Scope、diff check、索引状态准确，无当前宿主或业务测试语义修改。
 
 ## 本次实现与证据（提供者无关合同）
@@ -147,7 +147,7 @@ git diff --check
 
 使用 per-turn scratch 中的合成 make/go/id/bwrap/unshare 输出，实际调用完整脚本验证 27 个入口场景：四指定 pass 接受、package-only/缺 pass/非零退出/混合或非法 JSON 拒绝、额外 native skip 拒绝、无关 skip 记录、精确 root skip 例外与非 root/错误原因/无 source/多余后缀拒绝、负向编译错误/错误工具/零退出拒绝，以及版本不匹配、错误身份、短 mapping、未变化 namespace、production probe skip 拒绝。另验证无 HOME/LAST_EXIT_CODE 的干净环境与 mode 0700 runtime HOME，以及正常成功/失败后的工具视图清理。这些仅证明包装器判定，不证明 root 身份、namespace、native tools 或生产导入实际可用；合成日志标记为 synthetic，不挪作原生通过记录。
 
-最初一次完整 gate 冷编译被 terminal 的 120s 外层时限中止，未作为结果；随后以足够外层时限完成上述真实命令。项目 devShell 的原生 shared/merged/GC 完整正向、实际负向与 lint 已通过；仍未运行 root namespace/full identity mapping、CI 装配或分支 GitHub CI，无 run URL，整体仍 BLOCKED。KVM、kernel-isolation、Rust guest fixture、integration/smoke 及 production 不在本次新增门禁验收范围，未运行；完整 Engine suite 内的 Go guest 测试已随正向 gate 执行。
+最初一次完整 gate 冷编译被 terminal 的 120s 外层时限中止，未作为结果；随后以足够外层时限完成上述真实命令。截至该轮本地复核，项目 devShell 的原生 shared/merged/GC 完整正向、实际负向与 lint 已通过，root/分支 CI 尚未运行，因此当时仍 BLOCKED；后续实际结果见下方。该轮未运行 KVM、kernel-isolation、Rust guest fixture、integration/smoke 或 production；完整 Engine suite 内的 Go guest 测试已随正向 gate 执行。
 
 ### 分支 CI 验收
 
@@ -165,7 +165,17 @@ git diff --check
 
 前一官方 action/Nushell 候选 `c7261f285e2e571f08804412c1755d89843f4140` 的 [CI 42631164065](https://github.com/woxQAQ/sandbox-101/actions/runs/42631164065) 中，native root preflight、负向、完整 gate 与普通用户 lint 均成功，但 cache post-step 重新计算 `hashFiles` 时遍历 root 私有 runtime HOME 失败，native job 因而 FAIL；core 则在完整 Sandboxd race 包达到 180s 总预算时失败，static-guest 成功。修复为在特权步骤前冻结 cache key，post-step 只复用固定 key，不遍历私有 HOME，也不放宽其权限。
 
-对 core 超时另实际运行 `nix develop --no-write-lock-file --command env TMPDIR=/tmp make test-race`，试行 300s 包预算仍在 Sandboxd 后续的 `TestProductionOwnerBudgetFiniteHTTP`（该用例仅运行 4s）到达整包上限，结果 FAIL，未记作通过。两个上限下执行推进到不同测试，说明整包预算不足；当前统一将普通 `test-race` 的模块预算设为 Go 标准默认 10m，仍保留所有用例、每个用例自己的 deadline 和生产资源限制，`test-native` 的 300s 不变。10m 候选尚待 CI 实际结果，不用预算调整本身宣称通过。
+对 core 超时另实际运行 `nix develop --no-write-lock-file --command env TMPDIR=/tmp make test-race`，试行 300s 包预算仍在 Sandboxd 后续的 `TestProductionOwnerBudgetFiniteHTTP`（该用例仅运行 4s）到达整包上限，结果 FAIL，未记作通过。两个上限下执行推进到不同测试，说明整包预算不足；当前统一将普通 `test-race` 的模块预算设为 Go 标准默认 10m，仍保留所有用例、每个用例自己的 deadline 和生产资源限制，`test-native` 的 300s 不变。最终 CI 的完整 Sandboxd race 包实际以 285.790s 成功，不用预算调整本身宣称通过。
+
+### 最终 Python 候选：真实 CI 全部成功
+
+- 精确候选：`741cb9dfcf284ef29148e34dee56e6a2aadb0768`，分支 `ci/native-image-016`，push 事件、attempt 1；[run 42636560287](https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287) 总结果 success。
+- [native-image](https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287/job/129226118710)：root preflight、实际负向、完整 required race、普通用户 lint、artifact 和 cache post-step 全部成功。artifact 已下载到本机 `build/native-gate/ci-42636560287/` 并逐项核验；持久摘要及原始 artifact 标识、digest、入口 SHA256 见[接受收据](evidence/016-native-ci-acceptance.json)。
+- root probe 的 real/effective UID/GID 均为 0，shared 的 user/mount/PID/network 四个 namespace ID 均与外层不同；merged 使用另一新 user namespace，UID/GID maps 均精确为 `0 0 4294967295`，实际 production merged fixture pass。
+- 完整 Engine race：make exit 0，1763 行纯 JSON，四指定 pass、406 个 test/subtest pass 事件，唯一 test skip 为精确 root `unmapped_owner` 例外，零 fail；Engine 包 53.176s。`changed-paths.stdout` 为空，三入口 SHA256 与提交和最终源码一致。
+- 实际 negative：Go exit 1，9 行纯 JSON，选定测试的精确 missing-bwrap source 诊断及 fail 事件成立；脚本 exit 0。artifact 87 个诊断文件，不含 runtime HOME、PATH view、数据库、token 或全量环境。
+- [core](https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287/job/129226119279)：入口回归、7 个 Python gate CLI 行为测试、`make test check test-race integration smoke` 全部成功，包含真实 Rust Unix fixture；[static-guest](https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287/job/129226119315) 的 `make guest` 成功。
+- 仍不声称本轮运行了 KVM、kernel-isolation 或 production。未更改 engine/sandboxd 源码、测试断言或 flake 锁；023/024 等并行草稿未进入本分支提交。归档只记录已完成事实，不授权合入 `main`/`dev` 或继续其他暂停工作。
 
 ## 历史实施与复核结果（原提供者绑定方案）
 
