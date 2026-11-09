@@ -10,6 +10,18 @@ The production entrypoints use the real runtime. Unit tests inject explicit back
 
 Use Linux with Go compatible with the module go directives, Rust, protoc and GNU make. `nix develop` provides the development tools from the pinned flake. Submodules under `references/` are design references and are not needed to build the service.
 
+The default devShell includes Go and the stdenv C compiler for race-enabled tests, make, golangci-lint, Nushell, erofs-utils 1.9.4, umoci 0.6.0, bubblewrap, util-linux (`unshare`) and coreutils (`id`). Enter with `nix develop`, or start Nushell explicitly:
+
+```nu
+nix develop --command nu --no-config-file
+# Inside the shell:
+make lint
+nu scripts/check-native-gate.nu --negative
+nu scripts/check-native-gate.nu
+```
+
+Entering the shell requires its Nix dependencies to be available; evaluating the flake alone does not prove native tests or namespace/mapping support. Ordinary-user merged tests still need working subordinate UID/GID mappings. `--preflight` is reserved for the disposable root CI runner, not a request to run sudo on the development host.
+
 ```sh
 make build
 make test check test-race
@@ -18,7 +30,7 @@ make integration
 make smoke
 ```
 
-The repository root is a Go workspace, not a module. `make lint` checks all four modules in `go.work` using explicit package patterns; `make lint-fix` also applies automatic fixes. Running `golangci-lint run ./...` or `go fix ./...` at the root fails because `./...` does not expand to the workspace modules.
+The repository root is a Go workspace, not a module. `make lint` only runs `golangci-lint run` over all four modules in `go.work` using explicit package patterns; it does not run `go fix` or rewrite source files. `make lint-fix` is the separate entry for automatic fixes. Running `golangci-lint run ./...` or `go fix ./...` at the root fails because `./...` does not expand to the workspace modules.
 
 Binaries are written to `bin/{engined,sandboxd,sandboxctl}`. `make integration` launches the Rust agent fixture and exercises exec, file transfer, HTTP Upgrade, raw forwarding and Preview through the Go service and SDK. `make smoke` launches the actual daemons and CLI in temporary private state, verifies control-plane traffic and restart idempotency, and takes an offline metadata backup. It does not boot a VM.
 
@@ -29,6 +41,18 @@ SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test ./... -count=1
 ```
 
 See [image materialization](engine/IMAGE-MATERIALIZATION.md) for compatibility test requirements and the supported OCI contracts.
+
+### Required-native gate
+
+The enforced entry wraps that variable so no caller can forget it. `make test-native` runs the whole engine suite as pure Go JSON with `SANDBOX_REQUIRE_EROFS_TESTS=1` pinned by the recipe itself, and `scripts/check-native-gate.nu` (Nushell, provided by the pinned devShell) analyzes that JSON: any unexpected non-empty non-JSON stdout line fails the gate (line numbers are reported, contents never echoed), and the gate fails unless `TestActualLayeredEROFSImportAndExtraction`, `TestActualSharedOCIHardlinksAndMetadata`, `TestActualMergedOCIHardlinksAndMetadata` and `TestGCActualLayerCacheAndCompletedImport` each record an actual pass event. Any required-native skip fails the gate except the single documented root identity-mapping case, which is accepted only with the exact test name `TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner`, the exact normalized reason `root can identity-map all owners` taken from its source-located skip diagnostic, and an effective UID of 0; a reason merely containing that phrase or the same skip at a nonzero UID fails. Unrelated skips (KVM, capture and other out-of-scope tests) are recorded separately in the run's `skips-other.txt`. Every invocation writes its evidence (stdout, stderr and exit code per command) to a fresh per-run subdirectory of the gitignored `build/native-gate/` directory and never overwrites or removes earlier runs.
+
+Prerequisites are matching erofs-utils >=1.9.4 and <2, umoci 0.6.0, bubblewrap with usable user/mount namespaces, and either root or an unprivileged user with subordinate UID/GID mappings; the pinned Nix devShell supplies every tool. The script has three modes:
+
+- `nu scripts/check-native-gate.nu --preflight` — root-only environment proof for the disposable CI runner: tool versions and their pinned `/nix/store` sources, real new user/mount/PID/network namespaces through pinned bubblewrap (all four namespace IDs recorded and compared against the outer ones), the full root identity mapping through pinned unshare (printed real/effective IDs validated together with the uid/gid maps), and one merged-OCI required test through the production mapped sandbox helper.
+- `nu scripts/check-native-gate.nu --negative` — self-check that removing `bwrap` from a command-local PATH view makes the required layered test fail with the exact `required OCI tool missing: bwrap` diagnostic and a nonzero exit. The view lives only inside its own run directory, is removed as soon as the command finishes, and is excluded from uploaded CI artifacts, so no symlink farm is archived.
+- `nu scripts/check-native-gate.nu` — the positive gate described above.
+
+The `native-image` CI job runs lint as the ordinary runner user and the three gate modes as root inside the pinned Nix shell on a disposable Ubuntu 24.04 runner, forwarding only `PATH` and `GOTOOLCHAIN=local` through sudo. This gate does not run KVM, guest or production acceptance.
 
 ## HTTP and configuration
 

@@ -12,7 +12,7 @@ KERNEL_ARTIFACTS_DIR ?= $(ROOT)/build/kernel-isolation-acceptance
 PRODUCTION_OCI_LAYOUT ?=
 PRODUCTION_ARTIFACTS_DIR ?= $(ROOT)/build/production-acceptance
 
-.PHONY: all build test test-race check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e capture-isolation-e2e guest-fs-isolation-e2e
+.PHONY: all build test test-race test-native check lint lint-fix fmt proto guest image integration smoke privileged-e2e kvm-e2e kernel-isolation-e2e production-e2e capture-isolation-e2e guest-fs-isolation-e2e
 all: build
 
 build:
@@ -29,13 +29,18 @@ test:
 test-race:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=180s; done
 
+# Required-native OCI/EROFS gate: pure Go JSON on stdout, enforced by
+# scripts/check-native-gate.nu. The required variable is pinned by this entry,
+# never inherited from the caller's shell.
+test-native:
+	@SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=180s
+
 check:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module vet ./...; done
 	cargo fmt --all -- --check
 	cargo clippy --locked --workspace --all-targets -- -D warnings
 
 lint:
-	go fix $(GO_WORK_PACKAGES)
 	golangci-lint run $(GO_WORK_PACKAGES)
 
 lint-fix:

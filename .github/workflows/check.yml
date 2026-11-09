@@ -30,3 +30,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler musl-tools cpio ripgrep
       - run: make guest
+  native-image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_conf: |
+            experimental-features = nix-command flakes
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: native-image-${{ hashFiles('flake.lock', 'Cargo.lock', 'engine/go.sum', 'sandboxd/go.sum', 'protocol/gen/go.sum', 'operator/go.sum') }}
+          restore-prefixes: native-image-
+      # Lint runs as the ordinary runner user; the pinned devShell supplies it.
+      - run: nix develop --command make lint
+      # Native preflight/test run as root on this disposable runner only. Only
+      # the pinned PATH and GOTOOLCHAIN are forwarded through sudo; no token or
+      # full environment, no AppArmor/namespace relaxation.
+      - name: native gate preflight
+        run: nix develop --command bash -c 'exec sudo env "PATH=$PATH" GOTOOLCHAIN=local nu scripts/check-native-gate.nu --preflight'
+      - name: native gate negative self-check
+        run: nix develop --command bash -c 'exec sudo env "PATH=$PATH" GOTOOLCHAIN=local nu scripts/check-native-gate.nu --negative'
+      - name: required native OCI/EROFS gate
+        run: nix develop --command bash -c 'exec sudo env "PATH=$PATH" GOTOOLCHAIN=local nu scripts/check-native-gate.nu'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-gate-logs
+          # Per-invocation evidence only. The negative mode's command-local
+          # tool view is removed as soon as its command finishes; exclude it
+          # here as well so no binary symlink farm is ever archived.
+          path: |
+            build/native-gate/
+            !build/native-gate/**/no-bwrap-bin/
+            !build/native-gate/**/no-bwrap-bin/**
+          if-no-files-found: ignore
+          retention-days: 14
