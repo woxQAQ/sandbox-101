@@ -30,6 +30,12 @@ make integration
 make smoke
 ```
 
+`make test-race` uses `GO_RACE_TIMEOUT` as a shared per-package budget for the core Go race profile: it covers all tests in each package, not each subtest or request. Defaults live in `Makefile`; ordinary `make test` and required-native keep their independent limits. To override explicitly in Nushell:
+
+```nu
+make test-race GO_RACE_TIMEOUT=8m
+```
+
 The repository root is a Go workspace, not a module. `make lint` only runs `golangci-lint run` over all four modules in `go.work` using explicit package patterns; it does not run `go fix` or rewrite source files. `make lint-fix` is the separate entry for automatic fixes. Running `golangci-lint run ./...` or `go fix ./...` at the root fails because `./...` does not expand to the workspace modules.
 
 Binaries are written to `bin/{engined,sandboxd,sandboxctl}`. `make integration` launches the Rust agent fixture and exercises exec, file transfer, HTTP Upgrade, raw forwarding and Preview through the Go service and SDK. `make smoke` launches the actual daemons and CLI in temporary private state, verifies control-plane traffic and restart idempotency, and takes an offline metadata backup. It does not boot a VM.

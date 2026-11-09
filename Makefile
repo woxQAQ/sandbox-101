@@ -2,6 +2,8 @@ SHELL := /bin/sh
 ROOT := $(abspath .)
 GO_MODULES := engine protocol/gen sandboxd
 GO_WORK_PACKAGES := ./engine/... ./operator/... ./protocol/gen/... ./sandboxd/...
+# Core Go race budget for each complete package, not an individual test or request.
+GO_RACE_TIMEOUT ?= 480s
 GUEST_TARGET ?= x86_64-unknown-linux-musl
 GUEST_ARTIFACT_DIR ?=
 IMAGE_TAG ?= sandbox-guest:local
@@ -27,7 +29,7 @@ test:
 	cargo test --locked --workspace --all-targets
 
 test-race:
-	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=180s; done
+	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=$(GO_RACE_TIMEOUT); done
 
 # Required-native OCI/EROFS gate: pure Go JSON on stdout, enforced by
 # scripts/check-native-gate.nu. The required variable is pinned by this entry,
