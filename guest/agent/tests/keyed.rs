@@ -4,7 +4,16 @@ use sandbox_agent::{
     wire::{Frame, read_frame, write_frame},
 };
 use serde_json::{Value, json};
-use std::{os::unix::fs::MetadataExt, path::Path, sync::Arc, time::Duration};
+use std::{
+    io::{Read, Write},
+    os::{
+        fd::AsRawFd,
+        unix::{fs::MetadataExt, net::UnixStream as StdUnixStream},
+    },
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::net::UnixStream;
 
 fn config(root: &Path) -> Config {
@@ -94,6 +103,155 @@ async fn wait_idle(agent: &Arc<Agent>) {
     })
     .await
     .unwrap();
+}
+
+// Holds inherited descriptors at a fork-before-exec barrier, without cloning an
+// Agent or running any copied Rust destructor in the child.
+struct PreExecChild {
+    pid: Option<libc::pid_t>,
+    barrier: StdUnixStream,
+}
+
+impl PreExecChild {
+    fn start() -> Self {
+        let (parent, child) = StdUnixStream::pair().unwrap();
+        parent
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let parent_fd = parent.as_raw_fd();
+        let child_fd = child.as_raw_fd();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            // Only async-signal-safe syscalls are allowed after fork. The
+            // barrier is bounded even if the parent fails to release it.
+            unsafe {
+                libc::close(parent_fd);
+                let mut byte = 1u8;
+                if libc::write(child_fd, (&byte as *const u8).cast(), 1) != 1 {
+                    libc::_exit(120);
+                }
+                let mut ready = libc::pollfd {
+                    fd: child_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if libc::poll(&mut ready, 1, 30_000) != 1 {
+                    libc::_exit(121);
+                }
+                let received = libc::read(child_fd, (&mut byte as *mut u8).cast(), 1);
+                libc::_exit(if received == 1 && byte == 1 { 0 } else { 122 });
+            }
+        }
+        let mut fixture = Self {
+            pid: Some(pid),
+            barrier: parent,
+        };
+        drop(child);
+        let mut ready = [0];
+        fixture.barrier.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [1]);
+        eprintln!("pre-exec child {pid}: inherited descriptors, barrier ready");
+        fixture
+    }
+
+    fn inherited_lock_fd(&self, path: &Path) -> i32 {
+        let pid = self.pid.unwrap();
+        let fd = std::fs::read_dir(format!("/proc/{pid}/fd"))
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| std::fs::read_link(entry.path()).ok().as_deref() == Some(path))
+            .expect("pre-exec child must still hold the inherited lock descriptor");
+        fd.file_name().to_str().unwrap().parse().unwrap()
+    }
+
+    fn finish(mut self) {
+        self.barrier.write_all(&[1]).unwrap();
+        assert_eq!(self.barrier.read(&mut [0]).unwrap(), 0);
+        let mut status = 0;
+        let pid = self.pid.unwrap();
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        self.pid = None;
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+        eprintln!("pre-exec child {pid}: barrier released, exited and reaped");
+    }
+}
+
+impl Drop for PreExecChild {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let reaped = loop {
+                if unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) } == pid {
+                    break true;
+                }
+                if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                    break false;
+                }
+            };
+            eprintln!("pre-exec child {pid}: failure cleanup, reaped={reaped}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn ledger_owner_ends_before_inherited_pre_exec_descriptors_close() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = config(tmp.path());
+    let agent = Agent::new(cfg.clone()).unwrap();
+    let frame = exec(
+        "first",
+        "owner-step",
+        &format!("printf x >> {}/effect; printf saved", tmp.path().display()),
+    );
+    let mut stream = connect(&agent, Portal::Workload);
+    let first = rpc(&mut stream, frame.clone()).await;
+    success(&first);
+    assert_eq!(first.last().unwrap().params_json()["replayed"], false);
+    assert_eq!(bytes(&first, "stdout"), b"saved");
+    drop(stream);
+    wait_idle(&agent).await;
+
+    let child = PreExecChild::start();
+    let lock_path = cfg.ledger_dir.join("agent.lock");
+    let fd = child.inherited_lock_fd(&lock_path);
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    assert!(flags >= 0);
+    assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    assert!(
+        std::fs::read_to_string(format!("/proc/{}/fdinfo/{fd}", child.pid.unwrap()))
+            .unwrap()
+            .contains("FLOCK")
+    );
+    // Closing failed contenders must not release the live owner's lock.
+    for _ in 0..2 {
+        assert_eq!(
+            Agent::new(cfg.clone()).err().unwrap().to_string(),
+            "exec ledger already owned by another agent"
+        );
+    }
+    assert_eq!(Arc::strong_count(&agent), 1);
+    assert_eq!(agent.requests.available_permits(), 128);
+    drop(agent);
+    assert_eq!(child.inherited_lock_fd(&lock_path), fd);
+    eprintln!("sole owner dropped; pre-exec child still holds lock descriptor");
+
+    let agent = Agent::new(cfg.clone())
+        .expect("ended owner must release the ledger before unrelated inherited descriptors close");
+    assert!(
+        Agent::new(cfg).is_err(),
+        "replacement owner stays exclusive"
+    );
+    let replay = rpc(&mut connect(&agent, Portal::Workload), frame).await;
+    success(&replay);
+    assert_eq!(replay.last().unwrap().params_json()["replayed"], true);
+    assert_eq!(bytes(&replay, "stdout"), b"saved");
+    assert_eq!(std::fs::read(tmp.path().join("effect")).unwrap(), b"x");
+    wait_idle(&agent).await;
+    drop(agent);
+    assert_eq!(child.inherited_lock_fd(&lock_path), fd);
+    child.finish();
 }
 
 #[tokio::test]

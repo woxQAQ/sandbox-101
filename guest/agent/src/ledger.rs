@@ -49,7 +49,38 @@ pub struct Ledger {
     salt: [u8; 32],
     max_entries: u32,
     pub directory: PathBuf,
-    _lock: File,
+    // Fields drop in declaration order: close SQLite before releasing ownership.
+    _lock: LedgerLock,
+}
+
+struct LedgerLock {
+    file: File,
+    owner_pid: libc::pid_t,
+}
+
+impl LedgerLock {
+    fn acquire(path: &Path) -> Result<Self> {
+        let file = private_file(path)?;
+        ensure!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+            "exec ledger already owned by another agent"
+        );
+        Ok(Self {
+            file,
+            owner_pid: unsafe { libc::getpid() },
+        })
+    }
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        // flock follows the open-file description, so close alone would let an
+        // unrelated fork-before-exec child prolong a finished Ledger's ownership.
+        // An inherited guard may close its copy, but must not unlock a live owner.
+        if unsafe { libc::getpid() } == self.owner_pid {
+            unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
 }
 
 fn private_file(path: &Path) -> Result<File> {
@@ -95,11 +126,7 @@ impl Ledger {
             "unsafe exec ledger directory"
         );
         let directory = directory.canonicalize()?;
-        let lock = private_file(&directory.join("agent.lock"))?;
-        ensure!(
-            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "exec ledger already owned by another agent"
-        );
+        let lock = LedgerLock::acquire(&directory.join("agent.lock"))?;
         let path = directory.join("exec.sqlite3");
         let db_file = private_file(&path)?;
         db_file.sync_all()?;
