@@ -4,7 +4,7 @@ Use a dedicated Linux KVM host. These files are examples for reviewed host provi
 
 ## Hypervisor, tools and device identity
 
-The supported Cloud Hypervisor revision is exactly `a02b114bd42c65b73033231a27bd23f3c487fc4c`. The launcher requires seccomp and a static binary. Build in a fresh nonexistent directory, separate from engine state:
+The supported Cloud Hypervisor revision is exactly `a02b114bd42c65b73033231a27bd23f3c487fc4c`. The launcher requires seccomp and a static binary. Provision a matching artifact and its JSON receipt from a trusted supplier. Building CH here is not a deployment or acceptance prerequisite. If no matching artifact is available and a source build is explicitly desired, the optional builder uses a fresh nonexistent directory separate from engine state:
 
 ```sh
 bash deploy/host/build-cloud-hypervisor.sh /build/ch-engine-pinned /usr/local/libexec/sandbox
@@ -14,7 +14,7 @@ install -m 0755 /tmp/engined /usr/local/bin/engined
 
 The script builds x86_64 musl with `kvm,io_uring`; seccomp is built in at this revision. Other architectures require their own static toolchain and privileged validation. Keep the binary and JSON receipt writable only by a trusted administrator. The engine verifies source revision, feature identity, binary SHA256 and absence of dynamic dependencies. The receipt is deployment trust metadata, not an independent build attestation.
 
-Runtime requires root, KVM API version 12, `/dev/net/tun`, pidfd, CLONE_INTO_CGROUP, mount/PID/IPC/UTS/network namespaces, pivot_root, seccomp, cgroup v2, iproute2, nftables, e2fsprogs and sysctl. Image import uses erofs-utils >=1.9.4 and <2 plus bubblewrap; explicit merged OCI compatibility also uses umoci. See [image materialization](../../engine/IMAGE-MATERIALIZATION.md) for exact tool and namespace requirements. FHS and Nix tool closures are bound read-only. Configure an administrator-controlled PATH for host helpers.
+Runtime requires root, KVM API version 12, `/dev/net/tun`, pidfd, CLONE_INTO_CGROUP, mount/PID/IPC/UTS/network namespaces, pivot_root, seccomp, cgroup v2, iproute2, nftables, e2fsprogs and sysctl. Image import uses erofs-utils >=1.9.4 and <2 plus bubblewrap; explicit merged OCI compatibility also uses umoci. See [image materialization](../../engine/IMAGE-MATERIALIZATION.md) for exact tool and namespace requirements. System tool directories and explicitly configured `SANDBOX_IMAGE_TOOL_ROOTS` are bound read-only; see [host tool installation](../../engine/IMAGE-MATERIALIZATION.md#host-tool-installation). Configure an administrator-controlled PATH for host helpers and provide any extra readonly dependency roots in the engined service environment.
 
 The daemon runs as root for setup. Each VMM runs with a nonzero configured UID/GID, no supplementary groups or capabilities, no_new_privs and seccomp, inside a restricted private root. The launcher execs CH in place; no privileged supervisor remains. Cold boot creates the VM without a NIC, then passes the owned TAP descriptor through preboot `vm.add-net` with SCM_RIGHTS: this pinned CH ignores network descriptors on `vm.create`. The engine sets MTU 1500 before dropping privileges, so CH does not need a privileged MTU ioctl. Replay inspects the existing net0 before attaching another device. Do not add a parent-death signal or put VMMs in the daemon service cgroup.
 

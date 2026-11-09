@@ -278,7 +278,10 @@ func materializeMergedOCI(
 		}
 		reads = append(reads, imageMount{binary, "/tools/" + tool})
 	}
-	args := imageToolSandbox(out, reads, true)
+	args, err := imageToolSandbox(out, reads, true)
+	if err != nil {
+		return err
+	}
 	args = append(
 		args,
 		"--size",

@@ -95,7 +95,7 @@ func rootlessRequireNamespaces(t *testing.T) {
 
 func rootlessPrivateRun(t *testing.T) {
 	t.Helper()
-	// /run/current-system is on PATH on NixOS. Resolve it before masking /run;
+	// Resolve tool search directories before masking /run;
 	// all named netns mounts must live in this private tmpfs, never host /run.
 	var paths []string
 	for _, p := range filepath.SplitList(hostToolPath()) {

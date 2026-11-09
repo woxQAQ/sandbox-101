@@ -8,6 +8,7 @@ IMAGE_TAG ?= sandbox-guest:local
 KVM_MATERIALS_DIR ?=
 KVM_GUEST_DIR ?= $(ROOT)/build/guest
 KVM_ARTIFACTS_DIR ?= $(ROOT)/build/kvm-acceptance
+KVM_ROOTFS_DIR ?=
 KERNEL_ARTIFACTS_DIR ?= $(ROOT)/build/kernel-isolation-acceptance
 PRODUCTION_OCI_LAYOUT ?=
 PRODUCTION_ARTIFACTS_DIR ?= $(ROOT)/build/production-acceptance
@@ -72,7 +73,7 @@ privileged-e2e:
 	GOWORK=off go -C sandboxd test -tags=privileged ./integration -run TestMicroVM -count=1 -timeout=10m
 
 kvm-e2e:
-	bash scripts/run-kvm-acceptance.sh "$(KVM_MATERIALS_DIR)" "$(KVM_GUEST_DIR)" "$(KVM_ARTIFACTS_DIR)"
+	KVM_ROOTFS_DIR="$(KVM_ROOTFS_DIR)" bash scripts/run-kvm-acceptance.sh "$(KVM_MATERIALS_DIR)" "$(KVM_GUEST_DIR)" "$(KVM_ARTIFACTS_DIR)"
 
 kernel-isolation-e2e:
 	bash scripts/run-kernel-isolation-acceptance.sh "$(KERNEL_ARTIFACTS_DIR)"

@@ -74,25 +74,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-userspace=$(nix build --impure --no-link --print-out-paths --expr '
-  let
-    n = builtins.getFlake "github:NixOS/nixpkgs/319e4cebef10cbb636c6ea392137b52ad105336a";
-    p = n.legacyPackages.x86_64-linux;
-  in p.linkFarm "sandbox-production-acceptance-tools" [
-    { name = "e2fsprogs"; path = p.e2fsprogs; }
-    { name = "erofs"; path = p.erofs-utils; }
-    { name = "umoci"; path = p.umoci; }
-    { name = "bubblewrap"; path = p.bubblewrap; }
-    { name = "bindfs"; path = p.bindfs; }
-    { name = "util-linux"; path = p.util-linux; }
-    { name = "iproute2"; path = p.iproute2; }
-    { name = "nftables"; path = p.nftables; }
-    { name = "procps"; path = p.procps; }
-    { name = "tar"; path = p.gnutar; }
-    { name = "gzip"; path = p.gzip; }
-  ]')
+# The caller supplies the toolchain. Resolve search directories before the
+# delegated service masks /run; no environment provider is invoked here.
 resolved_path=
-for directory in "$userspace"/*/bin ${PATH//:/ }; do
+IFS=: read -r -a tool_paths <<< "$PATH"
+for directory in "${tool_paths[@]}"; do
   if [[ -d $directory ]]; then
     resolved=$(realpath -- "$directory")
     resolved_path+="${resolved_path:+:}$resolved"
@@ -112,6 +98,7 @@ systemd-run --user --wait --pipe --collect --service-type=exec --unit="$unit" \
   --property=MemoryMax=8G --property=MemorySwapMax=0 --property=TasksMax=2048 \
   --property=TimeoutStopSec=10s --property=RuntimeMaxSec=1300s \
   --setenv="PATH=$PATH" --setenv="HOME=$HOME" --setenv=GOMAXPROCS=2 \
+  --setenv="SANDBOX_IMAGE_TOOL_ROOTS=${SANDBOX_IMAGE_TOOL_ROOTS:-}" \
   --setenv="SANDBOX_PRODUCTION_USER_UNIT=$unit" \
   --setenv="SANDBOX_PRODUCTION_ARTIFACTS=$run_dir" \
   --setenv="SANDBOX_PRODUCTION_MATERIALS=$materials_dir" \

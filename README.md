@@ -8,7 +8,7 @@ The production entrypoints use the real runtime. Unit tests inject explicit back
 
 ## Build and local verification
 
-Use Linux with Go compatible with the module go directives, Rust, protoc and GNU make. `nix develop` provides the development tools from the pinned flake. Submodules under `references/` are design references and are not needed to build the service.
+Use Linux with Go compatible with the module go directives, Rust/Cargo, protoc and GNU make. Scripts and smoke tests also need Bash, Python >=3.11, GNU coreutils and ripgrep; binary checks need file and binutils. `make lint` needs golangci-lint. Prepare these tools on `PATH` before running the commands below; they do not invoke a package manager. The [optional Nix entrypoint](nix/README.md) supplies these tools and runs the same commands. Submodules under `references/` are design references and are not needed to build the service.
 
 ```sh
 make build
@@ -50,11 +50,10 @@ Example files are in [host configuration](deploy/host/engined.example.yaml), [sa
 make guest GUEST_TARGET=x86_64-unknown-linux-musl
 ```
 
-This requires the Rust musl target and native tools used by bundled SQLite, plus `readelf` and GNU `cpio`. Packaging rejects dynamic interpreters and shared-library dependencies and produces `build/guest/{sandbox-agent,sandbox-init,initramfs}`. The flake's `guest-static` package cross-builds both binaries with the static musl toolchain and checks the ELF outputs during installation. To package those binaries instead of using the host Cargo toolchain:
+This requires the Rust musl target and native tools used by bundled SQLite, plus `readelf` and GNU `cpio`. Packaging rejects dynamic interpreters and shared-library dependencies and produces `build/guest/{sandbox-agent,sandbox-init,initramfs}`. To package prebuilt binaries from any provider instead of using the host Cargo toolchain:
 
 ```sh
-guest_package=$(nix build .#guest-static --no-link --print-out-paths)
-make guest GUEST_ARTIFACT_DIR="$guest_package/bin"
+make guest GUEST_ARTIFACT_DIR=/absolute/path/to/static-binaries
 ```
 
 The same `GUEST_ARTIFACT_DIR` option works with `make image`. Guest runtime and RPC details are in [guest/README.md](guest/README.md).
@@ -65,15 +64,16 @@ Default `layered-erofs-v1` imports share immutable per-diff-ID EROFS payloads an
 
 ## Runtime acceptance
 
-On an x86_64 Linux host with user-accessible KVM, user namespaces and Nix, build the matching static VMM and kernel, package the static guest as above, then run:
+On an x86_64 Linux host with user-accessible KVM and user namespaces, supply the matching static VMM/kernel and complete guest userspace described in the [integration test inputs](scripts/README.md#vm-test-inputs), package the static guest as above, then run:
 
 ```sh
-bash scripts/build-acceptance-materials.sh
-make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/the/printed/run-directory \
+bash scripts/prepare-acceptance-materials.sh /absolute/path/to/materials
+make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/materials \
+  KVM_ROOTFS_DIR=/absolute/path/to/guest-userspace-rootfs \
   KVM_ARTIFACTS_DIR=/dev/shm/sandbox-kvm-acceptance
 ```
 
-The materials builder needs the pinned Cloud Hypervisor Git objects under `references/cocoonstack/cloud-hypervisor`. It preserves sources, build logs, kernel configuration and artifact hashes in a fresh run directory. The KVM test uses actual OCI import, initramfs, systemd, vsock, EROFS/OverlayFS and native VMM snapshot APIs. It checks file contents, ownership, modes, hardlinks, symlinks, whiteouts, opaque directories, xattrs, ACLs and capabilities in the guest. A boot-time root precheck also proves raw reads succeed and raw writes are rejected for every readonly root/data block device. It also checks binary tree-transfer roundtrips, private retained RAM mappings, independent source/clone disks, deletion of a source capture while a clone runs, and restoration of a COW clone's next snapshot. Missing prerequisites fail explicitly.
+The preparation command checks the supplied static VMM/kernel, kernel configuration and source metadata, and records artifact hashes; it does not build dependencies. The rootfs must include genuine systemd and its complete runtime dependencies. The KVM test uses actual OCI import, initramfs, systemd, vsock, EROFS/OverlayFS and native VMM snapshot APIs. It checks file contents, ownership, modes, hardlinks, symlinks, whiteouts, opaque directories, xattrs, ACLs and capabilities in the guest. A boot-time root precheck also proves raw reads succeed and raw writes are rejected for every readonly root/data block device. It also checks binary tree-transfer roundtrips, private retained RAM mappings, independent source/clone disks, deletion of a source capture while a clone runs, and restoration of a COW clone's next snapshot. Missing prerequisites fail explicitly.
 
 Use artifact storage with matching `stat` and `/proc/PID/maps` device identity. The development Btrfs subvolume fails that strict proof; tmpfs passed. The fixture reserves about 9 GiB for each offline import before starting VMs; keep additional free space for the retained runtime/image/capture artifacts. Completed runs remain on disk for diagnosis, so archive stopped runs before repeating on a bounded tmpfs. This standalone test runs the actual VMM as the invoking nonroot user. The separate production runner below exercises the privileged launcher, daemon adoption and sandbox lifecycle through both daemons.
 

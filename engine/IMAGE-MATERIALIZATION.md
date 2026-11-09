@@ -54,7 +54,13 @@ Native fsck reads/extracts the final filesystem through all supplied external de
 
 `-T0` alone defaults to applying that timestamp to every file. `--preserve-mtime` by itself does not undo that policy. `--mkfs-time` is required to preserve input file mtimes while fixing the native build timestamp; the library also receives a fixed build timestamp and explicit inode times.
 
-FHS tool roots and `/nix/store` are mounted readonly for tool closures. Native tools run as UID/GID 0 inside an unprivileged user namespace. Shared composition preserves numeric OCI ownership directly, without requiring host subordinate mappings for those IDs. No sudo, host mounts or host device creation are needed for import/extraction tests.
+Native tools run as UID/GID 0 inside an unprivileged user namespace. Shared composition preserves numeric OCI ownership directly, without requiring host subordinate mappings for those IDs. No sudo, host mounts or host device creation are needed for import/extraction tests.
+
+## Host tool installation
+
+Executables are selected through an administrator-controlled PATH. The image sandbox mounts existing system tool roots (`/usr`, `/bin`, `/lib`, `/lib64`) readonly. For tools installed elsewhere, set `SANDBOX_IMAGE_TOOL_ROOTS` to a colon-separated list of absolute, normalized directories containing their runtime dependencies; these are mounted readonly at their original absolute paths. Provide executable search directories through PATH. No package-manager path is assumed.
+
+This is trusted process configuration, never image metadata. Expose only tool dependencies, not the host root, credentials or engine state. Missing or invalid configured roots fail. Roots must not overlap private `/proc`, `/dev`, `/tmp`, `/work`, `/tools`, `/input` or `/merged` paths.
 
 ## Explicit OCI merged compatibility
 
@@ -117,7 +123,7 @@ Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d
 
 ## Validation
 
-Tests can use an installed toolchain or an unprivileged Nix-provisioned one. Actual tools exercised are erofs-utils 1.9.4, umoci 0.6.0, bubblewrap 0.12.0 and util-linux unshare with the caller's subordinate mappings. Missing tools/namespaces/mappings produce an explicit test skip. Set `SANDBOX_REQUIRE_EROFS_TESTS=1` to make these conditions fail instead:
+Tests use the caller's prepared toolchain under the same contract for every environment provider. Actual tools exercised are erofs-utils 1.9.4, umoci 0.6.0, bubblewrap 0.12.0 and util-linux unshare with the caller's subordinate mappings. Missing tools/namespaces/mappings produce an explicit test skip. Set `SANDBOX_REQUIRE_EROFS_TESTS=1` to make these conditions fail instead:
 
 ```sh
 PATH=/path/to/umoci/bin:/path/to/erofs-utils/bin:$PATH SANDBOX_REQUIRE_EROFS_TESTS=1 \
@@ -133,4 +139,4 @@ Integrity tests cover cache corruption/missing receipts, cached index bounds/uns
 
 Additional actual umoci tests exercise its separate merged layout, including root attributes, cross-layer links, capabilities/ACLs, whiteout and duplicate ordering, symlink confinement, boot symlink refusal, digest/descriptor/resource limits, unmapped ownership, immutable manifests and layout conflicts. Its forward-hardlink refusal checks that no catalog entry is published.
 
-Host extraction tests are complemented by `make kvm-e2e KVM_MATERIALS_DIR=... KVM_ARTIFACTS_DIR=...`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel and packaged static guest to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The fresh shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The latest complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](../deploy/ACCEPTANCE.md) for exact outcomes and boundaries.
+Host extraction tests are complemented by `make kvm-e2e KVM_MATERIALS_DIR=... KVM_ROOTFS_DIR=... KVM_ARTIFACTS_DIR=...`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel, packaged static guest and caller-supplied complete userspace to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The historical shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The recorded complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](../deploy/ACCEPTANCE.md) for exact source-bound outcomes and boundaries; those runs do not validate later harness changes.

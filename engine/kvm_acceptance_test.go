@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -44,11 +43,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	hypervisor := kvmRequired(t, "SANDBOX_KVM_HYPERVISOR")
 	kernel := kvmRequired(t, "SANDBOX_KVM_KERNEL")
 	guest := kvmRequired(t, "SANDBOX_KVM_GUEST_DIR")
-	systemd := kvmRequired(t, "SANDBOX_KVM_SYSTEMD")
-	shell := kvmRequired(t, "SANDBOX_KVM_SHELL")
-	coreutils := kvmRequired(t, "SANDBOX_KVM_COREUTILS")
-	attr := kvmRequired(t, "SANDBOX_KVM_ATTR")
-	acl := kvmRequired(t, "SANDBOX_KVM_ACL")
+	rootfs := kvmRequired(t, "SANDBOX_KVM_ROOTFS")
 	artifacts := kvmRequired(t, "SANDBOX_KVM_ARTIFACTS")
 	if err := os.MkdirAll(artifacts, 0o700); err != nil {
 		t.Fatal(err)
@@ -81,11 +76,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 		layout,
 		kernel,
 		guest,
-		systemd,
-		shell,
-		coreutils,
-		attr,
-		acl,
+		rootfs,
 	)
 	meta := kvmMetadataLayers(t, layout)
 	cross := hardEntry("acceptance/cross-layer-hard", "acceptance/regular")
@@ -425,24 +416,46 @@ func kvmTool(t *testing.T, tool string, args ...string) []byte {
 
 func kvmRuntimeLayer(
 	t *testing.T,
-	layout, kernel, guest, systemd, shell, coreutils, attr, acl string,
+	layout, kernel, guest, rootfs string,
 ) ociLayerFixture {
 	t.Helper()
-	closure := strings.Fields(
-		string(
-			kvmTool(
-				t,
-				"nix-store",
-				"-qR",
-				systemd,
-				shell,
-				coreutils,
-				attr,
-				acl,
-			),
-		),
-	)
-	sort.Strings(closure)
+	var err error
+	rootfs, err = filepath.EvalSymlinks(rootfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootfs, err = filepath.Abs(rootfs)
+	if err != nil || rootfs == "/" {
+		t.Fatalf(
+			"acceptance requires a dedicated rootfs, not the host root: %v",
+			err,
+		)
+	}
+	root, err := os.Open(rootfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	// Resolve links relative to the guest root, never against the host. A
+	// package symlink alone is not a self-contained guest runtime.
+	for _, name := range []string{"usr/lib/systemd/systemd", "bin/sh", "bin/cat", "bin/stat", "bin/id", "bin/readlink", "bin/sync", "bin/dd", "bin/getfattr", "bin/getfacl"} {
+		fd, err := unix.Openat2(int(root.Fd()), name, &unix.OpenHow{
+			Flags:   unix.O_PATH | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
+		})
+		if err != nil {
+			t.Fatalf("incomplete acceptance rootfs (%s): %v", name, err)
+		}
+		file := os.NewFile(uintptr(fd), name)
+		info, err := file.Stat()
+		file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("acceptance rootfs requires an executable at %s", name)
+		}
+	}
 	archive, err := os.CreateTemp(filepath.Dir(layout), "runtime-layer-*.tar")
 	if err != nil {
 		t.Fatal(err)
@@ -487,47 +500,48 @@ func kvmRuntimeLayer(
 		h.Name = name
 		header(h, data)
 	}
-	for _, root := range closure {
-		if err := filepath.Walk(
-			root,
-			func(file string, info os.FileInfo, walkErr error) error {
-				if walkErr != nil {
-					return walkErr
-				}
-				name := strings.TrimPrefix(file, "/")
-				if info.IsDir() {
-					directory(name)
-					return nil
-				}
-				link := ""
-				if info.Mode()&os.ModeSymlink != 0 {
-					link, err = os.Readlink(file)
-					if err != nil {
-						return err
-					}
-				}
-				h, err := tar.FileInfoHeader(info, link)
-				if err != nil {
-					return err
-				}
-				h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
-				h.ModTime = time.Unix(0, 0)
-				h.AccessTime, h.ChangeTime = time.Time{}, time.Time{}
-				if !info.Mode().IsRegular() {
-					add(name, h, nil)
-					return nil
-				}
-				f, err := os.Open(file)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				add(name, h, f)
+	if err := filepath.Walk(
+		rootfs,
+		func(file string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			name, err := filepath.Rel(rootfs, file)
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				directory(name)
 				return nil
-			},
-		); err != nil {
-			t.Fatal(err)
-		}
+			}
+			link := ""
+			if info.Mode()&os.ModeSymlink != 0 {
+				link, err = os.Readlink(file)
+				if err != nil {
+					return err
+				}
+			}
+			h, err := tar.FileInfoHeader(info, link)
+			if err != nil {
+				return err
+			}
+			h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
+			h.ModTime = time.Unix(0, 0)
+			h.AccessTime, h.ChangeTime = time.Time{}, time.Time{}
+			if !info.Mode().IsRegular() {
+				add(name, h, nil)
+				return nil
+			}
+			f, err := os.Open(file)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			add(name, h, f)
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
 	}
 	text := func(name, value string, mode int64) {
 		add(
@@ -556,32 +570,39 @@ func kvmRuntimeLayer(
 	for _, name := range []string{"dev", "proc", "sys", "run", "tmp", "var/lib", "var/log", "etc/systemd/system", "home/sandbox", "workspace", "usr/lib/systemd", "usr/local/libexec"} {
 		directory(name)
 	}
-	for _, executable := range []struct{ name, source string }{{"boot/vmlinux", kernel}, {"boot/initramfs", filepath.Join(guest, "initramfs")}, {"usr/local/libexec/sandbox-agent", filepath.Join(guest, "sandbox-agent")}, {"usr/lib/systemd/systemd", filepath.Join(systemd, "lib/systemd/systemd")}} {
-		info, err := os.Stat(executable.source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, err := os.Open(executable.source)
+	addFile := func(name string, file *os.File) {
+		defer file.Close()
+		info, err := file.Stat()
 		if err != nil {
 			t.Fatal(err)
 		}
 		add(
-			executable.name,
+			name,
 			&tar.Header{Typeflag: tar.TypeReg, Mode: 0o755, Size: info.Size()},
-			f,
+			file,
 		)
-		f.Close()
 	}
-	link(
-		"usr/lib/systemd/system",
-		filepath.Join(systemd, "example/systemd/system"),
+	for _, executable := range []struct{ name, source string }{{"boot/vmlinux", kernel}, {"boot/initramfs", filepath.Join(guest, "initramfs")}, {"usr/local/libexec/sandbox-agent", filepath.Join(guest, "sandbox-agent")}} {
+		file, err := os.Open(executable.source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addFile(executable.name, file)
+	}
+	// The boot contract requires a regular systemd entry. Resolve a provider's
+	// guest-relative link safely and publish its bytes at the canonical path.
+	fd, err := unix.Openat2(
+		int(root.Fd()),
+		"usr/lib/systemd/systemd",
+		&unix.OpenHow{
+			Flags:   unix.O_RDONLY | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
+		},
 	)
-	link("bin/sh", filepath.Join(shell, "bin/sh"))
-	for _, tool := range []string{"cat", "stat", "id", "readlink", "sync", "dd"} {
-		link("bin/"+tool, filepath.Join(coreutils, "bin", tool))
+	if err != nil {
+		t.Fatal(err)
 	}
-	link("bin/getfattr", filepath.Join(attr, "bin/getfattr"))
-	link("bin/getfacl", filepath.Join(acl, "bin/getfacl"))
+	addFile("usr/lib/systemd/systemd", os.NewFile(uintptr(fd), "systemd"))
 	text("etc/os-release", "ID=sandbox-acceptance\nNAME=Sandbox\n", 0o644)
 	text(
 		"etc/passwd",
@@ -652,6 +673,98 @@ func kvmRuntimeLayer(
 			Size:      size,
 		},
 		diff: d,
+	}
+}
+
+// This exercises the userspace handoff through actual OCI materialization,
+// without booting a VM or consulting a package database.
+func TestAcceptanceRootfsOCI(t *testing.T) {
+	requireEROFS(t)
+	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+		t.Run(materialization, func(t *testing.T) {
+			if materialization == MergedOCIEROFSLayout {
+				requireMergedOCI(t)
+			}
+			rootfs, guest, layout := t.TempDir(), t.TempDir(), t.TempDir()
+			payload := "self-contained-runtime"
+			target := "packages/runtime/executable"
+			if err := os.MkdirAll(
+				filepath.Join(rootfs, "packages/runtime"),
+				0o755,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(
+				filepath.Join(rootfs, target),
+				[]byte(payload),
+				0o755,
+			); err != nil {
+				t.Fatal(err)
+			}
+			// Absolute links must resolve in the guest, not against the host.
+			for _, name := range []string{"usr/lib/systemd/systemd", "bin/sh", "bin/cat", "bin/stat", "bin/id", "bin/readlink", "bin/sync", "bin/dd", "bin/getfattr", "bin/getfacl"} {
+				file := filepath.Join(rootfs, name)
+				if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("/"+target, file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"kernel", "initramfs", "sandbox-agent"} {
+				if err := os.WriteFile(
+					filepath.Join(guest, name),
+					[]byte("fixture-"+name),
+					0o755,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			layer := kvmRuntimeLayer(
+				t,
+				layout,
+				filepath.Join(guest, "kernel"),
+				guest,
+				rootfs,
+			)
+			image := putOCIManifest(
+				t,
+				layout,
+				"provider-independent-runtime",
+				[]ociLayerFixture{layer},
+			)
+			e := openTest(t, t.TempDir(), newTestBackend(), true, nil)
+			t.Cleanup(func() { e.Close() })
+			m, err := e.ImportOCI(context.Background(), ImportOptions{
+				Layout: layout, Digest: image, Materialization: materialization,
+				MaxBytes: 4 << 20, MaxFiles: 1000,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tree string
+			if materialization == MergedOCIEROFSLayout {
+				tree = extractMergedManifest(t, e, m)
+			} else {
+				tree = extractManifest(t, e, m)
+			}
+			for name, expected := range map[string]string{
+				target:                            payload,
+				"usr/lib/systemd/systemd":         payload,
+				"boot/vmlinux":                    "fixture-kernel",
+				"boot/initramfs":                  "fixture-initramfs",
+				"usr/local/libexec/sandbox-agent": "fixture-sandbox-agent",
+			} {
+				data, err := os.ReadFile(filepath.Join(tree, name))
+				if err != nil || string(data) != expected {
+					t.Fatalf("materialized runtime %s: %q: %v", name, data, err)
+				}
+			}
+			link, err := os.Readlink(filepath.Join(tree, "bin/sh"))
+			if err != nil || link != "/"+target {
+				t.Fatalf("guest absolute symlink changed: %q: %v", link, err)
+			}
+		})
 	}
 }
 

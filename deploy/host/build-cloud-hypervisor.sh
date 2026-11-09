@@ -6,7 +6,8 @@ set -euo pipefail
 : "${2:?usage: build-cloud-hypervisor.sh EMPTY_BUILD_DIR INSTALL_DIR}"
 build_dir=$1
 install_dir=$2
-revision=a02b114bd42c65b73033231a27bd23f3c487fc4c
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+revision=$(<"$script_dir/cloud-hypervisor-revision")
 if [[ -e "$build_dir" ]]; then
     printf '%s\n' 'Build directory must not exist.' >&2
     exit 1

@@ -24,7 +24,7 @@
 | [013](013-template-build-quota.md) | 接入构建、模板快照与预热存储计费 | 发现 8／池治理 | P1 | L | HIGH | 012 | DONE（精确1414双SOURCE及完整production通过，清理释放；该项收口完成） |
 | [014](014-sdk-call-cancellation.md) | 排队中的 SDK Call 可取消 | 发现 9 | P2 | S | LOW | 无 | DONE（隔离分支） |
 | [015](015-schily-xattr-names.md) | 保留 SCHILY xattr 的字面名称 | 发现 10 | P2 | S | LOW | 无 | DONE（隔离分支） |
-| [016](016-native-image-ci.md) | 强制原生 OCI/EROFS CI 与统一 lint 工具链 | 发现 11 | P2 | M | LOW | 无 | PAUSED（用户收口；原CI/root/Nix gate仍BLOCKED） |
+| [016](016-native-image-ci.md) | 强制原生 OCI/EROFS CI 与统一 lint 工具链 | 发现 11 | P2 | M | LOW | 无 | PAUSED（通用合同已去除提供者绑定，尚未重实现；原候选CI/root门禁仍BLOCKED） |
 | [017](017-bounded-resource-recovery.md) | 持久待核对集合与有界恢复扫描 | 发现 12 | P2 | L | HIGH | 013 | PAUSED（最终组合仅限12项已完成成果，不续实现） |
 | [018](018-tree-push-cleanup-outcomes.md) | 区分 tree push 已提交与清理未完成 | 发现 13 | P2 | M | MED | 019 | DONE（隔离分支） |
 | [019](019-tree-pull-identity-investigation.md) | 双 UID 验证 tree pull，并保持授权 FD | 调查项，MED 置信度 | P1 调查 | M | LOW | 无 | DONE（调查限定） |
@@ -122,7 +122,7 @@
 - start/restore 的 ExpectedInstance 与自身新实例持久化之间的恢复冲突。
 - 首次模板提交与异步发布之间的跨租户归属竞争。
 - template build、golden snapshot 和 warm pool 尚未进入完整租户配额。
-- CI 缺少强制原生 OCI/EROFS 测试；lint 与 Nix devShell/CI 的工具范围未对齐。
+- CI 缺少强制原生 OCI/EROFS 测试；lint 与开发/CI 环境应遵守同一工具合同，环境装配不属于通用验收逻辑。
 - guest tree pull 的特权重开临时路径、cwd 与降权顺序仍需独立双 UID 验证；不将未完成复现当作已确认漏洞。
 - 供应延迟、池状态指标与只读恢复诊断属于方向选项，另行选择。
 
@@ -136,7 +136,7 @@
 
 - 不输出任何真实令牌、秘密、`.env` 值；测试使用生成的无实际用途数据，不复用运行状态。
 - 不操作 `.local-run/`、现有 daemon、未知归属文件或真实旧数据库。
-- 不安装依赖、不修改宿主 NixOS 配置，不因为本地缺少前提而降低验证标准。
+- 不安装依赖、不修改宿主配置，不因为本地缺少前提而降低验证标准；命令的工具前提见 [README](../README.md#build-and-local-verification)，不把某轮执行所用的环境准备方式变成项目依赖。
 - 不为未发布内部 helper/步骤名保留多余兼容层；已存在状态无法安全重放时要明确拒绝并保留证据。
 - 测试应覆盖实际 Service/HTTP/SQLite、跨 UID 文件系统或 Engine 生命周期行为，不增加独立函数的实现镜像式单测。
 - 不因计划存在就提交、推送、开 PR 或启动执行代理；执行授权与计划交付分开。

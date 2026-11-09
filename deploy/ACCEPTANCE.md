@@ -2,7 +2,7 @@
 
 The single-host implementation has passed real production-daemon lifecycle, launcher/adoption, golden/warm provisioning, guest/TAP TCP, standalone VMM/guest and kernel-isolation acceptance, alongside unit/race tests, Rust transport integration and actual daemon/CLI smoke. Production acceptance used fresh isolated resources and the unchanged runtime limits. This record identifies the materials, evidence and deployment-specific boundaries; the design documents' latency figures remain targets.
 
-## Current HEAD revalidation — 2026-11-08
+## Historical HEAD revalidation — 2026-11-08
 
 Commit `b4f2b2f750d63a5c36e49f13d58ad91d926b9a24` passed fresh standalone KVM and production acceptance in the root checkout. Both production daemons and the tagged acceptance binaries were compiled from this commit. Guest sources, acceptance scripts and Nix definitions are unchanged from `47f5ce71`; the existing matching guest, pinned kernel/VMM and bootable OCI were reused after SHA256 verification, including all six reachable OCI descriptors. Source HEAD/status and kernel/VMM/guest hashes remained unchanged through execution.
 
@@ -18,23 +18,23 @@ Fresh evidence: [KVM log](../build/head-vm-pu14c8xn/kvm.log), [production log](.
 
 ## Reproduce
 
-On an x86_64 Linux host with Nix, working user namespaces and user-authorized KVM/TUN:
+On an x86_64 Linux host with working user namespaces and user-authorized KVM/TUN, supply the tools and artifacts described in the [integration test inputs](../scripts/README.md#vm-test-inputs). The commands below describe the current entrypoints; the recorded results remain historical and do not validate subsequent harness changes.
 
 ```sh
-bash scripts/build-acceptance-materials.sh
-guest_package=$(nix build .#guest-static --no-link --print-out-paths)
-make guest GUEST_ARTIFACT_DIR="$guest_package/bin"
-make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/the/printed/materials-directory \
+bash scripts/prepare-acceptance-materials.sh /absolute/path/to/materials
+make guest
+make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/materials \
+  KVM_ROOTFS_DIR=/absolute/path/to/guest-userspace-rootfs \
   KVM_ARTIFACTS_DIR=/dev/shm/sandbox-kvm-acceptance
 make kernel-isolation-e2e
 SANDBOX_PRODUCTION_IO_MAX="$ENGINE_IO_MAX" make production-e2e \
-  KVM_MATERIALS_DIR=/absolute/path/to/the/printed/materials-directory \
+  KVM_MATERIALS_DIR=/absolute/path/to/materials \
   PRODUCTION_OCI_LAYOUT=/absolute/path/to/a/bootable-oci-layout
 ```
 
 Set `ENGINE_IO_MAX` to the verified device budget described in [host deployment](host/README.md#durable-storage-and-resource-limits). The production runner needs subordinate UID/GID mappings and usable `/dev/fuse`. It builds and starts both real daemons in fresh namespaces under its own delegated transient user service. Its private bindfs view serves byte/inode-bounded tmpfs state while charging underlying writes to the owned storage service; VMM limits stay RAM plus 128 MiB. Direct tmpfs capture is unsuitable here: a 512 MiB diagnostic guest reached its exact 640 MiB limit, recorded `oom=1`, `oom_kill=1` and retained about 499 MiB shmem after death. The bindfs primitive proves matching stat/maps identity, private COW, hardlinks and real dropped-UID permissions. Production block-backed deployments must validate their selected filesystem, shape and storage budget separately.
 
-The materials builder needs the pinned CH Git objects under `references/cocoonstack/cloud-hypervisor`. Kernel-isolation acceptance also needs native ip/nft/unshare tools and a systemd user manager that delegates cpu, memory, io and pids. Missing prerequisites fail explicitly. The kernel runner creates a new transient user service and private namespaces, modifies only the resources it owns, then cleans them. Keep `KERNEL_ARTIFACTS_DIR` on block-backed storage: its I/O probe deliberately fails when no real backing device accounts for the writes.
+The materials preparation step verifies caller-supplied artifacts without invoking an environment provider. Kernel-isolation acceptance also needs native ip/nft/unshare tools and a systemd user manager that delegates cpu, memory, io and pids. Missing prerequisites fail explicitly. The kernel runner creates a new transient user service and private namespaces, modifies only the resources it owns, then cleans them. Keep `KERNEL_ARTIFACTS_DIR` on block-backed storage: its I/O probe deliberately fails when no real backing device accounts for the writes.
 
 Use artifact storage with consistent `stat` and `/proc/PID/maps` device identity. Tmpfs passed; the development Btrfs subvolume is rejected by the retained-memory proof. The fixture reserves about 9 GiB per offline image import, plus space for OCI input and retained captures. Repeated runs retain their evidence: archive stopped runs before tmpfs free space becomes insufficient. This reservation is admission accounting rather than measured physical consumption.
 

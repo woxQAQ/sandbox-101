@@ -35,15 +35,18 @@ func requireMergedOCI(t *testing.T) {
 			binary, x = filepath.EvalSymlinks(binary)
 		}
 		if x == nil {
-			args := imageToolSandbox(
+			var args []string
+			args, err = imageToolSandbox(
 				t.TempDir(),
 				[]imageMount{{binary, "/tools/umoci"}},
 				true,
 			)
-			err = runMappedImageTool(
-				context.Background(),
-				append(args, "--", "/tools/umoci", "--version"),
-			)
+			if err == nil {
+				err = runMappedImageTool(
+					context.Background(),
+					append(args, "--", "/tools/umoci", "--version"),
+				)
+			}
 		} else {
 			err = x
 		}
@@ -128,7 +131,10 @@ func extractMergedManifest(t *testing.T, e *Engine, m ImageManifest) string {
 		}
 	}
 	fsckArgs = append(fsckArgs, bindings[0].GuestPath)
-	args := imageToolSandbox(out, reads, true)
+	args, err := imageToolSandbox(out, reads, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	args = append(args, "--", "/tools/sh", "-euc", `/tools/fsck "$@"
 while read -r inner outer count; do printf '%s %s %s\n' "$inner" "$outer" "$count"; done < /proc/self/uid_map > /work/uid_map
 while read -r inner outer count; do printf '%s %s %s\n' "$inner" "$outer" "$count"; done < /proc/self/gid_map > /work/gid_map`, "extractor")
@@ -183,6 +189,59 @@ func mappedHostID(t *testing.T, mapping string, id uint32) uint32 {
 	}
 	t.Fatalf("ID %d absent from mapping %s", id, data)
 	return 0
+}
+
+func TestActualOCIRejectsInvalidToolRoots(t *testing.T) {
+	requireMergedOCI(t)
+	layout := t.TempDir()
+	layer := putOCILayer(t, layout, bootLayerEntries(), false)
+	image := putOCIManifest(
+		t,
+		layout,
+		"invalid-tool-environment",
+		[]ociLayerFixture{layer},
+	)
+	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+		t.Run(materialization, func(t *testing.T) {
+			for _, roots := range []string{"relative/path", "/", "/proc", "/tmp/alternate-tools", "/missing-acceptance-tool-root"} {
+				t.Run(roots, func(t *testing.T) {
+					t.Setenv("SANDBOX_IMAGE_TOOL_ROOTS", roots)
+					e := openTest(t, t.TempDir(), newTestBackend(), true, nil)
+					t.Cleanup(func() { e.Close() })
+					_, err := e.ImportOCI(context.Background(), ImportOptions{
+						Layout:          layout,
+						Digest:          image,
+						Materialization: materialization,
+						MaxBytes:        4 << 20,
+						MaxFiles:        1000,
+					})
+					if err == nil {
+						t.Fatal(
+							"OCI import accepted invalid tool dependency roots",
+						)
+					}
+					if !strings.Contains(err.Error(), "tool root") &&
+						!strings.Contains(
+							err.Error(),
+							"SANDBOX_IMAGE_TOOL_ROOTS",
+						) {
+						t.Fatalf("unexpected OCI import failure: %v", err)
+					}
+					published := filepath.Join(
+						e.opts.StateDir,
+						"images",
+						image[7:],
+					)
+					if _, err := os.Stat(published); !os.IsNotExist(err) {
+						t.Fatalf(
+							"invalid tool environment published an image: %v",
+							err,
+						)
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestActualMergedOCIHardlinksAndMetadata(t *testing.T) {

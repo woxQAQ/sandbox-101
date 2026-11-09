@@ -73,8 +73,8 @@ func supportedLayerMedia(media string) bool {
 type imageMount struct{ host, guest string }
 
 // All archive interpretation and filesystem extraction happen in a private
-// mount/user/network namespace. Binding the Nix store permits pure Nix tool
-// closures as well as FHS installations. Image paths are never host cwd.
+// mount/user/network namespace. Only system tool roots and explicitly configured
+// runtime dependencies are exposed readonly. Image paths are never host cwd.
 func runImageTool(
 	ctx context.Context,
 	work string,
@@ -90,14 +90,21 @@ func runImageTool(
 	if err != nil {
 		return err
 	}
-	bargs := imageToolSandbox(work, reads, false)
+	bargs, err := imageToolSandbox(work, reads, false)
+	if err != nil {
+		return err
+	}
 	bargs = append(bargs, "--", binary)
 	bargs = append(bargs, args...)
 	_, err = command(ctx, "bwrap", bargs...)
 	return err
 }
 
-func imageToolSandbox(work string, reads []imageMount, mapped bool) []string {
+func imageToolSandbox(
+	work string,
+	reads []imageMount,
+	mapped bool,
+) ([]string, error) {
 	bargs := []string{"--die-with-parent", "--new-session"}
 	if mapped {
 		// Keep the enclosing subordinate-ID mapping and its namespace-only
@@ -132,15 +139,43 @@ func imageToolSandbox(work string, reads []imageMount, mapped bool) []string {
 		"--tmpfs",
 		"/tmp",
 	)
-	for _, dir := range []string{"/usr", "/bin", "/lib", "/lib64", "/nix/store"} {
+	for _, dir := range []string{"/usr", "/bin", "/lib", "/lib64"} {
 		if _, x := os.Stat(dir); x == nil {
 			bargs = append(bargs, "--ro-bind", dir, dir)
 		}
 	}
+	// Alternate toolchains declare their dependency roots, not their package
+	// manager. This is trusted process configuration, never an image input.
+	for _, dir := range filepath.SplitList(os.Getenv("SANDBOX_IMAGE_TOOL_ROOTS")) {
+		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == "/" {
+			return nil, fmt.Errorf(
+				"invalid SANDBOX_IMAGE_TOOL_ROOTS directory: %q",
+				dir,
+			)
+		}
+		for _, reserved := range []string{"/proc", "/dev", "/tmp", "/work", "/tools", "/input", "/merged"} {
+			if dir == reserved || strings.HasPrefix(dir, reserved+"/") ||
+				strings.HasPrefix(reserved, dir+"/") {
+				return nil, fmt.Errorf(
+					"tool root %q overlaps sandbox path %q",
+					dir,
+					reserved,
+				)
+			}
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			return nil, fmt.Errorf("image tool root %q: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("image tool root %q is not a directory", dir)
+		}
+		bargs = append(bargs, "--ro-bind", dir, dir)
+	}
 	for _, mount := range reads {
 		bargs = append(bargs, "--ro-bind", mount.host, mount.guest)
 	}
-	return append(bargs, "--bind", work, "/work", "--chdir", "/work")
+	return append(bargs, "--bind", work, "/work", "--chdir", "/work"), nil
 }
 
 type layerCache struct {
