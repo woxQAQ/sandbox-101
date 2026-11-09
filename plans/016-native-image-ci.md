@@ -109,7 +109,7 @@ git diff --check
 
 - `make test-native` 固定执行完整 Engine required race JSON suite，300s timeout，recipe 不回显。
 - `scripts/check-native-gate.nu` 提供完整门禁、`--preflight` 和 `--negative`。每次创建独占日志目录，分别保存 stdout/stderr/原始 exit code，记录源码 revision、入口 SHA256、身份、skip 和最终判定。缺少 HOME 的干净环境自行创建 mode 0700 私有 runtime HOME，不透传 runner 凭据。
-- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1、golangci-lint 2.14.0 源码/官方发布包，及固定版本 umoci 0.6.0；发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。lint 在原生验收之后使用普通用户运行，避免 `go fix` 先行改写待验源码；原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
+- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1 源码/发布包，及固定版本 umoci 0.6.0；官方 `golangci/golangci-lint-action@v9.3.0` 以 `install-only` 提供固定 golangci-lint 2.14.0，发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。`make lint` 仍为单一检查入口，在原生验收之后使用普通用户运行，避免 `go fix` 先行改写待验源码；原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
 
 ### 真实执行
 
@@ -153,6 +153,8 @@ git diff --check
 本轮获准推送专用分支后，首候选 `cb38d2e723386cc6db890fb3cb22528720490e6a` 已运行 [GitHub CI 42628888664](https://github.com/woxQAQ/sandbox-101/actions/runs/42628888664)。结果 FAIL：static-guest 成功；core 在入口测试发现缺少 `rg`；native-image 的原生工具装配成功，但 golangci-lint 2.11.3 报 gci 格式问题，root gate 步骤因此未运行。此 run 不算 root/native 通过。
 
 后续修复限于工具装配和检查顺序：core 显式提供 ripgrep/build-essential/binutils/file；lint 与开发已通过的 2.14.0 对齐并使用 SHA256 校验的官方包，不修改业务源码或 formatter 规则；`make lint` 移到原生验收之后，使原生证据绑定未被 `go fix` 改写的提交。修复候选仍待真实 CI 验收。
+
+按用户复核意见，进一步以官方 `golangci/golangci-lint-action@v9.3.0` 的 `install-only: true` 替代手写 lint 下载/安装。固定 `version: v2.14.0`，安装路径显式加入受控 PATH；保留后续同一个 `make lint`，不重复维护 package patterns 或改变检查语义。action 自身缓存关闭，项目 Go cache 仍由关联 workflow/module sums/Cargo.lock 的 key 管理。
 
 ## 历史实施与复核结果（原提供者绑定方案）
 

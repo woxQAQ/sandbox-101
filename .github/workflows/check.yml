@@ -37,6 +37,12 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
+      - name: Install lint toolchain
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.14.0
+          install-only: true
+          skip-cache: true
       - uses: actions/cache@v4
         with:
           path: |
@@ -97,12 +103,8 @@ jobs:
             cd umoci-0.6.0
             GOWORK=off go build -mod=mod -o "$prefix/bin/umoci" ./cmd/umoci
           )
-          download https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-amd64.tar.gz \
-            lint.tar.gz ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
-          tar -xf lint.tar.gz
-          install -m0755 golangci-lint-2.14.0-linux-amd64/golangci-lint "$prefix/bin/golangci-lint"
           # All privileged commands use this closed PATH, not the runner PATH.
-          echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v go)"):/usr/bin:/bin" >> "$GITHUB_ENV"
+          echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v golangci-lint)"):$(dirname "$(command -v go)"):/usr/bin:/bin" >> "$GITHUB_ENV"
       - name: Verify native namespaces and mapping
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu --preflight
       - name: Verify missing-bwrap failure
