@@ -10,6 +10,7 @@
         let pkgs = import nixpkgs { inherit system; };
         in { default = pkgs.mkShell {
           packages = with pkgs; [ go rustc cargo rustfmt clippy protobuf gnumake ripgrep
+            golangci-lint nushell util-linux coreutils
             erofs-utils e2fsprogs umoci skopeo bubblewrap iproute2 nftables cpio binutils ];
         }; });
       packages = eachSystem (system:
