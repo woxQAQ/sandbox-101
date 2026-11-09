@@ -22,6 +22,10 @@ make smoke
 
 The repository root is a Go workspace, not a module. `make lint` checks all four modules in `go.work` using explicit package patterns; `make lint-fix` also applies automatic fixes. Running `golangci-lint run ./...` or `go fix ./...` at the root fails because `./...` does not expand to the workspace modules.
 
+`make test-race` gives each complete module the standard Go 10-minute test
+budget; SQLite-heavy service suites can exceed three minutes under the race
+detector. The separate native gate retains its explicit 300s Engine budget.
+
 Binaries are written to `bin/{engined,sandboxd,sandboxctl}`. `make integration` launches the Rust agent fixture and exercises exec, file transfer, HTTP Upgrade, raw forwarding and Preview through the Go service and SDK. `make smoke` launches the actual daemons and CLI in temporary private state, verifies control-plane traffic and restart idempotency, and takes an offline metadata backup. It does not boot a VM.
 
 The quick tests above may skip native image tests when tools or namespaces are
@@ -30,13 +34,13 @@ and runs the complete Engine race suite with a 300s test timeout. Its stdout is
 only Go test JSON. To also require actual pass events for shared/merged
 materialization and native GC, and reject unexpected native skips:
 
-```nu
-nu scripts/check-native-gate.nu --negative
-nu scripts/check-native-gate.nu
+```sh
+python3 scripts/check-native-gate.py --negative
+python3 scripts/check-native-gate.py
 ```
 
 Prepare matching mkfs/fsck.erofs >=1.9.4 and <2, dump.erofs, umoci 0.6.0,
-bubblewrap, util-linux unshare, coreutils and Nushell on a controlled PATH;
+bubblewrap, util-linux unshare, coreutils and Python >=3.11 on a controlled PATH;
 Go/race also needs a C compiler. The gate does not install/download tools or
 invoke an environment provider. `--negative` creates a private PATH without
 bwrap and succeeds only after observing the selected required test fail for

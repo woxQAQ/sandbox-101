@@ -31,7 +31,7 @@ test-native:
 	@SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=300s
 
 test-race:
-	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=180s; done
+	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module test -race ./... -count=1 -timeout=10m; done
 
 check:
 	@set -e; for module in $(GO_MODULES); do GOWORK=off go -C $$module vet ./...; done

@@ -36,13 +36,13 @@ t.Skipf("actual EROFS tool test unavailable: %v", err)
 
 ## Scope
 
-允许：`.github/workflows/check.yml`、`Makefile`、`README.md`、`docs/image-materialization.md`；新增 `scripts/check-native-gate.nu`（验证命令包装，不生成源代码），索引状态。专用环境提供者的装配代码可同步工具合同，但不成为通用 gate 的依赖。
+允许：`.github/workflows/check.yml`、`Makefile`、`README.md`、`docs/image-materialization.md`；新增 `scripts/check-native-gate.py`（验证命令包装，不生成源代码）和 `scripts/test_native_gate.py`（CLI 行为回归），索引状态。本轮按用户要求移除先前的 Nushell 包装及 CI 依赖。专用环境提供者的装配代码可同步工具合同，但不成为通用 gate 的依赖。
 
 禁止：修改 engine 业务/测试语义、降低 required 环境变量、升级依赖锁、修改当前宿主配置、放宽恢复/COW。CI 所需安装只能写在工作流的环境装配步骤里并在其一次性 runner 执行，不在用户机器上执行；gate 本身不安装、下载或调用环境提供者。
 
 ## 目标入口
 
-新增 `make test-native`：单一明确命令执行 `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=300s`，Make recipe 前加 `@`，stdout 仅保留 Go JSON，不混入命令回显。不把 required 设置藏在调用者 shell 状态。300s 为完整 Engine race 留出已观察到的运行时间，不减少用例或改变 PASS/SKIP 判定。所有环境装配入口提供相同的 golangci-lint、nushell、util-linux、coreutils 和原生镜像工具合同。
+新增 `make test-native`：单一明确命令执行 `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -race ./... -count=1 -timeout=300s`，Make recipe 前加 `@`，stdout 仅保留 Go JSON，不混入命令回显。不把 required 设置藏在调用者 shell 状态。300s 为完整 Engine race 留出已观察到的运行时间，不减少用例或改变 PASS/SKIP 判定。所有环境装配入口提供相同的 golangci-lint、Python >=3.11、util-linux、coreutils 和原生镜像工具合同；gate 仅用 Python 标准库，不要求 Nushell。
 
 native-image job 固定为一次性的 GitHub Ubuntu 24.04 runner，先在独立装配步骤准备工具，仅 native preflight/test 使用 sudo 切换为 root，再由现有代码在新 namespace 内运行原生工具；这不授权当前用户宿主执行 sudo。只显式传入受控 PATH、必要的 SANDBOX_IMAGE_TOOL_ROOTS 与 GOTOOLCHAIN=local，不保留 token/全量环境，不全局关闭 AppArmor/namespace 防护。root merged 采用 `--map-users=0:0:4294967295 --map-groups=0:0:4294967295 --keep-caps`，不需要 subordinate 映射助手。唯一允许的 root 专属 skip 为 `TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner`，理由必须精确为 root can identity-map all owners；其他 required-native skip 均失败。保留 core/static-guest jobs，lint 仍以普通 runner 用户运行。专用提供者 CI 仅替换装配步骤，运行同一 gate。
 
@@ -53,28 +53,29 @@ native-image job 固定为一次性的 GitHub Ubuntu 24.04 runner，先在独立
 选定上述 root CI 模式，不在非 root/root 两条路径间运行时猜测。新增脚本 --preflight 模式（不跑完整 suite），要求 effective UID=0，记录并检查工具版本、真实可执行路径及能力；路径只用于来源证据，不按包管理器目录判定 PASS。再实际执行：
 
 - shared namespace：用已准备的 bwrap 创建全新 user/mount/PID/network namespace，只读绑定系统工具目录及显式配置的依赖根、私有 /proc 和 /dev、临时 /tmp，然后运行 `id -u`，预期 0；必须检查 namespace 与外层不同。
-- merged mapping：用 pinned unshare 的完整 root identity mapping 参数执行 `nu --no-config-file`，输出 real/effective UID/GID 和 `/proc/self/uid_map`、gid_map，映射起点均 0、长度 4294967295；随后用 `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -run '^TestActualMergedOCIExplicitSelectionAndVerification$' -count=1 -timeout=60s .` 实际走现有 production mapped sandbox/helper，不增加仅版本检查的假 preflight，也不修改测试源码。
+- merged mapping：用 pinned unshare 的完整 root identity mapping 参数执行只依赖 POSIX sh、id、readlink 的固定 probe，输出 real/effective UID/GID 和 `/proc/self/uid_map`、gid_map，映射起点均 0、长度 4294967295；随后用 `SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test -json -run '^TestActualMergedOCIExplicitSelectionAndVerification$' -count=1 -timeout=60s .` 实际走现有 production mapped sandbox/helper，不增加仅版本检查的假 preflight，也不修改测试源码。
 - 完整原生共享/merged 场景仍由 required tests 证明；preflight 不替代它们。
 
 **Verify**：在已经具备上述环境和 root 身份的一次性 CI runner 上执行；身份切换由 CI 步骤负责，不属于通用命令：
 
-```nu
-nu scripts/check-native-gate.nu --preflight
+```sh
+python3 scripts/check-native-gate.py --preflight
 ```
 
 这是本计划新增入口，预期版本、身份、实际 namespace 和 mapping 检查均成功。当前用户机器没有明确的隔离 root 执行前提时记录 BLOCKED，不照抄 sudo 到本机。runner 安全限制不满足则失败并报告，不改为 Skip。
 
 ### 2. 建立强制入口及失败自检
 
-新增 Make target 和 `scripts/check-native-gate.nu`：脚本只在新建、gitignored 的 build/native-gate 目录存日志，用 Nushell complete 分别保存 test-native 的纯 JSON stdout、stderr 与原始 exit_code；必须同时满足子命令 exit=0 和四个指定测试 pass。分析 Go test JSON，要求 `TestActualLayeredEROFSImportAndExtraction`、`TestActualSharedOCIHardlinksAndMetadata`、`TestActualMergedOCIHardlinksAndMetadata`、`TestGCActualLayerCacheAndCompletedImport` 具有 pass 事件，不能只有包 pass。required-native 的 skip 除上述精确 root 例外全部失败；KVM/capture 等非本 job 范围的其他 test skip 单列记录，不误算原生门禁。
+新增 Make target 和 `scripts/check-native-gate.py`：脚本只在新建、gitignored 的 build/native-gate 目录存日志，用 Python subprocess 分别保存 test-native 的纯 JSON stdout、stderr 原始字节与原始 exit code；必须同时满足子命令 exit=0 和四个指定测试 pass。分析 Go test JSON，要求 `TestActualLayeredEROFSImportAndExtraction`、`TestActualSharedOCIHardlinksAndMetadata`、`TestActualMergedOCIHardlinksAndMetadata`、`TestGCActualLayerCacheAndCompletedImport` 具有 pass 事件，不能只有包 pass。required-native 的 skip 除上述精确 root 例外全部失败；KVM/capture 等非本 job 范围的其他 test skip 单列记录，不误算原生门禁。
 
 添加负向自检模式：在该临时目录创建仅对本命令有效的工具 PATH 视图，保留必需编译器/基础工具，唯独移除 bwrap；以 -json、required 环境变量执行单个 TestActualLayeredEROFSImportAndExtraction。必须保存实际非零 exit_code，且 JSON/output 包含精确 `required OCI tool missing: bwrap`；编译失败或其他工具缺失的非零不能算正确负向。不要卸载机器工具或修改原测试。
 
 **Verify**（下列为本计划新增入口）：
 
-```nu
-nu scripts/check-native-gate.nu --negative
-nu scripts/check-native-gate.nu
+```sh
+python3 scripts/check-native-gate.py --negative
+python3 scripts/check-native-gate.py
+python3 -I scripts/test_native_gate.py
 ```
 
 负向脚本自身 exit 0 表示正确观察到子命令失败；正向脚本只在指定原生测试实际 pass 时 exit 0。先检查脚本实现/Make目标存在，不把未创建命令当历史基线。
@@ -85,9 +86,9 @@ workflow 在单独步骤装配满足版本/能力约束的工具，再执行上�
 
 **Verify**：
 
-```nu
+```sh
 make lint
-nu scripts/check-native-gate.nu
+python3 scripts/check-native-gate.py
 git diff --check
 ```
 
@@ -108,10 +109,10 @@ git diff --check
 实现基准为 `dacf00e6645153e2d43bd356da509758ea5602f8`；本轮获准将候选提交并推送到 `origin/ci/native-image-016` 运行 CI，不合入 `main`/`dev`。最终范围限于当前 Scope 和计划/索引状态，未更改 flake.nix/flake.lock、engine 源码或测试语义。后续复核使用项目已有 `nix develop` 临时工具环境，未修改系统/用户 profile、执行 sudo 或修改宿主 namespace/AppArmor 设置。
 
 - `make test-native` 固定执行完整 Engine required race JSON suite，300s timeout，recipe 不回显。
-- `scripts/check-native-gate.nu` 提供完整门禁、`--preflight` 和 `--negative`。每次创建独占日志目录，分别保存 stdout/stderr/原始 exit code，记录源码 revision、入口 SHA256、身份、skip 和最终判定。缺少 HOME 的干净环境自行创建 mode 0700 私有 runtime HOME，不透传 runner 凭据。
-- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1 源码/发布包，及固定版本 umoci 0.6.0；官方 `golangci/golangci-lint-action@v9.3.0` 以 `install-only` 提供固定 golangci-lint 2.14.0，发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。`make lint` 仍为单一检查入口，在原生验收之后使用普通用户运行，避免 `go fix` 先行改写待验源码；原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
+- `scripts/check-native-gate.py` 提供完整门禁、`--preflight` 和 `--negative`。每次创建独占日志目录，分别保存 stdout/stderr/原始 exit code，记录源码 revision、入口 SHA256、身份、skip 和最终判定。缺少 HOME 的干净环境自行创建 mode 0700 私有 runtime HOME，不透传 runner 凭据；真实 effective UID 使用 `os.geteuid()`，不从可替换的 PATH 工具输出推断。
+- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3 源码，及固定版本 umoci 0.6.0；官方 `golangci/golangci-lint-action@v9.3.0` 以 `install-only` 提供固定 golangci-lint 2.14.0，发行版提供 Python/bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。`make lint` 仍为单一检查入口，在原生验收之后使用普通用户运行，避免 `go fix` 先行改写待验源码；原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
 
-### 真实执行
+### 前一 Nushell 候选的真实执行记录
 
 本机为非 root UID 1000。首轮只使用裸 shell：Go 1.27.3、Nushell 0.116.1、golangci-lint 2.14.0，其 PATH 无 bwrap、mkfs/fsck/dump.erofs 和 umoci。这不是项目缺少工具配置；首轮未进入已有 devShell 是验证遗漏，裸 shell 的失败不能代替开发环境验证。本机工具版本不代替 CI 选定工具链的运行证据。
 
@@ -155,6 +156,16 @@ git diff --check
 后续修复限于工具装配和检查顺序：core 显式提供 ripgrep/build-essential/binutils/file；lint 与开发已通过的 2.14.0 对齐并使用 SHA256 校验的官方包，不修改业务源码或 formatter 规则；`make lint` 移到原生验收之后，使原生证据绑定未被 `go fix` 改写的提交。修复候选仍待真实 CI 验收。
 
 按用户复核意见，进一步以官方 `golangci/golangci-lint-action@v9.3.0` 的 `install-only: true` 替代手写 lint 下载/安装。固定 `version: v2.14.0`，安装路径显式加入受控 PATH；保留后续同一个 `make lint`，不重复维护 package patterns 或改变检查语义。action 自身缓存关闭，项目 Go cache 仍由关联 workflow/module sums/Cargo.lock 的 key 管理。
+
+### Python 入口重整与当前候选验证
+
+按用户要求，不再安装或调用 Nushell。删除 `scripts/check-native-gate.nu`，以 Python 标准库实现 `scripts/check-native-gate.py`，保持同一 Make target、原始输出/退出码、四指定 pass、精确 root skip、实际负向失败和 namespace/mapping 规则。只读 namespace 中的身份探针改用已准备的 POSIX sh/id/readlink，不引入额外解释器。新增 `scripts/test_native_gate.py`，在独占临时 workspace 和封闭 PATH 下验证 CLI，而非导入函数单测；该回归也接入 core。
+
+实际执行：`python3 -I scripts/test_native_gate.py` 的 7 个行为测试及其子场景通过；Python AST、workflow YAML 与 shell 语法检查通过。Python 初稿经 `nix develop --no-write-lock-file --command env TMPDIR=/tmp python3 -I scripts/check-native-gate.py` 实际 PASS，make exit 0，1761 行纯 JSON、四指定 pass、零 test skip、Engine 包 139.604s（`build/native-gate/run.5vfkmy7u/`）；`nix develop --no-write-lock-file --command python3 -I scripts/check-native-gate.py --negative` PASS，实际 Go exit 1、9 行 JSON、精确 missing-bwrap 诊断，视图清理（`build/native-gate/run.vkfmubcq/`）；本机非 root preflight 明确拒绝（`run._sdjc80g/`）。初稿之后只简化了尚待 CI 执行的 namespace 字符串检查；当前候选 root/CI 必须重新验收。
+
+前一官方 action/Nushell 候选 `c7261f285e2e571f08804412c1755d89843f4140` 的 [CI 42631164065](https://github.com/woxQAQ/sandbox-101/actions/runs/42631164065) 中，native root preflight、负向、完整 gate 与普通用户 lint 均成功，但 cache post-step 重新计算 `hashFiles` 时遍历 root 私有 runtime HOME 失败，native job 因而 FAIL；core 则在完整 Sandboxd race 包达到 180s 总预算时失败，static-guest 成功。修复为在特权步骤前冻结 cache key，post-step 只复用固定 key，不遍历私有 HOME，也不放宽其权限。
+
+对 core 超时另实际运行 `nix develop --no-write-lock-file --command env TMPDIR=/tmp make test-race`，试行 300s 包预算仍在 Sandboxd 后续的 `TestProductionOwnerBudgetFiniteHTTP`（该用例仅运行 4s）到达整包上限，结果 FAIL，未记作通过。两个上限下执行推进到不同测试，说明整包预算不足；当前统一将普通 `test-race` 的模块预算设为 Go 标准默认 10m，仍保留所有用例、每个用例自己的 deadline 和生产资源限制，`test-native` 的 300s 不变。10m 候选尚待 CI 实际结果，不用预算调整本身宣称通过。
 
 ## 历史实施与复核结果（原提供者绑定方案）
 

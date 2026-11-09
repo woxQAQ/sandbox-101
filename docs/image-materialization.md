@@ -142,7 +142,7 @@ the exact source diagnostic `root can identity-map all owners`. Other skips,
 including package skips for packages without tests and unrelated KVM/capture
 tests, are recorded separately in `skips.json` and do not supply native coverage.
 
-Prepare Go with race/C compiler support, make, git, Nushell, coreutils,
+Prepare Go with race/C compiler support, make, git, Python >=3.11, coreutils,
 golangci-lint, bubblewrap, util-linux unshare, matching mkfs/fsck.erofs
 **>=1.9.4 and <2**, dump.erofs and umoci **0.6.0**. Declare alternate readonly
 dependency roots using `SANDBOX_IMAGE_TOOL_ROOTS` as above. Executable realpaths
@@ -151,9 +151,9 @@ allowlist. A nonroot caller needs usable namespaces and subordinate UID/GID
 mappings with working helpers for merged imports; root needs a new user
 namespace with full `0:0:4294967295` UID and GID identity maps.
 
-```nu
-nu scripts/check-native-gate.nu --negative
-nu scripts/check-native-gate.nu
+```sh
+python3 scripts/check-native-gate.py --negative
+python3 scripts/check-native-gate.py
 ```
 
 The complete Engine suite also creates Unix sockets. If an inherited `TMPDIR`
@@ -161,8 +161,8 @@ has a long prefix, the generated socket path can exceed Linux's Unix-domain
 socket path limit even when every native image test passes. Use a short
 temporary root for that invocation, without changing the tests:
 
-```nu
-with-env {TMPDIR: "/tmp"} { nu scripts/check-native-gate.nu }
+```sh
+env TMPDIR=/tmp python3 scripts/check-native-gate.py
 ```
 
 `--negative` retains the normal compiler/base-tool PATH projection except
@@ -173,8 +173,8 @@ private to that command and removed on normal success or failure.
 
 On a **prepared, disposable root CI runner**, also run:
 
-```nu
-nu scripts/check-native-gate.nu --preflight
+```sh
+python3 scripts/check-native-gate.py --preflight
 ```
 
 Preflight checks versions and actual executable paths, proves bwrap's new
@@ -187,8 +187,10 @@ mapped helper. Full shared/merged coverage still comes from the complete gate.
 Preflight never switches identity or relaxes host namespace/AppArmor policy.
 
 The GitHub `native-image` job uses Ubuntu 24.04, source-pinned erofs-utils
-1.9.4 and unshare 2.41.3, umoci 0.6.0, Nushell 0.116.1, golangci-lint 2.14.0,
-and distribution bubblewrap/coreutils. Separate preparation steps install tools;
+1.9.4 and unshare 2.41.3, umoci 0.6.0, golangci-lint 2.14.0,
+and distribution Python/bubblewrap/coreutils. The gate uses only Python's standard
+library and POSIX shell probes; Nushell is neither installed nor invoked.
+Separate preparation steps install tools;
 the official `golangci/golangci-lint-action@v9.3.0` supplies the fixed lint version
 using `install-only`, and the existing `make lint` remains the single lint entrypoint.
 Lint runs without sudo after native validation, so its `go fix` cannot rewrite the
@@ -198,6 +200,8 @@ provider may also forward necessary `SANDBOX_IMAGE_TOOL_ROOTS`). The gate
 creates private runtime HOME when none is supplied, rather than forwarding
 runner credentials. Cache keys include workflow/tool-source identity, Go
 module sums and Cargo.lock; restored caches never bypass the gate.
+The cache identity is computed before privileged tests and reused verbatim in
+the cache post step, so hashing never traverses root-owned private runtime HOME.
 
 Each invocation retains separate stdout/stderr/exit-code files, source
 revision, entrypoint hashes and its verdict in a fresh, gitignored
@@ -206,6 +210,11 @@ diagnostic files, not private runtime HOME, PATH views, databases, tokens or
 the full environment. This job proves native host materialization and GC,
 not guest RPC, KVM, kernel isolation or production acceptance. Committed
 workflow configuration is not evidence that GitHub has executed it.
+
+`python3 -I scripts/test_native_gate.py` exercises the public gate CLI in private
+workspaces with a closed fixture PATH, without Nushell or privileges. It checks
+raw logs/statuses, exact pass/skip/failure rules, negative PATH cleanup and a
+clean runtime HOME. It does not replace actual native or root acceptance.
 
 Actual shared tool tests import gzip/uncompressed OCI fixtures, read the final external-device filesystem with native fsck, inspect chunk layout and UID/GID using native dump, and verify file contents, reversed layer order, boot extraction, repeated layers and the 16-device boundary. Broader namespace regressions cover root ownership/mode/xattrs/nanosecond time, inherited directories, implicit parents, cross-layer and symlink inode identity, forward chains, old inode retention through duplicate replacement, overwritten pending links, ancestor replacement, root/nonroot opaque, whiteout/replacement in either order, setuid/setgid, native v2/v3 capabilities and named-user ACLs. Cache-only rebuild repeats forward-link content checks after deleting original tar blobs. Independent imports compare complete output hashes for determinism. A legacy-native fixture is built with the frozen old profile, verified and reimported from its existing catalog unchanged.
 
