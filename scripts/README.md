@@ -58,10 +58,10 @@ make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absol
 ## Host capabilities
 
 Native image tests need the tools and namespaces described in
-[image materialization](../engine/IMAGE-MATERIALIZATION.md#validation), plus
+[image materialization](../docs/image-materialization.md#validation), plus
 e2fsprogs for KVM tests. Use an administrator-controlled PATH. Alternate tool
 installations declare their readonly dependency roots using
-[`SANDBOX_IMAGE_TOOL_ROOTS`](../engine/IMAGE-MATERIALIZATION.md#host-tool-installation).
+[`SANDBOX_IMAGE_TOOL_ROOTS`](../docs/image-materialization.md#host-tool-installation).
 
 KVM tests need user-authorized `/dev/kvm`, usable namespaces/mappings and storage
 with matching `stat` and `/proc/PID/maps` device identity. Kernel/production tests
@@ -73,7 +73,7 @@ in host deployment. The production runner resolves PATH before masking `/run`
 and forwards the configured image-tool roots into its transient service.
 
 Missing prerequisites fail in required runs. Logs and hashes identify the source
-and inputs used for each result; [historical results](../deploy/ACCEPTANCE.md) do
+and inputs used for each result; [historical results](../docs/acceptance.md) do
 not validate later changes.
 
 ## Runner regressions without VMs

@@ -1,6 +1,6 @@
 # Host egress portals
 
-`github.com/woxQAQ/sandboxd/egress` implements [sandbox architecture](../../sandbox-architecture.md) section 3 and the host portion of P4/P5. It uses Go `net/http`, `github.com/elazarl/goproxy v1.9.2` for TLS interception, and `github.com/things-go/go-socks5 v0.1.4` for SOCKS5. The parent module owns these dependencies. No engine interfaces or host network devices are changed by this package.
+`github.com/woxQAQ/sandboxd/egress` implements [sandbox egress architecture](../../docs/sandbox-architecture.md#6-出网凭据与-preview) and the host portion of P4/P5. It uses Go `net/http`, `github.com/elazarl/goproxy v1.9.2` for TLS interception, and `github.com/things-go/go-socks5 v0.1.4` for SOCKS5. The parent module owns these dependencies. No engine interfaces or host network devices are changed by this package.
 
 ```go
 manager, err := egress.New(egress.Options{

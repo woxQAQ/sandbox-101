@@ -1,11 +1,13 @@
 # Plan 020：设计供应路径与维护延迟的可验证观测合同
 
+> 当前 PAUSED，最终源码来源映射未收尾；设计曾交付不表示生产 instrumentation 已上线。本 checkout 无 `plans/designs/020-*` 最终交付物。恢复工作时先核对 [当前架构](../docs/sandbox-architecture.md#2-模板供应与配额)，历史源码摘录和路径不直接作为 Scope。
+
 > 这是 direction 设计/验证计划，不直接向生产添加指标。完整完成交付物检查后更新索引 020；reviewer 管理时交付设计结果。Drift check：`git diff --stat b93fc24..HEAD -- sandboxd/http.go sandboxd/lifecycle.go sandboxd/reconcile.go sandboxd/types.go sandboxd/warm_fallback.go sandbox-architecture.md plans/designs/020-provisioning-observability.md plans/designs/020-metrics.json plans/designs/020-scenarios.json plans/designs/020-validate.nu`，并检查未提交差异。源码路径只读用于事实核验。
 
 ## 状态
 
 - Priority：P3；Effort：M（设计/spike）；Risk：LOW；Depends on：无。
-- Category：direction；Planned at：`b93fc24`，2026-11-06；Status：IN PROGRESS（设计已交付，第四轮表述修订及最终源码来源复核中）。
+- Category：direction；Planned at：`b93fc24`，2026-11-06；Status：PAUSED（历史设计已交付，第四轮表述修订及最终源码来源复核未收尾）。
 - 审计映射：方向选项 1。017 的维护预算落地时须更新测量点，但本设计不依赖其实现。
 
 ## 意图与边界
@@ -28,7 +30,7 @@ for _, b := range bs { counts[b.State]++ }
 ProvisionSource string `json:"provision_source,omitempty"`
 ```
 
-`lifecycle.go` claim 标记 warm/golden/cold，warm_fallback.go 允许 warm 失败降为 golden/cold；不能简单在最初选择池时计最终 warm 成功。reconcile.go 的 maintain 串行执行 reconcile、reap、pools。`sandbox-architecture.md` 1.1 的毫秒级数字是目标，README/ACCEPTANCE 明确不是现有测量。
+`lifecycle.go` claim 标记 warm/golden/cold，warm_fallback.go 允许 warm 失败降为 golden/cold；不能简单在最初选择池时计最终 warm 成功。reconcile.go 的 maintain 串行执行 reconcile、reap、pools。原架构稿的毫秒级数字是历史目标，已从 [当前架构](../docs/sandbox-architecture.md) 移除；实际性能结论仍须测量。
 
 root-only `/metrics` 不因观测扩展变成 tenant 数据接口。禁止 tenant/sandbox/template/snapshot/operation ID 或 host/path 成为指标标签，禁止环境值、凭据、请求体。观测必须有稳定内存上界，不能对所有历史操作逐项解码形成每次 scrape 新瓶颈。
 

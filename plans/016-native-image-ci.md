@@ -1,6 +1,6 @@
 # Plan 016：将原生 OCI/EROFS 验证与 lint 工具链纳入持续门禁
 
-> 本节描述当前待实施合同；下方历史复核仅绑定原隔离候选，不表示当前工作树已有 `test-native` 或 gate 脚本。工具前提见 [README](../README.md#build-and-local-verification) 和 [image materialization](../engine/IMAGE-MATERIALIZATION.md#validation)，环境准备不属于 gate。此计划不授权修改当前宿主配置、安装工具、推送 CI 或继续已暂停的实现。
+> 本节描述当前待实施合同；下方历史复核仅绑定原隔离候选，不表示当前工作树已有 `test-native` 或 gate 脚本。工具前提见 [README](../README.md#build-and-local-verification) 和 [image materialization](../docs/image-materialization.md#validation)，环境准备不属于 gate。此计划不授权修改当前宿主配置、安装工具、推送 CI 或继续已暂停的实现。
 
 ## 状态
 
@@ -30,13 +30,13 @@ if os.Getenv("SANDBOX_REQUIRE_EROFS_TESTS") == "1" { t.Fatal(err) }
 t.Skipf("actual EROFS tool test unavailable: %v", err)
 ```
 
-`Makefile` 已有 test/check/lint/integration。`engine/IMAGE-MATERIALIZATION.md` 要求匹配 mkfs/fsck >=1.9.4 且 <2、umoci=0.6.0，以及可用 user/mount namespace 和映射。两套格式均不可用时不能改用另一套通过。工具通过受控 PATH 和必要的只读依赖根提供，不检查它们来自哪个包管理器。
+`Makefile` 已有 test/check/lint/integration。[镜像契约](../docs/image-materialization.md#validation) 要求匹配 mkfs/fsck >=1.9.4 且 <2、umoci=0.6.0，以及可用 user/mount namespace 和映射。两套格式均不可用时不能改用另一套通过。工具通过受控 PATH 和必要的只读依赖根提供，不检查它们来自哪个包管理器。
 
 实际已确认：普通 make test/check/lint/integration 在审计机器通过；TestActual 全部因工具缺失 Skip。当前本机未准备完整原生前提，不能宣称已验证 CI 方案。
 
 ## Scope
 
-允许：`.github/workflows/check.yml`、`Makefile`、`README.md`、`engine/IMAGE-MATERIALIZATION.md`；新增 `scripts/check-native-gate.nu`（验证命令包装，不生成源代码），索引状态。专用环境提供者的装配代码可同步工具合同，但不成为通用 gate 的依赖。
+允许：`.github/workflows/check.yml`、`Makefile`、`README.md`、`docs/image-materialization.md`；新增 `scripts/check-native-gate.nu`（验证命令包装，不生成源代码），索引状态。专用环境提供者的装配代码可同步工具合同，但不成为通用 gate 的依赖。
 
 禁止：修改 engine 业务/测试语义、降低 required 环境变量、升级依赖锁、修改当前宿主配置、放宽恢复/COW。CI 所需安装只能写在工作流的环境装配步骤里并在其一次性 runner 执行，不在用户机器上执行；gate 本身不安装、下载或调用环境提供者。
 

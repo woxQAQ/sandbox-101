@@ -1,5 +1,7 @@
 # Plan 017：以持久待核对集合替代每轮全历史恢复扫描
 
+> 当前 PAUSED，尚未实施。以下步骤仅在明确恢复本计划后执行；013 已完成不自动解除暂停。历史文件名与摘录须先映射到当前职责重组后的源码，完成状态见 [计划索引](README.md)。
+
 > 按阶段验证；不得用删除幂等历史或忽略未知资源换取性能。完成更新索引 017；reviewer 维护时交付证据。先执行下列 drift check 并核查未提交差异，009/012/013 的 schema、owner、账本变动为已知依赖。
 
 ```nu
@@ -10,7 +12,7 @@ git diff --stat b93fc24..HEAD -- sandboxd/recovery.go sandboxd/reconcile.go sand
 
 - Priority：P2；Effort：L；Risk：HIGH。
 - Depends on：013（包含 007/009/012；在 schema 6 的完整资源责任模型上优化）。
-- Category：perf；Planned at：`b93fc24`，2026-11-06；Status：TODO。
+- Category：perf；Planned at：`b93fc24`，2026-11-06；Status：PAUSED（未实施，继续前须重核源码与范围）。
 - 审计映射：发现 12。原粗估 M/MED 调整为 L/HIGH，因为不能破坏终态操作仍有在途 engine 副作用的保护。
 
 ## 问题与目标

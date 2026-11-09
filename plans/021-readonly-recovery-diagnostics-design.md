@@ -1,11 +1,13 @@
 # Plan 021：设计双 daemon 的只读恢复诊断合同
 
+> 当前 PAUSED，最终来源映射未收尾；本 checkout 无 `plans/designs/021-*` 最终交付物。以下设计不代表新的诊断 API/CLI 已上线。恢复工作前按 [Engine 集成](../docs/engine-integration.md#backup-and-explicit-recovery) 和 [Sandbox 恢复模型](../docs/sandbox-architecture.md#4-恢复清理与数据面接纳) 重核实际读取边界。
+
 > 这是 direction 设计/验证计划，不实现自动恢复或生产 CLI。完成交付物验证后更新索引 021；reviewer 管理时交付设计结论。Drift check：`git diff --stat b93fc24..HEAD -- engine/admin.go engine/api/types.go engine/cmd/engined/main.go sandboxd/recovery.go sandboxd/types.go sandboxd/store.go sandboxd/backup.go sandboxd/cmd/sandboxctl/main.go plans/designs/021-recovery-diagnostics.md plans/designs/021-diagnostic-contract.json plans/designs/021-scenarios.json plans/designs/021-validate.nu`，再核对未提交差异。源码路径只读。
 
 ## 状态
 
 - Priority：P3；Effort：M（设计/spike）；Risk：LOW；Depends on：无。
-- Category：direction；Planned at：`b93fc24`，2026-11-06；Status：IN PROGRESS（设计已交付，第三轮读取能力/provenance修订及最终映射复核中）。
+- Category：direction；Planned at：`b93fc24`，2026-11-06；Status：PAUSED（历史设计已交付，第三轮读取能力/provenance修订及最终映射复核未收尾）。
 - 审计映射：方向选项 2。012/013/017 已落地时按实际账本/工作队列更新证据映射，设计本身不要求先实施这些计划。
 
 ## 意图与边界

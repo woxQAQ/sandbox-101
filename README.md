@@ -1,10 +1,12 @@
 # sandbox-101
 
-A single-host microVM engine and sandbox service implementing [the engine architecture](architecture.md) and [the sandbox architecture](sandbox-architecture.md).
+A single-host microVM engine and sandbox service implementing [the engine architecture](docs/architecture.md) and [the sandbox architecture](docs/sandbox-architecture.md).
+
+Start with the [documentation index](docs/README.md) for component contracts, deployment and acceptance. [Unfinished plans](plans/README.md) and [completed plans/evidence](.agents/archive/README.md) are maintained separately from current architecture.
 
 `engined` owns VMs, Cloud Hypervisor processes, namespaces, cgroups, images, disks and snapshots. `sandboxd` uses its Unix-socket API to provide templates, warm pools, tenant leases, hibernation, checkpoints, fork and raw guest connections. Each daemon owns an independent SQLite store and writer lock. A static Rust guest agent handles host administration, system readiness and unprivileged workload RPC on separate portals; a small Rust PID 1 mounts the EROFS/ext4/OverlayFS root and execs systemd.
 
-The production entrypoints use the real runtime. Unit tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM acceptance boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production acceptance runner exercises the privileged launcher, live adoption after daemon failure and the sandbox microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](deploy/ACCEPTANCE.md). The latency figures in the design documents are targets, not measured results.
+The production entrypoints use the real runtime. Unit tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM acceptance boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production acceptance runner exercises the privileged launcher, live adoption after daemon failure and the sandbox microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](docs/acceptance.md). Supply latency evidence before treating a design target as a measured result.
 
 ## Build and local verification
 
@@ -28,7 +30,7 @@ Image tests use native erofs-utils and umoci when available. To require the laye
 SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C engine test ./... -count=1
 ```
 
-See [image materialization](engine/IMAGE-MATERIALIZATION.md) for compatibility test requirements and the supported OCI contracts.
+See [image materialization](docs/image-materialization.md) for compatibility test requirements and the supported OCI contracts.
 
 ## HTTP and configuration
 
@@ -83,7 +85,7 @@ With usable user namespaces, TUN, native networking tools and a systemd user man
 make kernel-isolation-e2e
 ```
 
-This creates fresh private namespaces and a transient user service, verifies actual nft/NAT/TCP allow/deny/revocation/tamper behavior, tests a shared flow budget with concurrent TCP connections, and proves PID exhaustion, CPU throttling, memory OOM enforcement and actual block-I/O throttling. The I/O probe writes two bounded 4 MiB files with O_DIRECT and fdatasync, selects the backing device from io.stat, then verifies that a production-applied 1 MiB/s budget slows the second write. Only the newly owned resources are modified and cleaned. `KERNEL_ARTIFACTS_DIR` selects the evidence directory and must use block-backed storage for the I/O probe; a tmpfs path fails the accounting check. The [acceptance record](deploy/ACCEPTANCE.md) distinguishes these results from remaining production-host checks.
+This creates fresh private namespaces and a transient user service, verifies actual nft/NAT/TCP allow/deny/revocation/tamper behavior, tests a shared flow budget with concurrent TCP connections, and proves PID exhaustion, CPU throttling, memory OOM enforcement and actual block-I/O throttling. The I/O probe writes two bounded 4 MiB files with O_DIRECT and fdatasync, selects the backing device from io.stat, then verifies that a production-applied 1 MiB/s budget slows the second write. Only the newly owned resources are modified and cleaned. `KERNEL_ARTIFACTS_DIR` selects the evidence directory and must use block-backed storage for the I/O probe; a tmpfs path fails the accounting check. The [acceptance record](docs/acceptance.md) distinguishes these results from remaining production-host checks.
 
 For the production launcher and daemon lifecycle checks in fresh isolated resources, supply a bootable OCI layout and the verified block-device budget from [host deployment](deploy/host/README.md#durable-storage-and-resource-limits):
 
@@ -93,7 +95,7 @@ SANDBOX_PRODUCTION_IO_MAX="$ENGINE_IO_MAX" make production-e2e \
   PRODUCTION_OCI_LAYOUT=/absolute/path/to/a/bootable-oci-layout
 ```
 
-This runner needs subordinate UID/GID mappings, usable `/dev/fuse` and a systemd user manager with delegated controllers. It builds both actual daemons and uses the production launcher in fresh user/network/mount/PID namespaces. A private bindfs view serves bounded tmpfs state, so storage writes are charged to the owned FUSE service while VMMs retain their production limits. The exact guest shape and resource budgets are preserved with the artifacts. See the [acceptance record](deploy/ACCEPTANCE.md) for measured outcomes and retained evidence.
+This runner needs subordinate UID/GID mappings, usable `/dev/fuse` and a systemd user manager with delegated controllers. It builds both actual daemons and uses the production launcher in fresh user/network/mount/PID namespaces. A private bindfs view serves bounded tmpfs state, so storage writes are charged to the owned FUSE service while VMMs retain their production limits. The exact guest shape and resource budgets are preserved with the artifacts. See the [acceptance record](docs/acceptance.md) for measured outcomes and retained evidence.
 
 ## Deploy and use
 
@@ -109,6 +111,6 @@ Accepted operations are durable and use deterministic step keys. Reusing a key w
 
 Engine and sandboxd backups cover metadata and receipts/keys; they do not copy VM disks, image data or memory captures. Restoring a known older point fences startup until an operator reviews it against actual resources. Local audit chains and engine HEAD cannot detect coordinated rollback of all local history.
 
-Reference-aware engine GC reclaims proven orphan layer caches, completed import work and retired resource versions/backings, with durable inode deletion intents and bounded background passes. It retains published images, operation/idempotency records and uncertain resources; recovery evidence fences collection. See [the collection contract](engine/INTEGRATION.md#reference-aware-garbage-collection).
+Reference-aware engine GC reclaims proven orphan layer caches, completed import work and retired resource versions/backings, with durable inode deletion intents and bounded background passes. It retains published images, operation/idempotency records and uncertain resources; recovery evidence fences collection. See [the collection contract](docs/engine-integration.md#reference-aware-garbage-collection).
 
 Tree transfer preserves in-tree links, modes, nanosecond mtimes and supported binary user xattrs; imported ownership is normalized to the workload identity. Arbitrary owners, privileged xattrs/ACLs and sparse layout are outside that transfer contract. Recursive filesystem watch remains unsupported. Escaped workload process groups can require VM shutdown for final cleanup. Preview uses signed paths and does not provide per-sandbox browser origins or rewrite absolute asset URLs. Optional gossip placement and remote snapshot archives are not implemented. Production host acceptance remains separate from the standalone VMM/guest and kernel isolation checks.
