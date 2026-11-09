@@ -187,9 +187,10 @@ mapped helper. Full shared/merged coverage still comes from the complete gate.
 Preflight never switches identity or relaxes host namespace/AppArmor policy.
 
 The GitHub `native-image` job uses Ubuntu 24.04, source-pinned erofs-utils
-1.9.4 and unshare 2.41.3, umoci 0.6.0, Nushell 0.116.1, golangci-lint 2.11.3,
+1.9.4 and unshare 2.41.3, umoci 0.6.0, Nushell 0.116.1, golangci-lint 2.14.0,
 and distribution bubblewrap/coreutils. Only its separate preparation step
-installs tools. Lint runs without sudo; the native probes/tests receive only
+installs tools. Lint runs without sudo after native validation, so its `go fix`
+cannot rewrite the checkout before the native tests. The native probes/tests receive only
 the controlled PATH and `GOTOOLCHAIN=local` through `sudo env -i` (an alternate
 provider may also forward necessary `SANDBOX_IMAGE_TOOL_ROOTS`). The gate
 creates private runtime HOME when none is supplied, rather than forwarding

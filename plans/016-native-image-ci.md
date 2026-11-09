@@ -109,7 +109,7 @@ git diff --check
 
 - `make test-native` 固定执行完整 Engine required race JSON suite，300s timeout，recipe 不回显。
 - `scripts/check-native-gate.nu` 提供完整门禁、`--preflight` 和 `--negative`。每次创建独占日志目录，分别保存 stdout/stderr/原始 exit code，记录源码 revision、入口 SHA256、身份、skip 和最终判定。缺少 HOME 的干净环境自行创建 mode 0700 私有 runtime HOME，不透传 runner 凭据。
-- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1 源码/发布包，及固定版本 umoci 0.6.0、golangci-lint 2.11.3；发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。lint 使用普通用户，原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
+- CI 保留 core/static-guest，新增 Ubuntu 24.04 native-image job。装配使用校验 SHA256 的 erofs-utils 1.9.4、unshare 2.41.3、Nushell 0.116.1、golangci-lint 2.14.0 源码/官方发布包，及固定版本 umoci 0.6.0；发行版提供 bubblewrap/coreutils。umoci 因自身 `replace` 声明从校验过的 Go module 源码构建，不使用不支持该声明的 `go install …@version`。lint 在原生验收之后使用普通用户运行，避免 `go fix` 先行改写待验源码；原生 gate 使用最小 root 环境；artifact 只收诊断文件，不收 runtime HOME、工具视图或数据库。
 
 ### 真实执行
 
@@ -147,6 +147,12 @@ git diff --check
 使用 per-turn scratch 中的合成 make/go/id/bwrap/unshare 输出，实际调用完整脚本验证 27 个入口场景：四指定 pass 接受、package-only/缺 pass/非零退出/混合或非法 JSON 拒绝、额外 native skip 拒绝、无关 skip 记录、精确 root skip 例外与非 root/错误原因/无 source/多余后缀拒绝、负向编译错误/错误工具/零退出拒绝，以及版本不匹配、错误身份、短 mapping、未变化 namespace、production probe skip 拒绝。另验证无 HOME/LAST_EXIT_CODE 的干净环境与 mode 0700 runtime HOME，以及正常成功/失败后的工具视图清理。这些仅证明包装器判定，不证明 root 身份、namespace、native tools 或生产导入实际可用；合成日志标记为 synthetic，不挪作原生通过记录。
 
 最初一次完整 gate 冷编译被 terminal 的 120s 外层时限中止，未作为结果；随后以足够外层时限完成上述真实命令。项目 devShell 的原生 shared/merged/GC 完整正向、实际负向与 lint 已通过；仍未运行 root namespace/full identity mapping、CI 装配或分支 GitHub CI，无 run URL，整体仍 BLOCKED。KVM、kernel-isolation、Rust guest fixture、integration/smoke 及 production 不在本次新增门禁验收范围，未运行；完整 Engine suite 内的 Go guest 测试已随正向 gate 执行。
+
+### 分支 CI 验收
+
+本轮获准推送专用分支后，首候选 `cb38d2e723386cc6db890fb3cb22528720490e6a` 已运行 [GitHub CI 42628888664](https://github.com/woxQAQ/sandbox-101/actions/runs/42628888664)。结果 FAIL：static-guest 成功；core 在入口测试发现缺少 `rg`；native-image 的原生工具装配成功，但 golangci-lint 2.11.3 报 gci 格式问题，root gate 步骤因此未运行。此 run 不算 root/native 通过。
+
+后续修复限于工具装配和检查顺序：core 显式提供 ripgrep/build-essential/binutils/file；lint 与开发已通过的 2.14.0 对齐并使用 SHA256 校验的官方包，不修改业务源码或 formatter 规则；`make lint` 移到原生验收之后，使原生证据绑定未被 `go fix` 改写的提交。修复候选仍待真实 CI 验收。
 
 ## 历史实施与复核结果（原提供者绑定方案）
 

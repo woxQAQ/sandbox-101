@@ -45,8 +45,8 @@ stdout/stderr and original child exit codes are retained under fresh
 gitignored `build/native-gate/run.*` directories.
 
 The `native-image` CI job prepares these tools on a disposable Ubuntu 24.04
-runner, runs lint as the ordinary user, then runs `--preflight`, `--negative`
-and the full gate as root with a minimal environment. `--preflight` requires
+runner, runs `--preflight`, `--negative` and the full gate as root with a minimal
+environment, then runs lint as the ordinary user. `--preflight` requires
 effective UID 0, proves fresh namespaces and full identity mappings, and runs
 the actual mapped merged importer. It is not a request to run sudo on a
 developer host. Nonroot local imports need usable user/mount namespaces and

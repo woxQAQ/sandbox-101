@@ -20,7 +20,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: core-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
-      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler ripgrep build-essential binutils file
       - run: python3 -I scripts/test_acceptance_environment.py
       - run: GOWORK=off go -C engine test -tags=kvm ./... -run '^TestAcceptanceRootfsOCI$' -count=1
       - run: make test check test-race integration smoke
@@ -97,17 +97,22 @@ jobs:
             cd umoci-0.6.0
             GOWORK=off go build -mod=mod -o "$prefix/bin/umoci" ./cmd/umoci
           )
-          GOBIN="$prefix/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+          download https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-amd64.tar.gz \
+            lint.tar.gz ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
+          tar -xf lint.tar.gz
+          install -m0755 golangci-lint-2.14.0-linux-amd64/golangci-lint "$prefix/bin/golangci-lint"
           # All privileged commands use this closed PATH, not the runner PATH.
           echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v go)"):/usr/bin:/bin" >> "$GITHUB_ENV"
-      - name: Lint as the ordinary runner user
-        run: PATH="$NATIVE_PATH" GOTOOLCHAIN=local make lint
       - name: Verify native namespaces and mapping
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu --preflight
       - name: Verify missing-bwrap failure
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu --negative
       - name: Require actual native coverage
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local nu --no-config-file scripts/check-native-gate.nu
+      # make lint includes go fix. Run it last so native evidence binds the
+      # committed checkout, not a tree rewritten by the lint toolchain.
+      - name: Lint as the ordinary runner user
+        run: PATH="$NATIVE_PATH" GOTOOLCHAIN=local make lint
       - name: Expose only diagnostic log directories to artifact collection
         if: always()
         shell: bash
