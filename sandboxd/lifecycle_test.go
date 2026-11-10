@@ -3,8 +3,6 @@ package sandboxd
 import (
 	"context"
 	"testing"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
@@ -20,7 +18,7 @@ func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
 		"pause-fails",
 		Command{Action: "pause", SandboxID: id},
 	)
-	if !isCode(err, api.Exhausted) {
+	if !isCode(err, ErrExhausted) {
 		t.Fatalf("expected exhaustion: %v", err)
 	}
 	b, _ := s.Get(context.Background(), p, id)

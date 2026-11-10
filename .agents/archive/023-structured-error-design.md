@@ -1,6 +1,6 @@
 # Plan 023：建立面向动作的机器错误分类与零成本人类上下文追踪
 
-> 当前 TODO，尚未实施。以下步骤仅在明确授权执行本计划后启动；存在计划不等于授权修改源码或运行重型验收。先执行下列 drift check 并核查未提交差异。
+> 已完成并归档。实施包含线程补充批准的 sandboxd 独立错误契约与边界翻译；不包含 Shape 等其他公开 DTO 的解耦。实际命令、曾失败的验收及未运行边界见[本轮证据](evidence/023-structured-errors.md)。本记录不授权提交、推送、合入或后续 VM 验收。
 
 ```nu
 git diff --stat 6f498c8..HEAD -- guest/init/Cargo.toml guest/init/src/lib.rs guest/agent/Cargo.toml guest/agent/src/lib.rs guest/agent/src/wire.rs guest/agent/src/server.rs guest/agent/src/system.rs guest/agent/src/process.rs guest/agent/src/session.rs guest/agent/src/keyed.rs guest/agent/src/fs.rs guest/agent/src/ledger.rs guest/agent/src/proxy.rs guest/agent/tests/agent.rs guest/agent/tests/keyed.rs guest/agent/tests/tree.rs sandboxd/agent/client.go sandboxd/sdk/client.go engine/api/types.go engine/metadata.go engine/operation_completion.go sandboxd/service.go sandboxd/operations.go protocol/README.md guest/README.md
@@ -10,7 +10,7 @@ git diff --stat 6f498c8..HEAD -- guest/init/Cargo.toml guest/init/src/lib.rs gue
 
 - Priority：P2；Effort：M；Risk：MED。
 - Depends on：无（与 017/020/021 独立；若与 017 交错修改 `sandboxd/operations.go` 或 `service.go` 须串行合并）。
-- Category：architecture / observability；Planned at：`6f498c8`；Status：TODO。
+- Category：architecture / observability；Planned at：`6f498c8`；Status：DONE。
 
 ## 问题与目标
 
@@ -73,13 +73,21 @@ func asAPI(err error) *api.Error {
 必须保持的不变量：
 
 - **Wire 协议与向后兼容**：`protocol/sandbox.proto` 的 `Frame` 二进制编码保持不变；失败响应仍然设置非空 `Frame.error`，并在 `Frame.params` 中携带结构化 `"error_code"`（以及可选的 `"result_state"` 与 `tree_push` post-commit 状态字段）。
-- **Keyed Exec 账本与状态机严格不变**：`result_unknown`、`exec_in_progress`、`exec_key_conflict`、`exec_ledger_capacity_exhausted` 的触发条件、SQLite 持久化时机与 `sandboxd` 映射为 `api.Unknown` / `api.Conflict` / `api.Exhausted` 的语义完全保留；任何未确认结果的执行错误仍必须降级为 `result_unknown`，绝不因细化错误分类而放宽幂等围栏。
+- **Keyed Exec 账本与状态机严格不变**：`result_unknown`、`exec_in_progress`、`exec_key_conflict`、`exec_ledger_capacity_exhausted` 的触发条件与 SQLite 持久化时机保留；sandboxd 现使用自有 `ErrUnknown` / `ErrConflict` / `ErrExhausted` 表达相同动作语义与 wire code。任何未确认结果的执行错误仍必须降级为 `result_unknown`，绝不因细化错误分类而放宽幂等围栏。
 - **`tree_push` 提交后失败契约保留**：018 中发布目录 `fsync` 失败时，terminal frame 必须同时保留非空 `Frame.error` 和 `committed:true, publication_durable:false` 等 `params` 字段，不能被通用错误转换抹除。
 - **Completion Fence 与脱敏边界**：`engine/operation_completion.go` 中对 `opRecord` 的 `reflect.DeepEqual` 校验不受影响；HTTP 500 对外响应（`sandboxd/http.go` 的 `writeError`）对未知未分类错误继续向不可信客户端返回固定 `"internal error"`，不泄露宿主路径或凭据，而持久化的 `Operation.Error` / `VM.BlockedReason` 保留清晰的操作阶段上下文。
 
 ## Scope
 
-仅限 drift check 所列路径，不新增外部 crates（不引入 `thiserror` 或外部宏依赖，直接用标准库 `std::panic::Location` 实现轻量结构）。禁止修改 `protocol/sandbox.proto` wire 字段编号、禁止修改 SQLite schema、禁止放宽 `result_unknown` 保护。
+原始范围为 drift check 所列路径。本线程补充授权将 Go 范围扩展到 sandboxd 自有错误模型、业务错误构造、Engine/Agent 调用边界、恢复分类判断、HTTP/SDK 及对应行为测试和组件契约；同时纳入跨 UID 的 postcommit 断言与依赖锁文件更新。不解耦 Shape 等其他公开 DTO，不新增外部 crates（不引入 `thiserror` 或外部宏依赖，直接用标准库 `std::panic::Location` 实现轻量结构）。禁止修改 `protocol/sandbox.proto` wire 字段编号、禁止修改 SQLite 表结构/schema 版本、禁止放宽 `result_unknown` 保护。
+
+### 补充决策：sandboxd 错误契约归属
+
+- 根包拥有独立 `ErrorCode`、`Error`、`Fail`、`Wrap`，不是 Engine 类型的 alias；`Operation.Error` 和 SDK HTTP 错误使用本层类型，保留既有 code/message JSON。
+- 本层分类与 Engine 回答分别使用 `isCode` / `isEngineCode`。后者不穿透已翻译的本层错误或联合错误，权限隐藏 404 不能证明物理回收。
+- 调用点先消费预期缺失或实例围栏，再翻译剩余依赖失败；内部 Engine NotFound 不成为租户 404，host 构造的 invalid 不成为租户参数错误。
+- `Cause` 不序列化、不通过 Unwrap 重新开放依赖分类；原始诊断使用既有私有 audit journal 的事件字段，不增加表。公开错误、Operation 查询/重放与 sandbox LastError 投影脱敏，不改写历史落盘终态。
+- Engine/sandboxd 全量 race 的当前入口按 README 使用 10 分钟预算。原计划 180 秒运行如超时必须记录 FAIL，不得以扩大预算隐去；窄行为验收仍使用明确的短预算。
 
 ## 目标模型
 
@@ -111,8 +119,8 @@ func asAPI(err error) *api.Error {
 ### 3. Go 侧（`sandboxd/agent`、`sdk`、`engine`、`sandboxd`）
 
 - **`sandboxd/sdk`**：`Connection.Call` 已支持从 `r.Params.AsMap()["error_code"]` 提取 `RPCError.Code`；当 `guest/agent` 全方法统一输出 `error_code` 后，所有 SDK 调用（包括 `fs_*`、`proc_*`、`session_*`）天然获得机器可判定的 `RPCError.Code`。
-- **`sandboxd/agent/client.go`**：`rpc()` 不再仅对 `method == "exec"` 读取 `error_code`。除保留 `exec` 专属的 4 个幂等状态码外，对管理/控制 RPC（`activate`、`prepare_template`、`info`）返回的 `invalid`、`conflict`、`quiesced`、`resource_exhausted` 映射为对应的 `*api.Error`，并在 Message 中保留 `guest {method}: {r.Error}`。
-- **`engine` 与 `sandboxd` 终态错误收敛**：在 `engine/operation_completion.go`（或 `asAPI` 调用处）和 `sandboxd/operations.go` 将非 `*api.Error` 包装为 `api.Internal` 时，自动前置当前操作的 `action` 与 `step`（例如 `fmt.Sprintf("%s (%s): %v", action, step, err)`），消除裸系统错误直接落盘导致无法判断失败阶段的问题。
+- **`sandboxd/agent/client.go`**：`rpc()` 全方法读取 `error_code`，翻译为本层 `*sandboxd.Error`；管理参数错误归 internal，管理资源缺失归 operator recovery，冲突/排空归 conflict、容量归 exhausted。Keyed exec 的 4 个精确状态及未知完成围栏保留；Message 安全，guest 原始诊断只在 Cause 中。
+- **`engine` 与 `sandboxd` 终态错误收敛**：Engine 为未分类错误增加 action/step，不改变既有 API 分类；sandboxd 使用自有分类落盘安全 action/step 文案，将原始因果链记入私有 audit 事件。HTTP 与 Operation 的公开投影不透传私有诊断；历史错误 JSON 不因读取、重启或重放而重写。
 
 ## 命令
 
@@ -161,8 +169,8 @@ cargo test --locked -p sandbox-agent --features filesystem-fixtures --all-target
 **Verify**：
 
 ```nu
-with-env {GOWORK: 'off'} { ^go -C engine test -race ./... -count=1 -timeout=180s }
-with-env {GOWORK: 'off'} { ^go -C sandboxd test -race ./... -count=1 -timeout=180s }
+with-env {GOWORK: 'off'} { ^go -C engine test -race ./... -count=1 -timeout=10m }
+with-env {GOWORK: 'off'} { ^go -C sandboxd test -race ./... -count=1 -timeout=10m }
 make integration
 make lint
 git diff --check
@@ -170,12 +178,13 @@ git diff --check
 
 ## 完成标准
 
-- [ ] `guest/init` 与 `guest/agent` 消除无上下文的裸 `?` 转发，错误携带 `#[track_caller]` 源码位置与操作目标。
-- [ ] `guest/agent` 所有失败响应在 `Frame.params` 中提供机器可读的 `error_code`，`sdk.RPCError.Code` 在非 `exec` 方法上可稳定读取。
-- [ ] `keyed exec` 幂等状态机與 `tree_push` 提交后失败参数契约零退化。
-- [ ] `engine` 与 `sandboxd` 的未分类操作错误在落盘时包含 `action`/`step` 上下文。
-- [ ] Rust 默认与 `filesystem-fixtures` 构建、Go race 测试、真实 Rust fixture integration 与 lint 全部通过。
+- [x] `guest/init` 与 agent library 使用结构化错误与静态调用位置，模块/RPC 边界附加操作和目标上下文。
+- [x] 所有 RPC 失败 terminal 提供 `error_code`；SDK 对非 exec 方法也可读取。连接级非法帧仍可直接断开，不伪造 RPC 回复。
+- [x] Keyed exec 状态机、未确认 spawn/commit 的 Unknown 围栏与 tree push postcommit 参数契约保留。
+- [x] Engine 与 sandboxd 持久错误包含 action/step；sandboxd 的原始诊断进入私有 audit，公开投影安全且不改写历史终态。
+- [x] sandboxd 错误契约独立；本层 404 与 Engine 物理 absence 判断分离；SDK 不再直接导入 Engine API。
+- [x] Rust 默认与 filesystem-fixtures、两模块全量 Go race、真实 Rust fixture integration、跨 UID runner 与 lint 通过，详见证据；KVM/native image/production 不在本轮证明范围。
 
 ## STOP 与维护
 
-若发现某处错误码映射会导致 `sandboxd` 将 `result_unknown` 误判为可安全换 key 重试的普通错误，立即停止并保持 `api.Unknown` 围栏。不得为追求错误格式统一而篡改已提交终态 `Operation` 的历史落盘记录。
+若后续变更导致 sandboxd 将 `result_unknown` 误判为可安全换 key 重试的普通错误，必须保持 `ErrUnknown` 围栏。不得为追求错误格式统一而篡改已提交终态 Operation 的历史落盘记录。

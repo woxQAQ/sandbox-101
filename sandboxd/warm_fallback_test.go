@@ -28,7 +28,7 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 				if _, err := engine.GetVM(
 					context.Background(),
 					engine.warmCandidate,
-				); !isCode(
+				); !isEngineCode(
 					err,
 					api.NotFound,
 				) {
@@ -134,7 +134,7 @@ func TestWarmFallbackPreservesChangedInstance(t *testing.T) {
 		template,
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatalf("changed warm instance was not rejected: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.Unknown) {
+			if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, ErrUnknown) {
 				t.Fatal("missing real unknown replacement", err)
 			}
 			r, err := s.loadRecovery(allocationGroupID(o))
@@ -234,7 +234,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			}
 			before := templateQuotaState(t, s)
 			n, finds := e.counts()
-			if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+			if err = s.recoverResources(); !isCode(err, ErrManualRecovery) {
 				t.Fatal("unqualified pending destination consumed", err)
 			}
 			if !bytes.Equal(before, templateQuotaState(t, s)) {
@@ -249,7 +249,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			if next != nil {
 				next.Close()
 			}
-			if !isCode(err, api.ManualRecovery) ||
+			if !isCode(err, ErrManualRecovery) ||
 				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 				t.Fatal("startup accepted or repaired destination", err)
 			}
@@ -382,7 +382,7 @@ func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 	e := &templateQuotaSelectionClient{Client: s.opts.Engine}
 	s.opts.Engine = e
 	before := templateQuotaState(t, s)
-	if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+	if err = s.recoverResources(); !isCode(err, ErrManualRecovery) {
 		t.Fatal("later lifecycle hid required selection", err)
 	}
 	if !bytes.Equal(before, templateQuotaState(t, s)) {
@@ -397,7 +397,7 @@ func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 	if next != nil {
 		next.Close()
 	}
-	if !isCode(err, api.ManualRecovery) ||
+	if !isCode(err, ErrManualRecovery) ||
 		!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 		t.Fatal("startup lost historical transfer", err)
 	}

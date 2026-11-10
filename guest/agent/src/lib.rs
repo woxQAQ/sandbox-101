@@ -1,3 +1,19 @@
+// Validation defaults to invalid; runtime and admission checks name their code.
+macro_rules! bail {
+    ($code:ident => $($arg:tt)*) => {
+        return Err(crate::Error::new(crate::ErrorCode::$code, format!($($arg)*)))
+    };
+    ($($arg:tt)*) => { bail!(Invalid => $($arg)*) };
+}
+macro_rules! ensure {
+    ($condition:expr, $code:ident => $($arg:tt)*) => {
+        if !$condition { bail!($code => $($arg)*); }
+    };
+    ($condition:expr, $($arg:tt)*) => {
+        ensure!($condition, Invalid => $($arg)*);
+    };
+}
+
 pub mod fs;
 pub mod keyed;
 pub mod ledger;
@@ -10,6 +26,168 @@ pub mod wire;
 
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, Semaphore};
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Flat recovery categories; keyed execution retains its more precise fence codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    Invalid,
+    NotFound,
+    Conflict,
+    ResourceExhausted,
+    Quiesced,
+    Unauthorized,
+    ExecInProgress,
+    ExecKeyConflict,
+    ExecLedgerCapacityExhausted,
+    ResultUnknown,
+    Internal,
+}
+impl ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Invalid => "invalid",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::Quiesced => "quiesced",
+            Self::Unauthorized => "unauthorized",
+            Self::ExecInProgress => "exec_in_progress",
+            Self::ExecKeyConflict => "exec_key_conflict",
+            Self::ExecLedgerCapacityExhausted => "exec_ledger_capacity_exhausted",
+            Self::ResultUnknown => "result_unknown",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ErrorFrame {
+    message: String,
+    location: &'static std::panic::Location<'static>,
+}
+
+#[derive(Debug)]
+pub struct Error {
+    pub code: ErrorCode,
+    pub params: serde_json::Value,
+    frames: Vec<ErrorFrame>,
+}
+impl Error {
+    #[track_caller]
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            params: serde_json::json!({}),
+            frames: vec![ErrorFrame {
+                message: message.into(),
+                location: std::panic::Location::caller(),
+            }],
+        }
+    }
+    #[track_caller]
+    pub fn context(mut self, message: impl Into<String>) -> Self {
+        self.frames.push(ErrorFrame {
+            message: message.into(),
+            location: std::panic::Location::caller(),
+        });
+        self
+    }
+    pub fn with_params(mut self, params: serde_json::Value) -> Self {
+        self.params = params;
+        self
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, frame) in self.frames.iter().rev().enumerate() {
+            if index != 0 {
+                write!(f, ": ")?;
+            }
+            write!(f, "{} at {}", frame.message, frame.location)?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for Error {}
+
+/// Context closures run only on failure; caller locations require no backtrace.
+pub trait ResultContext<T> {
+    #[track_caller]
+    fn or_context(self, context: impl FnOnce() -> String) -> Result<T>;
+    #[track_caller]
+    fn map_code(self, code: ErrorCode, context: impl FnOnce() -> String) -> Result<T>;
+}
+impl<T, E: Into<Error>> ResultContext<T> for std::result::Result<T, E> {
+    #[track_caller]
+    fn or_context(self, context: impl FnOnce() -> String) -> Result<T> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(error) => Err(error.into().context(context())),
+        }
+    }
+    #[track_caller]
+    fn map_code(self, code: ErrorCode, context: impl FnOnce() -> String) -> Result<T> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let mut error = error.into();
+                error.code = code;
+                Err(error.context(context()))
+            }
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    #[track_caller]
+    fn from(error: std::io::Error) -> Self {
+        use std::io::ErrorKind;
+        if error.get_ref().is_some_and(|e| e.is::<Error>()) {
+            return *error.into_inner().unwrap().downcast::<Error>().unwrap();
+        }
+        let code = match error.kind() {
+            ErrorKind::NotFound => ErrorCode::NotFound,
+            ErrorKind::AlreadyExists
+            | ErrorKind::NotADirectory
+            | ErrorKind::IsADirectory
+            | ErrorKind::CrossesDevices
+            | ErrorKind::DirectoryNotEmpty => ErrorCode::Conflict,
+            ErrorKind::InvalidInput | ErrorKind::InvalidData => ErrorCode::Invalid,
+            ErrorKind::PermissionDenied => ErrorCode::Unauthorized,
+            ErrorKind::StorageFull | ErrorKind::QuotaExceeded => ErrorCode::ResourceExhausted,
+            _ => ErrorCode::Internal,
+        };
+        Self::new(code, format!("I/O: {error}"))
+    }
+}
+macro_rules! error_from {
+    ($type:ty, $code:ident, $context:literal) => {
+        impl From<$type> for Error {
+            #[track_caller]
+            fn from(error: $type) -> Self {
+                Self::new(ErrorCode::$code, format!("{}: {error}", $context))
+            }
+        }
+    };
+}
+error_from!(rusqlite::Error, Internal, "exec ledger SQLite");
+error_from!(serde_json::Error, Internal, "JSON");
+error_from!(prost::DecodeError, Invalid, "decode frame");
+error_from!(std::ffi::NulError, Invalid, "NUL in string");
+error_from!(std::str::Utf8Error, Invalid, "UTF-8");
+error_from!(std::num::ParseIntError, Invalid, "integer");
+error_from!(std::num::TryFromIntError, Invalid, "integer range");
+error_from!(base64::DecodeError, Invalid, "base64");
+error_from!(tokio::task::JoinError, Internal, "join task");
+error_from!(tokio::time::error::Elapsed, Internal, "deadline");
+error_from!(
+    tokio::sync::oneshot::error::RecvError,
+    Internal,
+    "fixture observer"
+);
+error_from!(walkdir::Error, Internal, "walk filesystem");
 
 #[derive(Clone)]
 pub struct Config {
@@ -51,8 +229,9 @@ pub struct Agent {
     pub active_streams: std::sync::atomic::AtomicUsize,
 }
 impl Agent {
-    pub fn new(config: Config) -> anyhow::Result<Arc<Self>> {
-        let ledger = ledger::Ledger::open(&config.ledger_dir, config.ledger_max_entries)?;
+    pub fn new(config: Config) -> Result<Arc<Self>> {
+        let ledger = ledger::Ledger::open(&config.ledger_dir, config.ledger_max_entries)
+            .or_context(|| format!("open exec ledger {}", config.ledger_dir.display()))?;
         let sandbox_id = ledger.identity()?;
         Ok(Arc::new(Self {
             config,
@@ -71,18 +250,28 @@ impl Agent {
             active_streams: std::sync::atomic::AtomicUsize::new(0),
         }))
     }
-    pub async fn environment(&self) -> anyhow::Result<BTreeMap<String, String>> {
+    pub async fn environment(&self) -> Result<BTreeMap<String, String>> {
         let activation = self.activation.lock().await;
         self.environment_for(&activation).await
     }
     pub(crate) async fn environment_for(
         &self,
         activation: &Activation,
-    ) -> anyhow::Result<BTreeMap<String, String>> {
+    ) -> Result<BTreeMap<String, String>> {
         let mut env = match tokio::fs::read(&self.config.env_file).await {
-            Ok(data) => serde_json::from_slice(&data)?,
+            Ok(data) => serde_json::from_slice(&data).map_code(ErrorCode::Internal, || {
+                format!(
+                    "decode activation environment {}",
+                    self.config.env_file.display()
+                )
+            })?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(Error::from(e).context(format!(
+                    "read activation environment {}",
+                    self.config.env_file.display()
+                )));
+            }
         };
         if activation.network == "relay" {
             for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] {
@@ -127,40 +316,45 @@ impl Agent {
     }
 }
 
-pub fn string<'a>(p: &'a serde_json::Value, key: &str) -> anyhow::Result<&'a str> {
-    p.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("{key} must be a string"))
+#[track_caller]
+pub fn string<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
+    match p.get(key).and_then(|v| v.as_str()) {
+        Some(value) => Ok(value),
+        None => Err(Error::new(
+            ErrorCode::Invalid,
+            format!("{key} must be a string"),
+        )),
+    }
 }
-pub fn number(p: &serde_json::Value, key: &str) -> anyhow::Result<u64> {
-    let n = p
-        .get(key)
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| anyhow::anyhow!("{key} must be an integer"))?;
-    anyhow::ensure!(
+#[track_caller]
+pub fn number(p: &serde_json::Value, key: &str) -> Result<u64> {
+    let Some(n) = p.get(key).and_then(|v| v.as_f64()) else {
+        bail!("{key} must be an integer");
+    };
+    ensure!(
         n.is_finite() && n >= 0. && n.fract() == 0. && n <= 9007199254740991.,
         "invalid {key}"
     );
     Ok(n as u64)
 }
-pub fn env_map(p: &serde_json::Value) -> anyhow::Result<BTreeMap<String, String>> {
+pub fn env_map(p: &serde_json::Value) -> Result<BTreeMap<String, String>> {
     let Some(value) = p.get("env") else {
         return Ok(BTreeMap::new());
     };
     let values = value
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("env must be an object"))?;
+        .ok_or_else(|| Error::new(ErrorCode::Invalid, "env must be an object"))?;
     values
         .iter()
         .map(|(k, v)| {
-            anyhow::ensure!(
+            ensure!(
                 !k.is_empty() && !k.contains(['=', '\0']),
                 "invalid environment key"
             );
-            let value = v
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("environment values must be strings"))?;
-            anyhow::ensure!(!value.contains('\0'), "invalid environment value");
+            let value = v.as_str().ok_or_else(|| {
+                Error::new(ErrorCode::Invalid, "environment values must be strings")
+            })?;
+            ensure!(!value.contains('\0'), "invalid environment value");
             Ok((k.clone(), value.into()))
         })
         .collect()

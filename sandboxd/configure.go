@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
@@ -21,8 +20,8 @@ func (s *Service) activationFence(o Operation, id string) error {
 	}
 	if (o.Command.Action == "configure" && fence != o.ID) ||
 		(o.Command.Action != "configure" && fence != "") {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"sandbox configuration operation is fenced or superseded",
 		)
 	}
@@ -55,8 +54,8 @@ func (s *Service) configure(o *Operation, b *Sandbox) (err error) {
 	}()
 	if b.State != "running" && b.State != "paused" {
 		configuration()
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"configuration requires running or paused sandbox",
 		)
 	}
@@ -133,8 +132,8 @@ func splitEnv(
 	for k, v := range env {
 		if k == "" || strings.ContainsAny(k, "=\x00\n") || len(k) > 256 ||
 			strings.ContainsRune(v.Value, 0) {
-			return nil, nil, api.Fail(
-				api.Invalid,
+			return nil, nil, Fail(
+				ErrInvalid,
 				"invalid environment variable",
 			)
 		}
@@ -142,8 +141,8 @@ func splitEnv(
 			if v.Inject == nil || len(v.Inject.Hosts) == 0 ||
 				v.Inject.Header == "" ||
 				v.Value == "" {
-				return nil, nil, api.Fail(
-					api.Invalid,
+				return nil, nil, Fail(
+					ErrInvalid,
 					"host secret requires value, authorized hosts and header",
 				)
 			}
@@ -233,7 +232,7 @@ func clearConfigFence(
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n != 1 {
-		return api.Fail(api.Conflict, "configuration operation was superseded")
+		return Fail(ErrConflict, "configuration operation was superseded")
 	}
 	return err
 }

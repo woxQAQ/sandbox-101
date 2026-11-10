@@ -21,13 +21,13 @@ func (s *Service) template(o *Operation) error {
 		return intentErr
 	}
 	if owner == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"template ownership placeholder is missing",
 		)
 	}
 	if owner != t.TenantID || pointer != o.ID {
-		return api.Fail(api.Conflict, "template publication was superseded")
+		return Fail(ErrConflict, "template publication was superseded")
 	}
 	if o.Command.Action == "template_build" {
 		v, err := s.engine(
@@ -58,14 +58,14 @@ func (s *Service) template(o *Operation) error {
 				return startErr
 			}
 			if start.Status != "succeeded" || start.ResultInstance == "" {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"build start has no successful generation witness",
 				)
 			}
 			vm, err := s.opts.Engine.GetVM(s.ctx, v.VMID)
 			if err != nil {
-				return err
+				return engineFailure(err)
 			}
 			group, e := s.loadRecovery(allocationGroupID(*o))
 			if e != nil {
@@ -80,8 +80,8 @@ func (s *Service) template(o *Operation) error {
 			if t.Warmup != "" {
 				// Guest execution results cannot be inferred after a crash. Record its start before dispatch.
 				if o.Step == "warmup_inflight" {
-					return api.Fail(
-						api.Unknown,
+					return Fail(
+						ErrUnknown,
 						"template warmup result unknown; submit a new build intent",
 					)
 				}
@@ -144,10 +144,10 @@ func (s *Service) template(o *Operation) error {
 			return err
 		}
 		if group.Group.Identity == nil {
-			return api.Fail(api.ManualRecovery, "build identity is missing")
+			return Fail(ErrManualRecovery, "build identity is missing")
 		}
 		vm, lookupErr := s.opts.Engine.GetVM(s.ctx, group.Group.Identity.VM)
-		if isCode(lookupErr, api.NotFound) {
+		if isEngineCode(lookupErr, api.NotFound) {
 			err = s.retireAllocationAbsent(group.ID)
 		} else if lookupErr != nil {
 			return lookupErr
@@ -167,12 +167,12 @@ func (s *Service) template(o *Operation) error {
 	if t.SnapshotID != "" {
 		snap, err := s.opts.Engine.GetSnapshot(s.ctx, t.SnapshotID)
 		if err != nil {
-			return err
+			return engineFailure(err)
 		}
 		if snap.ID != t.SnapshotID || !snap.Published || snap.Deleting ||
 			snap.Config.Shape != t.Shape {
-			return api.Fail(
-				api.Incompatible,
+			return Fail(
+				ErrIncompatible,
 				"template snapshot shape or publication does not match",
 			)
 		}
@@ -186,8 +186,8 @@ func (s *Service) template(o *Operation) error {
 				encode(snap.Config),
 				encode(*group.Group.SnapshotSource.Config),
 			) {
-			return api.Fail(
-				api.Incompatible,
+			return Fail(
+				ErrIncompatible,
 				"snapshot Config differs from frozen source quote",
 			)
 		}
@@ -212,7 +212,7 @@ func (s *Service) template(o *Operation) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	previous, previousErr := getTemplateTx(s.ctx, tx, t.ID)
-	if previousErr != nil && !isCode(previousErr, api.NotFound) {
+	if previousErr != nil && !isCode(previousErr, ErrNotFound) {
 		return previousErr
 	}
 	if previous.ID != "" && previous.SnapshotID != "" &&
@@ -252,20 +252,20 @@ func (s *Service) template(o *Operation) error {
 		return err
 	}
 	if owner == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"template ownership placeholder is missing",
 		)
 	}
 	if owner != t.TenantID {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"template ownership does not match this operation",
 		)
 	}
 	if current != o.ID {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"template publication was superseded",
 		)
 	}
@@ -408,7 +408,7 @@ func (s *Service) templateSource(
 	t Template,
 ) (*templateSnapshotSource, error) {
 	ownerErr := requireSnapshotOwner(ctx, s.store.db, t.SnapshotID, p.TenantID)
-	if ownerErr != nil && (!p.Root || !isCode(ownerErr, api.NotFound)) {
+	if ownerErr != nil && (!p.Root || !isCode(ownerErr, ErrNotFound)) {
 		return nil, ownerErr
 	}
 	var foreign int
@@ -417,7 +417,7 @@ func (s *Service) templateSource(
 		return nil, err
 	}
 	if foreign != 0 {
-		return nil, api.Fail(api.NotFound, "not found")
+		return nil, Fail(ErrNotFound, "not found")
 	}
 	quote := &templateSnapshotSource{
 		SnapshotID: t.SnapshotID,
@@ -435,8 +435,8 @@ func (s *Service) templateSource(
 			return nil, err
 		}
 		if source.Shape != t.Shape {
-			return nil, api.Fail(
-				api.Conflict,
+			return nil, Fail(
+				ErrConflict,
 				"template shape differs from trusted snapshot",
 			)
 		}
@@ -454,8 +454,8 @@ func (s *Service) templateSource(
 			continue
 		}
 		if r.Group.Template.Shape != t.Shape {
-			return nil, api.Fail(
-				api.Conflict,
+			return nil, Fail(
+				ErrConflict,
 				"template shape differs from frozen capture",
 			)
 		}
@@ -476,19 +476,19 @@ func (s *Service) templateSource(
 		return quote, nil
 	}
 	if !p.Root {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"snapshot has no trusted full shape",
 		)
 	}
 	snap, err := s.opts.Engine.GetSnapshot(ctx, t.SnapshotID)
 	if err != nil {
-		return nil, err
+		return nil, engineFailure(err)
 	}
 	if snap.ID != t.SnapshotID || !snap.Published || snap.Deleting ||
 		snap.Config.Shape != t.Shape {
-		return nil, api.Fail(
-			api.Incompatible,
+		return nil, Fail(
+			ErrIncompatible,
 			"import snapshot shape or publication differs",
 		)
 	}
@@ -510,14 +510,14 @@ func recheckTemplateSource(
 	if source == nil || source.Owner != owner ||
 		source.SnapshotID != t.SnapshotID ||
 		source.Shape != t.Shape {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"template source quote differs from admission",
 		)
 	}
 	if source.Config != nil && source.Config.Shape != t.Shape {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"template source Config differs from its shape",
 		)
 	}
@@ -535,7 +535,7 @@ func recheckTemplateSource(
 		r, err = loadRecoveryTx(ctx, q, source.ID)
 		if err == nil &&
 			(r.TenantID != owner || !groupSnapshotSource(r, t.SnapshotID) || r.Group.Template.Shape != t.Shape) {
-			err = api.Fail(api.Conflict, "frozen snapshot source changed")
+			err = Fail(ErrConflict, "frozen snapshot source changed")
 		}
 		if err == nil {
 			err = validateGroupSource(ctx, q, r)
@@ -543,18 +543,18 @@ func recheckTemplateSource(
 		return err
 	case "external":
 		if source.ID != t.SnapshotID || source.Config == nil {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"external snapshot quote is incomplete",
 			)
 		}
 		return nil
 	default:
-		return api.Fail(api.ManualRecovery, "unknown template source")
+		return Fail(ErrManualRecovery, "unknown template source")
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"template source retired during admission",
 		)
 	}
@@ -571,8 +571,8 @@ func recheckTemplateSource(
 	}
 	if current.TenantID != owner || current.SnapshotID != source.SnapshotID ||
 		current.Shape != source.Shape {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"template source changed during admission",
 		)
 	}
@@ -599,8 +599,8 @@ func (s *Service) prepareBuildRetirement(o Operation) error {
 		if a.Resolution.Proof == nil ||
 			a.Resolution.Proof.Status != "succeeded" ||
 			a.Resolution.Proof.SnapshotID == "" {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"build capture has not delivered its identity",
 			)
 		}
@@ -651,7 +651,7 @@ func (s *Service) Templates(
 	p Principal,
 ) ([]Template, error) {
 	if p.SandboxID != "" {
-		return nil, api.Fail(api.Conflict, "tenant access required")
+		return nil, Fail(ErrConflict, "tenant access required")
 	}
 	all, err := s.store.templates(ctx)
 	if err != nil {
@@ -675,7 +675,7 @@ func getTemplateTx(
 	err := e.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).
 		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Template{}, api.Fail(api.NotFound, "not found")
+		return Template{}, Fail(ErrNotFound, "not found")
 	}
 	var t Template
 	if err == nil {
@@ -725,7 +725,7 @@ func reserveTemplateIntent(
 	}
 	owner, current, err := templateIntent(ctx, e, id)
 	if err == nil && (owner != tenant || current != operation) {
-		return api.Fail(api.ManualRecovery, "template intent was not persisted")
+		return Fail(ErrManualRecovery, "template intent was not persisted")
 	}
 	return err
 }
@@ -759,7 +759,7 @@ func (s *store) template(ctx context.Context, id string) (Template, error) {
 	err := s.db.QueryRowContext(ctx, "SELECT body FROM templates WHERE id=?", id).
 		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Template{}, api.Fail(api.NotFound, "not found")
+		return Template{}, Fail(ErrNotFound, "not found")
 	}
 	var t Template
 	if err == nil {

@@ -156,31 +156,58 @@ func rpc(
 			return nil, errors.New("unexpected response id")
 		}
 		if r.Error != "" {
+			cause := fmt.Errorf("guest %s: %s", method, r.Error)
 			if method == "exec" {
 				switch r.Params.AsMap()["error_code"] {
 				case "result_unknown":
-					return nil, api.Fail(
-						api.Unknown,
+					return nil, sandboxd.Wrap(
+						sandboxd.ErrUnknown,
 						"guest exec result unknown; do not retry under a new key",
+						cause,
 					)
 				case "exec_in_progress":
-					return nil, api.Fail(
-						api.Conflict,
+					return nil, sandboxd.Wrap(
+						sandboxd.ErrConflict,
 						"guest exec is in progress; retain the same exec_key",
+						cause,
 					)
 				case "exec_key_conflict":
-					return nil, api.Fail(
-						api.Conflict,
+					return nil, sandboxd.Wrap(
+						sandboxd.ErrConflict,
 						"guest exec_key has different parameters",
+						cause,
 					)
 				case "exec_ledger_capacity_exhausted":
-					return nil, api.Fail(
-						api.Exhausted,
+					return nil, sandboxd.Wrap(
+						sandboxd.ErrExhausted,
 						"guest exec ledger admission capacity exhausted",
+						cause,
 					)
 				}
 			}
-			return nil, fmt.Errorf("guest %s: %s", method, r.Error)
+			code := sandboxd.ErrInternal
+			switch r.Params.AsMap()["error_code"] {
+			case "invalid":
+				if method == "exec" {
+					code = sandboxd.ErrInvalid
+				}
+			case "not_found":
+				code = sandboxd.ErrManualRecovery
+			case "conflict", "quiesced":
+				code = sandboxd.ErrConflict
+			case "resource_exhausted":
+				code = sandboxd.ErrExhausted
+			}
+			// An unclassified keyed completion must still pass through Exec's
+			// conservative Unknown fence, never become an ordinary Internal error.
+			if method != "exec" || code != sandboxd.ErrInternal {
+				return nil, sandboxd.Wrap(
+					code,
+					"guest "+method+" failed",
+					cause,
+				)
+			}
+			return nil, cause
 		}
 		size += len(r.Data)
 		if size > 1<<20 {
@@ -256,24 +283,24 @@ func (c *Client) Exec(
 		map[string]any{"command": command, "exec_key": execKey},
 	)
 	if err != nil {
-		if _, ok := errors.AsType[*api.Error](err); ok {
+		if _, ok := errors.AsType[*sandboxd.Error](err); ok {
 			return err
 		}
-		return api.Fail(
-			api.Unknown,
-			"guest exec completion unconfirmed; retain the same exec_key: %v",
+		return sandboxd.Wrap(
+			sandboxd.ErrUnknown,
+			"guest exec completion unconfirmed; retain the same exec_key",
 			err,
 		)
 	}
 	if p["result_state"] != "completed" {
-		return api.Fail(
-			api.Unknown,
+		return sandboxd.Fail(
+			sandboxd.ErrUnknown,
 			"guest did not confirm a durable keyed exec result",
 		)
 	}
 	if _, ok := p["exit_code"].(float64); !ok {
-		return api.Fail(
-			api.Unknown,
+		return sandboxd.Fail(
+			sandboxd.ErrUnknown,
 			"guest keyed exec result omitted exit_code",
 		)
 	}

@@ -60,7 +60,7 @@ func TestPausedCheckpointRetainsCaptureWithoutWaking(t *testing.T) {
 	if _, err = f.GetSnapshot(
 		context.Background(),
 		cp.Checkpoint.SnapshotID,
-	); !isCode(
+	); !isEngineCode(
 		err,
 		api.NotFound,
 	) {

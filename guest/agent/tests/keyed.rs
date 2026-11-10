@@ -55,6 +55,10 @@ async fn rpc(stream: &mut UnixStream, frame: Frame) -> Vec<Frame> {
     loop {
         let frame = next(stream).await;
         let eof = frame.eof;
+        if !frame.error.is_empty() {
+            assert!(frame.params_json()["error_code"].is_string(), "{frame:?}");
+            assert!(frame.error.contains("guest/agent/src/"), "{frame:?}");
+        }
         frames.push(frame);
         if eof {
             return frames;
@@ -123,12 +127,20 @@ async fn saved_result_survives_restart_and_hashes_all_inputs() {
         };
         let changed = frame.reply(p, frame.data.clone(), true);
         let result = rpc(&mut stream, changed).await;
-        assert_eq!(result.last().unwrap().error, "exec_key_conflict", "{field}");
+        assert_eq!(
+            result.last().unwrap().params_json()["error_code"],
+            "exec_key_conflict",
+            "{field}"
+        );
     }
     let mut changed = frame.clone();
     changed.data.push(1);
     assert_eq!(
-        rpc(&mut stream, changed).await.last().unwrap().error,
+        rpc(&mut stream, changed)
+            .await
+            .last()
+            .unwrap()
+            .params_json()["error_code"],
         "exec_key_conflict"
     );
     drop(stream);
@@ -149,7 +161,7 @@ async fn saved_result_survives_restart_and_hashes_all_inputs() {
             .await
             .last()
             .unwrap()
-            .error,
+            .params_json()["error_code"],
         "exec_key_conflict"
     );
     let db = std::fs::read(agent.ledger.directory.join("exec.sqlite3")).unwrap();
@@ -196,6 +208,10 @@ async fn concurrent_key_is_admitted_once_and_identity_cannot_change_while_runnin
     assert_eq!(
         duplicate.last().unwrap().params_json()["result_state"],
         "in_progress"
+    );
+    assert_eq!(
+        duplicate.last().unwrap().params_json()["error_code"],
+        "exec_in_progress"
     );
     let changed = activate(&agent, "b", json!({})).await;
     assert!(changed.last().unwrap().error.contains("still in progress"));
@@ -255,7 +271,7 @@ async fn output_and_admission_bounds_do_not_evict_keys() {
             .await
             .last()
             .unwrap()
-            .error,
+            .params_json()["error_code"],
         "exec_ledger_capacity_exhausted"
     );
     assert_eq!(
@@ -332,6 +348,10 @@ async fn unsupported_keyed_modes_and_private_files_are_rejected_before_side_effe
             )
             .await;
             assert!(result.last().unwrap().error.contains("private state"));
+            assert_eq!(
+                result.last().unwrap().params_json()["error_code"],
+                "unauthorized"
+            );
         }
     }
     let listing = rpc(
@@ -433,7 +453,10 @@ async fn crash_after_side_effect_reports_unknown_and_never_replays() {
         let agent = Agent::new(cfg.clone()).unwrap();
         let mut stream = connect(&agent, Portal::Workload);
         let result = rpc(&mut stream, crash_request(tmp.path())).await;
-        assert_eq!(result.last().unwrap().error, "result_unknown");
+        assert_eq!(
+            result.last().unwrap().params_json()["error_code"],
+            "result_unknown"
+        );
         assert_eq!(
             result.last().unwrap().params_json()["result_state"],
             "result_unknown"
@@ -441,6 +464,55 @@ async fn crash_after_side_effect_reports_unknown_and_never_replays() {
         assert_eq!(std::fs::read(tmp.path().join("effect")).unwrap(), b"x");
         drop(stream);
         wait_idle(&agent).await;
+    }
+}
+
+#[tokio::test]
+async fn spawn_and_result_commit_failures_remain_unknown_under_the_same_key() {
+    for failure in ["spawn", "commit"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent = Agent::new(config(tmp.path())).unwrap();
+        let effect = tmp.path().join("effect");
+        let mut params = json!({
+            "exec_key":"private-key-must-not-appear-in-diagnostics",
+            "command":format!("printf x >> {}", effect.display()),
+        });
+        let context = if failure == "spawn" {
+            params["command"] = json!("/no-such-workload-executable");
+            params["argv"] = json!([]);
+            "spawn workload process"
+        } else {
+            let db =
+                rusqlite::Connection::open(agent.ledger.directory.join("exec.sqlite3")).unwrap();
+            db.execute_batch(
+                "CREATE TRIGGER reject_result BEFORE UPDATE ON executions
+                WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'fixture result commit failure'); END;"
+            ).unwrap();
+            "commit keyed exec result"
+        };
+        let mut stream = connect(&agent, Portal::Workload);
+        let request = request("unknown", "exec", params);
+        let first = rpc(&mut stream, request.clone()).await;
+        let terminal = first.last().unwrap();
+        assert_eq!(terminal.params_json()["error_code"], "result_unknown");
+        assert_eq!(terminal.params_json()["result_state"], "result_unknown");
+        assert!(terminal.error.contains(context), "{terminal:?}");
+        assert!(!terminal.error.contains("private-key-must-not-appear"));
+        let replay = rpc(&mut stream, request).await;
+        assert_eq!(
+            replay.last().unwrap().params_json()["error_code"],
+            "result_unknown"
+        );
+        assert!(
+            !replay
+                .iter()
+                .any(|frame| frame.params_json()["started"] == true)
+        );
+        if failure == "commit" {
+            assert_eq!(std::fs::read(&effect).unwrap(), b"x");
+        } else {
+            assert!(!effect.exists());
+        }
     }
 }
 

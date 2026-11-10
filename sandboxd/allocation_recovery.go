@@ -26,8 +26,8 @@ func (s *Service) quotaRecoveryAllocation(
 		return nil, err
 	}
 	if matches != 1 {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"allocation step has multiple descriptors",
 		)
 	}
@@ -44,8 +44,8 @@ func (a recoveryAllocation) validate(proof api.Operation) error {
 		(a.Request.Action == "restore" && proof.VMID != "" && proof.VMID != a.Request.VMID) ||
 		(a.Request.Action == "restore" && proof.Status == "succeeded" &&
 			(proof.VMID == "" || proof.VMID != a.Request.VMID || proof.ResultInstance == "")) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"recovery receipt does not match frozen allocation request",
 		)
 	}
@@ -72,8 +72,8 @@ func (s *Service) reconcileRecoveryAllocations(
 		}
 		if a.Resolution.State != "unresolved" &&
 			a.Resolution.State != "result_known" {
-			return recoveryProgress{}, api.Fail(
-				api.ManualRecovery,
+			return recoveryProgress{}, Fail(
+				ErrManualRecovery,
 				"invalid allocation resolution",
 			)
 		}
@@ -97,7 +97,7 @@ func (s *Service) reconcileRecoveryAllocations(
 				continue
 			}
 			b, e := getSandbox(s.ctx, s.store.db, a.SandboxID)
-			if e != nil && !isCode(e, api.NotFound) {
+			if e != nil && !isCode(e, ErrNotFound) {
 				return recoveryProgress{}, e
 			}
 			if e == nil &&
@@ -261,7 +261,7 @@ func (s *Service) reconcileRecoveryAllocations(
 			return recoveryProgress{}, err
 		}
 		v, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
-		if isCode(err, api.NotFound) &&
+		if isEngineCode(err, api.NotFound) &&
 			(proof.Status == "failed" || proof.Status == "succeeded") &&
 			b.TenantID == a.ChargeTenantID &&
 			(b.VMID == proof.VMID || b.VMID == "") {
@@ -283,8 +283,8 @@ func (s *Service) reconcileRecoveryAllocations(
 			!v.Verified ||
 			v.OperationID != "" ||
 			v.ID != proof.VMID {
-			return recoveryProgress{}, api.Fail(
-				api.ManualRecovery,
+			return recoveryProgress{}, Fail(
+				ErrManualRecovery,
 				"allocation destination is unverified or owned elsewhere",
 			)
 		}
@@ -293,8 +293,8 @@ func (s *Service) reconcileRecoveryAllocations(
 			// handed to proven existing V responsibility, never to a guessed candidate.
 			if v.Instance == "" || v.Instance != a.Request.ExpectedInstance ||
 				b.Instance != v.Instance {
-				return recoveryProgress{}, api.Fail(
-					api.ManualRecovery,
+				return recoveryProgress{}, Fail(
+					ErrManualRecovery,
 					"failed allocation has no proven existing VM holder",
 				)
 			}
@@ -311,8 +311,8 @@ func (s *Service) reconcileRecoveryAllocations(
 		}
 		if proof.ResultInstance == "" || v.Instance != proof.ResultInstance ||
 			(b.Instance != a.Request.ExpectedInstance && b.Instance != proof.ResultInstance) {
-			return recoveryProgress{}, api.Fail(
-				api.ManualRecovery,
+			return recoveryProgress{}, Fail(
+				ErrManualRecovery,
 				"successful allocation lacks exact result instance proof",
 			)
 		}
@@ -325,8 +325,8 @@ func (s *Service) reconcileRecoveryAllocations(
 		owned := b.OperationID == r.Source ||
 			strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
 		if !owned || b.State != "resuming" {
-			return recoveryProgress{}, api.Fail(
-				api.ManualRecovery,
+			return recoveryProgress{}, Fail(
+				ErrManualRecovery,
 				"result has no lawful lifecycle continuation",
 			)
 		}
@@ -352,7 +352,7 @@ func (s *Service) deliverKnownAllocation(
 	a := r.Allocations[index]
 	if a.Resolution.Proof == nil ||
 		!recoveryTerminal(a.Resolution.Proof.Status) {
-		return api.Fail(api.ManualRecovery, "allocation is not terminal")
+		return Fail(ErrManualRecovery, "allocation is not terminal")
 	}
 	if vm != "" && state == "cleanup" {
 		var holders int
@@ -367,8 +367,8 @@ func (s *Service) deliverKnownAllocation(
 		if holders == 0 || b.VMID != vm ||
 			b.Instance != a.Request.ExpectedInstance ||
 			b.TenantID != a.ChargeTenantID {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"terminal allocation lost its VM destination",
 			)
 		}
@@ -392,8 +392,8 @@ func (s *Service) deliverKnownAllocation(
 		return err
 	}
 	if pending != 0 {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"terminal allocation still has pending storage",
 		)
 	}
@@ -411,8 +411,8 @@ func (s *Service) deliverKnownAllocation(
 			return err
 		}
 		if b.TenantID != a.ChargeTenantID || (b.VMID != vm && b.VMID != "") {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"absent allocation has another sandbox target",
 			)
 		}
@@ -425,8 +425,8 @@ func (s *Service) deliverKnownAllocation(
 			return err
 		}
 		if remaining > 0 {
-			return api.Fail(
-				api.Conflict,
+			return Fail(
+				ErrConflict,
 				"absent VM still has unresolved allocation dependencies",
 			)
 		}
@@ -442,8 +442,8 @@ func (s *Service) deliverKnownAllocation(
 			if current.VMID != "" || current.Instance != "" ||
 				current.State != b.State ||
 				current.TenantID != b.TenantID {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"absent VM metadata was not retired",
 				)
 			}
@@ -474,8 +474,8 @@ func (s *Service) validateAbsentRestoreTx(
 		r.SandboxID != a.SandboxID ||
 		!strings.HasPrefix(a.OperationID, "recovery:"+r.ID+":") ||
 		a.Request.Key != stepKey(a.operation(), a.Step) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"absent restore has no exact successful history",
 		)
 	}
@@ -506,8 +506,8 @@ func (s *Service) validateAbsentRestoreTx(
 		(b.VMID != vm && b.VMID != "") ||
 		(b.VMID == vm && b.Instance != a.Request.ExpectedInstance && b.Instance != proof.ResultInstance) ||
 		(b.VMID == "" && b.Instance != "") {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"absent restore history belongs to another lifecycle",
 		)
 	}
@@ -564,7 +564,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 		return err
 	}
 	if r.Group == nil {
-		return api.Fail(api.ManualRecovery, "missing allocation group")
+		return Fail(ErrManualRecovery, "missing allocation group")
 	}
 	if r.Done && r.Group.Gate == nil && !hasUnresolvedAllocations(r) &&
 		(r.Group.Selection == nil || r.Group.Selection.Stage == "active" || r.Group.Selection.Stage == "cleanup_done") {
@@ -601,7 +601,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 		}
 		proof, e := s.opts.Engine.FindOperation(s.ctx, frozen.Request.Key)
 		if e != nil {
-			if isCode(e, api.NotFound) {
+			if isEngineCode(e, api.NotFound) {
 				continue
 			}
 			return e
@@ -710,15 +710,15 @@ func (s *Service) resolveAllocationGroup(id string) error {
 				return e
 			}
 			if latest.Group.Identity != nil || !groupStepsTerminal(latest) {
-				return api.Fail(
-					api.Conflict,
+				return Fail(
+					ErrConflict,
 					"terminal allocation responsibility changed",
 				)
 			}
 			for _, a := range latest.Allocations {
 				if !a.Resolution.delivered() {
-					return api.Fail(
-						api.Conflict,
+					return Fail(
+						ErrConflict,
 						"terminal allocation still has pending responsibility",
 					)
 				}
@@ -772,7 +772,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 		return nil
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, r.Group.Identity.VM)
-	if isCode(err, api.NotFound) {
+	if isEngineCode(err, api.NotFound) {
 		return s.retireAllocationAbsent(r.ID)
 	}
 	if err != nil {

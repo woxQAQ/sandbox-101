@@ -89,7 +89,7 @@ func (s *Service) DataReady(
 		return b, err
 	}
 	if b.State != "running" || !time.Now().Before(b.Deadline) {
-		return b, api.Fail(api.Conflict, "sandbox lease is not active")
+		return b, Fail(ErrConflict, "sandbox lease is not active")
 	}
 	if b.SnapshotID != "" {
 		if err = s.commitRunning(
@@ -100,8 +100,8 @@ func (s *Service) DataReady(
 		}
 	}
 	if s.credentialsMissing(b) {
-		return b, api.Fail(
-			api.Conflict,
+		return b, Fail(
+			ErrConflict,
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
@@ -109,8 +109,8 @@ func (s *Service) DataReady(
 		// Confirm residual teardown before admission; LastError is diagnostic
 		// and its persistence may have failed during maintenance.
 		if err = s.bind(ctx, b, ""); err != nil {
-			return b, api.Fail(
-				api.Conflict,
+			return b, Fail(
+				ErrConflict,
 				"egress policy could not be revoked",
 			)
 		}
@@ -150,11 +150,11 @@ func (s *Service) DataReady(
 func (s *Service) verifiedVM(ctx context.Context, b Sandbox) (api.VM, error) {
 	v, err := s.opts.Engine.GetVM(ctx, b.VMID)
 	if err != nil {
-		return v, err
+		return v, engineFailure(err)
 	}
 	if v.Instance != b.Instance || v.Phase != "running" || !v.AgentReady ||
 		!v.Verified {
-		return v, api.Fail(api.Conflict, "engine VM is not verified ready")
+		return v, Fail(ErrConflict, "engine VM is not verified ready")
 	}
 	return v, nil
 }
@@ -166,7 +166,7 @@ func (s *Service) dataFence(ctx context.Context, id string) error {
 		return err
 	}
 	if fence != "" {
-		return api.Fail(api.Conflict, "sandbox configuration change is pending")
+		return Fail(ErrConflict, "sandbox configuration change is pending")
 	}
 	return nil
 }
@@ -189,16 +189,16 @@ func (s *Service) lockDataAdmission(
 		err = s.dataFence(ctx, id)
 	}
 	if err == nil && (b.State != "running" || !time.Now().Before(b.Deadline)) {
-		err = api.Fail(api.Conflict, "sandbox lease is not active")
+		err = Fail(ErrConflict, "sandbox lease is not active")
 	}
 	if err == nil && s.credentialsMissing(b) {
-		err = api.Fail(
-			api.Conflict,
+		err = Fail(
+			ErrConflict,
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
 	if err == nil && b.LastError != "" {
-		err = api.Fail(api.Conflict, "sandbox is blocked: %s", b.LastError)
+		err = Fail(ErrConflict, "sandbox is blocked; operator review required")
 	}
 	if err != nil {
 		unlock()

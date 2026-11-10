@@ -18,7 +18,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		return nil
 	}
 	b, err := getSandbox(s.ctx, s.store.db, r.SandboxID)
-	if isCode(err, api.NotFound) {
+	if isCode(err, ErrNotFound) {
 		return s.finishRecoveryAttempt(r, nil)
 	}
 	if err != nil {
@@ -94,8 +94,8 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 			if deletion != nil {
 				if deletion.Request.VMID != b.VMID ||
 					deletion.Request.ExpectedInstance != b.Instance {
-					return api.Fail(
-						api.ManualRecovery,
+					return Fail(
+						ErrManualRecovery,
 						"original release does not match the sandbox instance",
 					)
 				}
@@ -105,12 +105,12 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 				if deletion.Status == "succeeded" {
 					_, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
 					if e == nil {
-						return api.Fail(
-							api.ManualRecovery,
+						return Fail(
+							ErrManualRecovery,
 							"successful deletion still has a live VM",
 						)
 					}
-					if !isCode(e, api.NotFound) {
+					if !isEngineCode(e, api.NotFound) {
 						return e
 					}
 				}
@@ -131,8 +131,8 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		)
 	case "pausing":
 		if source.Command.Action != "pause" {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"pausing sandbox has no pause intent",
 			)
 		}
@@ -176,7 +176,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 			}
 		}
 		v, e := s.opts.Engine.GetVM(s.ctx, b.VMID)
-		if isCode(e, api.NotFound) && b.SnapshotID != "" {
+		if isEngineCode(e, api.NotFound) && b.SnapshotID != "" {
 			if err = s.reclaimQuota("vm_disk", b.VMID); err != nil {
 				return err
 			}
@@ -190,8 +190,8 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		if !v.Verified || (v.Phase != "running" && b.SnapshotID == "") ||
 			b.Instance == "" ||
 			v.Instance != b.Instance {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"cannot prove the original hibernating VM instance",
 			)
 		}
@@ -235,8 +235,8 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 			)
 		}
 		if source.Command.Action != "resume" {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"resuming sandbox has no resume or rollback intent",
 			)
 		}
@@ -261,11 +261,11 @@ func (s *Service) recoverFailedClone(
 		return err
 	}
 	if proof != nil && !recoveryTerminal(proof.Status) {
-		return api.Fail(api.Conflict, "resume clone is still running")
+		return Fail(ErrConflict, "resume clone is still running")
 	}
 	if b.VMID != "" && (proof == nil || proof.VMID != b.VMID) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"failed resume VM has no matching clone receipt",
 		)
 	}
@@ -285,13 +285,13 @@ func (s *Service) recoverFailedClone(
 			return e
 		}
 		if vms[vmid] {
-			return api.Fail(api.Conflict, "failed resume VM has another owner")
+			return Fail(ErrConflict, "failed resume VM has another owner")
 		}
 		v, e := s.opts.Engine.GetVM(s.ctx, vmid)
-		if e != nil && !isCode(e, api.NotFound) {
+		if e != nil && !isEngineCode(e, api.NotFound) {
 			return e
 		}
-		if isCode(e, api.NotFound) {
+		if isEngineCode(e, api.NotFound) {
 			if reclaimErr := s.reclaimQuota(
 				"vm_disk",
 				vmid,
@@ -302,8 +302,8 @@ func (s *Service) recoverFailedClone(
 		if e == nil {
 			if !v.Verified || (b.Instance != "" && b.Instance != v.Instance) ||
 				(r.Instance != "" && r.Instance != v.Instance) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"failed resume VM instance cannot be proven",
 				)
 			}
@@ -350,8 +350,8 @@ func (s *Service) recoverRollback(
 		return err
 	}
 	if cp.SandboxID != b.ID || cp.TenantID != b.TenantID {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"rollback checkpoint ownership does not match",
 		)
 	}
@@ -367,16 +367,16 @@ func (s *Service) recoverRollback(
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"host credentials must be supplied before rollback recovery",
 		)
 	}
 	o := r.operation()
 	o.Command, o.TenantID, o.ChargeTenantID = source.Command, source.TenantID, source.ChargeTenantID
 	if b.VMID == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"rollback target is missing; refusing an unproven replacement",
 		)
 	}
@@ -385,7 +385,7 @@ func (s *Service) recoverRollback(
 		return err
 	}
 	if !v.Verified {
-		return api.Fail(api.ManualRecovery, "rollback VM is not verified")
+		return Fail(ErrManualRecovery, "rollback VM is not verified")
 	}
 	target := ""
 	for _, a := range r.Allocations {
@@ -397,7 +397,7 @@ func (s *Service) recoverRollback(
 		}
 	}
 	if target != "" && v.Instance != target {
-		return api.Fail(api.ManualRecovery, "restore result instance changed")
+		return Fail(ErrManualRecovery, "restore result instance changed")
 	}
 	if target == "" && v.Phase == "stopped" && source.SourceInstance != "" &&
 		v.Instance == source.SourceInstance {
@@ -407,8 +407,8 @@ func (s *Service) recoverRollback(
 		}
 		if stop == nil || stop.Status != "succeeded" || stop.VMID != v.ID ||
 			stop.Request.ExpectedInstance != v.Instance {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"rollback stop receipt does not prove the stopped source",
 			)
 		}
@@ -473,8 +473,8 @@ func (s *Service) recoverRollback(
 			!v.Verified ||
 			!v.AgentReady ||
 			v.Phase != "running" {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"rollback running instance cannot be proven",
 			)
 		}
@@ -488,15 +488,15 @@ func (s *Service) recoverRollback(
 		return s.finishResume(&o, b)
 	}
 	if v.Instance != target || v.OperationID != "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"rollback result has another instance or owner",
 		)
 	}
 	r.Instance = target
 	if v.Phase != "running" || !v.AgentReady || !v.Verified {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"rollback restore is not verified running",
 		)
 	}

@@ -23,8 +23,8 @@ func failedRecoveryOperation(
 		Command:        Command{Action: action, SandboxID: b.ID},
 		IDs:            []string{b.ID},
 		Status:         "failed",
-		Error: &api.Error{
-			Code:    api.Internal,
+		Error: &Error{
+			Code:    ErrInternal,
 			Message: "interrupted cleanup",
 		},
 		CreatedAt: time.Now().UTC(),
@@ -243,7 +243,7 @@ func TestRecoverResourcesFailedProvisionCleanupRetriesDurably(t *testing.T) {
 	if _, err = f.GetVM(
 		context.Background(),
 		vmid,
-	); !isCode(
+	); !isEngineCode(
 		err,
 		api.NotFound,
 	) {
@@ -261,7 +261,7 @@ func TestRecoverResourcesFailedHibernateRetainsVMBeforeCapture(t *testing.T) {
 	b.State = "pausing"
 	failedRecoveryOperation(t, s, "pause", &b)
 	f.failSnapshot = true
-	if err := s.recoverResources(); !isCode(err, api.Exhausted) {
+	if err := s.recoverResources(); !isCode(err, ErrExhausted) {
 		t.Fatalf("expected failed capture: %v", err)
 	}
 	b = recoverySandbox(t, s, b.ID)
@@ -403,7 +403,7 @@ func TestRecoverResourcesRollbackPreservesUnprovenRunningInstance(
 	if err := saveOp(s.ctx, s.store.db, source); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.recoverResources(); !isCode(err, api.ManualRecovery) {
+	if err := s.recoverResources(); !isCode(err, ErrManualRecovery) {
 		t.Fatalf("unproven rollback should require recovery: %v", err)
 	}
 	if f.count("delete") != 0 || f.count("stop") != 0 ||
@@ -445,7 +445,7 @@ func TestRecoverResourcesUnknownResumeVMIsPreserved(t *testing.T) {
 	}
 	f.mu.Unlock()
 	before := f.count("delete")
-	if err := s.recoverResources(); !isCode(err, api.ManualRecovery) {
+	if err := s.recoverResources(); !isCode(err, ErrManualRecovery) {
 		t.Fatalf(
 			"resume without clone receipt should preserve unknown VM: %v",
 			err,

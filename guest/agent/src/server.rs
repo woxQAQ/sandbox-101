@@ -2,7 +2,7 @@ use crate::{
     Agent, string,
     wire::{self, Frame},
 };
-use anyhow::{Result, bail, ensure};
+use crate::{Error, ErrorCode, Result, ResultContext};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::{
@@ -26,11 +26,11 @@ pub struct Output {
 impl Output {
     pub async fn send(&self, frame: Frame) -> Result<()> {
         tokio::select! {
-            _ = self.cancel.cancelled() => bail!("connection closed"),
+            _ = self.cancel.cancelled() => bail!(Internal => "connection closed"),
             result = tokio::time::timeout(Duration::from_secs(30),self.tx.send(frame)) => {
                 match result {
                     Ok(Ok(())) => Ok(()),
-                    _ => { self.cancel.cancel(); bail!("output stalled or disconnected") }
+                    _ => { self.cancel.cancel(); bail!(Internal => "output stalled or disconnected") }
                 }
             }
         }
@@ -62,7 +62,11 @@ where
         let _guard = StreamGuard(agent.clone());
         let request = first.take().unwrap();
         if agent.quiesced.load(Ordering::SeqCst) {
-            wire::write_frame(&mut stream, &request.failure("agent is quiesced")).await?;
+            wire::write_frame(
+                &mut stream,
+                &request.failure(Error::new(ErrorCode::Quiesced, "agent is quiesced")),
+            )
+            .await?;
             return Ok(());
         }
         return crate::proxy::raw_port_forward(stream, request).await;
@@ -111,7 +115,7 @@ where
             let permit = if requests.len() < 16 { slots.try_acquire_owned().ok() } else { None };
             let Some(permit) = permit else {
                 drop(requests);
-                Output {request:frame.clone(),tx:tx.clone(),cancel:cancel.clone()}.send(frame.failure("request capacity exhausted")).await?;
+                Output {request:frame.clone(),tx:tx.clone(),cancel:cancel.clone()}.send(frame.failure(Error::new(ErrorCode::ResourceExhausted, "request capacity exhausted"))).await?;
                 continue;
             };
             let (input_tx,input) = mpsc::channel(8);
@@ -120,8 +124,8 @@ where
             let output = Output {request:frame.clone(),tx:tx.clone(),cancel:cancel.clone()};
             tokio::spawn(async move {
                 let _permit = permit;
-                let result = dispatch(agent,portal,&output,input).await;
-                if let Err(error) = result { let _ = output.send(frame.failure(format!("{error:#}"))).await; }
+                let result = dispatch(agent,portal,&output,input).await.or_context(|| request_context(&frame));
+                if let Err(error) = result { let _ = output.send(frame.failure(error)).await; }
                 active.lock().await.remove(&frame.id);
             });
         }
@@ -163,12 +167,12 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
                         .load(std::sync::atomic::Ordering::SeqCst);
                 out.done(json!({"quiescent":running==0 && sessions==0 && in_flight==0,"in_flight":in_flight,"running_processes":running,"sessions":sessions})).await
             }
-            _ => bail!("method is not authorized on admin portal"),
+            _ => bail!(Unauthorized => "method is not authorized on admin portal"),
         };
     }
     ensure!(
         !agent.quiesced.load(std::sync::atomic::Ordering::SeqCst) || f.method == "info",
-        "agent is quiesced"
+        Quiesced => "agent is quiesced"
     );
     ensure!(
         p.get("exec_key").is_none() || matches!(f.method.as_str(), "exec" | "pty_open"),
@@ -180,10 +184,10 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
             out.done(json!({"protocol":1,"portal":"workload","sandbox_id":a.sandbox_id,"network":a.network,"active":!a.sandbox_id.is_empty(),"processes":agent.processes.lock().await.len(),"in_flight":(128-agent.requests.available_permits()).saturating_sub(1)+agent.active_streams.load(std::sync::atomic::Ordering::SeqCst),"quiesced":agent.quiesced.load(std::sync::atomic::Ordering::SeqCst)})).await
         }
         "activate" | "quiesce" | "prepare_template" => {
-            bail!("method is not authorized on workload portal")
+            bail!(Unauthorized => "method is not authorized on workload portal")
         }
         "ping" | "reseed" | "clock_sync" => {
-            bail!("system method is not authorized on workload portal")
+            bail!(Unauthorized => "system method is not authorized on workload portal")
         }
         "exec" | "pty_open" if p.get("exec_key").is_some() => {
             crate::keyed::execute(&agent, out, input).await
@@ -209,7 +213,9 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
                 .await
                 .get(process_id)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("unknown process"))?;
+                .ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, format!("unknown process {process_id}"))
+                })?;
             process.signal(libc::SIGKILL)?;
             out.done(json!({})).await
         }
@@ -219,9 +225,28 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
 
 pub async fn next_input(input: &mut Input, out: &Output) -> Result<Frame> {
     tokio::select! {
-        _ = out.cancel.cancelled() => bail!("connection closed"),
+        _ = out.cancel.cancelled() => bail!(Internal => "connection closed"),
         result = tokio::time::timeout(Duration::from_secs(60),input.recv()) => {
-            result?.ok_or_else(||anyhow::anyhow!("input closed without eof"))
+            result?.ok_or_else(||Error::new(ErrorCode::Internal, "input closed without eof"))
         }
     }
+}
+
+// Do not format all params: commands, environment values and exec keys are private.
+pub(crate) fn request_context(frame: &Frame) -> String {
+    let params = frame.params_json();
+    let targets: Vec<_> = ["path", "destination", "process_id", "session_id", "port"]
+        .iter()
+        .filter_map(|key| {
+            let value = params.get(key)?;
+            if let Some(value) = value.as_str() {
+                Some(format!("{key}={value:?}"))
+            } else if *key == "port" {
+                value.as_u64().map(|value| format!("port={value}"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    format!("guest {} {}", frame.method, targets.join(" "))
 }

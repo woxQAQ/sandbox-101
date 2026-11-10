@@ -3,19 +3,14 @@ use crate::{
     ledger::{Admission, Saved},
     server::{Input, Output},
 };
-use anyhow::{Result, ensure};
+use crate::{Error, ErrorCode, Result, ResultContext};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::mpsc;
 
-async fn failure(out: &Output, state: &str, code: &str) -> Result<()> {
-    let mut frame = out.request.reply(
-        json!({"result_state":state,"error_code":code}),
-        vec![],
-        true,
-    );
-    frame.error = code.into();
-    out.send(frame).await
+#[track_caller]
+fn failure(state: &str, code: ErrorCode) -> Error {
+    Error::new(code, code.as_str()).with_params(json!({"result_state":state}))
 }
 
 async fn result(out: &Output, saved: &Saved, replayed: bool) -> Result<()> {
@@ -75,7 +70,7 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output, input: Input) -> Result<(
     let activation = agent.activation.lock().await;
     ensure!(
         !agent.quiesced.load(std::sync::atomic::Ordering::SeqCst),
-        "agent is quiesced"
+        Quiesced => "agent is quiesced"
     );
     let environment = agent.environment_for(&activation).await?;
     let mut command = crate::process::command_with_environment(agent, &params, environment)?;
@@ -83,11 +78,13 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output, input: Input) -> Result<(
         .as_std()
         .get_current_dir()
         .map(|p| p.to_path_buf())
-        .unwrap_or(std::env::current_dir()?);
+        .unwrap_or(std::env::current_dir().or_context(|| "resolve keyed exec cwd".into())?);
     let cwd = if cwd.is_absolute() {
         cwd
     } else {
-        std::env::current_dir()?.join(cwd)
+        std::env::current_dir()
+            .or_context(|| "resolve relative keyed exec cwd".into())?
+            .join(cwd)
     };
     command.current_dir(&cwd);
     let effective_env: BTreeMap<_, _> = command
@@ -102,7 +99,7 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output, input: Input) -> Result<(
         .collect();
     let cwd = cwd
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("keyed exec requires a UTF-8 cwd"))?;
+        .ok_or_else(|| Error::new(ErrorCode::Invalid, "keyed exec requires a UTF-8 cwd"))?;
     let fingerprint = agent.ledger.fingerprint("exec-input-v1", &serde_json::to_vec(&json!({
         "method":out.request.method,"params":params,"stdin":agent.ledger.fingerprint("stdin",&out.request.data),
         "eof":out.request.eof,"cwd":cwd,"environment":effective_env,
@@ -110,16 +107,21 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output, input: Input) -> Result<(
     }))?);
     let admission = agent
         .ledger
-        .admit(&activation.sandbox_id, &key, &fingerprint)?;
+        .admit(&activation.sandbox_id, &key, &fingerprint)
+        .or_context(|| "persist keyed exec admission".into())?;
     drop(activation);
     let key = match admission {
         Admission::New(key) => key,
         Admission::Completed(saved) => return result(out, &saved, true).await,
-        Admission::InProgress => return failure(out, "in_progress", "exec_in_progress").await,
-        Admission::Unknown => return failure(out, "result_unknown", "result_unknown").await,
-        Admission::Conflict => return failure(out, "conflict", "exec_key_conflict").await,
+        Admission::InProgress => {
+            return Err(failure("in_progress", ErrorCode::ExecInProgress));
+        }
+        Admission::Unknown => {
+            return Err(failure("result_unknown", ErrorCode::ResultUnknown));
+        }
+        Admission::Conflict => return Err(failure("conflict", ErrorCode::ExecKeyConflict)),
         Admission::Exhausted => {
-            return failure(out, "rejected", "exec_ledger_capacity_exhausted").await;
+            return Err(failure("rejected", ErrorCode::ExecLedgerCapacityExhausted));
         }
     };
     let mut intent = Intent {
@@ -170,11 +172,25 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output, input: Input) -> Result<(
             connected = out.send(frame).await.is_ok();
         }
     }
-    let success = matches!(runner.await, Ok(Ok(()))) && terminal;
-    if !success || agent.ledger.complete(&key, &saved).is_err() {
+    let completion = match runner.await {
+        Ok(Ok(())) if terminal => agent
+            .ledger
+            .complete(&key, &saved)
+            .or_context(|| "commit keyed exec result".into()),
+        Ok(Ok(())) => Err(Error::new(
+            ErrorCode::ResultUnknown,
+            "keyed exec terminal result missing",
+        )),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(Error::from(error)),
+    };
+    if let Err(error) = completion {
         // A failure to commit a terminal result is also unknown, even if a child exited.
         intent.completed = agent.ledger.unknown(&key).is_ok();
-        return failure(out, "result_unknown", "result_unknown").await;
+        let mut unknown =
+            error.context("keyed exec completion unconfirmed; retain the same exec_key");
+        unknown.code = ErrorCode::ResultUnknown;
+        return Err(unknown.with_params(json!({"result_state":"result_unknown"})));
     }
     intent.completed = true;
     result(out, &saved, false).await

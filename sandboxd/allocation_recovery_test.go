@@ -100,7 +100,7 @@ func (x *r3RestoreScenario) releaseFirst(t *testing.T) {
 		"release-before-receipt",
 		Command{Action: "release", SandboxID: x.b.ID},
 	)
-	if !isCode(err, api.Conflict) {
+	if !isCode(err, ErrManualRecovery) {
 		t.Fatal("expected frozen A pre-admission conflict", err)
 	}
 	x.release = result.OperationID
@@ -223,7 +223,7 @@ func (x *r3RestoreScenario) deleteResultBeforeDestination(t *testing.T) {
 	if err != nil || proof.Status != "succeeded" {
 		t.Fatal("legitimate exact-B delete failed", err)
 	}
-	if _, err = x.f.GetVM(x.s.ctx, v.ID); !isCode(err, api.NotFound) {
+	if _, err = x.f.GetVM(x.s.ctx, v.ID); !isEngineCode(err, api.NotFound) {
 		t.Fatal("deleted B is still present", err)
 	}
 	x.assertResultEffects(t)
@@ -344,7 +344,7 @@ func (x *r3RestoreScenario) finishAbsentResult(t *testing.T) {
 	if _, err = x.f.GetSnapshot(
 		x.s.ctx,
 		x.cp.SnapshotID,
-	); !isCode(
+	); !isEngineCode(
 		err,
 		api.NotFound,
 	) {
@@ -923,7 +923,7 @@ func TestQuotaLedgerRecoveryRestoreAcceptedFailureCosts(t *testing.T) {
 			t.Fatal("ordinary restore fault missing")
 		}
 		ledgerMoney(t, s, p.TenantID, 1, 320)
-		if err = s.recoverResources(); !isCode(err, api.Exhausted) {
+		if err = s.recoverResources(); !isCode(err, ErrExhausted) {
 			t.Fatal("383 admitted extra D64", err)
 		}
 		if f.count("restore") != 0 {
@@ -1499,7 +1499,7 @@ func TestQuotaLedgerRecoveryFailedRestoreTransfersSnapshotDependency(
 			if _, err = f.GetSnapshot(
 				s.ctx,
 				cp.SnapshotID,
-			); !isCode(
+			); !isEngineCode(
 				err,
 				api.NotFound,
 			) {
@@ -1569,7 +1569,7 @@ func TestQuotaLedgerRecoveryRestoreReleaseFirst(t *testing.T) {
 				"release-before-receipt",
 				Command{Action: "release", SandboxID: b.ID},
 			)
-			if !isCode(releaseErr, api.Conflict) {
+			if !isCode(releaseErr, ErrManualRecovery) {
 				t.Fatal("need original stale instance rejection", releaseErr)
 			}
 			var failedRelease []byte
@@ -1942,7 +1942,7 @@ func TestQuotaLedgerRecoveryRestoreReconcilesIndependently(t *testing.T) {
 			if _, err = f.GetSnapshot(
 				s.ctx,
 				cp.SnapshotID,
-			); !isCode(
+			); !isEngineCode(
 				err,
 				api.NotFound,
 			) {

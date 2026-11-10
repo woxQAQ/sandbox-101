@@ -238,7 +238,7 @@ func TestQuotaLedgerAdmissionIsAtomic(t *testing.T) {
 		for err := range results {
 			if err == nil {
 				accepted++
-			} else if !isCode(err, api.Exhausted) {
+			} else if !isCode(err, ErrExhausted) {
 				t.Fatal(err)
 			}
 		}
@@ -294,7 +294,7 @@ func TestQuotaLedgerBackupAndRestart(t *testing.T) {
 	opts.StateDir = restored
 	opts.Initialize = false
 	before := f.count("delete")
-	if _, err := Open(opts); !isCode(err, api.ManualRecovery) {
+	if _, err := Open(opts); !isCode(err, ErrManualRecovery) {
 		t.Fatal("backup recovery fence missing", err)
 	}
 	if f.count("delete") != before {
@@ -392,7 +392,7 @@ func TestQuotaLedgerRootUsesResourceOwner(t *testing.T) {
 				b.ID,
 			); !isCode(
 				err,
-				api.Exhausted,
+				ErrExhausted,
 			) {
 				t.Fatal("automatic owner admission inherited root bypass", err)
 			}
@@ -536,7 +536,7 @@ func TestQuotaLedgerSnapshotChargeExactBoundaries(t *testing.T) {
 			Command{Action: "pause", SandboxID: b.ID},
 		); !isCode(
 			err,
-			api.Exhausted,
+			ErrExhausted,
 		) {
 			t.Fatal(err)
 		}
@@ -586,7 +586,7 @@ func TestQuotaLedgerSnapshotChargeExactBoundaries(t *testing.T) {
 				c,
 			); !isCode(
 				err,
-				api.Exhausted,
+				ErrExhausted,
 			) {
 				t.Fatal(err)
 			}
@@ -626,7 +626,7 @@ func TestQuotaLedgerUnknownInstanceKeepsCharge(t *testing.T) {
 		Command{Action: "release", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrManualRecovery,
 	) {
 		t.Fatal("unproven instance accepted", err)
 	}
@@ -664,7 +664,7 @@ func TestQuotaLedgerSchemaBoundaryAndCorruption(t *testing.T) {
 				},
 			); !isCode(
 				err,
-				api.Incompatible,
+				ErrIncompatible,
 			) {
 				t.Fatal("incompatible schema accepted", err)
 			}
@@ -720,7 +720,7 @@ func TestQuotaLedgerSchemaBoundaryAndCorruption(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := f.count("delete")
-			if _, err := Open(opts); !isCode(err, api.ManualRecovery) {
+			if _, err := Open(opts); !isCode(err, ErrManualRecovery) {
 				t.Fatal("inconsistent ledger accepted", damage, err)
 			}
 			if f.count("delete") != before {
@@ -782,7 +782,7 @@ func TestQuotaLedgerUnknownAllocationKeepsReservation(t *testing.T) {
 		"lost-create",
 		Command{Action: "claim", TemplateID: "python"},
 	)
-	if !isCode(err, api.Unknown) {
+	if !isCode(err, ErrUnknown) {
 		t.Fatal("original failure changed", err)
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 64)
@@ -799,7 +799,7 @@ func TestQuotaLedgerUnknownAllocationKeepsReservation(t *testing.T) {
 	}
 	ledgerMoney(t, s, p.TenantID, 0, 0)
 	old, err := s.store.operation(s.ctx, result.OperationID)
-	if err != nil || old.Status != "failed" || old.Error.Code != api.Unknown {
+	if err != nil || old.Status != "failed" || old.Error.Code != ErrUnknown {
 		t.Fatal("receipt recovery rewrote failed public result", err)
 	}
 	if f.count("create") != 1 || f.count("delete") != 1 {
@@ -827,7 +827,7 @@ func TestQuotaLedgerRollbackRetainsIndependentVersions(t *testing.T) {
 		Command{Action: "rollback", SandboxID: b.ID, CheckpointID: cp.ID},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatal(err)
 	}

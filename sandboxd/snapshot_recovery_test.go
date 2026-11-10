@@ -45,7 +45,7 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 	if _, err = f.GetSnapshot(
 		s.ctx,
 		cp.SnapshotID,
-	); !isCode(
+	); !isEngineCode(
 		err,
 		api.NotFound,
 	) {
@@ -64,7 +64,7 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 		Command{Action: "pause", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.ManualRecovery,
+		ErrManualRecovery,
 	) {
 		t.Fatal("unproven historical capture accepted", err)
 	}
@@ -277,7 +277,7 @@ func TestRetiredSnapshotCleanupKeepsQuotaUntilReclaimed(t *testing.T) {
 		Command{Action: "pause", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatal("cleanup charge lost", err)
 	}
@@ -349,7 +349,7 @@ func TestRetiredSnapshotHistoricalRunningCaptureAdmission(t *testing.T) {
 		Command{Action: "pause", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatal("historical capture skipped reservation", err)
 	}
@@ -364,7 +364,7 @@ func TestRetiredSnapshotHistoricalRunningCaptureAdmission(t *testing.T) {
 		Command{Action: "pause", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatal("handoff released charge", err)
 	}
@@ -450,7 +450,7 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 		Command{Action: "pause", SandboxID: b.ID},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatal("persistent charge missing", err)
 	}
@@ -558,7 +558,7 @@ func TestSnapshotOwnershipSurvivesReplayAndRestart(t *testing.T) {
 				},
 			); !isCode(
 				err,
-				api.NotFound,
+				ErrNotFound,
 			) {
 				t.Fatal("replay provenance reassigned", err)
 			}
@@ -621,8 +621,8 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 						t.Fatal(err)
 					}
 					original.Status = "failed"
-					original.Error = &api.Error{
-						Code:    api.Unknown,
+					original.Error = &Error{
+						Code:    ErrUnknown,
 						Message: "capture response lost",
 					}
 					if err = saveOp(
@@ -684,7 +684,7 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 					},
 				); !isCode(
 					err,
-					api.NotFound,
+					ErrNotFound,
 				) {
 					t.Fatal("Bob imported replayed Alice capture", err)
 				}
@@ -724,7 +724,7 @@ func TestRootSnapshotGrantSurvivesRestart(t *testing.T) {
 		cmd,
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("tenant created grant", err)
 	}

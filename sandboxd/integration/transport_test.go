@@ -325,6 +325,32 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 			t.Fatalf("reused info stream: %v %v", info, err)
 		}
 	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, tc := range []struct {
+		method string
+		params map[string]any
+		code   string
+	}{
+		{"fs_read", map[string]any{"path": missing}, "not_found"},
+		{"fs_stat", map[string]any{"path": "relative"}, "invalid"},
+		{"proc_kill", map[string]any{"process_id": "absent"}, "not_found"},
+		{"session_rm", map[string]any{"session_id": "absent"}, "not_found"},
+		{"activate", map[string]any{"sandbox_id": "attack"}, "unauthorized"},
+	} {
+		params, err := conn.Call(ctx, tc.method, tc.params, nil)
+		var rpcErr *sdk.RPCError
+		if !errors.As(err, &rpcErr) || rpcErr.Code != tc.code ||
+			params["error_code"] != tc.code ||
+			!strings.Contains(rpcErr.Message, "guest "+tc.method) ||
+			!strings.Contains(rpcErr.Message, "guest/agent/src/") {
+			t.Fatalf(
+				"%s structured failure: params=%v err=%#v",
+				tc.method,
+				params,
+				err,
+			)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	code, err := conn.Exec(
 		ctx,

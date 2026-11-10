@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,77 @@ func TestTerminalOperationRecordIsImmutable(t *testing.T) {
 		if string(first) != string(next) {
 			t.Fatal("terminal idempotency response changed")
 		}
+	}
+}
+
+func TestOperationFailureContextIsDurableAndImmutable(t *testing.T) {
+	for _, name := range []string{"raw", "classified"} {
+		t.Run(name, func(t *testing.T) {
+			classified := name == "classified"
+			b := newTestBackend()
+			dir := t.TempDir()
+			e := openTest(t, dir, b, true, nil)
+			defer func() { _ = e.Close() }()
+			created := wait(
+				t,
+				e,
+				api.Request{Key: "create", Action: "create", Config: config()},
+			)
+			cause := error(errors.New("private agent diagnostic"))
+			if classified {
+				cause = api.Fail(api.Unknown, "unconfirmed agent result")
+			}
+			b.mu.Lock()
+			b.agentError = cause
+			b.mu.Unlock()
+			req := api.Request{
+				Key:    "start-failure",
+				Action: "start",
+				VMID:   created.VMID,
+			}
+			accepted, err := e.Submit(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			final := awaitStatus(t, e, accepted.ID)
+			if final.Status != "failed" || final.Error == nil {
+				t.Fatalf("missing failure receipt: %+v", final)
+			}
+			if classified {
+				if final.Error.Code != api.Unknown ||
+					final.Error.Message != "unconfirmed agent result" {
+					t.Fatalf("classified error changed: %+v", final.Error)
+				}
+			} else if final.Error.Code != api.Internal || final.Step == "" ||
+				!strings.HasPrefix(
+					final.Error.Message,
+					"start ("+final.Step+"): ",
+				) ||
+				!strings.Contains(
+					final.Error.Message,
+					"private agent diagnostic",
+				) {
+				t.Fatalf("operation context missing: %+v", final)
+			}
+			vm, err := e.GetVM(context.Background(), created.VMID)
+			if err != nil ||
+				!strings.Contains(vm.BlockedReason, final.Error.Message) {
+				t.Fatalf("VM diagnostic diverged: %+v err=%v", vm, err)
+			}
+			before := encode(final)
+			if err := e.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e = openTest(t, dir, b, false, nil)
+			replay, err := e.Submit(context.Background(), req)
+			if err != nil || !bytes.Equal(before, encode(replay)) {
+				t.Fatalf(
+					"terminal context changed after restart: %+v %v",
+					replay,
+					err,
+				)
+			}
+		})
 	}
 }
 
@@ -549,7 +621,7 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 	if final.Status != "failed" ||
 		final.ResultInstance != "" ||
 		final.Error == nil ||
-		final.Error.Message != "restore pre-candidate backend check failed" ||
+		final.Error.Message != "restore (): restore pre-candidate backend check failed" ||
 		after.Journal.Resource != nil ||
 		after.Journal.RestoreBlocked ||
 		after.Journal.Lease ||

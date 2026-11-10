@@ -105,7 +105,7 @@ func TestSnapshotOwnershipBackupRoundTrip(t *testing.T) {
 		},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("foreign capture accepted", err)
 	}
@@ -135,7 +135,7 @@ func TestLegacySnapshotOwnershipStateRequiresReview(t *testing.T) {
 		},
 	); !isCode(
 		err,
-		api.Incompatible,
+		ErrIncompatible,
 	) {
 		t.Fatal("legacy state accepted", err)
 	}
@@ -181,7 +181,7 @@ func TestSandboxdBackupRestorationRequiresReview(t *testing.T) {
 	if got.ID != point.ID {
 		t.Fatal("backup point changed")
 	}
-	if _, err = openStore(restored, false); !isCode(err, api.ManualRecovery) {
+	if _, err = openStore(restored, false); !isCode(err, ErrManualRecovery) {
 		t.Fatal("restored metadata silently started", err)
 	}
 	if err = AcknowledgeStateRecovery(
@@ -269,7 +269,7 @@ func TestBackupPreservesConfigurationFence(t *testing.T) {
 	defer cancel()
 	if _, err = reopened.DataReady(ctx, p, r.Sandbox.ID); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatalf("restored fence admitted to data: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestLegacySchemaTwoRequiresReviewBeforeDDL(t *testing.T) {
 	if err = st.close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = openStore(dir, false); !isCode(err, api.Incompatible) {
+	if _, err = openStore(dir, false); !isCode(err, ErrIncompatible) {
 		t.Fatalf("schema 2 state accepted: %v", err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(dir, "sandboxd.db"))

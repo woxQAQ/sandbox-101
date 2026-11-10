@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/woxQAQ/sandbox-engine/api"
@@ -68,7 +69,7 @@ func (s *Service) Wait(
 			if o.Error != nil {
 				return o.Result, o.Error
 			}
-			return o.Result, api.Fail(api.Internal, "operation failed")
+			return o.Result, Fail(ErrInternal, "operation failed")
 		}
 		select {
 		case <-ctx.Done():
@@ -89,13 +90,13 @@ func (s *Service) Operation(
 	}
 	if !visible(p, o.TenantID, o.Command.SandboxID) ||
 		(p.SandboxID != "" && !p.Root && o.Command.Action != "renew" && o.Command.Action != "release") {
-		return Operation{}, api.Fail(api.NotFound, "not found")
+		return Operation{}, Fail(ErrNotFound, "not found")
 	}
 	if _, err := s.resultTokens(p, o.Result); err != nil {
 		return Operation{}, err
 	}
 	o.Result.Tokens = nil
-	return o, nil
+	return publicOperation(o), nil
 }
 
 func (s *Service) resultTokens(p Principal, r Result) (Result, error) {
@@ -106,15 +107,15 @@ func (s *Service) resultTokens(p Principal, r Result) (Result, error) {
 	}
 	for _, b := range targets {
 		if !visible(p, b.TenantID, b.ID) {
-			return Result{}, api.Fail(api.NotFound, "not found")
+			return Result{}, Fail(ErrNotFound, "not found")
 		}
 	}
 	if r.Checkpoint != nil &&
 		!visible(p, r.Checkpoint.TenantID, r.Checkpoint.SandboxID) {
-		return Result{}, api.Fail(api.NotFound, "not found")
+		return Result{}, Fail(ErrNotFound, "not found")
 	}
 	if r.Template != nil && !visible(p, r.Template.TenantID, "") {
-		return Result{}, api.Fail(api.NotFound, "not found")
+		return Result{}, Fail(ErrNotFound, "not found")
 	}
 	for _, b := range targets {
 		if b.State != "terminated" {
@@ -124,7 +125,7 @@ func (s *Service) resultTokens(p Principal, r Result) (Result, error) {
 			r.Tokens[b.ID] = s.issuedToken(b)
 		}
 	}
-	return r, nil
+	return publicResult(r), nil
 }
 
 func (s *Service) setStep(o *Operation, step string) error {
@@ -146,8 +147,8 @@ func (s *Service) engine(
 	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
 		return api.Operation{}, err
 	} else if a != nil && !bytes.Equal(encode(a.Request), encode(r)) {
-		return api.Operation{}, api.Fail(
-			api.ManualRecovery,
+		return api.Operation{}, Fail(
+			ErrManualRecovery,
 			"recovery dispatch does not match frozen allocation request",
 		)
 	}
@@ -164,8 +165,8 @@ func (s *Service) engine(
 			return api.Operation{}, err
 		}
 		if source.VMID != r.VMID || source.Instance != r.ExpectedInstance {
-			return api.Operation{}, api.Fail(
-				api.ManualRecovery,
+			return api.Operation{}, Fail(
+				ErrManualRecovery,
 				"capture does not match the source sandbox instance",
 			)
 		}
@@ -178,8 +179,8 @@ func (s *Service) engine(
 			return api.Operation{}, err
 		}
 		if source.TenantID != o.ChargeTenantID {
-			return api.Operation{}, api.Fail(
-				api.ManualRecovery,
+			return api.Operation{}, Fail(
+				ErrManualRecovery,
 				"restore charge owner mismatch",
 			)
 		}
@@ -209,6 +210,7 @@ func (s *Service) engine(
 		return api.Operation{}, err
 	}
 	result, err := api.Wait(s.ctx, s.opts.Engine, r)
+	err = engineFailure(err)
 	if r.Action == "clone" && result.VMID != "" && o.ChargeTenantID != "" {
 		if e := referenceQuotaSnapshot(
 			s.ctx,
@@ -299,7 +301,7 @@ func (s *Service) run(o Operation) {
 		}
 		if err != nil {
 			o.Status = "failed"
-			o.Error = internalError(err)
+			o.Error = operationError(o, err)
 		} else {
 			o.Status = "succeeded"
 		}
@@ -307,12 +309,12 @@ func (s *Service) run(o Operation) {
 		// Resource receipts are recorded before publishing a terminal result.
 		if e := s.finishQuotaOperation(o); e != nil {
 			o.Status = "failed"
-			o.Error = internalError(errors.Join(err, e))
+			o.Error = operationError(o, errors.Join(err, e))
 		}
 		group, groupErr := s.findAllocationGroup(o)
 		if groupErr != nil {
 			o.Status = "failed"
-			o.Error = internalError(errors.Join(err, groupErr))
+			o.Error = operationError(o, errors.Join(err, groupErr))
 		} else if group == nil {
 			_ = s.reconcileQuota()
 		}
@@ -327,7 +329,18 @@ func (s *Service) run(o Operation) {
 			"tenant_id":    o.TenantID,
 			"operation_id": o.ID,
 			"status":       o.Status,
+			"step":         o.Step,
+			"diagnostic":   privateDiagnostic(o.Error),
 		},
+	)
+}
+
+func operationError(o Operation, err error) *Error {
+	e := publicError(err)
+	return Wrap(
+		e.Code,
+		fmt.Sprintf("%s (%s): %s", o.Command.Action, o.Step, e.Message),
+		err,
 	)
 }
 
@@ -351,7 +364,7 @@ func (s *store) operation(ctx context.Context, id string) (Operation, error) {
 	err := s.db.QueryRowContext(ctx, "SELECT body,spec_hash FROM operations WHERE id=?", id).
 		Scan(&b, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Operation{}, api.Fail(api.NotFound, "not found")
+		return Operation{}, Fail(ErrNotFound, "not found")
 	}
 	var o Operation
 	if err == nil {
@@ -369,7 +382,7 @@ func (s *store) byKey(
 	err := s.db.QueryRowContext(ctx, "SELECT id FROM operations WHERE tenant=? AND idem_key=?", tenant, key).
 		Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Operation{}, api.Fail(api.NotFound, "not found")
+		return Operation{}, Fail(ErrNotFound, "not found")
 	}
 	if err != nil {
 		return Operation{}, err
@@ -408,24 +421,24 @@ type Result struct {
 // Operation records an admitted command, its progress, and its terminal result.
 // Key identifies idempotent submission within the tenant scope.
 type Operation struct {
-	ID             string     `json:"id"`
-	Key            string     `json:"key"`
-	TenantID       string     `json:"tenant_id"`
-	ChargeTenantID string     `json:"charge_tenant_id,omitempty"`
-	origin         string     `json:"-"`
-	hash           string     `json:"-"`
-	Command        Command    `json:"command"`
-	IDs            []string   `json:"resource_ids,omitempty"`
-	Status         string     `json:"status"`
-	Step           string     `json:"step"`
-	SnapshotID     string     `json:"snapshot_id,omitempty"`
-	OwnedSnapshot  bool       `json:"owned_snapshot,omitempty"`
-	ReservedMiB    int64      `json:"reserved_mib,omitempty"`
-	SourceInstance string     `json:"source_instance,omitempty"`
-	Result         Result     `json:"result"`
-	Error          *api.Error `json:"error,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	FinishedAt     time.Time  `json:"finished_at"`
+	ID             string    `json:"id"`
+	Key            string    `json:"key"`
+	TenantID       string    `json:"tenant_id"`
+	ChargeTenantID string    `json:"charge_tenant_id,omitempty"`
+	origin         string    `json:"-"`
+	hash           string    `json:"-"`
+	Command        Command   `json:"command"`
+	IDs            []string  `json:"resource_ids,omitempty"`
+	Status         string    `json:"status"`
+	Step           string    `json:"step"`
+	SnapshotID     string    `json:"snapshot_id,omitempty"`
+	OwnedSnapshot  bool      `json:"owned_snapshot,omitempty"`
+	ReservedMiB    int64     `json:"reserved_mib,omitempty"`
+	SourceInstance string    `json:"source_instance,omitempty"`
+	Result         Result    `json:"result"`
+	Error          *Error    `json:"error,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	FinishedAt     time.Time `json:"finished_at"`
 }
 
 func stepKey(

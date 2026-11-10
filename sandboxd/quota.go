@@ -38,8 +38,8 @@ func requireQuotaResource(
 		return err
 	}
 	if count != 1 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation lost its cost or typed destination reference",
 		)
 	}
@@ -80,8 +80,8 @@ func requireSQLWrite(result sql.Result, err error) error {
 		return err
 	}
 	if n != 1 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"required responsibility write did not affect one row",
 		)
 	}
@@ -104,7 +104,7 @@ func putQuotaResource(
 ) error {
 	if r.Tenant == "" || r.Key == "" || r.Source == "" || r.Slots < 0 ||
 		r.Storage < 0 {
-		return api.Fail(api.ManualRecovery, "incomplete quota responsibility")
+		return Fail(ErrManualRecovery, "incomplete quota responsibility")
 	}
 	if _, err := e.ExecContext(
 		ctx,
@@ -124,8 +124,8 @@ func putQuotaResource(
 		return err
 	}
 	if slots != r.Slots || storage != r.Storage {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"quota resource cost conflicts with its identity",
 		)
 	}
@@ -154,7 +154,7 @@ func putQuotaRef(
 	err = e.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?`, tenant, kind, key, ref.Kind, ref.ID).
 		Scan(&present)
 	if err == nil && present != 1 {
-		return api.Fail(api.ManualRecovery, "quota reference was not persisted")
+		return Fail(ErrManualRecovery, "quota reference was not persisted")
 	}
 	return err
 }
@@ -274,7 +274,7 @@ func quoteSnapshot(
 		return 0, err
 	}
 	if storage != shape.DiskMiB+shape.MemoryMiB {
-		return 0, api.Fail(api.ManualRecovery, "snapshot quota shape mismatch")
+		return 0, Fail(ErrManualRecovery, "snapshot quota shape mismatch")
 	}
 	return 0, nil
 }
@@ -303,8 +303,8 @@ func (s *Service) quotaAllocation(
 		return allocationContext{}, "", true, err
 	} else if a != nil {
 		if a.ChargeTenantID != o.ChargeTenantID {
-			return allocationContext{}, "", true, api.Fail(
-				api.ManualRecovery,
+			return allocationContext{}, "", true, Fail(
+				ErrManualRecovery,
 				"recovery charge owner mismatch",
 			)
 		}
@@ -366,8 +366,8 @@ func (s *Service) quotaAllocation(
 		return allocationContext{}, kind, true, err
 	}
 	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
-		return allocationContext{}, kind, true, api.Fail(
-			api.ManualRecovery,
+		return allocationContext{}, kind, true, Fail(
+			ErrManualRecovery,
 			"allocation has no trusted charge owner",
 		)
 	}
@@ -587,8 +587,8 @@ func (s *Service) requireQuotaReservation(o Operation, step string) error {
 		if receipt != nil && recoveryTerminal(receipt.Status) {
 			return nil
 		}
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation has no durable reservation or receipt",
 		)
 	}
@@ -702,8 +702,8 @@ func deleteQuotaRows(
 		return err
 	}
 	if rows != expected {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"quota responsibility was not fully retired",
 		)
 	}
@@ -767,8 +767,8 @@ func (s *Service) saveQuotaSandbox(b Sandbox) error {
 			b.SnapshotID,
 			b.TenantID,
 		); err != nil {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"snapshot responsibility has no trusted provenance",
 			)
 		}
@@ -805,8 +805,8 @@ func (s *store) validateQuota(ctx context.Context) error {
 		return err
 	}
 	if bad != 0 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"quota ledger contains inconsistent responsibility",
 		)
 	}
@@ -951,7 +951,7 @@ func (s *Service) reconcileQuota() error {
 		} else {
 			_, err = s.opts.Engine.GetSnapshot(s.ctx, target.key)
 		}
-		if isCode(err, api.NotFound) {
+		if isEngineCode(err, api.NotFound) {
 			if err = s.reclaimQuota(target.kind, target.key); err != nil {
 				return err
 			}
@@ -971,8 +971,8 @@ func (s *Service) admitQuotaRecovery(
 	storage int64,
 ) error {
 	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"recovery allocation has no trusted owner",
 		)
 	}
@@ -994,8 +994,8 @@ func (s *Service) admitQuotaRecovery(
 			if !bytes.Equal(encode(previous.Request), encode(request)) ||
 				previous.Shape != b.Shape ||
 				previous.ChargeTenantID != o.ChargeTenantID {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"recovery allocation intent changed",
 				)
 			}
@@ -1051,8 +1051,8 @@ func (s *Service) admitQuotaRecovery(
 		return err
 	}
 	if rows != 1 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"recovery allocation has no durable responsibility",
 		)
 	}

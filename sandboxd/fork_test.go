@@ -402,7 +402,7 @@ func TestForkRollbackUnknownInstanceSurvivesMaintenance(t *testing.T) {
 			Command{Action: "release", SandboxID: id},
 		); !isCode(
 			err,
-			api.ManualRecovery,
+			ErrManualRecovery,
 		) {
 			t.Fatal("shared release accepted unproven instance", err)
 		}

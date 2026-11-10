@@ -35,8 +35,8 @@ func (s *Service) findAllocationGroup(o Operation) (*resourceRecovery, error) {
 		return nil, err
 	}
 	if r.Kind != "allocation_group" || r.Group == nil {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"allocation group is malformed",
 		)
 	}
@@ -85,8 +85,8 @@ func validateGroupSource(
 			encode(*source.Command.Template),
 			encode(r.Group.Template),
 		) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation group differs from original public intent",
 		)
 	}
@@ -98,8 +98,8 @@ func validateGroupSource(
 			}
 		}
 		if source.Command.Action != "claim" || !found {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"allocation subject is not its original sandbox",
 			)
 		}
@@ -115,8 +115,8 @@ func validateGroupSource(
 			(q.Kind != "checkpoint" && q.Kind != "sleep" && q.Kind != "group" && q.Kind != "external") ||
 			(q.Config != nil && q.Config.Shape != q.Shape) ||
 			(q.Kind == "external" && (q.Config == nil || q.ID != q.SnapshotID)) {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"template quote lost its frozen source",
 			)
 		}
@@ -126,8 +126,8 @@ func validateGroupSource(
 			return err
 		}
 		if owners != 1 {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"template source provenance changed",
 			)
 		}
@@ -220,18 +220,18 @@ func (s *Service) allocationEngine(
 			err = json.Unmarshal(raw, &current)
 		}
 		if err == nil && recoveryTerminal(current.Status) {
-			err = api.Fail(
-				api.ManualRecovery,
+			err = Fail(
+				ErrManualRecovery,
 				"terminal allocation intent cannot dispatch lifecycle work",
 			)
 		}
 	}
 	if err == nil && (r.Group == nil || r.Group.Gate != nil) {
-		err = api.Fail(api.ManualRecovery, "allocation lifecycle is gated")
+		err = Fail(ErrManualRecovery, "allocation lifecycle is gated")
 	}
 	if err == nil && request.Action == "delete" {
-		err = api.Fail(
-			api.ManualRecovery,
+		err = Fail(
+			ErrManualRecovery,
 			"allocation deletion requires a qualified durable destination",
 		)
 	}
@@ -239,8 +239,8 @@ func (s *Service) allocationEngine(
 		(request.Action == "create" || request.Action == "clone" || request.Action == "snapshot" || request.Action == "restore") {
 		a := groupAllocation(&r, step)
 		if a == nil {
-			err = api.Fail(
-				api.ManualRecovery,
+			err = Fail(
+				ErrManualRecovery,
 				"allocation step has no reservation descriptor",
 			)
 		} else {
@@ -248,8 +248,8 @@ func (s *Service) allocationEngine(
 			err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`, r.TenantID, a.Request.Key).
 				Scan(&pending)
 			if err == nil && pending != 1 && a.Resolution.Proof == nil {
-				err = api.Fail(
-					api.ManualRecovery,
+				err = Fail(
+					ErrManualRecovery,
 					"allocation step has no durable pending responsibility",
 				)
 			}
@@ -261,21 +261,21 @@ func (s *Service) allocationEngine(
 		frozen, exists = r.Group.Steps[step]
 		if exists && frozen.Bound &&
 			!bytes.Equal(encode(frozen.Request), encode(request)) {
-			err = api.Fail(api.ManualRecovery, "allocation request changed")
+			err = Fail(ErrManualRecovery, "allocation request changed")
 		}
 		if err == nil && (!exists || !frozen.Bound) {
 			if request.Action == "snapshot" || request.Action == "start" {
 				identity := r.Group.Identity
 				if identity == nil || identity.VM != request.VMID {
-					err = api.Fail(
-						api.ManualRecovery,
+					err = Fail(
+						ErrManualRecovery,
 						"step has no frozen VM identity",
 					)
 				}
 				if err == nil && request.Action == "snapshot" &&
 					(identity.Instance == "" || request.ExpectedInstance != identity.Instance) {
-					err = api.Fail(
-						api.ManualRecovery,
+					err = Fail(
+						ErrManualRecovery,
 						"capture has no successful generation witness",
 					)
 				}
@@ -284,8 +284,8 @@ func (s *Service) allocationEngine(
 					err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND storage_mib=?`, r.TenantID, identity.VM, identity.Shape.DiskMiB).
 						Scan(&disks)
 					if err == nil && disks != 1 {
-						err = api.Fail(
-							api.ManualRecovery,
+						err = Fail(
+							ErrManualRecovery,
 							"capture lost its source disk responsibility",
 						)
 					}
@@ -313,6 +313,7 @@ func (s *Service) allocationEngine(
 		return api.Operation{}, err
 	}
 	proof, engineErr := api.Wait(s.ctx, s.opts.Engine, request)
+	engineErr = engineFailure(engineErr)
 	if proof.Key == "" {
 		return proof, engineErr
 	}
@@ -344,15 +345,15 @@ func (s *Service) adoptGroupReceipt(
 	if !ok || !frozen.Bound || proof.ID == "" ||
 		proof.Key != frozen.Request.Key ||
 		!bytes.Equal(encode(proof.Request), encode(frozen.Request)) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"receipt differs from frozen group request",
 		)
 	}
 	if frozen.Proof != nil && recoveryTerminal(frozen.Proof.Status) &&
 		!bytes.Equal(encode(*frozen.Proof), encode(proof)) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"terminal allocation receipt changed",
 		)
 	}
@@ -478,8 +479,8 @@ func (s *Service) adoptGroupReceipt(
 				}
 			}
 			if r.Group.Identity.VM != key {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"allocation returned another VM",
 				)
 			}
@@ -498,7 +499,7 @@ func (s *Service) adoptGroupReceipt(
 		identity := r.Group.Identity
 		if identity == nil || identity.VM != proof.VMID ||
 			proof.Request.VMID != identity.VM {
-			return api.Fail(api.ManualRecovery, "start returned another VM")
+			return Fail(ErrManualRecovery, "start returned another VM")
 		}
 		identity.Instance = proof.ResultInstance
 		identity.Generation = &proof
@@ -535,7 +536,7 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 	}
 	for _, r := range groups {
 		if r.TenantID == "" || r.Source == "" {
-			return api.Fail(api.ManualRecovery, "group has no owner or source")
+			return Fail(ErrManualRecovery, "group has no owner or source")
 		}
 		if r.Kind == "allocation_cleanup" {
 			if r.Deletion == nil || r.Deletion.Identity.Instance == "" ||
@@ -545,8 +546,8 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 					r.Deletion.Identity.VM,
 					r.Deletion.Identity.Instance,
 				) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"cleanup identity is invalid",
 				)
 			}
@@ -565,29 +566,29 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 			g.Template.Shape.VCPUs < 1 ||
 			g.Template.Shape.DiskMiB < 64 ||
 			g.Template.Shape.MemoryMiB < 128 {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"allocation subject or shape is invalid",
 			)
 		}
 		if g.Gate != nil &&
 			(g.Gate.Reason != "generation_witness_missing" || g.Gate.Mode != "observe_absence_only" || r.Done) {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"invalid allocation observation gate",
 			)
 		}
 		for _, step := range g.Steps {
 			if step.Dispatched && !step.Bound {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"unbound allocation step was dispatched",
 				)
 			}
 			if step.Proof != nil &&
 				(!step.Dispatched || !step.Bound || step.Proof.ID == "" || step.Proof.Key != step.Request.Key || !bytes.Equal(encode(step.Proof.Request), encode(step.Request))) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"step receipt differs from frozen request",
 				)
 			}
@@ -617,16 +618,16 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 				a.ChargeTenantID != r.TenantID ||
 				a.OperationID != r.Source ||
 				a.Request.Key != stepKey(a.operation(), a.Step) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"allocation provenance conflicts",
 				)
 			}
 			if !a.Resolution.delivered() &&
 				a.Resolution.State != "unresolved" &&
 				a.Resolution.State != "result_known" {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"invalid allocation resolution",
 				)
 			}
@@ -643,8 +644,8 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 					return err
 				}
 				if dependency != 1 {
-					return api.Fail(
-						api.ManualRecovery,
+					return Fail(
+						ErrManualRecovery,
 						"allocation lost its source snapshot dependency",
 					)
 				}
@@ -665,8 +666,8 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 							return err
 						}
 						if dependency != 1 {
-							return api.Fail(
-								api.ManualRecovery,
+							return Fail(
+								ErrManualRecovery,
 								"capture lost its publication reader",
 							)
 						}
@@ -677,8 +678,8 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 				step, ok := g.Steps[a.Step]
 				if !ok || step.Bound != a.RequestBound ||
 					!bytes.Equal(encode(step.Request), encode(a.Request)) {
-					return api.Fail(
-						api.ManualRecovery,
+					return Fail(
+						ErrManualRecovery,
 						"allocation step binding conflicts",
 					)
 				}
@@ -725,8 +726,8 @@ func (s *store) validateAllocationGroups(ctx context.Context) error {
 		return err
 	}
 	if catalogBad != 0 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"template catalog lost its snapshot cost, owner or holder",
 		)
 	}
@@ -818,7 +819,7 @@ func (s *Service) recordAllocationResultTx(
 		}
 		if next.Resolution.Proof != nil &&
 			!reflect.DeepEqual(*next.Resolution.Proof, proof) {
-			return api.Fail(api.ManualRecovery, "allocation receipt changed")
+			return Fail(ErrManualRecovery, "allocation receipt changed")
 		}
 		next.Resolution = allocationResolution{
 			State: "result_known",
@@ -826,13 +827,13 @@ func (s *Service) recordAllocationResultTx(
 		}
 		return writeRecovery(s.ctx, tx, r)
 	}
-	return api.Fail(api.ManualRecovery, "missing allocation responsibility")
+	return Fail(ErrManualRecovery, "missing allocation responsibility")
 }
 
 func validateAllocationProvenance(r resourceRecovery) error {
 	if r.Group == nil || r.Group.Identity == nil {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"missing known allocation provenance",
 		)
 	}
@@ -842,8 +843,8 @@ func validateAllocationProvenance(r resourceRecovery) error {
 		i.VM == "" ||
 		i.Receipt.ID == "" ||
 		i.Receipt.VMID != i.VM {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"known allocation provenance changed",
 		)
 	}
@@ -871,28 +872,28 @@ func validateAllocationProvenance(r resourceRecovery) error {
 			i.Generation.ResultInstance == "" ||
 			i.Generation.ResultInstance != i.Instance ||
 			i.Generation.VMID != i.VM {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"generation has no original frozen successful receipt",
 			)
 		}
 	}
 	if !matched {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"known VM has no original frozen receipt",
 		)
 	}
 	if i.Receipt.Request.Action == "create" &&
 		(i.Receipt.Request.Config == nil || i.Receipt.Request.Config.Shape != i.Shape) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"created VM lost full shape provenance",
 		)
 	}
 	if i.Receipt.Request.Action == "clone" &&
 		i.Receipt.Request.SnapshotID != r.Group.Template.SnapshotID {
-		return api.Fail(api.ManualRecovery, "clone lost frozen snapshot source")
+		return Fail(ErrManualRecovery, "clone lost frozen snapshot source")
 	}
 	return nil
 }
@@ -903,8 +904,8 @@ func validAllocationIdentity(r resourceRecovery, v api.VM) error {
 	}
 	g := r.Group
 	if g == nil || g.Identity == nil {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation has no known VM identity",
 		)
 	}
@@ -916,8 +917,8 @@ func validAllocationIdentity(r resourceRecovery, v api.VM) error {
 		i.Receipt.Key != i.Receipt.Request.Key ||
 		i.Receipt.Status != "succeeded" ||
 		(i.Receipt.Request.Action != "create" && i.Receipt.Request.Action != "clone") {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation VM provenance is incomplete",
 		)
 	}
@@ -926,26 +927,26 @@ func validAllocationIdentity(r resourceRecovery, v api.VM) error {
 		i.Generation.ResultInstance != i.Instance ||
 		i.Generation.VMID != i.VM ||
 		(i.Generation.Request.Action != "start" && i.Generation.Request.Action != "clone") {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation lacks immutable successful generation witness",
 		)
 	}
 	if v.ID != i.VM || v.Instance != i.Instance || !v.Verified ||
 		v.OperationID != "" ||
 		v.Config.Shape != i.Shape {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"allocation VM changed or is owned elsewhere",
 		)
 	}
 	if i.Receipt.Request.Action == "create" &&
 		!reflect.DeepEqual(i.Receipt.Request.Config, &v.Config) {
-		return api.Fail(api.ManualRecovery, "created VM config changed")
+		return Fail(ErrManualRecovery, "created VM config changed")
 	}
 	if i.Receipt.Request.Action == "clone" &&
 		i.Receipt.Request.SnapshotID != g.Template.SnapshotID {
-		return api.Fail(api.ManualRecovery, "clone source changed")
+		return Fail(ErrManualRecovery, "clone source changed")
 	}
 	return nil
 }

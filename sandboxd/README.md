@@ -14,6 +14,44 @@ Use `Authorization: Bearer TOKEN`. Root tokens administer tenants and metrics; t
 
 Mutations require a stable `Idempotency-Key`. The same key and parameters return the original operation/result, including terminal failure. Changed parameters conflict. A canceled HTTP request stops waiting while durable work continues. `Prefer: respond-async` returns 202 with an operation and `Location`; poll that location with the same authority. Sandbox tokens may poll only their own renew/release operations, including the completed release after termination; terminated credentials remain rejected on other routes. An operation ID is not an authorization credential. Result responses can contain sandbox tokens, so store them privately.
 
+### Error ownership and diagnostics
+
+HTTP errors and `Operation.Error` belong to `sandboxd.Error`, with the unchanged
+JSON shape `{"code":"...","message":"..."}`. SDK HTTP failures decode to this
+type, independently of Engine errors. `Cause` is process-local diagnostic
+evidence, excluded from JSON and deliberately not exposed through `Unwrap`;
+translated dependency errors cannot be reused as Engine absence proofs.
+
+| sandboxd code | HTTP | Caller action |
+|---|---|---|
+| `not_found` | 404 | Check the tenant-visible identity/authority; foreign and missing resources stay indistinguishable |
+| `forbidden` | 403 | Use root authority for a root-only operation |
+| `invalid` | 400 | Correct the tenant request |
+| `conflict` | 409 | Resolve the sandbox's current lifecycle/admission state |
+| `resource_exhausted` | 429 | Reduce usage or arrange additional capacity |
+| `incompatible` | 422 | Correct the incompatible configuration |
+| `result_unknown` | 503 | Retain the original operation/exec key; do not infer safe replay |
+| `manual_recovery_required` | 503 | Arrange operator review; retained responsibility is not reclaimed |
+| `internal` | 500 | Inspect private operator diagnostics; no automatic mutation replay |
+
+Engine replies are interpreted at the call site before translation. Only a
+direct, authoritative Engine observation, combined with the existing frozen
+ownership proof, can establish physical absence. A missing Engine VM for an
+existing sandbox is a recovery problem, not a tenant 404. Unconsumed Engine
+not-found/conflict/recovery errors map to operator recovery; Engine invalid
+requests are internal failures of host-constructed requests. Unknown results,
+capacity exhaustion and incompatible configuration retain their action categories.
+
+New terminal errors persist safe action/step context. Raw causes are recorded
+best-effort in the existing private, integrity-chained audit journal; journal
+failure does not rewrite a committed terminal result. Journal/metadata backups
+are operator-private and can contain diagnostic paths. `Cause` itself does not
+survive reloading a receipt. Public HTTP errors, operation queries/replays and
+sandbox failure projections omit private diagnostic details, including those
+in historical receipts. Serving these projections does not rewrite stored
+historical error JSON, terminal identity or result witnesses. Direct service
+callers should treat error messages as diagnostics rather than parsing them.
+
 Create a tenant using a root token and `POST /v1/tenants`:
 
 ```json

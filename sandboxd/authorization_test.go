@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func TestAuthenticatedForeignTenantCannotDiscoverObjects(t *testing.T) {
@@ -62,7 +60,7 @@ func TestSandboxTokenCannotReadForkOperation(t *testing.T) {
 		r.OperationID,
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatalf("fork operation visible to source: %v", err)
 	}
@@ -115,7 +113,7 @@ func TestSandboxTokenCanPollOwnLeaseOperations(t *testing.T) {
 				o.ID,
 			); !isCode(
 				err,
-				api.NotFound,
+				ErrNotFound,
 			) {
 				t.Fatalf("foreign read: %v", err)
 			}
@@ -180,7 +178,7 @@ func TestOperationResultTokensRespectPrincipal(t *testing.T) {
 		o.ID,
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatalf("foreign result exposed: %v", err)
 	}

@@ -25,7 +25,7 @@ func (s *Service) claim(o *Operation) error {
 		return nil
 	}
 	if b.State == "terminated" {
-		return api.Fail(api.Conflict, "sandbox was released")
+		return Fail(ErrConflict, "sandbox was released")
 	}
 	var t Template
 	if o.Command.Template != nil {
@@ -190,10 +190,10 @@ func (s *Service) change(o *Operation) error {
 		err = s.release(o, &b)
 	case "renew":
 		if b.State != "running" {
-			return api.Fail(api.Conflict, "renew requires running sandbox")
+			return Fail(ErrConflict, "renew requires running sandbox")
 		}
 		if time.Now().After(b.Deadline) {
-			return api.Fail(api.Conflict, "lease expired")
+			return Fail(ErrConflict, "lease expired")
 		}
 		ttl, e := s.ttl(o.Command.TTLSeconds)
 		if e != nil {
@@ -240,8 +240,8 @@ func (s *Service) change(o *Operation) error {
 			}
 			cp.SnapshotID = snap.SnapshotID
 		default:
-			return api.Fail(
-				api.Conflict,
+			return Fail(
+				ErrConflict,
 				"sandbox cannot checkpoint in %s",
 				b.State,
 			)
@@ -285,7 +285,7 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 		return nil
 	}
 	if b.State != "running" && b.State != "pausing" {
-		return api.Fail(api.Conflict, "sandbox cannot pause in %s", b.State)
+		return Fail(ErrConflict, "sandbox cannot pause in %s", b.State)
 	}
 	if b.State == "running" && b.SnapshotID != "" {
 		if err := s.commitRunning(*o, b); err != nil {
@@ -370,11 +370,11 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		return s.finishResume(o, b)
 	}
 	if b.State != "paused" && b.State != "resuming" {
-		return api.Fail(api.Conflict, "sandbox cannot resume in %s", b.State)
+		return Fail(ErrConflict, "sandbox cannot resume in %s", b.State)
 	}
 	if s.credentialsMissing(*b) {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
@@ -474,8 +474,8 @@ func (s *Service) proveReleaseInstance(o Operation, b *Sandbox) error {
 	}
 	if proof == nil || proof.Status != "succeeded" || proof.VMID != b.VMID ||
 		proof.Request.ExpectedInstance == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"sandbox VM instance cannot be proven for release",
 		)
 	}
@@ -523,7 +523,7 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	// VM. Confirm absence before issuing another delete or requiring a live fence.
 	if b.VMID != "" {
 		_, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
-		if isCode(err, api.NotFound) {
+		if isEngineCode(err, api.NotFound) {
 			if err = s.reclaimQuota("vm_disk", b.VMID); err != nil {
 				return err
 			}
@@ -562,17 +562,15 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 			var e error
 			if origin.Release.Dispatched {
 				proof, e = s.opts.Engine.FindOperation(s.ctx, request.Key)
-			} else {
-				e = api.Fail(api.NotFound, "release not dispatched")
 			}
-			if e != nil && !isCode(e, api.NotFound) {
+			if e != nil && !isEngineCode(e, api.NotFound) {
 				return e
 			}
-			if e == nil {
+			if origin.Release.Dispatched && e == nil {
 				if proof.Key != request.Key ||
 					!reflect.DeepEqual(proof.Request, request) {
-					return api.Fail(
-						api.ManualRecovery,
+					return Fail(
+						ErrManualRecovery,
 						"release receipt differs from frozen intent",
 					)
 				}
@@ -585,7 +583,7 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 						s.ctx,
 						compensationKey,
 					)
-					if e != nil && !isCode(e, api.NotFound) {
+					if e != nil && !isEngineCode(e, api.NotFound) {
 						return e
 					}
 					if e == nil {
@@ -593,8 +591,8 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 						expected.Key = compensationKey
 						if compensation.Key != compensationKey ||
 							!reflect.DeepEqual(compensation.Request, expected) {
-							return api.Fail(
-								api.ManualRecovery,
+							return Fail(
+								ErrManualRecovery,
 								"A compensation receipt mismatch",
 							)
 						}
@@ -674,14 +672,14 @@ func (s *Service) Get(
 		return b, err
 	}
 	if !visible(p, b.TenantID, id) {
-		return Sandbox{}, api.Fail(api.NotFound, "not found")
+		return Sandbox{}, Fail(ErrNotFound, "not found")
 	}
-	return b, nil
+	return publicSandbox(b), nil
 }
 
 func (s *Service) List(ctx context.Context, p Principal) ([]Sandbox, error) {
 	if p.SandboxID != "" {
-		return nil, api.Fail(api.Conflict, "tenant access required")
+		return nil, Fail(ErrConflict, "tenant access required")
 	}
 	all, err := s.store.sandboxes(ctx)
 	if err != nil {
@@ -690,7 +688,7 @@ func (s *Service) List(ctx context.Context, p Principal) ([]Sandbox, error) {
 	out := []Sandbox{}
 	for _, b := range all {
 		if visible(p, b.TenantID, b.ID) {
-			out = append(out, b)
+			out = append(out, publicSandbox(b))
 		}
 	}
 	return out, nil
@@ -701,8 +699,8 @@ func (s *Service) ttl(n int64) (int64, error) {
 		n = 300
 	}
 	if n < 1 || time.Duration(n) > s.opts.MaxTTL/time.Second {
-		return 0, api.Fail(
-			api.Invalid,
+		return 0, Fail(
+			ErrInvalid,
 			"ttl_seconds must be between 1 and %d",
 			int64(s.opts.MaxTTL/time.Second),
 		)
@@ -741,7 +739,7 @@ func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 	err := e.QueryRowContext(ctx, "SELECT body FROM sandboxes WHERE id=?", id).
 		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Sandbox{}, api.Fail(api.NotFound, "not found")
+		return Sandbox{}, Fail(ErrNotFound, "not found")
 	}
 	if err != nil {
 		return Sandbox{}, err

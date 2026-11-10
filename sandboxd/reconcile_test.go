@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
@@ -131,7 +130,7 @@ func TestAutomaticLeaseRenewalAndStaleExpiry(t *testing.T) {
 				b.ID,
 			); !isCode(
 				err,
-				api.Conflict,
+				ErrConflict,
 			) {
 				t.Fatalf("expired lease revived by activity: %v", err)
 			}

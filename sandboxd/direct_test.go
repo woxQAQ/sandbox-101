@@ -141,7 +141,7 @@ func TestDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 			command,
 		); !isCode(
 			err,
-			api.Invalid,
+			ErrInvalid,
 		) {
 			t.Fatalf("invalid direct request accepted: %v", err)
 		}

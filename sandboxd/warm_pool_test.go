@@ -154,7 +154,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 				Command{Action: "claim", TemplateID: template.ID},
 			)
 			if storage == 256 {
-				if !isCode(err, api.Exhausted) || f.count("clone") != before {
+				if !isCode(err, ErrExhausted) || f.count("clone") != before {
 					t.Fatal(
 						"second claim reused one V or allocated over budget",
 						err,
@@ -214,7 +214,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 					Command{Action: "template_put", Template: &changed},
 				); !isCode(
 					err,
-					api.Conflict,
+					ErrForbidden,
 				) {
 					t.Fatal("ordinary pool target mutation allowed", err)
 				}
@@ -244,7 +244,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			s.wg.Wait()
 			for range 3 {
 				if err := s.recoverResources(); err != nil &&
-					!isCode(err, api.ManualRecovery) {
+					!isCode(err, ErrManualRecovery) {
 					t.Fatal(err)
 				}
 				s.pools()
@@ -347,7 +347,7 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 		Command{Action: "release", SandboxID: o.IDs[0]},
 	); !isCode(
 		err,
-		api.ManualRecovery,
+		ErrManualRecovery,
 	) {
 		t.Fatal("release bypassed witnessless replacement", err)
 	}
@@ -488,7 +488,13 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = f.GetSnapshot(s.ctx, old); !isCode(err, api.NotFound) {
+		if _, err = f.GetSnapshot(
+			s.ctx,
+			old,
+		); !isEngineCode(
+			err,
+			api.NotFound,
+		) {
 			t.Fatal("obsolete source snapshot remained pinned", err)
 		}
 		ledgerMoney(t, s, p.TenantID, 0, 192)
@@ -572,7 +578,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 			t.Fatal("external start did not produce a new immutable C witness")
 		}
 		release()
-		if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.ManualRecovery) {
+		if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, ErrManualRecovery) {
 			t.Fatal("changed warm instance was accepted", err)
 		}
 		current, err := f.GetVM(s.ctx, vm)
@@ -664,7 +670,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 	c.Action = "template_put"
 	c.Template.TargetWarm = 1
 	_, err := s.Submit(s.ctx, p, "ordinary-target", c)
-	if !isCode(err, api.Conflict) {
+	if !isCode(err, ErrForbidden) {
 		t.Fatalf("ordinary first nonzero pool target must be refused: %v", err)
 	}
 }

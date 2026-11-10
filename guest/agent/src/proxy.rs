@@ -1,13 +1,17 @@
 use crate::Agent;
-use anyhow::Result;
+use crate::{Result, ResultContext};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tokio_vsock::{VsockAddr, VsockStream};
 
 pub async fn listeners(agent: Arc<Agent>) -> Result<()> {
-    let http = TcpListener::bind("127.0.0.1:3128").await?;
-    let socks = TcpListener::bind("127.0.0.1:1080").await?;
+    let http = TcpListener::bind("127.0.0.1:3128")
+        .await
+        .or_context(|| "bind HTTP bridge 127.0.0.1:3128".into())?;
+    let socks = TcpListener::bind("127.0.0.1:1080")
+        .await
+        .or_context(|| "bind SOCKS bridge 127.0.0.1:1080".into())?;
     let slots = Arc::new(Semaphore::new(64));
     loop {
         let (mut guest, port) = tokio::select! {r=http.accept()=>{let(s,_)=r?;(s,2049)},r=socks.accept()=>{let(s,_)=r?;(s,2050)}};
@@ -39,23 +43,24 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let result: Result<tokio::net::TcpStream> = async {
-        anyhow::ensure!(
+        ensure!(
             !request.id.is_empty() && request.id.len() <= 128 && request.error.is_empty(),
             "invalid port_forward request"
         );
-        anyhow::ensure!(
+        ensure!(
             request.data.is_empty(),
             "raw port_forward sends payload only after ready"
         );
         let port = crate::number(&request.params_json(), "port")?;
-        anyhow::ensure!((1..=65535).contains(&port), "invalid port");
+        ensure!((1..=65535).contains(&port), "invalid port");
         Ok(tokio::time::timeout(
             Duration::from_secs(5),
             tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port as u16)),
         )
         .await??)
     }
-    .await;
+    .await
+    .or_context(|| crate::server::request_context(&request));
     let mut guest = match result {
         Ok(guest) => guest,
         Err(error) => {

@@ -852,7 +852,12 @@ func (f *ownerFixture) get(c *sdk.Client, id string) sandboxd.Sandbox {
 	return b
 }
 
-func ownerCode(err error, code api.Code) bool {
+func ownerCode(err error, code sandboxd.ErrorCode) bool {
+	var e *sandboxd.Error
+	return errors.As(err, &e) && e.Code == code
+}
+
+func ownerEngineCode(err error, code api.Code) bool {
 	var e *api.Error
 	return errors.As(err, &e) && e.Code == code
 }
@@ -1070,7 +1075,13 @@ func (f *ownerFixture) prefix(c *sdk.Client, shape api.Shape) ownerPrefix {
 		paused.SnapshotID == "" {
 		f.t.Fatal("pause result")
 	}
-	if _, err = f.engine.GetVM(f.ctx, b.VMID); !ownerCode(err, api.NotFound) {
+	if _, err = f.engine.GetVM(
+		f.ctx,
+		b.VMID,
+	); !ownerEngineCode(
+		err,
+		api.NotFound,
+	) {
 		f.t.Fatal("old VM not deleted")
 	}
 	f.assertLedger(
@@ -1138,7 +1149,7 @@ func ownerUpgrade(
 	if resp.StatusCode != 101 {
 		defer resp.Body.Close()
 		defer conn.Close()
-		var typed api.Error
+		var typed sandboxd.Error
 		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).
 			Decode(&typed) !=
 			nil {
@@ -1187,17 +1198,17 @@ func (f *ownerFixture) info(c *sdk.Client, id, selected string) {
 	}
 }
 
-func ownerErrorCode(err error) api.Code {
-	if typed, ok := errors.AsType[*api.Error](err); ok {
+func ownerErrorCode(err error) sandboxd.ErrorCode {
+	if typed, ok := errors.AsType[*sandboxd.Error](err); ok {
 		return typed.Code
 	}
-	return api.Internal
+	return sandboxd.ErrInternal
 }
 
 func (f *ownerFixture) eight(
 	c *sdk.Client,
 	id, selected string,
-	want api.Code,
+	want sandboxd.ErrorCode,
 ) {
 	f.t.Helper()
 	type outcome struct {
@@ -1216,7 +1227,7 @@ func (f *ownerFixture) eight(
 	close(out)
 	failed := 0
 	for result := range out {
-		code := api.Code("")
+		code := sandboxd.ErrorCode("")
 		if result.Err != nil {
 			code = ownerErrorCode(result.Err)
 		}
@@ -1320,7 +1331,7 @@ func TestProductionOwnerBudgetMissingRowHTTP(t *testing.T) {
 	before, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(
 		f.ops(),
 	)
-	f.eight(f.root, p.Source.ID, "", api.NotFound)
+	f.eight(f.root, p.Source.ID, "", sandboxd.ErrNotFound)
 	if !reflect.DeepEqual(before, f.ledger()) ||
 		!reflect.DeepEqual(eff, f.engine.effects()) ||
 		!reflect.DeepEqual(agents, f.agent.effects()) ||
@@ -1467,7 +1478,13 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		buildProofs["build-snapshot"].SnapshotID != built.SnapshotID {
 		t.Fatal("build generation or snapshot receipt mismatch")
 	}
-	if _, e := f.engine.GetVM(f.ctx, buildVM); !ownerCode(e, api.NotFound) {
+	if _, e := f.engine.GetVM(
+		f.ctx,
+		buildVM,
+	); !ownerEngineCode(
+		e,
+		api.NotFound,
+	) {
 		t.Fatal("build VM did not actually retire", e)
 	}
 	if f.scalar(
@@ -1545,7 +1562,7 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	f.nextRound()
 	f.until("successor actual absence and destination retired", func() bool {
 		_, e := f.engine.GetVM(f.ctx, successor)
-		return ownerCode(e, api.NotFound) &&
+		return ownerEngineCode(e, api.NotFound) &&
 			f.scalar(
 				`SELECT count(*) FROM quota_resources WHERE kind='vm_disk' AND resource_key=?`,
 				successor,
@@ -1833,7 +1850,7 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 						}
 						if caller == "sandbox-alice" {
 							_, err := c.Get(f.ctx, p.Branches[0].ID)
-							if !ownerCode(err, api.NotFound) {
+							if !ownerCode(err, sandboxd.ErrNotFound) {
 								t.Fatal("sandbox visibility")
 							}
 						}
@@ -1846,7 +1863,12 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 							ledger, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(
 								f.ops(),
 							)
-							f.eight(c, p.Source.ID, selected, api.Exhausted)
+							f.eight(
+								c,
+								p.Source.ID,
+								selected,
+								sandboxd.ErrExhausted,
+							)
 							after := f.get(f.root, p.Source.ID)
 							if !reflect.DeepEqual(ledger, f.ledger()) ||
 								!reflect.DeepEqual(eff, f.engine.effects()) ||
@@ -1938,7 +1960,7 @@ func TestProductionOwnerBudgetLifecyclePeakHTTP(t *testing.T) {
 					"life-second-pause",
 					sandboxd.Command{Action: "pause"},
 				)
-				if !ownerCode(err, api.Exhausted) ||
+				if !ownerCode(err, sandboxd.ErrExhausted) ||
 					!reflect.DeepEqual(before, f.ledger()) ||
 					!reflect.DeepEqual(eff, f.engine.effects()) ||
 					!reflect.DeepEqual(agents, f.agent.effects()) ||
@@ -2018,7 +2040,7 @@ func TestProductionOwnerBudgetRetainedIdentityHTTP(t *testing.T) {
 	if _, err := f.engine.GetSnapshot(
 		f.ctx,
 		p.SleepSID,
-	); !ownerCode(
+	); !ownerEngineCode(
 		err,
 		api.NotFound,
 	) {

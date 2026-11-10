@@ -14,8 +14,6 @@ import (
 
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 const storeSchemaVersion = 6
@@ -36,8 +34,8 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, api.Fail(
-			api.Invalid,
+		return nil, Fail(
+			ErrInvalid,
 			"state directory must be a directory, not a symlink",
 		)
 	}
@@ -54,8 +52,8 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = lock.Close()
-		return nil, api.Fail(
-			api.Conflict,
+		return nil, Fail(
+			ErrConflict,
 			"another sandboxd owns state directory",
 		)
 	}
@@ -63,8 +61,8 @@ func openStore(dir string, initialize bool) (*store, error) {
 	fail := func(e error) (*store, error) { return nil, errors.Join(e, s.close()) }
 	if _, e := os.Lstat(filepath.Join(dir, "RECOVERY_REQUIRED")); e == nil {
 		return fail(
-			api.Fail(
-				api.ManualRecovery,
+			Fail(
+				ErrManualRecovery,
 				"sandboxd metadata was restored; review engine inventory and acknowledge the recovery point",
 			),
 		)
@@ -77,16 +75,16 @@ func openStore(dir string, initialize bool) (*store, error) {
 	if fresh {
 		if !initialize {
 			return fail(
-				api.Fail(
-					api.ManualRecovery,
+				Fail(
+					ErrManualRecovery,
 					"database missing; use --init only for a new installation",
 				),
 			)
 		}
 		if _, e := os.Stat(filepath.Join(dir, "initialized")); e == nil {
 			return fail(
-				api.Fail(
-					api.ManualRecovery,
+				Fail(
+					ErrManualRecovery,
 					"database lost; preserve state and restore a consistent backup",
 				),
 			)
@@ -95,11 +93,11 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return fail(err)
 	} else if initialize {
 		return fail(
-			api.Fail(api.Conflict, "database already exists; omit --init"),
+			Fail(ErrConflict, "database already exists; omit --init"),
 		)
 	} else if !databaseInfo.Mode().IsRegular() {
 		return fail(
-			api.Fail(api.ManualRecovery, "database must be a regular file"),
+			Fail(ErrManualRecovery, "database must be a regular file"),
 		)
 	}
 	keyPath := filepath.Join(dir, "node.key")
@@ -114,11 +112,11 @@ func openStore(dir string, initialize bool) (*store, error) {
 		}
 	} else if err != nil {
 		return fail(
-			api.Fail(api.ManualRecovery, "node key missing or unreadable"),
+			Fail(ErrManualRecovery, "node key missing or unreadable"),
 		)
 	}
 	if len(key) != 32 {
-		return fail(api.Fail(api.ManualRecovery, "invalid node key"))
+		return fail(Fail(ErrManualRecovery, "invalid node key"))
 	}
 	s.key = key
 	s.db, err = sql.Open(
@@ -134,8 +132,8 @@ func openStore(dir string, initialize bool) (*store, error) {
 		Scan(&integrity); err != nil ||
 		integrity != "ok" {
 		return fail(
-			api.Fail(
-				api.ManualRecovery,
+			Fail(
+				ErrManualRecovery,
 				"database integrity check failed: %v %s",
 				err,
 				integrity,
@@ -151,7 +149,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 			Scan(&version); err != nil ||
 			version != storeSchemaVersion {
 			return fail(
-				api.Fail(api.Incompatible, "unsupported database schema"),
+				Fail(ErrIncompatible, "unsupported database schema"),
 			)
 		}
 	}
@@ -179,7 +177,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 	if err = s.db.QueryRow("SELECT version FROM version").
 		Scan(&version); err != nil ||
 		version != storeSchemaVersion {
-		return fail(api.Fail(api.Incompatible, "unsupported database schema"))
+		return fail(Fail(ErrIncompatible, "unsupported database schema"))
 	}
 	if err = atomicFile(
 		filepath.Join(dir, "initialized"),
@@ -299,8 +297,8 @@ func (s *store) verifyJournal(ctx context.Context) error {
 			[]byte(hash),
 			[]byte(s.sign("journal-v1", prev, string(b))),
 		) {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"audit journal verification failed",
 			)
 		}

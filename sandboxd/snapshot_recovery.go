@@ -71,9 +71,9 @@ func (s *Service) proveRetiredSnapshot(b Sandbox) error {
 		b.SnapshotID,
 		b.TenantID,
 	); err != nil {
-		if isCode(err, api.NotFound) {
-			return api.Fail(
-				api.ManualRecovery,
+		if isCode(err, ErrNotFound) {
+			return Fail(
+				ErrManualRecovery,
 				"sleep snapshot provenance cannot be proven",
 			)
 		}
@@ -102,7 +102,7 @@ func (s *Service) recoverRetiredSnapshot(r *resourceRecovery) error {
 		}
 	}
 	_, err = s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
-	if isCode(err, api.NotFound) {
+	if isEngineCode(err, api.NotFound) {
 		if err = s.reclaimQuota("snapshot", r.Snapshot); err != nil {
 			return err
 		}
@@ -131,14 +131,11 @@ func (s *Service) recoverRetiredSnapshot(r *resourceRecovery) error {
 		"",
 		r.Source,
 	); err != nil {
-		if isCode(err, api.NotFound) {
-			return s.finishRecoveryAttempt(r, nil)
-		}
 		return s.finishRecoveryAttempt(r, err, "retire-snapshot:"+r.Snapshot)
 	}
 	// A shared live reference leaves both the intent and its charge intact.
 	_, err = s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
-	if isCode(err, api.NotFound) {
+	if isEngineCode(err, api.NotFound) {
 		return s.finishRecoveryAttempt(r, nil)
 	}
 	return err
@@ -150,8 +147,8 @@ func (s *Service) recoverySnapshotReady(id string) error {
 		return err
 	}
 	if !snap.Published || snap.Deleting {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"recovery snapshot %s is not published",
 			id,
 		)
@@ -171,8 +168,8 @@ func snapshotCollector(
 	if err == nil {
 		err = json.Unmarshal(raw, &r)
 		if err == nil && r.TenantID != tenant {
-			err = api.Fail(
-				api.ManualRecovery,
+			err = Fail(
+				ErrManualRecovery,
 				"snapshot collector owner mismatch",
 			)
 		}
@@ -219,7 +216,7 @@ func requireSnapshotOwner(
 	err := e.QueryRowContext(ctx, "SELECT tenant_id FROM snapshot_owners WHERE snapshot_id=?", snapshot).
 		Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != tenant) {
-		return api.Fail(api.NotFound, "not found")
+		return Fail(ErrNotFound, "not found")
 	}
 	return err
 }
@@ -230,7 +227,7 @@ func recordSnapshotOwner(
 	snapshot, tenant, operation, kind string,
 ) error {
 	if snapshot == "" || tenant == "" || operation == "" {
-		return api.Fail(api.ManualRecovery, "snapshot source is incomplete")
+		return Fail(ErrManualRecovery, "snapshot source is incomplete")
 	}
 	if _, err := e.ExecContext(
 		ctx,
@@ -249,11 +246,11 @@ func recordSnapshotOwner(
 		return err
 	}
 	if owner != tenant {
-		return api.Fail(api.NotFound, "not found")
+		return Fail(ErrNotFound, "not found")
 	}
 	if source != operation || sourceKind != kind {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"snapshot source conflicts with immutable provenance",
 		)
 	}

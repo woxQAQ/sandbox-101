@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 type previewCapability struct {
@@ -36,11 +34,11 @@ func (s *Service) PreviewURL(
 		return "", err
 	}
 	if b.State != "running" && b.State != "paused" {
-		return "", api.Fail(api.Conflict, "sandbox not available")
+		return "", Fail(ErrConflict, "sandbox not available")
 	}
 	if port < 1 || port > 65535 || ttl <= 0 {
-		return "", api.Fail(
-			api.Invalid,
+		return "", Fail(
+			ErrInvalid,
 			"valid port and positive duration required",
 		)
 	}
@@ -49,7 +47,7 @@ func (s *Service) PreviewURL(
 		exp = b.Deadline
 	}
 	if !exp.After(time.Now()) {
-		return "", api.Fail(api.Conflict, "lease expired")
+		return "", Fail(ErrConflict, "lease expired")
 	}
 	cap := previewCapability{b.ID, b.TenantID, b.Epoch, port, exp.Unix()}
 	body := base64.RawURLEncoding.EncodeToString(encode(cap))
@@ -86,7 +84,7 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	body, sig, ok := strings.Cut(captext, ".")
 	if !ok ||
 		!hmac.Equal([]byte(sig), []byte(s.store.sign("preview-v1", body))) {
-		writeError(w, api.Fail(api.NotFound, "not found"))
+		writeError(w, Fail(ErrNotFound, "not found"))
 		return
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(body)
@@ -94,14 +92,14 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	if err != nil || json.Unmarshal(raw, &cap) != nil || cap.Port < 1 ||
 		cap.Port > 65535 ||
 		time.Now().Unix() >= cap.Expires {
-		writeError(w, api.Fail(api.NotFound, "not found"))
+		writeError(w, Fail(ErrNotFound, "not found"))
 		return
 	}
 	p := Principal{TenantID: cap.Tenant, SandboxID: cap.Sandbox}
 	b, err := s.Get(r.Context(), p, cap.Sandbox)
 	if err != nil || b.Epoch != cap.Epoch || b.State == "terminated" ||
 		cap.Expires > b.Deadline.Unix() {
-		writeError(w, api.Fail(api.NotFound, "not found"))
+		writeError(w, Fail(ErrNotFound, "not found"))
 		return
 	}
 	b, err = s.DataReady(r.Context(), p, cap.Sandbox)
@@ -120,7 +118,7 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 			}
 			if current.State != "running" ||
 				!time.Now().Before(current.Deadline) {
-				return nil, api.Fail(api.Conflict, "lease inactive")
+				return nil, Fail(ErrConflict, "lease inactive")
 			}
 			vm, e := s.verifiedVM(ctx, current)
 			if e != nil {
@@ -168,8 +166,8 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 			writeJSON(
 				w,
 				502,
-				&api.Error{
-					Code:    api.Internal,
+				&Error{
+					Code:    ErrInternal,
 					Message: "preview upstream unavailable",
 				},
 			)

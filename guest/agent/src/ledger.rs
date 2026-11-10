@@ -1,5 +1,5 @@
 //! Private, host-controlled execution intents. Keys are never expired or evicted.
-use anyhow::{Result, ensure};
+use crate::{Result, ResultContext};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     fs::{File, OpenOptions},
@@ -60,14 +60,15 @@ fn private_file(path: &Path) -> Result<File> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
+        .open(path)
+        .or_context(|| format!("open private exec ledger file {}", path.display()))?;
     let m = file.metadata()?;
     ensure!(
         m.is_file()
             && m.uid() == unsafe { libc::geteuid() }
             && m.mode() & 0o7777 == 0o600
             && m.nlink() == 1,
-        "unsafe exec ledger file"
+        Internal => "unsafe exec ledger file {}", path.display()
     );
     Ok(file)
 }
@@ -92,13 +93,13 @@ impl Ledger {
         let m = std::fs::symlink_metadata(directory)?;
         ensure!(
             m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700,
-            "unsafe exec ledger directory"
+            Internal => "unsafe exec ledger directory {}", directory.display()
         );
         let directory = directory.canonicalize()?;
         let lock = private_file(&directory.join("agent.lock"))?;
         ensure!(
             unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "exec ledger already owned by another agent"
+            Conflict => "exec ledger already owned by another agent"
         );
         let path = directory.join("exec.sqlite3");
         let db_file = private_file(&path)?;
@@ -110,7 +111,7 @@ impl Ledger {
             PRAGMA secure_delete=ON; PRAGMA temp_store=MEMORY; PRAGMA max_page_count=40960;",
         )?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 1, "unsupported exec ledger schema");
+        ensure!(version <= 1, Internal => "unsupported exec ledger schema");
         connection.execute_batch(
             "BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS identity (
@@ -177,7 +178,7 @@ impl Ledger {
         )?;
         ensure!(
             running == 0,
-            "keyed exec is still in progress; drain before changing identity"
+            Quiesced => "keyed exec is still in progress; drain before changing identity"
         );
         tx.execute("DELETE FROM executions", [])?;
         tx.execute("UPDATE identity SET sandbox_id=?1 WHERE singleton=1", [id])?;
@@ -204,7 +205,7 @@ impl Ledger {
             [],
             |r| r.get(0),
         )?;
-        ensure!(scope == identity, "exec ledger identity changed");
+        ensure!(scope == identity, Conflict => "exec ledger identity changed");
         let old = tx
             .query_row(
                 "SELECT params_hash,state,exit_code,stdout,stderr,stdout_bytes,stderr_bytes
@@ -256,7 +257,7 @@ impl Ledger {
             "UPDATE executions SET state='completed',finished_at=unixepoch(),exit_code=?2,
                 stdout=?3,stderr=?4,stdout_bytes=?5,stderr_bytes=?6 WHERE key_hash=?1 AND state='in_progress'",
             params![&key[..], saved.exit_code, &saved.stdout, &saved.stderr, saved.stdout_bytes, saved.stderr_bytes])?;
-        ensure!(changed == 1, "exec intent missing at completion");
+        ensure!(changed == 1, Internal => "exec intent missing at completion");
         Ok(())
     }
 

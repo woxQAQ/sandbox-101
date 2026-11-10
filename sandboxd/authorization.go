@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func (s *Service) Authenticate(
@@ -27,7 +25,7 @@ func (s *Service) authenticateToken(
 	allowTerminated bool,
 ) (Principal, error) {
 	if token == "" {
-		return Principal{}, api.Fail(api.NotFound, "not found")
+		return Principal{}, Fail(ErrNotFound, "not found")
 	}
 	if hmac.Equal(
 		[]byte(hashToken(token)),
@@ -51,11 +49,11 @@ func (s *Service) authenticateToken(
 			hmac.Equal([]byte(parts[1]), []byte(s.store.token(b))) {
 			return Principal{TenantID: b.TenantID, SandboxID: b.ID}, nil
 		}
-		if err != nil && !isCode(err, api.NotFound) {
+		if err != nil && !isCode(err, ErrNotFound) {
 			return Principal{}, err
 		}
 	}
-	return Principal{}, api.Fail(api.NotFound, "not found")
+	return Principal{}, Fail(ErrNotFound, "not found")
 }
 
 func (s *Service) issuedToken(

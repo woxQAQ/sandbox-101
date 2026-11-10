@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func (s *Service) Submit(
@@ -18,15 +16,25 @@ func (s *Service) Submit(
 	key string,
 	c Command,
 ) (Operation, error) {
+	o, err := s.submit(ctx, p, key, c)
+	return publicOperation(o), err
+}
+
+func (s *Service) submit(
+	ctx context.Context,
+	p Principal,
+	key string,
+	c Command,
+) (Operation, error) {
 	if len(key) < 1 || len(key) > 256 {
-		return Operation{}, api.Fail(
-			api.Invalid,
+		return Operation{}, Fail(
+			ErrInvalid,
 			"Idempotency-Key required (max 256 bytes)",
 		)
 	}
 	if p.SandboxID != "" &&
 		(c.SandboxID != p.SandboxID || (c.Action != "renew" && c.Action != "release")) {
-		return Operation{}, api.Fail(api.NotFound, "not found")
+		return Operation{}, Fail(ErrNotFound, "not found")
 	}
 	// HMAC permits comparing retries without persisting credential material or a guessable secret hash.
 	hash := s.store.sign("request-v1", p.SandboxID, string(encode(c)))
@@ -35,18 +43,18 @@ func (s *Service) Submit(
 	old, err := s.store.byKey(ctx, p.TenantID, key)
 	if err == nil {
 		if old.hash != hash {
-			return old, api.Fail(
-				api.Conflict,
+			return old, Fail(
+				ErrConflict,
 				"idempotency key has different parameters",
 			)
 		}
 		if !visible(p, old.TenantID, old.Command.SandboxID) && !p.Root {
-			return Operation{}, api.Fail(api.NotFound, "not found")
+			return Operation{}, Fail(ErrNotFound, "not found")
 		}
 		s.start(old)
 		return old, nil
 	}
-	if !isCode(err, api.NotFound) {
+	if !isCode(err, ErrNotFound) {
 		return Operation{}, err
 	}
 	env, secrets, err := splitEnv(c.Env)
@@ -101,7 +109,7 @@ func (s *Service) Submit(
 		draining := s.draining
 		s.mu.Unlock()
 		if draining {
-			return o, api.Fail(api.Exhausted, "node is draining")
+			return o, Fail(ErrExhausted, "node is draining")
 		}
 		var t Template
 		count := 1
@@ -111,10 +119,10 @@ func (s *Service) Submit(
 				return o, err
 			}
 			if t.TenantID != p.TenantID {
-				return o, api.Fail(api.NotFound, "not found")
+				return o, Fail(ErrNotFound, "not found")
 			}
 			if t.State != "ready" {
-				return o, api.Fail(api.Conflict, "template is not ready")
+				return o, Fail(ErrConflict, "template is not ready")
 			}
 			if err = requireSnapshotOwner(
 				ctx,
@@ -130,7 +138,7 @@ func (s *Service) Submit(
 		if c.Action == "fork" {
 			count = c.Count
 			if count < 1 || count > 32 {
-				return o, api.Fail(api.Invalid, "fork count must be 1..32")
+				return o, Fail(ErrInvalid, "fork count must be 1..32")
 			}
 			if c.CheckpointID != "" {
 				cp, e := getCheckpointTx(ctx, tx, c.CheckpointID)
@@ -138,7 +146,7 @@ func (s *Service) Submit(
 					return o, e
 				}
 				if !p.Root && cp.TenantID != p.TenantID {
-					return o, api.Fail(api.NotFound, "not found")
+					return o, Fail(ErrNotFound, "not found")
 				}
 				source = Sandbox{
 					TenantID:   cp.TenantID,
@@ -153,18 +161,18 @@ func (s *Service) Submit(
 					return o, err
 				}
 				if !visible(p, source.TenantID, source.ID) {
-					return o, api.Fail(api.NotFound, "not found")
+					return o, Fail(ErrNotFound, "not found")
 				}
 				if source.State != "running" && source.State != "paused" {
-					return o, api.Fail(
-						api.Conflict,
+					return o, Fail(
+						ErrConflict,
 						"sandbox cannot fork in %s",
 						source.State,
 					)
 				}
 			}
 			if source.TenantID != p.TenantID {
-				return o, api.Fail(api.NotFound, "not found")
+				return o, Fail(ErrNotFound, "not found")
 			}
 			o.ChargeTenantID = source.TenantID
 			if err = requireSnapshotOwner(
@@ -249,7 +257,7 @@ func (s *Service) Submit(
 			expiry = "kill"
 		}
 		if expiry != "kill" && expiry != "pause" {
-			return o, api.Fail(api.Invalid, "on_expire must be kill or pause")
+			return o, Fail(ErrInvalid, "on_expire must be kill or pause")
 		}
 		policy := c.Policy
 		if policy.Mode == "" {
@@ -313,10 +321,10 @@ func (s *Service) Submit(
 			return o, err
 		}
 		if !visible(p, source.TenantID, source.ID) {
-			return o, api.Fail(api.NotFound, "not found")
+			return o, Fail(ErrNotFound, "not found")
 		}
 		if source.State == "terminated" && c.Action != "release" {
-			return o, api.Fail(api.Conflict, "sandbox terminated")
+			return o, Fail(ErrConflict, "sandbox terminated")
 		}
 		o.ChargeTenantID = source.TenantID
 		o.SnapshotID = source.SnapshotID
@@ -326,7 +334,7 @@ func (s *Service) Submit(
 				return o, e
 			}
 			if cp.TenantID != source.TenantID || cp.SandboxID != source.ID {
-				return o, api.Fail(api.NotFound, "not found")
+				return o, Fail(ErrNotFound, "not found")
 			}
 			o.SnapshotID = cp.SnapshotID
 		}
@@ -337,8 +345,8 @@ func (s *Service) Submit(
 		}
 		if c.Action == "checkpoint" {
 			if source.State != "running" && source.State != "paused" {
-				return o, api.Fail(
-					api.Conflict,
+				return o, Fail(
+					ErrConflict,
 					"sandbox cannot checkpoint in %s",
 					source.State,
 				)
@@ -410,8 +418,8 @@ func (s *Service) Submit(
 				o.SnapshotID,
 				o.ChargeTenantID,
 			); e != nil {
-				return o, api.Fail(
-					api.ManualRecovery,
+				return o, Fail(
+					ErrManualRecovery,
 					"snapshot responsibility has no trusted provenance",
 				)
 			}
@@ -428,8 +436,8 @@ func (s *Service) Submit(
 		}
 		if c.Action == "configure" {
 			if c.Env == nil {
-				return o, api.Fail(
-					api.Invalid,
+				return o, Fail(
+					ErrInvalid,
 					"env is required; an empty object clears environment",
 				)
 			}
@@ -459,12 +467,12 @@ func (s *Service) Submit(
 			return o, e
 		}
 		if !p.Root && cp.TenantID != p.TenantID {
-			return o, api.Fail(api.NotFound, "not found")
+			return o, Fail(ErrNotFound, "not found")
 		}
 		o.ChargeTenantID = cp.TenantID
 	case "template_put", "template_build":
 		if p.SandboxID != "" || c.Template == nil {
-			return o, api.Fail(api.Invalid, "template required")
+			return o, Fail(ErrInvalid, "template required")
 		}
 		t := *c.Template
 		if t.ID == "" || t.Shape.VCPUs < 1 || t.Shape.VCPUs > 255 ||
@@ -474,13 +482,13 @@ func (s *Service) Submit(
 			t.Shape.DiskMiB > 1<<30 ||
 			t.TargetWarm < 0 ||
 			t.TargetWarm > s.opts.MaxWarm {
-			return o, api.Fail(
-				api.Invalid,
+			return o, Fail(
+				ErrInvalid,
 				"invalid template shape or pool target",
 			)
 		}
 		existing, e := getTemplateTx(ctx, tx, t.ID)
-		if e != nil && !isCode(e, api.NotFound) {
+		if e != nil && !isCode(e, ErrNotFound) {
 			return o, e
 		}
 		owner, current, e := templateIntent(ctx, tx, t.ID)
@@ -492,11 +500,11 @@ func (s *Service) Submit(
 		if owner != "" && owner != p.TenantID ||
 			owner == "" && existing.ID != "" &&
 				existing.TenantID != p.TenantID {
-			return o, api.Fail(api.NotFound, "not found")
+			return o, Fail(ErrNotFound, "not found")
 		}
 		if existing.ID != "" && (owner == "" || existing.TenantID != owner) {
-			return o, api.Fail(
-				api.ManualRecovery,
+			return o, Fail(
+				ErrManualRecovery,
 				"published template has missing or conflicting ownership provenance",
 			)
 		}
@@ -509,8 +517,8 @@ func (s *Service) Submit(
 				current,
 			).Scan(&tenant, &status, &body)
 			if errors.Is(e, sql.ErrNoRows) {
-				return o, api.Fail(
-					api.ManualRecovery,
+				return o, Fail(
+					ErrManualRecovery,
 					"template intent references a missing operation",
 				)
 			}
@@ -523,22 +531,22 @@ func (s *Service) Submit(
 				(prior.Command.Action != "template_put" && prior.Command.Action != "template_build") ||
 				prior.Command.Template == nil || prior.Command.Template.ID != t.ID ||
 				prior.Command.Template.TenantID != owner {
-				return o, api.Fail(
-					api.ManualRecovery,
+				return o, Fail(
+					ErrManualRecovery,
 					"template intent operation has inconsistent provenance",
 				)
 			}
 			switch status {
 			case "pending", "running":
-				return o, api.Fail(
-					api.Conflict,
+				return o, Fail(
+					ErrConflict,
 					"template publication is already in flight",
 				)
 			case "succeeded", "failed":
 				// Recycle only a proven terminal pointer, retaining its result.
 			default:
-				return o, api.Fail(
-					api.ManualRecovery,
+				return o, Fail(
+					ErrManualRecovery,
 					"template intent operation has an unknown status",
 				)
 			}
@@ -549,14 +557,14 @@ func (s *Service) Submit(
 				target = existing.TargetWarm
 			}
 			if t.TargetWarm != target {
-				return o, api.Fail(
-					api.Conflict,
+				return o, Fail(
+					ErrForbidden,
 					"root access required to change pool target",
 				)
 			}
 		}
 		if p.TenantID == "" {
-			return o, api.Fail(api.Invalid, "target tenant required")
+			return o, Fail(ErrInvalid, "target tenant required")
 		}
 		// The first admission reserves the name permanently for this tenant
 		// and commits the placeholder atomically with the operation.
@@ -572,7 +580,7 @@ func (s *Service) Submit(
 			t.State = "ready"
 			if t.SnapshotID != "" {
 				if p.TenantID == "" {
-					return o, api.Fail(api.Invalid, "target tenant required")
+					return o, Fail(ErrInvalid, "target tenant required")
 				}
 				if e := requireSnapshotOwner(
 					ctx,
@@ -580,7 +588,7 @@ func (s *Service) Submit(
 					t.SnapshotID,
 					p.TenantID,
 				); e != nil {
-					if !p.Root || !isCode(e, api.NotFound) {
+					if !p.Root || !isCode(e, ErrNotFound) {
 						return o, e
 					}
 					if e = recordSnapshotOwner(
@@ -609,8 +617,8 @@ func (s *Service) Submit(
 				}
 			}
 			if t.SnapshotID == "" && t.Image == "" {
-				return o, api.Fail(
-					api.Invalid,
+				return o, Fail(
+					ErrInvalid,
 					"template requires image or snapshot",
 				)
 			}
@@ -663,7 +671,7 @@ func (s *Service) Submit(
 			}
 		}
 	default:
-		return o, api.Fail(api.Invalid, "unsupported action %q", c.Action)
+		return o, Fail(ErrInvalid, "unsupported action %q", c.Action)
 	}
 	if err = saveOp(ctx, tx, o); err != nil {
 		return o, err

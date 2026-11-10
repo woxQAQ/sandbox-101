@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
@@ -112,7 +111,7 @@ func TestProxySocketPreservesReplacementAndRejectsUnverifiedVM(t *testing.T) {
 		before,
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatal("unverified VM received proxy access", err)
 	}
@@ -137,7 +136,7 @@ func TestProxySocketPreservesReplacementAndRejectsUnverifiedVM(t *testing.T) {
 		before,
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatal("replacement symlink was accepted", err)
 	}

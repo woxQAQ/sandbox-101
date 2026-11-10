@@ -50,7 +50,7 @@ func TestUntrustedExistingTemplateCannotCloneSnapshot(t *testing.T) {
 		Command{Action: "claim", TemplateID: template.ID},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("untrusted template admitted", err)
 	}
@@ -72,7 +72,7 @@ func TestUntrustedExistingTemplateCannotCloneSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.start(o)
-	if _, err := s.Wait(s.ctx, p, o.ID); !isCode(err, api.NotFound) {
+	if _, err := s.Wait(s.ctx, p, o.ID); !isCode(err, ErrNotFound) {
 		t.Fatal("untrusted refill accepted", err)
 	}
 	if f.count("clone") != 0 {
@@ -117,7 +117,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		Command{Action: "template_put", Template: &template},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatalf("foreign snapshot accepted: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		Command{Action: "template_put", Template: &template},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("root transferred ownership", err)
 	}
@@ -208,10 +208,10 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 
 // notFoundError asserts the uniform P12 response and returns it for
 // body comparison against a reference rejection.
-func notFoundError(t *testing.T, err error) *api.Error {
+func notFoundError(t *testing.T, err error) *Error {
 	t.Helper()
-	var e *api.Error
-	if !errors.As(err, &e) || e.Code != api.NotFound {
+	var e *Error
+	if !errors.As(err, &e) || e.Code != ErrNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
 	return e
@@ -302,7 +302,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 		p,
 		"second-build",
 		Command{Action: "template_build", Template: template()},
-	); !isCode(err, api.Conflict) {
+	); !isCode(err, ErrConflict) {
 		t.Fatalf("concurrent same-tenant build admitted: %v", err)
 	}
 	again, err := s.Submit(
@@ -336,7 +336,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 		bob,
 		"bob-claim",
 		Command{Action: "claim", TemplateID: "gated"},
-	); !isCode(err, api.NotFound) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatalf("foreign tenant claimed the template: %v", err)
 	}
 	claim := func(key string) Result {
@@ -400,7 +400,7 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 		p,
 		"flaky-build",
 		build("flaky", "3"),
-	); !isCode(err, api.Exhausted) {
+	); !isCode(err, ErrExhausted) {
 		t.Fatalf("expected the injected build failure: %v", err)
 	}
 	if _, err := s.Submit(
@@ -408,7 +408,7 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 		bob,
 		"bob-take",
 		build("flaky", "3"),
-	); !isCode(err, api.NotFound) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatalf("failure released the name to another tenant: %v", err)
 	}
 	listed, err := s.Templates(ctx, p)
@@ -488,7 +488,7 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 		bob,
 		"bob-restart-take",
 		build("durable", "4"),
-	); !isCode(err, api.NotFound) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatalf("restart released the name to another tenant: %v", err)
 	}
 	rerelease.Do(func() { close(regate) })
@@ -589,7 +589,7 @@ func TestTemplateAdmissionPublicationFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.template(&stale); !isCode(err, api.Conflict) {
+	if err = s.template(&stale); !isCode(err, ErrConflict) {
 		t.Fatalf("stale publication accepted: %v", err)
 	}
 	stored, err := s.store.template(ctx, "rolling")
@@ -611,7 +611,7 @@ func TestTemplateAdmissionPublicationFence(t *testing.T) {
 	}
 	if _, err = s.Submit(ctx, p, "build-v3", build("6")); !isCode(
 		err,
-		api.ManualRecovery,
+		ErrManualRecovery,
 	) {
 		t.Fatalf("lost pointer admitted silently: %v", err)
 	}
@@ -708,12 +708,12 @@ func TestTemplateAdmissionPublishedOwnerConsistency(t *testing.T) {
 			for _, caller := range []struct {
 				name string
 				p    Principal
-				code api.Code
+				code ErrorCode
 			}{
-				{"foreign", Principal{TenantID: "eve"}, api.NotFound},
-				{"root-foreign-target", Principal{Root: true, TenantID: "eve"}, api.NotFound},
-				{"owner", p, api.ManualRecovery},
-				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, api.ManualRecovery},
+				{"foreign", Principal{TenantID: "eve"}, ErrNotFound},
+				{"root-foreign-target", Principal{Root: true, TenantID: "eve"}, ErrNotFound},
+				{"owner", p, ErrManualRecovery},
+				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, ErrManualRecovery},
 			} {
 				for _, action := range []string{"template_build", "template_put"} {
 					_, err = s.Submit(
@@ -735,7 +735,7 @@ func TestTemplateAdmissionPublishedOwnerConsistency(t *testing.T) {
 							err,
 						)
 					}
-					if caller.code == api.NotFound &&
+					if caller.code == ErrNotFound &&
 						notFoundError(t, err).Message != "not found" {
 						t.Fatal("foreign response disclosed owner details")
 					}
@@ -817,12 +817,12 @@ func TestTemplateAdmissionPointerProvenance(t *testing.T) {
 			for _, caller := range []struct {
 				name string
 				p    Principal
-				code api.Code
+				code ErrorCode
 			}{
-				{"foreign", Principal{TenantID: "eve"}, api.NotFound},
-				{"root-foreign", Principal{Root: true, TenantID: "eve"}, api.NotFound},
-				{"owner", p, api.ManualRecovery},
-				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, api.ManualRecovery},
+				{"foreign", Principal{TenantID: "eve"}, ErrNotFound},
+				{"root-foreign", Principal{Root: true, TenantID: "eve"}, ErrNotFound},
+				{"owner", p, ErrManualRecovery},
+				{"root-owner", Principal{Root: true, TenantID: p.TenantID}, ErrManualRecovery},
 			} {
 				_, err = s.Submit(
 					ctx,
@@ -842,7 +842,7 @@ func TestTemplateAdmissionPointerProvenance(t *testing.T) {
 						err,
 					)
 				}
-				if caller.code == api.NotFound &&
+				if caller.code == ErrNotFound &&
 					notFoundError(t, err).Message != "not found" {
 					t.Fatal("foreign response disclosed pointer details")
 				}
@@ -979,7 +979,7 @@ func TestTemplateAdmissionRootExplicitOwnerUpdate(t *testing.T) {
 			"root-wrong-target",
 			command,
 		)
-		if !isCode(err, api.NotFound) {
+		if !isCode(err, ErrNotFound) {
 			t.Fatalf("root with foreign target admitted: %v", err)
 		}
 	}
@@ -1046,7 +1046,7 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 		p,
 		"build-failed",
 		build("failed-name", "8"),
-	); !isCode(err, api.Exhausted) {
+	); !isCode(err, ErrExhausted) {
 		t.Fatalf("expected the injected build failure: %v", err)
 	}
 	f.mu.Lock()
@@ -1065,7 +1065,7 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 	opts.Initialize = false
 	// The recovery fence still holds: restored ownership state demands
 	// acknowledgement before it can serve again.
-	if _, err = Open(opts); !isCode(err, api.ManualRecovery) {
+	if _, err = Open(opts); !isCode(err, ErrManualRecovery) {
 		t.Fatalf("restored state opened without review: %v", err)
 	}
 	if err = AcknowledgeStateRecovery(
@@ -1085,7 +1085,7 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 			bob,
 			"bob-"+id,
 			build(id, "8"),
-		); !isCode(err, api.NotFound) {
+		); !isCode(err, ErrNotFound) {
 			t.Fatalf("restore released %s to another tenant: %v", id, err)
 		}
 	}
@@ -1156,7 +1156,7 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.Unknown) {
+		if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, ErrUnknown) {
 			t.Fatal("start reply was not unknown", err)
 		}
 		original, _ := s.store.operation(s.ctx, o.ID)
@@ -1248,7 +1248,7 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 				"second",
 				templateQuotaBuild("build-two"),
 			)
-			if !isCode(err, api.Exhausted) {
+			if !isCode(err, ErrExhausted) {
 				t.Errorf(
 					"second distinct template must be refused before Engine: %v",
 					err,
@@ -1274,7 +1274,7 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 		s, f, a, p := recoveryFixture(t)
 		ledgerLimit(t, s, p, 1, 255)
 		_, err := s.Submit(s.ctx, p, "low", templateQuotaBuild("low"))
-		if !isCode(err, api.Exhausted) {
+		if !isCode(err, ErrExhausted) {
 			t.Fatalf("255 MiB build must be refused: %v", err)
 		}
 		if f.count("create") != 0 || f.count("start") != 0 {
@@ -1419,8 +1419,8 @@ func templateQuotaFailedBuild(
 				return err
 			}
 			o.Status = "failed"
-			o.Error = &api.Error{
-				Code:    api.Internal,
+			o.Error = &Error{
+				Code:    ErrInternal,
 				Message: "controlled public failure before start dispatch",
 			}
 			o.FinishedAt = time.Now().UTC()
@@ -1643,7 +1643,7 @@ func templateQuotaAbsenceFault(t *testing.T, fault string) {
 		t.Fatal("absence fault was not observed")
 	}
 	if fault == "commit" &&
-		(!strings.Contains(err.Error(), "allocation absence commit") || !strings.Contains(err.Error(), "FOREIGN KEY")) {
+		(!strings.Contains(privateDiagnostic(err), "allocation absence commit") || !strings.Contains(privateDiagnostic(err), "FOREIGN KEY")) {
 		t.Fatalf("not an actual deferred COMMIT error: %v", err)
 	}
 	t.Logf("absence %s actual error: %v", fault, err)
@@ -1773,7 +1773,7 @@ func templateQuotaUnknownStartAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.Unknown) {
+	if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, ErrUnknown) {
 		t.Fatal("original start was not unknown", err)
 	}
 	original, _ := s.store.operation(s.ctx, o.ID)
@@ -1858,7 +1858,7 @@ func templateQuotaUnknownCapture(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	if _, err = s.Wait(ctx, p, o.ID); !isCode(err, api.Unknown) {
+	if _, err = s.Wait(ctx, p, o.ID); !isCode(err, ErrUnknown) {
 		t.Fatal("capture was not unknown", err)
 	}
 	r, err := s.loadRecovery(allocationGroupID(o))
@@ -1947,7 +1947,7 @@ func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 		"new-capture",
 		Command{Action: "checkpoint", SandboxID: b.ID},
 	)
-	if !isCode(err, api.Exhausted) {
+	if !isCode(err, ErrExhausted) {
 		t.Fatalf("retained template SID must still consume 192 MiB: %v", err)
 	}
 	after, _ := s.store.sandboxes(s.ctx)
@@ -1967,7 +1967,7 @@ func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 		Command{Action: "template_put", Template: &bad},
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatal("same cost accepted a different full shape", err)
 	}
@@ -2068,7 +2068,8 @@ func templateQuotaPublicationFault(t *testing.T, fault string) {
 		t.Fatal("publication fault missing")
 	}
 	if fault == "commit" &&
-		(!strings.Contains(err.Error(), "template publication commit") || !strings.Contains(err.Error(), "FOREIGN KEY")) {
+		(!strings.Contains(templateQuotaOperationDiagnostic(t, s, o.ID), "template publication commit") ||
+			!strings.Contains(templateQuotaOperationDiagnostic(t, s, o.ID), "FOREIGN KEY")) {
 		t.Fatalf("not a real publication COMMIT failure: %v", err)
 	}
 	t.Logf("publication %s error=%v", fault, err)
@@ -2130,7 +2131,7 @@ func templateQuotaBackupGate(t *testing.T) {
 	}
 	opts.StateDir = destination
 	opts.Initialize = false
-	if _, err := Open(opts); !isCode(err, api.ManualRecovery) {
+	if _, err := Open(opts); !isCode(err, ErrManualRecovery) {
 		t.Fatal("restore recovery fence missing", err)
 	}
 	if err := AcknowledgeStateRecovery(
@@ -2194,7 +2195,7 @@ func templateQuotaSchema(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = openStore(dir, false); !isCode(err, api.Incompatible) {
+			if _, err = openStore(dir, false); !isCode(err, ErrIncompatible) {
 				t.Fatal("old/future schema was accepted", err)
 			}
 			after, err := os.ReadFile(path)
@@ -2300,7 +2301,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 		Command{Action: "template_put", Template: &owned},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("root transferred Alice snapshot ownership", err)
 	}
@@ -2311,7 +2312,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 		Command{Action: "template_put", Template: &owned},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("published state authorized foreign snapshot", err)
 	}
@@ -2449,7 +2450,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 				Command{Action: "claim", TemplateID: template.ID},
 			); !isCode(
 				err,
-				api.Unknown,
+				ErrUnknown,
 			) {
 				t.Fatal("rejected selection unknown delete missing", err)
 			}
@@ -2497,7 +2498,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 				templateQuotaBuild("backup-capture"),
 			); !isCode(
 				err,
-				api.Unknown,
+				ErrUnknown,
 			) {
 				t.Fatal("unknown backup capture missing", err)
 			}
@@ -2637,7 +2638,7 @@ func TestTemplateQuotaBackupAndAuthorization(t *testing.T) {
 		if err = s.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if next, e := Open(opts); !isCode(e, api.ManualRecovery) {
+		if next, e := Open(opts); !isCode(e, ErrManualRecovery) {
 			if next != nil {
 				next.Close()
 			}
@@ -2685,7 +2686,7 @@ func TestTemplateQuotaBackupAndAuthorization(t *testing.T) {
 				if err = s.Close(); err != nil {
 					t.Fatal(err)
 				}
-				if next, e := Open(opts); !isCode(e, api.ManualRecovery) {
+				if next, e := Open(opts); !isCode(e, ErrManualRecovery) {
 					if next != nil {
 						next.Close()
 					}
@@ -2723,7 +2724,7 @@ func TestTemplateQuotaBackupAndAuthorization(t *testing.T) {
 			ID: "foreign", SnapshotID: cp.SnapshotID, Shape: b.Shape,
 		}},
 	)
-	if !isCode(err, api.NotFound) {
+	if !isCode(err, ErrNotFound) {
 		t.Fatalf("foreign published SID must be NotFound: %v", err)
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)

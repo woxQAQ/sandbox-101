@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 	"github.com/woxQAQ/sandboxd"
 	"github.com/woxQAQ/sandboxd/agent"
@@ -67,7 +66,7 @@ func (c *Client) call(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var e api.Error
+		var e sandboxd.Error
 		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&e) != nil {
 			return fmt.Errorf("sandboxd HTTP %d", resp.StatusCode)
 		}
@@ -153,8 +152,10 @@ func (c *Client) PutTemplate(
 	return r, err
 }
 
-// RPCError reports a guest error. Code and ResultState retain keyed execution
-// outcomes, including result_unknown; transport errors do not use this type.
+// RPCError reports a guest failure for any method. Code is the machine-readable
+// recovery category; ResultState additionally retains keyed execution outcomes,
+// including result_unknown. Message is diagnostic, not a parsing contract.
+// Transport errors do not use this type.
 type RPCError struct {
 	Message     string
 	Code        string
@@ -271,7 +272,7 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		!strings.EqualFold(resp.Header.Get("Upgrade"), "sandbox-v1") {
 		defer func() { _ = resp.Body.Close() }()
 		defer func() { _ = conn.Close() }()
-		var e api.Error
+		var e sandboxd.Error
 		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&e) == nil {
 			return nil, &e
 		}

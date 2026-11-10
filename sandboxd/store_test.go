@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
@@ -27,7 +25,7 @@ func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.close()
-	if _, err = openStore(dir, false); !isCode(err, api.Incompatible) {
+	if _, err = openStore(dir, false); !isCode(err, ErrIncompatible) {
 		t.Fatalf("future schema accepted: %v", err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(dir, "sandboxd.db"))
@@ -81,7 +79,7 @@ func TestSchemaThreeStateIsRejectedBeforeDDL(t *testing.T) {
 			Agent:     &fakeAgent{},
 			RootToken: "root-secret",
 		},
-	); !isCode(err, api.Incompatible) {
+	); !isCode(err, ErrIncompatible) {
 		t.Fatalf("schema 3 state accepted: %v", err)
 	}
 	after, err := os.ReadFile(path)
@@ -117,14 +115,14 @@ func TestStoreWriterGuardAndMissingDBRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = openStore(dir, false); !isCode(err, api.Conflict) {
+	if _, err = openStore(dir, false); !isCode(err, ErrConflict) {
 		t.Fatal("second writer allowed")
 	}
 	s.close()
 	if err = os.Remove(filepath.Join(dir, "sandboxd.db")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = openStore(dir, true); !isCode(err, api.ManualRecovery) {
+	if _, err = openStore(dir, true); !isCode(err, ErrManualRecovery) {
 		t.Fatal("lost DB silently reinitialized")
 	}
 }

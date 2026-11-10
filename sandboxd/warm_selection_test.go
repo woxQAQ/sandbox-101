@@ -63,7 +63,7 @@ func TestTemplateQuotaSelectedReaderRetirement(t *testing.T) {
 	if readers != 0 {
 		t.Fatal("successful selection kept old reader")
 	}
-	if _, err = f.GetSnapshot(s.ctx, oldSID); !isCode(err, api.NotFound) {
+	if _, err = f.GetSnapshot(s.ctx, oldSID); !isEngineCode(err, api.NotFound) {
 		t.Fatal("obsolete SID retained", err)
 	}
 	if _, err = f.GetSnapshot(s.ctx, newer.Template.SnapshotID); err != nil {
@@ -120,7 +120,7 @@ func TestTemplateQuotaReadyWarmStartup(t *testing.T) {
 			if next != nil {
 				next.Close()
 			}
-			if !isCode(err, api.ManualRecovery) {
+			if !isCode(err, ErrManualRecovery) {
 				t.Fatal("corrupt ready warm accepted", err)
 			}
 			if !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
@@ -216,7 +216,7 @@ func templateQuotaRejectedSelection(
 		e.mu.Lock()
 		e.unknown = true
 		e.mu.Unlock()
-		if err = s.recoverResources(); !isCode(err, api.Unknown) {
+		if err = s.recoverResources(); !isCode(err, ErrUnknown) {
 			t.Fatal(err)
 		}
 	}
@@ -273,7 +273,7 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 				r.Group.Template,
 			); !isCode(
 				err,
-				api.ManualRecovery,
+				ErrManualRecovery,
 			) {
 				t.Fatal("malformed receipt was adopted", err)
 			}
@@ -316,7 +316,7 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 			r.Group.Template,
 		); !isCode(
 			err,
-			api.ManualRecovery,
+			ErrManualRecovery,
 		) {
 			t.Fatal("post-Find corruption reached dispatch", err)
 		}
@@ -520,7 +520,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 						if next != nil {
 							next.Close()
 						}
-						if !isCode(err, api.ManualRecovery) {
+						if !isCode(err, ErrManualRecovery) {
 							t.Fatal("startup accepted invalid selection", err)
 						}
 						if !bytes.Equal(
@@ -537,7 +537,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 							b := recoverySandbox(t, s, r.Group.Subject.ID)
 							err = s.discardWarm(o, &b, r.Group.Template)
 						}
-						if !isCode(err, api.ManualRecovery) {
+						if !isCode(err, ErrManualRecovery) {
 							t.Fatal("runtime accepted invalid selection", err)
 						}
 						if !bytes.Equal(before, templateQuotaState(t, s)) {
@@ -577,7 +577,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 				original := encode(public)
 				fixed := templateQuotaCopy(r.Group.Selection)
 				s = ledgerRestart(t, s)
-				if err := s.recoverResources(); !isCode(err, api.Unknown) {
+				if err := s.recoverResources(); !isCode(err, ErrUnknown) {
 					t.Fatal(err)
 				}
 				latest, err := s.loadRecovery(r.ID)
@@ -706,7 +706,7 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 					if !startup {
 						if err = s.recoverResources(); !isCode(
 							err,
-							api.ManualRecovery,
+							ErrManualRecovery,
 						) {
 							t.Fatal("runtime consumed invalid destination", err)
 						}
@@ -717,7 +717,7 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 							r.ID,
 						); !isCode(
 							err,
-							api.ManualRecovery,
+							ErrManualRecovery,
 						) {
 							t.Fatal(
 								"durable read accepted incomplete context",
@@ -733,7 +733,7 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 					if next != nil {
 						next.Close()
 					}
-					if !isCode(err, api.ManualRecovery) {
+					if !isCode(err, ErrManualRecovery) {
 						t.Fatal("startup consumed invalid destination", err)
 					}
 					if !bytes.Equal(
@@ -793,7 +793,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 			}
 			_, err = s.Wait(s.ctx, p, o.ID)
 			if (tc.phase == "active" && err != nil) ||
-				(tc.phase != "active" && !isCode(err, api.Unknown)) {
+				(tc.phase != "active" && !isCode(err, ErrUnknown)) {
 				t.Fatal("unexpected claim outcome", err)
 			}
 			if tc.phase == "known" || tc.phase == "cleanup" {
@@ -907,7 +907,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 			}
 			before := templateQuotaState(t, s)
 			n, finds := e.counts()
-			if err = s.recoverResources(); !isCode(err, api.ManualRecovery) {
+			if err = s.recoverResources(); !isCode(err, ErrManualRecovery) {
 				t.Fatal("wrong reference kind accepted at runtime", err)
 			}
 			if !bytes.Equal(before, templateQuotaState(t, s)) {
@@ -927,7 +927,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 			if next != nil {
 				next.Close()
 			}
-			if !isCode(openErr, api.ManualRecovery) ||
+			if !isCode(openErr, ErrManualRecovery) ||
 				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 				t.Fatal(
 					"startup accepted or repaired incomplete destination",
@@ -1005,11 +1005,11 @@ func TestTemplateQuotaActiveAndCleanupReferenceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Wait(s.ctx, p, release.ID); !isCode(err, api.Unknown) {
+	if _, err = s.Wait(s.ctx, p, release.ID); !isCode(err, ErrUnknown) {
 		t.Fatal("expected unknown release", err)
 	}
 	s = ledgerRestart(t, s)
-	if err = s.recoverResources(); err != nil && !isCode(err, api.Unknown) {
+	if err = s.recoverResources(); err != nil && !isCode(err, ErrUnknown) {
 		t.Fatal("legitimate terminated cleanup holder rejected", err)
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)

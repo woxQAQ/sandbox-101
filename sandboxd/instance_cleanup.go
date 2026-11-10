@@ -57,8 +57,8 @@ func (s *Service) originalRelease(b Sandbox) (*resourceRecovery, error) {
 			continue
 		}
 		if found != nil && !reflect.DeepEqual(found.Release, r.Release) {
-			return nil, api.Fail(
-				api.ManualRecovery,
+			return nil, Fail(
+				ErrManualRecovery,
 				"conflicting release origins",
 			)
 		}
@@ -81,8 +81,8 @@ func (s *Service) boundCollector(b Sandbox) (*resourceRecovery, error) {
 			continue
 		}
 		if found != nil && found.ID != r.ID {
-			return nil, api.Fail(
-				api.ManualRecovery,
+			return nil, Fail(
+				ErrManualRecovery,
 				"conflicting instance collectors",
 			)
 		}
@@ -194,14 +194,14 @@ func (s *Service) handoffInstanceCleanup(
 		!v.Verified ||
 		v.OperationID != "" ||
 		b.TenantID != a.ChargeTenantID {
-		return api.Fail(api.ManualRecovery, "invalid exact instance handoff")
+		return Fail(ErrManualRecovery, "invalid exact instance handoff")
 	}
 	origin, err := s.originalRelease(b)
 	if err != nil {
 		return err
 	}
 	if origin == nil || origin.Release == nil {
-		return api.Fail(api.ManualRecovery, "missing frozen release intent")
+		return Fail(ErrManualRecovery, "missing frozen release intent")
 	}
 	original := *origin.Release
 	source, err := s.store.operation(s.ctx, origin.Source)
@@ -215,20 +215,20 @@ func (s *Service) handoffInstanceCleanup(
 		original.Request.VMID != v.ID ||
 		original.Request.ExpectedInstance != original.Instance ||
 		original.Request.Key != stepKey(original.Source, releaseVMStep(b.ID)) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"release origin does not match restore proof",
 		)
 	}
 	deletion, err := s.opts.Engine.FindOperation(s.ctx, original.Request.Key)
-	if isCode(err, api.NotFound) {
+	if isEngineCode(err, api.NotFound) {
 		// This is a generation fence proof, never a fabricated failed receipt or a
 		// claim that NotFound means no dispatch. Replaying A cannot admit against B.
 		_, err = api.Wait(s.ctx, s.opts.Engine, original.Request)
-		if !isCode(err, api.Conflict) {
+		if !isEngineCode(err, api.Conflict) {
 			if err == nil {
-				err = api.Fail(
-					api.ManualRecovery,
+				err = Fail(
+					ErrManualRecovery,
 					"unproven A deletion outcome",
 				)
 			}
@@ -237,8 +237,8 @@ func (s *Service) handoffInstanceCleanup(
 	} else if err != nil {
 		return err
 	} else if !reflect.DeepEqual(deletion.Request, original.Request) || deletion.Key != original.Request.Key || deletion.Status != "failed" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"A deletion is unresolved or contradicts generation proof",
 		)
 	}
@@ -277,7 +277,7 @@ func (s *Service) handoffInstanceCleanup(
 	if latest.State != "terminated" || latest.TenantID != b.TenantID ||
 		latest.VMID != v.ID ||
 		(latest.Instance != original.Instance && latest.Instance != v.Instance) {
-		return api.Fail(api.ManualRecovery, "sandbox changed before handoff")
+		return Fail(ErrManualRecovery, "sandbox changed before handoff")
 	}
 	var raw []byte
 	err = tx.QueryRowContext(s.ctx, `SELECT body FROM resource_recovery WHERE id=?`, id).
@@ -295,7 +295,7 @@ func (s *Service) handoffInstanceCleanup(
 			!reflect.DeepEqual(old.Cleanup.Original, original) ||
 			!reflect.DeepEqual(old.Cleanup.Allocation.Request, a.Request) ||
 			!reflect.DeepEqual(old.Cleanup.Allocation.Resolution.Proof, proof) {
-			return api.Fail(api.ManualRecovery, "collector binding conflict")
+			return Fail(ErrManualRecovery, "collector binding conflict")
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
 		_, err = tx.ExecContext(
@@ -372,7 +372,7 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 		c.Request.ExpectedInstance != r.Instance ||
 		c.Allocation.Resolution.Proof == nil ||
 		c.Allocation.Resolution.Proof.ResultInstance != r.Instance {
-		return api.Fail(api.ManualRecovery, "invalid collector binding")
+		return Fail(ErrManualRecovery, "invalid collector binding")
 	}
 	if r.Done {
 		return nil
@@ -385,7 +385,7 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 		c.Allocation.ChargeTenantID != r.TenantID ||
 		c.Allocation.SandboxID != r.SandboxID ||
 		c.Original.Instance != c.Allocation.Request.ExpectedInstance {
-		return api.Fail(api.ManualRecovery, "cleanup provenance changed")
+		return Fail(ErrManualRecovery, "cleanup provenance changed")
 	}
 	b, err := getSandbox(s.ctx, s.store.db, r.SandboxID)
 	if err != nil {
@@ -394,31 +394,31 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 	if b.TenantID != r.TenantID || b.State != "terminated" ||
 		b.VMID != r.VMID ||
 		(b.Instance != r.Instance && b.Instance != c.Original.Instance) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"collector no longer owns terminated target",
 		)
 	}
 	// Reconcile the existing attempt before considering references for a dispatch.
 	receipt, findErr := s.opts.Engine.FindOperation(s.ctx, c.Request.Key)
-	if findErr != nil && !isCode(findErr, api.NotFound) {
+	if findErr != nil && !isEngineCode(findErr, api.NotFound) {
 		return findErr
 	}
 	if findErr == nil &&
 		(receipt.Key != c.Request.Key || !reflect.DeepEqual(receipt.Request, c.Request) || receipt.VMID != r.VMID) {
-		return api.Fail(api.ManualRecovery, "cleanup receipt mismatch")
+		return Fail(ErrManualRecovery, "cleanup receipt mismatch")
 	}
 	if findErr == nil && !recoveryTerminal(receipt.Status) {
-		return api.Fail(api.Unknown, "cleanup attempt remains nonterminal")
+		return Fail(ErrUnknown, "cleanup attempt remains nonterminal")
 	}
 	v, vmErr := s.opts.Engine.GetVM(s.ctx, r.VMID)
-	if vmErr != nil && !isCode(vmErr, api.NotFound) {
+	if vmErr != nil && !isEngineCode(vmErr, api.NotFound) {
 		return vmErr
 	}
 	if vmErr == nil &&
 		(!v.Verified || v.Instance != r.Instance || v.OperationID != "") {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"cleanup target changed or has another owner",
 		)
 	}
@@ -440,19 +440,19 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 			return err
 		}
 		*r = next
-		return api.Fail(
-			api.Unknown,
+		return Fail(
+			ErrUnknown,
 			"terminal failed cleanup advanced to a frozen retry",
 		)
 	}
-	if isCode(vmErr, api.NotFound) {
+	if isEngineCode(vmErr, api.NotFound) {
 		ownership := s.lockResourceOwnership()
 		defer ownership()
 		return s.completeInstanceCleanup(r, &receipt, findErr == nil)
 	}
 	if findErr == nil && receipt.Status == "succeeded" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"successful B deletion still has a VM",
 		)
 	}
@@ -463,7 +463,7 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 		return err
 	}
 	if vms[r.VMID] {
-		return api.Fail(api.Conflict, "instance cleanup has live dependencies")
+		return Fail(ErrConflict, "instance cleanup has live dependencies")
 	}
 	var live int
 	if err = s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs r WHERE r.tenant_id=? AND r.holder_kind IN ('active_use','engine_dependency') AND ((r.kind='vm_disk' AND (r.resource_key=? OR EXISTS(SELECT 1 FROM quota_refs v WHERE v.tenant_id=r.tenant_id AND v.kind=r.kind AND v.resource_key=r.resource_key AND v.holder_id=?))) OR (r.kind='pending_storage' AND r.holder_id=?))`, r.TenantID, r.VMID, "vm:"+r.VMID, "sandbox:"+r.SandboxID).
@@ -471,7 +471,7 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 		return err
 	}
 	if live > 0 {
-		return api.Fail(api.Conflict, "instance cleanup has live ledger users")
+		return Fail(ErrConflict, "instance cleanup has live ledger users")
 	}
 	next := *r
 	copyC := *c
@@ -488,12 +488,12 @@ func (s *Service) consumeInstanceCleanup(r *resourceRecovery) error {
 	if receipt.Key != copyC.Request.Key || receipt.Status != "succeeded" ||
 		!reflect.DeepEqual(receipt.Request, copyC.Request) ||
 		receipt.VMID != r.VMID {
-		return api.Fail(api.ManualRecovery, "cleanup completion mismatch")
+		return Fail(ErrManualRecovery, "cleanup completion mismatch")
 	}
 	_, err = s.opts.Engine.GetVM(s.ctx, r.VMID)
-	if !isCode(err, api.NotFound) {
+	if !isEngineCode(err, api.NotFound) {
 		if err == nil {
-			err = api.Fail(api.ManualRecovery, "cleanup VM still present")
+			err = Fail(ErrManualRecovery, "cleanup VM still present")
 		}
 		return err
 	}
@@ -517,7 +517,7 @@ func (s *Service) completeInstanceCleanup(
 	if b.State != "terminated" || b.TenantID != r.TenantID ||
 		b.VMID != r.VMID ||
 		(b.Instance != r.Instance && b.Instance != r.Cleanup.Original.Instance) {
-		return api.Fail(api.ManualRecovery, "reclaim metadata changed")
+		return Fail(ErrManualRecovery, "reclaim metadata changed")
 	}
 	if err = s.reclaimQuotaTx(tx, "vm_disk", r.VMID); err != nil {
 		return err
@@ -528,8 +528,8 @@ func (s *Service) completeInstanceCleanup(
 		return err
 	}
 	if remaining != 0 {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"VM responsibility still has an unresolved dependency",
 		)
 	}

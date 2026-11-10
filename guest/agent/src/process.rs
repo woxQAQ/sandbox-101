@@ -4,7 +4,7 @@ use crate::{
     string,
     wire::CHUNK,
 };
-use anyhow::{Result, bail, ensure};
+use crate::{Error, ErrorCode, Result, ResultContext};
 use serde_json::json;
 use std::{
     collections::VecDeque,
@@ -53,9 +53,14 @@ impl Process {
     }
     pub fn signal(&self, signal: i32) -> Result<()> {
         let status = self.status.lock().unwrap();
-        ensure!(!status.exited, "process already exited");
+        ensure!(!status.exited, Conflict => "process {} already exited", self.id);
         if unsafe { libc::kill(-(self.pid as i32), signal) } < 0 {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(
+                Error::from(std::io::Error::last_os_error()).context(format!(
+                    "signal {signal} process {} (pid={})",
+                    self.id, self.pid
+                )),
+            );
         }
         Ok(())
     }
@@ -114,23 +119,23 @@ pub(crate) fn command_with_environment(
 ) -> Result<Command> {
     let command = string(p, "command")?;
     ensure!(!command.is_empty(), "empty command");
-    let mut cmd = if let Some(argv) = p.get("argv") {
-        let argv = argv
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("argv must be an array"))?;
-        let mut cmd = Command::new(command);
-        for arg in argv {
-            cmd.arg(
-                arg.as_str()
-                    .ok_or_else(|| anyhow::anyhow!("argv entries must be strings"))?,
-            );
-        }
-        cmd
-    } else {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c").arg(command);
-        cmd
-    };
+    let mut cmd =
+        if let Some(argv) = p.get("argv") {
+            let argv = argv
+                .as_array()
+                .ok_or_else(|| Error::new(ErrorCode::Invalid, "argv must be an array"))?;
+            let mut cmd = Command::new(command);
+            for arg in argv {
+                cmd.arg(arg.as_str().ok_or_else(|| {
+                    Error::new(ErrorCode::Invalid, "argv entries must be strings")
+                })?);
+            }
+            cmd
+        } else {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg("-c").arg(command);
+            cmd
+        };
     cmd.env_clear()
         .env(
             "PATH",
@@ -142,7 +147,7 @@ pub(crate) fn command_with_environment(
     if let Some(cwd) = p.get("cwd") {
         cmd.current_dir(
             cwd.as_str()
-                .ok_or_else(|| anyhow::anyhow!("cwd must be a string"))?,
+                .ok_or_else(|| Error::new(ErrorCode::Invalid, "cwd must be a string"))?,
         );
     }
     cmd.kill_on_drop(true);
@@ -203,7 +208,7 @@ pub(crate) async fn execute_command(
         "PTY cannot detach; use persistent sessions"
     );
     let mut table = agent.processes.lock().await;
-    ensure!(table.len() < 256, "process table capacity exhausted");
+    ensure!(table.len() < 256, ResourceExhausted => "process table capacity exhausted");
     let mut master = None;
     if pty {
         let (rows, cols) = dimensions(&p)?;
@@ -224,13 +229,15 @@ pub(crate) async fn execute_command(
             )
         } < 0
         {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(Error::from(std::io::Error::last_os_error()).context("openpty"));
         }
         let master_fd = unsafe { OwnedFd::from_raw_fd(m) };
         let slave_fd = unsafe { OwnedFd::from_raw_fd(s) };
         for fd in [m, s] {
             if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                return Err(std::io::Error::last_os_error().into());
+                return Err(
+                    Error::from(std::io::Error::last_os_error()).context("set PTY FD_CLOEXEC")
+                );
             }
         }
         cmd.stdin(Stdio::from(slave_fd.try_clone()?))
@@ -254,7 +261,9 @@ pub(crate) async fn execute_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     }
-    let mut child = cmd.spawn()?;
+    let mut child = cmd
+        .spawn()
+        .or_context(|| "spawn workload process with restricted identity".into())?;
     drop(cmd); // Close the parent's retained PTY slave handles before waiting for EOF.
     let pid = child.id().unwrap();
     let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
@@ -264,12 +273,17 @@ pub(crate) async fn execute_command(
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
         let _ = child.wait().await;
-        return Err(error.into());
+        return Err(Error::from(error).context(format!("pidfd_open pid={pid}")));
     }
     let pidfd = unsafe { OwnedFd::from_raw_fd(raw as i32) };
     // The pidfd is only observed for readiness; wait() is deferred until the
     // process group has been cleaned up, so the leader PID cannot be reused.
-    let pidfd = unsafe { tokio::io::unix::AsyncFd::register(pidfd) }?;
+    let pidfd = unsafe { tokio::io::unix::AsyncFd::register(pidfd) }.map_err(|e| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("register pidfd pid={pid}: {e}"),
+        )
+    })?;
     let id = format!("p-{pid}-{}", random_id()?);
     let (events, _) = broadcast::channel(32);
     let process = Arc::new(Process {
@@ -404,7 +418,10 @@ pub(crate) async fn execute_command(
             task.abort();
         }
         let mut error = if keyed && (status.is_err() || local.is_cancelled()) {
-            Some(anyhow::anyhow!("keyed execution completion unconfirmed"))
+            Some(Error::new(
+                ErrorCode::ResultUnknown,
+                "keyed execution completion unconfirmed",
+            ))
         } else {
             None
         };
@@ -448,7 +465,9 @@ pub(crate) async fn execute_command(
 pub fn random_id() -> Result<String> {
     use std::io::Read;
     let mut bytes = [0u8; 8];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .or_context(|| "read /dev/urandom for process identity".into())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 fn dimensions(p: &serde_json::Value) -> Result<(u16, u16)> {
@@ -482,7 +501,7 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
         .await
         .get(id)
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("unknown process"))?;
+        .ok_or_else(|| Error::new(ErrorCode::NotFound, format!("unknown process {id}")))?;
     match out.request.method.as_str() {
         "proc_kill" => {
             let signal = if p.get("signal").is_some() {
@@ -495,10 +514,9 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
             out.done(json!({})).await
         }
         "pty_resize" => {
-            let master = process
-                .pty
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("process has no PTY"))?;
+            let master = process.pty.as_ref().ok_or_else(|| {
+                Error::new(ErrorCode::Conflict, format!("process {id} has no PTY"))
+            })?;
             let (rows, cols) = dimensions(&p)?;
             let size = libc::winsize {
                 ws_row: rows,
@@ -507,7 +525,8 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
                 ws_ypixel: 0,
             };
             if unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0 {
-                return Err(std::io::Error::last_os_error().into());
+                return Err(Error::from(std::io::Error::last_os_error())
+                    .context(format!("resize PTY process {id}")));
             }
             out.done(json!({})).await
         }
@@ -562,17 +581,17 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
                                 | broadcast::error::TryRecvError::Closed,
                             ) => break,
                             Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                                bail!("attach output overflow ({n} chunks); replay proc_logs")
+                                bail!(ResourceExhausted => "attach output overflow ({n} chunks); replay proc_logs")
                             }
                         }
                     }
                     return out.done(json!({"exit_code":code,"process_id":id})).await;
                 }
                 tokio::select! {
-                    _ = out.cancel.cancelled() => bail!("connection closed"),
+                    _ = out.cancel.cancelled() => bail!(Internal => "connection closed"),
                     _ = notified => {},
                     log = events.recv() => {
-                        let log = log.map_err(|e|anyhow::anyhow!("attach output overflow or closed: {e}"))?;
+                        let log = log.map_err(|e| Error::new(ErrorCode::ResourceExhausted, format!("attach output overflow or closed: {e}")))?;
                         if log.sequence > seen { out.event(json!({"stream":log.stream,"sequence":log.sequence}),log.data).await?; seen = log.sequence; }
                     }
                 }
@@ -591,10 +610,13 @@ impl AsyncPty {
         if flags < 0
             || unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
         {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(Error::from(std::io::Error::last_os_error()).context("set PTY O_NONBLOCK"));
         }
         // OwnedFd cannot change descriptor while registered.
-        Ok(Self(unsafe { tokio::io::unix::AsyncFd::register(fd) }?))
+        Ok(Self(
+            unsafe { tokio::io::unix::AsyncFd::register(fd) }
+                .map_err(|e| Error::new(ErrorCode::Internal, format!("register PTY: {e}")))?,
+        ))
     }
 }
 impl tokio::io::AsyncRead for AsyncPty {

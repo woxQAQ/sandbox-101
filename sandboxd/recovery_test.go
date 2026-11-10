@@ -119,7 +119,7 @@ func TestRecoverResourcesCollectsOnlyProvenUnownedVMs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"orphan-build", "orphan-refill", "orphan-provision", "orphan-fork"} {
-		if _, err := f.GetVM(s.ctx, id); !isCode(err, api.NotFound) {
+		if _, err := f.GetVM(s.ctx, id); !isEngineCode(err, api.NotFound) {
 			t.Fatalf("proven orphan %s was not collected: %v", id, err)
 		}
 	}

@@ -145,7 +145,12 @@ func (s *Service) resourceOperations() ([]Operation, error) {
 
 // recoverResources runs after ordinary reconciliation, at startup and on every
 // maintenance pass. No failed guest execution or template build is replayed.
-func (s *Service) recoverResources() error {
+func (s *Service) recoverResources() (failure error) {
+	defer func() {
+		if failure != nil {
+			failure = internalError(failure)
+		}
+	}()
 	unlock := s.lock("resource-recovery")
 	defer unlock()
 	if _, err := s.store.db.ExecContext(
@@ -552,8 +557,8 @@ func (s *Service) finishRecoveryAttempt(
 			return err
 		}
 		if hasUnresolvedAllocations(latest) {
-			return api.Fail(
-				api.Conflict,
+			return Fail(
+				ErrConflict,
 				"parent still owns undelivered allocations",
 			)
 		}
@@ -646,7 +651,7 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 			return nil
 		}
 		v, e := s.opts.Engine.GetVM(s.ctx, r.VMID)
-		if isCode(e, api.NotFound) {
+		if isEngineCode(e, api.NotFound) {
 			if e = s.reclaimQuota("vm_disk", r.VMID); e != nil {
 				return e
 			}
@@ -656,15 +661,15 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 			return e
 		}
 		if !v.Verified {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"orphan VM %s is not verified",
 				v.ID,
 			)
 		}
 		if r.Instance != "" && r.Instance != v.Instance {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"orphan VM %s changed instance",
 				v.ID,
 			)
@@ -676,7 +681,7 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 			return nil
 		}
 		_, e := s.opts.Engine.GetSnapshot(s.ctx, r.Snapshot)
-		if isCode(e, api.NotFound) {
+		if isEngineCode(e, api.NotFound) {
 			return s.finishRecoveryAttempt(r, nil)
 		}
 		if e != nil {
@@ -697,7 +702,7 @@ func (s *Service) findResourceStep(
 ) (*api.Operation, error) {
 	key := stepKey(o, step)
 	v, err := s.opts.Engine.FindOperation(s.ctx, key)
-	if isCode(err, api.NotFound) {
+	if isEngineCode(err, api.NotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -706,8 +711,8 @@ func (s *Service) findResourceStep(
 	if v.Key != key ||
 		(action != "" && action != "*" && v.Request.Action != action) ||
 		(action == "" && v.Request.Action != "create" && v.Request.Action != "clone") {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"engine operation %s does not prove resource ownership",
 			key,
 		)
@@ -738,8 +743,8 @@ func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 		return err
 	}
 	if rows != 1 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"recovery responsibility was not persisted",
 		)
 	}
@@ -783,8 +788,8 @@ func insertRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 		return err
 	}
 	if !bytes.Equal(actual, encode(r)) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"recovery identity conflicts with durable responsibility",
 		)
 	}

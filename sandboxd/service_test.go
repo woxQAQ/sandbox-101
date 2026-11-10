@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -276,6 +278,7 @@ type fakeAgent struct {
 	activations     []Activation
 	fail            bool
 	failInfo        bool
+	execError       error
 	infoEntered     chan<- struct{}
 	infoGate        <-chan struct{}
 	activateEntered chan<- struct{}
@@ -341,7 +344,9 @@ func (f *fakeAgent) Exec(
 	string,
 	string,
 ) error {
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.execError
 }
 
 func (f *fakeAgent) Connect(context.Context, api.VM) (net.Conn, error) {
@@ -434,6 +439,107 @@ func fixture(t *testing.T) (*Service, *fakeEngine, *fakeAgent, Principal) {
 		t.Fatal(err)
 	}
 	return s, f, a, p
+}
+
+func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
+	for _, classified := range []bool{false, true} {
+		t.Run(
+			map[bool]string{false: "raw", true: "classified"}[classified],
+			func(t *testing.T) {
+				s, _, a, p := fixture(t)
+				a.mu.Lock()
+				a.execError = errors.New(
+					"private warmup diagnostic /private/host/path",
+				)
+				if classified {
+					a.execError = Fail(ErrUnknown, "unconfirmed warmup")
+				}
+				a.mu.Unlock()
+				command := Command{
+					Action: "template_build",
+					Template: &Template{
+						ID:    "diagnostic",
+						Image: "sha256:" + strings.Repeat("1", 64),
+						Shape: api.Shape{
+							VCPUs:     1,
+							MemoryMiB: 128,
+							DiskMiB:   64,
+						},
+						Warmup: "true",
+					},
+				}
+				accepted, err := s.Submit(s.ctx, p, "failure-context", command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.Wait(s.ctx, p, accepted.ID); err == nil {
+					t.Fatal("warmup failure was lost")
+				}
+				final, err := s.Operation(s.ctx, p, accepted.ID)
+				if err != nil || final.Status != "failed" ||
+					final.Error == nil {
+					t.Fatalf("missing failure receipt: %+v %v", final, err)
+				}
+				if classified {
+					if final.Error.Code != ErrUnknown ||
+						final.Error.Message != "result unknown; retain the same operation or exec key" {
+						t.Fatalf("classified error changed: %+v", final.Error)
+					}
+				} else if final.Error.Code != ErrInternal || final.Step != "warmup_inflight" ||
+					final.Error.Message != "internal error" {
+					t.Fatalf("missing action/step context: %+v", final)
+				}
+				durable, err := s.store.operation(s.ctx, accepted.ID)
+				if err != nil ||
+					!strings.Contains(
+						durable.Error.Message,
+						"template_build (warmup_inflight): ",
+					) ||
+					strings.Contains(
+						durable.Error.Message,
+						"/private/host/path",
+					) {
+					t.Fatalf(
+						"unsafe or contextless durable error: %+v %v",
+						durable.Error,
+						err,
+					)
+				}
+				before, _ := json.Marshal(final)
+				replay, err := s.Submit(s.ctx, p, "failure-context", command)
+				after, _ := json.Marshal(replay)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("terminal error rewritten: %+v %v", replay, err)
+				}
+				if !classified {
+					body, _ := json.Marshal(command)
+					request := httptest.NewRequest(
+						http.MethodPost,
+						"/v1/templates",
+						bytes.NewReader(body),
+					)
+					request.Header.Set("Authorization", "Bearer alice-token")
+					request.Header.Set("Idempotency-Key", "failure-context")
+					response := httptest.NewRecorder()
+					s.Handler().ServeHTTP(response, request)
+					var public Error
+					if err := json.Unmarshal(
+						response.Body.Bytes(),
+						&public,
+					); err != nil ||
+						response.Code != 500 || public.Code != ErrInternal ||
+						public.Message != "internal error" {
+						t.Fatalf(
+							"HTTP internal diagnostic leaked: status=%d body=%s err=%v",
+							response.Code,
+							response.Body,
+							err,
+						)
+					}
+				}
+			},
+		)
+	}
 }
 
 func claimTest(
@@ -570,7 +676,7 @@ func ledgerRejectClaim(
 		Command{Action: "claim", TemplateID: "python"},
 	); !isCode(
 		err,
-		api.Exhausted,
+		ErrExhausted,
 	) {
 		t.Fatalf("wanted Exhausted before engine effects, got %v", err)
 	}
@@ -1522,7 +1628,11 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 	if err == nil {
 		t.Fatal("handoff fault missing")
 	}
-	if fault == "commit" && !strings.Contains(err.Error(), "FOREIGN KEY") {
+	if fault == "commit" &&
+		!strings.Contains(
+			templateQuotaOperationDiagnostic(t, s, o.ID),
+			"FOREIGN KEY",
+		) {
 		t.Fatal("handoff did not fail on deferred FK Commit", err)
 	}
 	t.Logf("handoff stage=%s fault=%s actual=%v", stage, fault, err)
@@ -1580,6 +1690,35 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 		ledgerMoney(t, s, p.TenantID, 0, 0)
 	} else {
 		ledgerMoney(t, s, p.TenantID, 0, 192)
+	}
+}
+
+// Failure oracles read private journal evidence, never tenant-facing messages.
+func templateQuotaOperationDiagnostic(
+	t *testing.T,
+	s *Service,
+	operation string,
+) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var diagnostic string
+		err := s.store.db.QueryRowContext(
+			s.ctx,
+			`SELECT COALESCE(json_extract(body,'$.event.diagnostic'),'') FROM journal
+			WHERE json_extract(body,'$.event.operation_id')=? ORDER BY seq DESC LIMIT 1`,
+			operation,
+		).Scan(&diagnostic)
+		if err == nil && diagnostic != "" {
+			return diagnostic
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("private operation diagnostic missing: %s", operation)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

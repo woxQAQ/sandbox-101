@@ -115,7 +115,7 @@ func (s *Service) admitRefill(t Template) (*Operation, error) {
 		0,
 		t.Shape.DiskMiB,
 	); err != nil {
-		if !isCode(err, api.Exhausted) && !isCode(err, api.NotFound) {
+		if !isCode(err, ErrExhausted) && !isCode(err, ErrNotFound) {
 			return nil, err
 		}
 		o.Status = "failed"
@@ -221,7 +221,7 @@ func (s *Service) pools() {
 				continue
 			}
 			v, lookup := s.opts.Engine.GetVM(s.ctx, m.vm)
-			if lookup != nil && !isCode(lookup, api.NotFound) {
+			if lookup != nil && !isEngineCode(lookup, api.NotFound) {
 				continue
 			}
 			if lookup == nil && validAllocationIdentity(group, v) == nil &&
@@ -239,7 +239,7 @@ func (s *Service) pools() {
 				}
 			}
 			pool := s.lock("pool:" + t.ID)
-			if isCode(lookup, api.NotFound) {
+			if isEngineCode(lookup, api.NotFound) {
 				_ = s.retireAllocationAbsent(group.ID)
 				pool()
 				continue
@@ -288,13 +288,13 @@ func (s *Service) refill(o *Operation) error {
 	}
 	vm, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if err = validAllocationIdentity(group, vm); err != nil {
 		return err
 	}
 	if vm.Phase != "running" || !vm.AgentReady || vm.NetworkActual {
-		return api.Fail(api.Conflict, "warm instance is not isolated and ready")
+		return Fail(ErrConflict, "warm instance is not isolated and ready")
 	}
 	if err = s.opts.Agent.Info(s.ctx, vm); err != nil {
 		return err
@@ -315,7 +315,7 @@ func (s *Service) refill(o *Operation) error {
 	// Recheck after guest IO before acquiring publication locks.
 	currentVM, err := s.opts.Engine.GetVM(s.ctx, vm.ID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if err = validAllocationIdentity(group, currentVM); err != nil {
 		return err
@@ -339,7 +339,7 @@ func (s *Service) refill(o *Operation) error {
 		current.Shape != t.Shape ||
 		current.State != "ready" ||
 		current.TargetWarm == 0 {
-		return api.Fail(api.Conflict, "warm publication was superseded")
+		return Fail(ErrConflict, "warm publication was superseded")
 	}
 	var ready int
 	if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM warm WHERE template_id=? AND snapshot_id=? AND vm_id!=?`, t.ID, t.SnapshotID, vm.ID).
@@ -347,7 +347,7 @@ func (s *Service) refill(o *Operation) error {
 		return err
 	}
 	if ready >= current.TargetWarm {
-		return api.Fail(api.Conflict, "warm pool is full")
+		return Fail(ErrConflict, "warm pool is full")
 	}
 	group, err = loadRecoveryTx(s.ctx, tx, group.ID)
 	if err != nil {

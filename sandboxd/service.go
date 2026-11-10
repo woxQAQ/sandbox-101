@@ -43,8 +43,8 @@ type Service struct {
 // Engine, Agent, and a root token are required.
 func Open(opts Options) (*Service, error) {
 	if opts.Engine == nil || opts.Agent == nil || opts.RootToken == "" {
-		return nil, api.Fail(
-			api.Invalid,
+		return nil, Fail(
+			ErrInvalid,
 			"engine, agent and root token are required",
 		)
 	}
@@ -124,14 +124,6 @@ func (s *Service) lock(id string) func() {
 	return m.Unlock
 }
 
-func isCode(
-	err error,
-	c api.Code,
-) bool {
-	var e *api.Error
-	return errors.As(err, &e) && e.Code == c
-}
-
 // Drain prevents admission of new claim and fork operations.
 func (s *Service) Drain() { s.mu.Lock(); s.draining = true; s.mu.Unlock() }
 
@@ -183,11 +175,4 @@ func newID(prefix string) string {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(b[:])
-}
-
-func internalError(err error) *api.Error {
-	if e, ok := errors.AsType[*api.Error](err); ok {
-		return e
-	}
-	return &api.Error{Code: api.Internal, Message: fmt.Sprint(err)}
 }

@@ -152,7 +152,7 @@ func (s *Service) reconcile() {
 		// Inventory could predate a just-finished resume; confirm the current instance under lock.
 		if !ok || v.Instance != b.Instance {
 			v, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
-			if e != nil && !isCode(e, api.NotFound) {
+			if e != nil && !isEngineCode(e, api.NotFound) {
 				unlock()
 				continue
 			}

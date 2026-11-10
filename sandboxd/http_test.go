@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func TestSandboxTokenCanPollOwnLeaseOperationsHTTP(t *testing.T) {
@@ -78,7 +76,7 @@ func TestSandboxTokenCanPollOwnLeaseOperationsHTTP(t *testing.T) {
 		token,
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("ordinary authentication allowed terminated credential", err)
 	}
@@ -155,7 +153,7 @@ func TestRootCapturesPreserveSourceTenant(t *testing.T) {
 					},
 				); !isCode(
 					err,
-					api.NotFound,
+					ErrNotFound,
 				) {
 					t.Fatal("Bob imported Alice capture", err)
 				}
@@ -299,11 +297,11 @@ func TestHTTPUpgradeRejectsHTTP2BeforeResuming(t *testing.T) {
 	r.Header.Set("Upgrade", "sandbox-v1")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
-	var result api.Error
+	var result Error
 	if err := json.Unmarshal(
 		w.Body.Bytes(),
 		&result,
-	); err != nil || w.Code != http.StatusUnprocessableEntity || result.Code != api.Incompatible ||
+	); err != nil || w.Code != http.StatusUnprocessableEntity || result.Code != ErrIncompatible ||
 		f.count("clone") != 0 {
 		t.Fatalf(
 			"status=%d result=%+v clones=%d decode=%v",
@@ -333,11 +331,11 @@ func TestHTTPRejectsInvalidJSONBeforeMutation(t *testing.T) {
 		r.Header.Set("Idempotency-Key", "invalid-claim")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
-		var result api.Error
+		var result Error
 		if err := json.Unmarshal(
 			w.Body.Bytes(),
 			&result,
-		); err != nil || w.Code != http.StatusBadRequest || result.Code != api.Invalid ||
+		); err != nil || w.Code != http.StatusBadRequest || result.Code != ErrInvalid ||
 			f.count("create") != 0 {
 			t.Fatalf(
 				"status=%d result=%+v creations=%d decode=%v",

@@ -74,6 +74,16 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 		durable.Operation.VMID != next.Operation.VMID {
 		return api.Fail(api.Conflict, "durable completion intent changed")
 	}
+	if cause != nil {
+		if _, classified := errors.AsType[*api.Error](cause); !classified {
+			cause = fmt.Errorf(
+				"%s (%s): %w",
+				next.Operation.Request.Action,
+				next.Operation.Step,
+				cause,
+			)
+		}
+	}
 	generation := cause == nil &&
 		(next.Operation.Request.Action == "start" || next.Operation.Request.Action == "restore" || next.Operation.Request.Action == "clone")
 	next.Operation.ResultInstance = ""

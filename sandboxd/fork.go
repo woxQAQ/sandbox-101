@@ -12,7 +12,7 @@ func (s *Service) fork(o *Operation) error {
 		if o.Error != nil {
 			cause = o.Error
 		} else {
-			cause = api.Fail(api.Internal, "fork rolled back")
+			cause = Fail(ErrInternal, "fork rolled back")
 		}
 		return s.rollbackFork(o, cause)
 	}
@@ -55,7 +55,7 @@ func (s *Service) fork(o *Operation) error {
 			default:
 				return s.rollbackFork(
 					o,
-					api.Fail(api.Conflict, "source is not forkable"),
+					Fail(ErrConflict, "source is not forkable"),
 				)
 			}
 		}
@@ -84,7 +84,7 @@ func (s *Service) fork(o *Operation) error {
 			defer release()
 			b, err := getSandbox(s.ctx, s.store.db, id)
 			if err == nil && b.State == "terminated" {
-				err = api.Fail(api.Conflict, "branch was released")
+				err = Fail(ErrConflict, "branch was released")
 			}
 			if err == nil && b.State != "running" {
 				if b.VMID == "" {

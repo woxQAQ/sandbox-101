@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 type BackupPoint struct {
@@ -96,8 +94,8 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", api.Fail(
-			api.Invalid,
+		return "", Fail(
+			ErrInvalid,
 			"backup component is not a regular file",
 		)
 	}
@@ -157,7 +155,7 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 		return point, err
 	}
 	if point.Format != 1 || point.ID == "" {
-		return point, api.Fail(api.Incompatible, "unsupported sandboxd backup")
+		return point, Fail(ErrIncompatible, "unsupported sandboxd backup")
 	}
 	for name, want := range map[string]string{"sandboxd.db": point.DatabaseSHA256, "node.key": point.NodeKeySHA256} {
 		got, err := hashFile(filepath.Join(source, name))
@@ -165,8 +163,8 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 			return point, err
 		}
 		if got != want {
-			return point, api.Fail(
-				api.Invalid,
+			return point, Fail(
+				ErrInvalid,
 				"backup checksum mismatch for %s",
 				name,
 			)
@@ -201,8 +199,8 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 
 func AcknowledgeStateRecovery(state, note string) error {
 	if len(strings.TrimSpace(note)) < 16 {
-		return api.Fail(
-			api.Invalid,
+		return Fail(
+			ErrInvalid,
 			"a review note describing engine inventory and missing history is required",
 		)
 	}
@@ -216,7 +214,7 @@ func AcknowledgeStateRecovery(state, note string) error {
 	}
 	defer func() { _ = lock.Close() }()
 	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		return api.Fail(api.Conflict, "sandboxd is active")
+		return Fail(ErrConflict, "sandboxd is active")
 	}
 	point, err := os.ReadFile(filepath.Join(state, "RECOVERY_REQUIRED"))
 	if err != nil {

@@ -26,8 +26,8 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 		if group != nil && group.Group.Identity != nil {
 			i := group.Group.Identity
 			if i.Instance == "" {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"allocation activation lacks successful witness",
 				)
 			}
@@ -57,18 +57,18 @@ func (s *Service) activateTarget(
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"host credentials must be supplied again after daemon restart",
 		)
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if target != nil && (v.ID != target.VM || v.Instance != target.Instance) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"activation read returned another instance",
 		)
 	}
@@ -78,7 +78,7 @@ func (s *Service) activateTarget(
 		}
 	}
 	if v.Phase != "running" || !v.AgentReady || !v.Verified {
-		return api.Fail(api.Conflict, "engine VM is not verified ready")
+		return Fail(ErrConflict, "engine VM is not verified ready")
 	}
 	// Network is disabled even for a recovered activation. Sandbox policy always precedes enable.
 	if _, err = s.engine(
@@ -108,8 +108,8 @@ func (s *Service) activateTarget(
 		if s.opts.Egress != nil {
 			err = s.bind(s.ctx, *b, v.VSockPath)
 		} else if b.Policy.Mode != "none" {
-			err = api.Fail(
-				api.Incompatible,
+			err = Fail(
+				ErrIncompatible,
 				"egress manager required for network mode",
 			)
 		}
@@ -203,7 +203,7 @@ func (s *Service) commitGroupActiveTx(
 		r.Group.Identity.VM != target.VM ||
 		r.Group.Identity.Instance != target.Instance ||
 		b.Instance != target.Instance {
-		return api.Fail(api.Conflict, "allocation publication changed")
+		return Fail(ErrConflict, "allocation publication changed")
 	}
 	for index := range r.Allocations {
 		a := &r.Allocations[index]
@@ -354,8 +354,8 @@ func (s *Service) checkActivationTarget(
 			current.VMID != target.VM ||
 			r.Group.Identity.VM != target.VM ||
 			r.Group.Identity.Instance != target.Instance {
-			return api.Fail(
-				api.Conflict,
+			return Fail(
+				ErrConflict,
 				"allocation activation lifecycle changed",
 			)
 		}
@@ -373,26 +373,26 @@ func (s *Service) checkActivationTarget(
 			current.Instance != target.Instance ||
 			r.Group.Selection.Identity.VM != target.VM ||
 			r.Group.Selection.Identity.Instance != target.Instance {
-			return api.Fail(
-				api.Conflict,
+			return Fail(
+				ErrConflict,
 				"exact warm activation lifecycle changed",
 			)
 		}
 	} else if current.TenantID != b.TenantID || current.State != "resuming" ||
 		current.VMID != b.VMID ||
 		(current.OperationID != o.ID && !strings.HasPrefix(o.ID, "recovery:sandbox:"+b.ID+":"+current.OperationID+":")) {
-		return api.Fail(api.Conflict, "exact activation lifecycle changed")
+		return Fail(ErrConflict, "exact activation lifecycle changed")
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if v.ID != target.VM || v.Instance != target.Instance ||
 		v.OperationID != "" ||
 		!v.Verified ||
 		!v.AgentReady ||
 		v.Phase != "running" {
-		return api.Fail(api.ManualRecovery, "exact activation instance changed")
+		return Fail(ErrManualRecovery, "exact activation instance changed")
 	}
 	return nil
 }
@@ -421,7 +421,7 @@ func (s *Service) commitAllocationActiveTx(
 		current.TenantID != b.TenantID ||
 		(current.OperationID != r.Source && !strings.HasPrefix(current.OperationID, "recovery:"+r.ID+":")) ||
 		b.Instance != target {
-		return api.Fail(api.Conflict, "publication lifecycle changed")
+		return Fail(ErrConflict, "publication lifecycle changed")
 	}
 	for i := range r.Allocations {
 		a := &r.Allocations[i]
@@ -433,8 +433,8 @@ func (s *Service) commitAllocationActiveTx(
 			proof.VMID != b.VMID ||
 			proof.ResultInstance != target ||
 			a.ChargeTenantID != b.TenantID {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"active destination proof mismatch",
 			)
 		}

@@ -76,6 +76,11 @@ async fn rpc(s: &mut UnixStream, f: Frame) -> Vec<Frame> {
         let f = next(s).await;
         assert_eq!(f.id, id);
         let done = f.eof;
+        if !f.error.is_empty() {
+            assert!(f.eof);
+            assert!(f.params_json()["error_code"].is_string(), "{f:?}");
+            assert!(f.error.contains("guest/agent/src/"), "{f:?}");
+        }
         frames.push(f);
         if done {
             return frames;
@@ -99,7 +104,10 @@ async fn portal_separation_activation_and_multiplex() {
     let mut workload = connection(agent.clone(), Portal::Workload);
     for method in ["reseed", "clock_sync", "ping", "activate", "quiesce"] {
         let frames = rpc(&mut workload, request("deny", method, json!({}))).await;
-        assert!(!frames.last().unwrap().error.is_empty());
+        assert_eq!(
+            frames.last().unwrap().params_json()["error_code"],
+            "unauthorized"
+        );
     }
     let mut system = connection(agent.clone(), Portal::System);
     let frames = rpc(&mut system, request("ping", "ping", json!({}))).await;
@@ -147,6 +155,118 @@ async fn portal_separation_activation_and_multiplex() {
     .await;
     success(&frames);
     assert!(agent.environment().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn structured_failures_cover_files_processes_sessions_and_admission() {
+    let (tmp, agent) = setup();
+    let mut workload = connection(agent.clone(), Portal::Workload);
+    let missing = tmp.path().join("missing");
+    let binary = tmp.path().join("binary");
+    std::fs::write(&binary, [0xff]).unwrap();
+    for (method, params, code, target, origin) in [
+        (
+            "fs_read",
+            json!({"path":missing}),
+            "not_found",
+            missing.to_str().unwrap(),
+            "fs.rs:",
+        ),
+        (
+            "fs_stat",
+            json!({"path":binary.join("child")}),
+            "conflict",
+            "child",
+            "fs.rs:",
+        ),
+        (
+            "fs_read",
+            json!({"path":"relative"}),
+            "invalid",
+            "relative",
+            "fs.rs:",
+        ),
+        (
+            "fs_replace",
+            json!({"path":binary,"find":"x","replace":"y"}),
+            "invalid",
+            "binary",
+            "fs.rs:",
+        ),
+        (
+            "proc_kill",
+            json!({"process_id":"absent-process"}),
+            "not_found",
+            "absent-process",
+            "process.rs:",
+        ),
+        (
+            "session_rm",
+            json!({"session_id":"absent-session"}),
+            "not_found",
+            "absent-session",
+            "session.rs:",
+        ),
+        (
+            "fs_read",
+            json!({"path":agent.ledger.directory.join("exec.sqlite3")}),
+            "unauthorized",
+            "exec.sqlite3",
+            "fs.rs:",
+        ),
+        (
+            "exec",
+            json!({"command":"","env":{"PRIVATE_VALUE":"not-for-diagnostics"}}),
+            "invalid",
+            "guest exec",
+            "process.rs:",
+        ),
+    ] {
+        let frames = rpc(&mut workload, request("failure", method, params)).await;
+        let terminal = frames.last().unwrap();
+        assert_eq!(terminal.params_json()["error_code"], code, "{terminal:?}");
+        assert!(terminal.error.contains(target), "{terminal:?}");
+        assert!(terminal.error.contains(origin), "{terminal:?}");
+        assert!(!terminal.error.contains("not-for-diagnostics"));
+    }
+    let permit = agent
+        .requests
+        .clone()
+        .acquire_many_owned(128)
+        .await
+        .unwrap();
+    let frames = rpc(&mut workload, request("capacity", "info", json!({}))).await;
+    assert_eq!(
+        frames.last().unwrap().params_json()["error_code"],
+        "resource_exhausted"
+    );
+    drop(permit);
+    let mut admin = connection(agent.clone(), Portal::Admin);
+    success(&rpc(&mut admin, request("gate", "quiesce", json!({}))).await);
+    let frames = rpc(
+        &mut workload,
+        request("gated", "fs_stat", json!({"path":binary})),
+    )
+    .await;
+    assert_eq!(
+        frames.last().unwrap().params_json()["error_code"],
+        "quiesced"
+    );
+    let mut system = connection(agent.clone(), Portal::System);
+    let frames = rpc(
+        &mut system,
+        request(
+            "clock",
+            "clock_sync",
+            json!({"unix_seconds":1,"nanoseconds":1_000_000_000}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        frames.last().unwrap().params_json()["error_code"],
+        "invalid"
+    );
+    assert!(frames.last().unwrap().error.contains("system.rs:"));
 }
 
 #[tokio::test]

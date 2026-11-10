@@ -56,6 +56,31 @@ Before handoff it verifies PID 1 and that the old root is initramfs tmpfs/ramfs,
 
 Memory restore resumes the captured kernel, mounts, systemd and agent directly; it does not execute init again. Engine reconnects on System 2047 and performs ping/reseed/clock_sync. sandboxd separately activates via Admin 2046 before exposing Workload 2048. See `protocol/README.md` for exact framing, methods and tenant/admin boundary.
 
+## Error diagnostics
+
+Init errors retain operation/target context and compile-time caller locations
+(`file:line:column`) through `InitError`. Mount failures identify source, target,
+filesystem, flags and data; discovery identifies serials and sysfs paths; root
+handoff and loopback failures identify the failed action. `sandbox-init` no
+longer depends on anyhow.
+
+The agent library uses `Error` with a flat `ErrorCode`, typed diagnostic frames
+and additional result params. `#[track_caller]` captures static locations without
+collecting a backtrace. `ResultContext::or_context` preserves classification;
+`map_code` explicitly assigns a boundary's category. Context closures format only
+on error. Argument validation defaults to `invalid`; runtime and admission checks
+name their category, and standard I/O failures retain their actionable kind or
+fall back to `internal`. SQLite failures remain internal until keyed execution's
+post-admission fence conservatively promotes an unconfirmed result to
+`result_unknown`. No new crate or SQLite/protobuf schema is required.
+
+All RPC failures pass through the same failure-frame encoder. The exact codes,
+optional result state and postcommit fields are defined in the
+[structured-failure protocol](../protocol/README.md#structured-failures).
+Messages carry method and permitted target identifiers, not command text,
+environment values or raw exec keys. Locations and wording may change with source
+edits; callers branch on codes and inspect result params, not message text.
+
 ## Durable keyed exec
 
 Workload `exec` accepts an optional explicit `params.exec_key`. `Frame.id` remains a connection-local multiplexing identifier and never enables deduplication. Unkeyed exec retains its existing streaming, disconnect cleanup, detach and session behavior and has no durable deduplication guarantee.

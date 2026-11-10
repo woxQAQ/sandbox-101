@@ -1,5 +1,5 @@
 use crate::{Agent, env_map, number, string, wire::Frame};
-use anyhow::{Result, bail, ensure};
+use crate::{Error, Result, ResultContext};
 use serde_json::json;
 use std::{fs::OpenOptions, io::Read, os::fd::AsRawFd, sync::Arc};
 
@@ -30,15 +30,17 @@ pub fn dispatch(frame: &Frame) -> Result<Frame> {
             let random = OpenOptions::new()
                 .read(true)
                 .write(true)
-                .open("/dev/urandom")?;
+                .open("/dev/urandom")
+                .or_context(|| "open /dev/urandom for reseed".into())?;
             if unsafe { libc::ioctl(random.as_raw_fd(), 0x40085203_u32 as _, pool.as_ptr()) } < 0 {
-                return Err(std::io::Error::last_os_error().into());
+                return Err(Error::from(std::io::Error::last_os_error())
+                    .context("RNDADDENTROPY /dev/urandom"));
             }
             let reseeded = if unsafe { libc::ioctl(random.as_raw_fd(), 0x5207 as _, 0) } < 0 {
                 let error = std::io::Error::last_os_error();
                 // Linux before 4.17 mixes credited entropy through RNDADDENTROPY.
                 if error.raw_os_error() != Some(libc::ENOTTY) {
-                    return Err(error.into());
+                    return Err(Error::from(error).context("RNDRESEEDCRNG /dev/urandom"));
                 }
                 false
             } else {
@@ -62,11 +64,12 @@ pub fn dispatch(frame: &Frame) -> Result<Frame> {
                 tv_nsec: nanos as _,
             };
             if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) } < 0 {
-                return Err(std::io::Error::last_os_error().into());
+                return Err(Error::from(std::io::Error::last_os_error())
+                    .context("clock_settime CLOCK_REALTIME"));
             }
             Ok(frame.reply(json!({}), vec![], true))
         }
-        _ => bail!("method is not authorized on system portal"),
+        _ => bail!(Unauthorized => "method is not authorized on system portal"),
     }
 }
 
@@ -80,11 +83,11 @@ pub async fn prepare_template(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame
                 .active_streams
                 .load(std::sync::atomic::Ordering::SeqCst)
                 == 0,
-        "other RPCs are still in flight; retry after draining"
+        Quiesced => "other RPCs are still in flight; retry after draining"
     );
     ensure!(
         agent.sessions.lock().await.is_empty(),
-        "remove persistent sessions before preparing a template"
+        Quiesced => "remove persistent sessions before preparing a template"
     );
     let mut activation = agent.activation.lock().await;
     agent.ledger.set_identity("", true)?;
@@ -95,10 +98,12 @@ pub async fn prepare_template(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame
     crate::fs::atomic_write(&agent.config.env_file, b"{}", 0o600)?;
     crate::fs::atomic_write(&agent.config.machine_id, b"", 0o444)?;
     let ca = agent.config.env_file.with_file_name("sandbox-ca.pem");
-    match std::fs::remove_file(ca) {
+    match std::fs::remove_file(&ca) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => {
+            return Err(Error::from(e).context(format!("remove template CA {}", ca.display())));
+        }
     }
     let mut table = agent.processes.lock().await;
     table.retain(|_, p| p.status.lock().unwrap().exit.is_none());
@@ -107,9 +112,11 @@ pub async fn prepare_template(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame
         s.logs.clear();
         s.bytes = 0;
     }
-    let root = std::fs::File::open("/")?;
+    let root = std::fs::File::open("/").or_context(|| "open / for template syncfs".into())?;
     if unsafe { libc::syncfs(root.as_raw_fd()) } < 0 {
-        return Err(std::io::Error::last_os_error().into());
+        return Err(
+            Error::from(std::io::Error::last_os_error()).context("syncfs / preparing template")
+        );
     }
     Ok(frame.reply(json!({"quiescent":true,"prepared":true}), vec![], true))
 }
@@ -145,10 +152,13 @@ pub async fn activate(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame> {
             "invalid hostname"
         );
         if unsafe { libc::sethostname(hostname.as_ptr().cast(), hostname.len()) } < 0 {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(Error::from(std::io::Error::last_os_error())
+                .context("sethostname during activation"));
         }
         let mut bytes = [0u8; 16];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .or_context(|| "read /dev/urandom for machine-id".into())?;
         let machine_id = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>() + "\n";
         crate::fs::atomic_write(&agent.config.machine_id, machine_id.as_bytes(), 0o444)?;
         crate::fs::atomic_write(
@@ -159,12 +169,16 @@ pub async fn activate(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame> {
     }
     let ca_file = agent.config.env_file.with_file_name("sandbox-ca.pem");
     let ca = p.get("ca_pem").and_then(|v| v.as_str()).unwrap_or("");
-    ensure!(ca.len() <= 128 * 1024, "CA PEM exceeds 128 KiB");
+    ensure!(ca.len() <= 128 * 1024, ResourceExhausted => "CA PEM exceeds 128 KiB");
     if ca.is_empty() {
         match std::fs::remove_file(&ca_file) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(
+                    Error::from(e).context(format!("remove activation CA {}", ca_file.display()))
+                );
+            }
         }
     } else {
         ensure!(

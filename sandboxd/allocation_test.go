@@ -22,7 +22,8 @@ func templateQuotaFaultObserved(
 	if err == nil {
 		t.Fatal("required SQL fault not reached")
 	}
-	if fault == "commit" && !strings.Contains(err.Error(), "FOREIGN KEY") {
+	if fault == "commit" &&
+		!strings.Contains(privateDiagnostic(err), "FOREIGN KEY") {
 		t.Fatal("not a deferred COMMIT error", err)
 	}
 	t.Logf("SQL fault=%s actual=%v", fault, err)
@@ -46,7 +47,7 @@ func templateQuotaCaptureFault(t *testing.T, target, fault string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, api.Unknown) {
+	if _, err = s.Wait(s.ctx, p, o.ID); !isCode(err, ErrUnknown) {
 		t.Fatal(err)
 	}
 	public, _ := s.store.operation(s.ctx, o.ID)
@@ -162,7 +163,8 @@ func templateQuotaQualifiedFixture(
 		templateQuotaTarget(t, s, p, tpl, 0)
 	}
 	err := s.recoverResources()
-	if err == nil || !strings.Contains(err.Error(), "qualification setup") {
+	if err == nil ||
+		!strings.Contains(privateDiagnostic(err), "qualification setup") {
 		t.Fatal("qualified setup not reached", err)
 	}
 	if _, err = s.store.db.Exec(
@@ -447,7 +449,7 @@ func templateQuotaPartialQualifiedRetirement(t *testing.T) {
 	}
 	before := templateQuotaState(t, s)
 	err = s.recoverResources()
-	if !isCode(err, api.ManualRecovery) ||
+	if !isCode(err, ErrManualRecovery) ||
 		!strings.Contains(err.Error(), "not fully retired") {
 		t.Fatal("partial multirow deletion was accepted", err)
 	}

@@ -5,7 +5,7 @@ use crate::{
     string,
     wire::CHUNK,
 };
-use anyhow::{Result, bail, ensure};
+use crate::{Error, ErrorCode, Result, ResultContext};
 use serde_json::json;
 use std::{
     collections::BTreeSet,
@@ -89,7 +89,8 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
             cmd.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let (parent, child_fd) = std::os::unix::net::UnixStream::pair()?;
+            let (parent, child_fd) = std::os::unix::net::UnixStream::pair()
+                .or_context(|| "create session completion channel".into())?;
             let fd = child_fd.as_raw_fd();
             unsafe {
                 cmd.pre_exec(move || {
@@ -100,8 +101,8 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
                 });
             }
             let mut sessions = agent.sessions.lock().await;
-            ensure!(sessions.len() < 64, "session capacity exhausted");
-            let mut child = cmd.spawn()?;
+            ensure!(sessions.len() < 64, ResourceExhausted => "session capacity exhausted");
+            let mut child = cmd.spawn().or_context(|| "spawn session /bin/sh".into())?;
             drop(child_fd);
             parent.set_nonblocking(true)?;
             let id = format!("s-{}", random_id()?);
@@ -128,12 +129,10 @@ pub async fn dispatch(agent: &Arc<Agent>, out: &Output) -> Result<()> {
         }
         "session_rm" => {
             let id = string(&p, "session_id")?;
-            let session = agent
-                .sessions
-                .lock()
-                .await
-                .remove(id)
-                .ok_or_else(|| anyhow::anyhow!("unknown session"))?;
+            let session =
+                agent.sessions.lock().await.remove(id).ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, format!("unknown session {id}"))
+                })?;
             // Removal waits for the current command, bounded by its five-minute timeout.
             let mut session = session.lock().await;
             session.kill();
@@ -165,20 +164,19 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output) -> Result<()> {
         .await
         .get(id)
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("unknown session"))?;
-    let mut session =
-        tokio::select! {_=out.cancel.cancelled()=>bail!("connection closed"),s=entry.lock()=>s};
+        .ok_or_else(|| Error::new(ErrorCode::NotFound, format!("unknown session {id}")))?;
+    let mut session = tokio::select! {_=out.cancel.cancelled()=>bail!(Internal => "connection closed"),s=entry.lock()=>s};
     let mut env = agent.environment().await?;
     env.extend(session.defaults.clone());
     env.extend(env_map(&p)?);
     let result=tokio::time::timeout(Duration::from_secs(300),async {
-        ensure!(!session.has_exited(),"session shell exited");
+        ensure!(!session.has_exited(), Conflict => "session {id} shell exited");
         let mut script=String::new();
         for old in &session.injected {if !env.contains_key(old){script.push_str(&format!("unset {old}\n"));}}
         for (key,value) in &env {ensure!(shell_key(key),"invalid shell environment key");script.push_str(&format!("export {key}={}\n",quote(value)));}
         session.injected=env.keys().cloned().collect();
         let mut shell=string(&p,"command")?.to_owned();
-        if let Some(cwd)=p.get("cwd"){shell=format!("cd {} && {{\n{shell}\n}}",quote(cwd.as_str().ok_or_else(||anyhow::anyhow!("cwd must be a string"))?));}
+        if let Some(cwd)=p.get("cwd"){shell=format!("cd {} && {{\n{shell}\n}}",quote(cwd.as_str().ok_or_else(||Error::new(ErrorCode::Invalid, "cwd must be a string"))?));}
         script.push_str(&format!("eval {}\n__sandbox_status=$?\nprintf '%s\\n' \"$__sandbox_status\" >&3\n",quote(&shell)));
         session.stdin.write_all(script.as_bytes()).await?;session.stdin.flush().await?;
         let mut stdout=vec![0;CHUNK];let mut stderr=vec![0;CHUNK];let mut status=Vec::new();let mut code=None;
@@ -186,10 +184,10 @@ pub async fn execute(agent: &Arc<Agent>, out: &Output) -> Result<()> {
             let Session{stdout:out_pipe,stderr:err_pipe,completion,..}=&mut *session;
             tokio::select!{
                 biased;
-                _=out.cancel.cancelled()=>bail!("connection closed"),
-                n=out_pipe.read(&mut stdout)=>{let n=n?;ensure!(n>0,"session stdout closed");out.event(json!({"stream":"stdout","session_id":id}),stdout[..n].to_vec()).await?;},
-                n=err_pipe.read(&mut stderr)=>{let n=n?;ensure!(n>0,"session stderr closed");out.event(json!({"stream":"stderr","session_id":id}),stderr[..n].to_vec()).await?;},
-                n=completion.read_u8(),if code.is_none()=>{let b=n?;status.push(b);ensure!(status.len()<=16,"invalid shell completion");if b==b'\n'{code=Some(std::str::from_utf8(&status)?.trim().parse::<i32>()?);}},
+                _=out.cancel.cancelled()=>bail!(Internal => "connection closed"),
+                n=out_pipe.read(&mut stdout)=>{let n=n?;ensure!(n>0, Conflict => "session stdout closed");out.event(json!({"stream":"stdout","session_id":id}),stdout[..n].to_vec()).await?;},
+                n=err_pipe.read(&mut stderr)=>{let n=n?;ensure!(n>0, Conflict => "session stderr closed");out.event(json!({"stream":"stderr","session_id":id}),stderr[..n].to_vec()).await?;},
+                n=completion.read_u8(),if code.is_none()=>{let b=n?;status.push(b);ensure!(status.len()<=16, Conflict => "invalid shell completion");if b==b'\n'{code=Some(std::str::from_utf8(&status)?.trim().parse::<i32>()?);}},
                 _=tokio::time::sleep(Duration::from_millis(5)),if code.is_some()=>break,
             }
         }

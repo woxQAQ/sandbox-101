@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use crate::{Error, ErrorCode, Result, ResultContext};
 use prost::Message;
 use prost_types::{Struct, Value, value::Kind};
 use serde_json::Value as Json;
@@ -11,16 +11,24 @@ pub const CHUNK: usize = 64 * 1024;
 
 pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Frame>> {
     let mut prefix = [0u8; 4];
-    if r.read(&mut prefix[..1]).await? == 0 {
+    if r.read(&mut prefix[..1])
+        .await
+        .or_context(|| "read frame prefix".into())?
+        == 0
+    {
         return Ok(None);
     }
-    r.read_exact(&mut prefix[1..]).await?;
+    r.read_exact(&mut prefix[1..])
+        .await
+        .or_context(|| "read frame length".into())?;
     let n = u32::from_be_bytes(prefix) as usize;
     if n == 0 || n > MAX_FRAME {
         bail!("invalid frame length {n}");
     }
     let mut data = vec![0; n];
-    r.read_exact(&mut data).await?;
+    r.read_exact(&mut data)
+        .await
+        .or_context(|| format!("read frame payload ({n} bytes)"))?;
     Ok(Some(Frame::decode(data.as_slice())?))
 }
 
@@ -29,8 +37,12 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, frame: &Frame) -> Res
     if n == 0 || n > MAX_FRAME {
         bail!("invalid frame length {n}");
     }
-    w.write_all(&(n as u32).to_be_bytes()).await?;
-    w.write_all(&frame.encode_to_vec()).await?;
+    w.write_all(&(n as u32).to_be_bytes())
+        .await
+        .or_context(|| "write frame length".into())?;
+    w.write_all(&frame.encode_to_vec())
+        .await
+        .or_context(|| "write frame payload".into())?;
     Ok(())
 }
 
@@ -90,9 +102,13 @@ impl Frame {
             error: String::new(),
         }
     }
-    pub fn failure(&self, error: impl ToString) -> Frame {
-        let mut f = self.reply(serde_json::json!({}), vec![], true);
-        f.error = error.to_string();
+    pub fn failure(&self, error: Error) -> Frame {
+        self.failure_with(error.code, error.params.clone(), error.to_string())
+    }
+    pub fn failure_with(&self, code: ErrorCode, mut params: Json, message: impl ToString) -> Frame {
+        params["error_code"] = serde_json::json!(code.as_str());
+        let mut f = self.reply(params, vec![], true);
+        f.error = message.to_string();
         f
     }
 }

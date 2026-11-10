@@ -32,8 +32,8 @@ func validateWarmDeleteReceipt(request api.Request, proof api.Operation) error {
 		(proof.Status != "pending" && proof.Status != "running" && proof.Status != "succeeded" && proof.Status != "failed") ||
 		(proof.Status == "failed" && proof.Error == nil) ||
 		(proof.Status != "failed" && proof.Error != nil) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"warm delete receipt differs from its fixed generation request",
 		)
 	}
@@ -48,8 +48,8 @@ func (s *Service) activateWarm(o Operation, b *Sandbox) error {
 		Instance: b.Instance,
 	}
 	if target.Instance == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"warm selection lacks successful generation witness",
 		)
 	}
@@ -64,7 +64,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 		return err
 	}
 	if r.Group == nil || r.Group.Selection == nil {
-		return api.Fail(api.ManualRecovery, "rejected warm has no selection")
+		return Fail(ErrManualRecovery, "rejected warm has no selection")
 	}
 	selection := r.Group.Selection
 	if selection.Stage == "fallback_reserved" {
@@ -77,18 +77,18 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 	}
 	i := selection.Identity
 	if b.Instance != "" && b.Instance != i.Instance {
-		return api.Fail(api.Conflict, "warm selection instance changed")
+		return Fail(ErrConflict, "warm selection instance changed")
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, i.VM)
-	absent := isCode(err, api.NotFound)
+	absent := isEngineCode(err, api.NotFound)
 	if err != nil && !absent {
 		return err
 	}
 	if !absent {
 		if v.ID != i.VM || v.Instance != i.Instance || !v.Verified ||
 			v.OperationID != "" || v.Config.Shape != i.Shape || v.Config.Image != r.Group.Template.Image {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"rejected warm instance changed",
 			)
 		}
@@ -128,7 +128,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 		}
 		q := r.Group.Selection
 		proof, e := s.opts.Engine.FindOperation(s.ctx, q.Deletion.Request.Key)
-		if e != nil && !isCode(e, api.NotFound) {
+		if e != nil && !isEngineCode(e, api.NotFound) {
 			return e
 		}
 		if e == nil {
@@ -141,8 +141,8 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			if q.Deletion.Proof != nil &&
 				recoveryTerminal(q.Deletion.Proof.Status) &&
 				!reflect.DeepEqual(*q.Deletion.Proof, proof) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"terminal warm delete receipt changed",
 				)
 			}
@@ -157,8 +157,8 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 							latest.Group.Selection.Deletion.Request,
 							proof.Request,
 						) {
-						e = api.Fail(
-							api.ManualRecovery,
+						e = Fail(
+							ErrManualRecovery,
 							"warm delete attempt changed during receipt lookup",
 						)
 					}
@@ -212,16 +212,16 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 				latest.Group.Selection.Deletion.Request,
 				request,
 			) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"warm delete receipt has a different durable attempt",
 				)
 			}
 			stored := latest.Group.Selection.Deletion.Proof
 			if stored != nil && recoveryTerminal(stored.Status) &&
 				!reflect.DeepEqual(*stored, proof) {
-				return api.Fail(
-					api.ManualRecovery,
+				return Fail(
+					ErrManualRecovery,
 					"terminal warm delete receipt changed",
 				)
 			}
@@ -230,12 +230,12 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			return err
 		}
 		_, err = s.opts.Engine.GetVM(s.ctx, i.VM)
-		if !isCode(err, api.NotFound) {
+		if !isEngineCode(err, api.NotFound) {
 			if err != nil {
 				return err
 			}
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"warm deletion did not prove absence",
 			)
 		}
@@ -281,8 +281,8 @@ func (s *Service) transferWarmFallback(
 		i.Generation == nil ||
 		i.Generation.ResultInstance != i.Instance ||
 		i.Instance == "" {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"fallback lost fixed selection identity",
 		)
 	}
@@ -327,7 +327,7 @@ func (s *Service) transferWarmFallback(
 		}
 	} else {
 		if current.State != "provisioning" || current.OperationID != o.ID {
-			return api.Fail(api.Conflict, "fallback lifecycle changed")
+			return Fail(ErrConflict, "fallback lifecycle changed")
 		}
 		q.Stage = "fallback_reserved"
 		request := api.Request{Action: "clone", SnapshotID: t.SnapshotID}
@@ -422,8 +422,8 @@ func (s *Service) resolveWarmSelection(o Operation, r *resourceRecovery) error {
 		}
 		if b.State != "terminated" || b.VMID != "" ||
 			b.TenantID != latest.TenantID {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"completed warm cleanup lost its sandbox destination",
 			)
 		}
@@ -499,8 +499,8 @@ func (s *Service) releaseAllocation(b *Sandbox) (bool, error) {
 		return true, err
 	}
 	if r.Group.Selection.Stage == "fallback_reserved" {
-		return true, api.Fail(
-			api.ManualRecovery,
+		return true, Fail(
+			ErrManualRecovery,
 			"replacement allocation still requires original receipt resolution",
 		)
 	}

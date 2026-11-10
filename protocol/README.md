@@ -37,6 +37,43 @@ Ordinary calls set request `eof=true`. Streaming input starts with `eof=false`, 
 
 Limits: 64 workload connections, 8 system and 8 admin connections with separate admission budgets; 128 workload RPCs and 32 control RPCs globally; 8 queued response frames per connection and 8 input chunks per RPC; 30-second output-stall timeout; 60-second streaming-input idle timeout. Slow readers backpressure foreground output; a stalled or disconnected reader cancels its connection and kills foreground process groups. System capacity is separate from tenant capacity. No arbitrary command output is logged by the agent itself.
 
+### Structured failures
+
+Every failed RPC terminal frame retains a nonempty `error` and carries
+`params.error_code`, on all three portals and on raw-forward setup failures.
+Malformed transport/continuation frames can instead close the connection without
+a reply. The protobuf schema and field numbers are unchanged.
+
+| `error_code` | Caller action |
+|---|---|
+| `invalid` | Correct the argument type, range, path, encoding or unsupported combination; do not retry unchanged |
+| `not_found` | The target file, process or session is absent; check its identity |
+| `conflict` | Resolve incompatible current state, such as an exited process or cross-filesystem rename |
+| `resource_exhausted` | Reduce usage or transfer size before retrying admission |
+| `quiesced` | Drain existing work or await host-authorized activation before retrying |
+| `unauthorized` | Use the correct portal/authority; private agent state is never exposed by filesystem RPC |
+| `internal` | Unclassified I/O, syscall or internal failure; inspect diagnostics rather than assuming no side effects |
+| `exec_in_progress`, `exec_key_conflict`, `exec_ledger_capacity_exhausted`, `result_unknown` | Preserve the keyed-exec rules in the [guest contract](../guest/README.md#durable-keyed-exec) |
+
+`error` is a human diagnostic containing operation/target context and
+`file:line:column` locations, not a machine-parsing contract. Diagnostic context
+does not dump command text, environment values or exec keys. SDK `RPCError.Code`
+exposes the category for every method; `ResultState` retains the optional
+`params.result_state`. Terminal result params are returned even on failure:
+in particular, `tree_push` postcommit failures retain all commit/durability and
+cleanup fields alongside `error_code`. Neither classification nor an internal
+error authorizes automatic replay of an uncertain mutation.
+
+The Go host control client translates failures to sandboxd's own error contract,
+not the Engine API. Guest `conflict`/`quiesced` become `conflict`, and
+`resource_exhausted` remains an admission-capacity failure. A missing management
+resource requires operator recovery; invalid host-constructed management
+arguments, authorization failures and unknown management codes are internal
+failures, not tenant validation errors or tenant-resource 404s. Private guest
+diagnostics remain in the host error's non-serialized cause.
+Missing, unknown or internal keyed-exec failures remain `result_unknown` at
+the host, never a reason to choose a new key.
+
 ## System methods (2047)
 
 | Method | Request | Terminal params |

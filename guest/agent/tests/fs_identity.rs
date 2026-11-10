@@ -484,7 +484,8 @@ fn tree_push_mixed_owner_rejected_before_commit() {
                 !frame.error.is_empty(),
                 "mixed-owner admission RED: tree committed instead of rejecting"
             );
-            assert!(frame.params_json().as_object().unwrap().is_empty());
+            assert_eq!(frame.params_json()["error_code"], "unauthorized");
+            assert!(frame.params_json().get("committed").is_none());
             assert_eq!(std::fs::metadata(&target).unwrap().ino(), inode);
             let unchanged = std::fs::metadata(&nested).unwrap();
             assert_eq!((unchanged.uid(), unchanged.mode() & 0o777), (0, 0o555));
@@ -611,7 +612,14 @@ fn tree_push_postcommit_sync_failure_remains_error() {
                     !frame.error.is_empty(),
                     "old client must observe fsync failure"
                 );
-                assert_eq!(frame.error, "tree publication fsync failed after commit");
+                assert!(
+                    frame
+                        .error
+                        .contains("tree publication fsync failed after commit")
+                );
+                assert!(frame.error.contains(target.to_str().unwrap()));
+                assert!(frame.error.contains("guest/agent/src/fs.rs:"));
+                assert_eq!(frame.params_json()["error_code"], "internal");
                 if let Some(inode) = inode {
                     let evidence = pending_evidence(&frame, &target, inode, false);
                     assert_eq!(std::fs::metadata(&evidence).unwrap().mode() & 0o777, 0o555);
@@ -622,6 +630,7 @@ fn tree_push_postcommit_sync_failure_remains_error() {
                         json!({
                             "committed": true, "publication_durable": false,
                             "cleanup_complete": true, "cleanup_required": false,
+                            "error_code": "internal",
                         })
                     );
                     assert_eq!(directory_names(fixture.scratch.path()).len(), 1);

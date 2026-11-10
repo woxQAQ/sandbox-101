@@ -3,7 +3,6 @@ package sandboxd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,8 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 func (s *Service) Handler() http.Handler {
@@ -30,7 +27,7 @@ func (s *Service) Handler() http.Handler {
 				return
 			}
 		}
-		writeError(c.Writer, api.Fail(api.NotFound, "not found"))
+		writeError(c.Writer, Fail(ErrNotFound, "not found"))
 	})
 	router.NoMethod(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
@@ -42,7 +39,7 @@ func (s *Service) Handler() http.Handler {
 		writeJSON(
 			c.Writer,
 			405,
-			&api.Error{Code: api.Invalid, Message: "method not allowed"},
+			&Error{Code: ErrInvalid, Message: "method not allowed"},
 		)
 	})
 	router.Match(
@@ -63,11 +60,7 @@ func (s *Service) Handler() http.Handler {
 	v1.POST("/tenants", s.putTenant)
 	v1.POST("/drain", func(c *gin.Context) {
 		if !c.MustGet("principal").(Principal).Root {
-			writeJSON(
-				c.Writer,
-				403,
-				&api.Error{Code: "forbidden", Message: "root access required"},
-			)
+			writeError(c.Writer, Fail(ErrForbidden, "root access required"))
 			return
 		}
 		s.Drain()
@@ -166,11 +159,7 @@ func (s *Service) authenticate(c *gin.Context) {
 
 func (s *Service) metrics(c *gin.Context) {
 	if !c.MustGet("principal").(Principal).Root {
-		writeJSON(
-			c.Writer,
-			403,
-			&api.Error{Code: "forbidden", Message: "root access required"},
-		)
+		writeError(c.Writer, Fail(ErrForbidden, "root access required"))
 		return
 	}
 	bs, err := s.store.sandboxes(c.Request.Context())
@@ -198,11 +187,7 @@ func (s *Service) metrics(c *gin.Context) {
 func (s *Service) putTenant(c *gin.Context) {
 	p := c.MustGet("principal").(Principal)
 	if !p.Root {
-		writeJSON(
-			c.Writer,
-			403,
-			&api.Error{Code: "forbidden", Message: "root access required"},
-		)
+		writeError(c.Writer, Fail(ErrForbidden, "root access required"))
 		return
 	}
 	var t Tenant
@@ -221,7 +206,7 @@ func (s *Service) putTenant(c *gin.Context) {
 func (s *Service) principal(r *http.Request) (Principal, error) {
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {
-		return Principal{}, api.Fail(api.NotFound, "not found")
+		return Principal{}, Fail(ErrNotFound, "not found")
 	}
 	p, err := s.Authenticate(r.Context(), strings.TrimPrefix(h, "Bearer "))
 	if err == nil && p.Root && r.Header.Get("X-Tenant-ID") != "" {
@@ -238,24 +223,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
-	var e *api.Error
-	if !errors.As(err, &e) {
-		e = &api.Error{Code: api.Internal, Message: "internal error"}
-	}
+	e := publicError(err)
 	status := 500
 	switch e.Code {
-	case api.NotFound:
+	case ErrNotFound:
 		status = 404
-		e = &api.Error{Code: api.NotFound, Message: "not found"}
-	case api.Invalid:
+	case ErrForbidden:
+		status = 403
+	case ErrInvalid:
 		status = 400
-	case api.Conflict:
+	case ErrConflict:
 		status = 409
-	case api.Exhausted:
+	case ErrExhausted:
 		status = 429
-	case api.Incompatible:
+	case ErrIncompatible:
 		status = 422
-	case api.Unknown, api.ManualRecovery:
+	case ErrUnknown, ErrManualRecovery:
 		status = 503
 	}
 	writeJSON(w, status, e)
@@ -266,11 +249,11 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
-		return api.Fail(api.Invalid, "invalid JSON request")
+		return Fail(ErrInvalid, "invalid JSON request")
 	}
 	var extra any
 	if err := d.Decode(&extra); err != io.EOF {
-		return api.Fail(api.Invalid, "request must contain one JSON value")
+		return Fail(ErrInvalid, "request must contain one JSON value")
 	}
 	return nil
 }
@@ -335,15 +318,15 @@ func (s *Service) relay(
 		writeJSON(
 			w,
 			426,
-			&api.Error{
-				Code:    api.Invalid,
+			&Error{
+				Code:    ErrInvalid,
 				Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
 			},
 		)
 		return
 	}
 	if r.ProtoMajor != 1 {
-		writeError(w, api.Fail(api.Incompatible, "HTTP/1.1 Upgrade required"))
+		writeError(w, Fail(ErrIncompatible, "HTTP/1.1 Upgrade required"))
 		return
 	}
 	b, err := s.DataReady(r.Context(), p, id)
@@ -356,7 +339,7 @@ func (s *Service) relay(
 	if err != nil || b.State != "running" || !time.Now().Before(b.Deadline) {
 		unlock()
 		if err == nil {
-			err = api.Fail(api.Conflict, "lease inactive")
+			err = Fail(ErrConflict, "lease inactive")
 		}
 		writeError(w, err)
 		return
@@ -379,7 +362,7 @@ func (s *Service) relay(
 	if !ok {
 		_ = up.Close()
 		unlock()
-		writeError(w, api.Fail(api.Incompatible, "HTTP/1.1 Upgrade required"))
+		writeError(w, Fail(ErrIncompatible, "HTTP/1.1 Upgrade required"))
 		return
 	}
 	_, publication, err := s.lockDataAdmission(r.Context(), p, id)

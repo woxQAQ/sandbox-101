@@ -56,7 +56,7 @@ func validateReadyWarmRow(
 	e executor,
 	vm, template, snapshot string,
 ) error {
-	bad := func() error { return api.Fail(api.ManualRecovery, "ready warm lost its frozen cost, source or holder") }
+	bad := func() error { return Fail(ErrManualRecovery, "ready warm lost its frozen cost, source or holder") }
 	var count int
 	var raw []byte
 	if err := e.QueryRowContext(ctx, `SELECT count(*),body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, vm).
@@ -153,8 +153,8 @@ func (s *Service) selectWarmTx(
 	err = tx.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, vm).
 		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"ready warm VM has no durable provenance",
 		)
 	}
@@ -179,8 +179,8 @@ func (s *Service) selectWarmTx(
 		len(r.Allocations) != 1 ||
 		r.Allocations[0].Resolution.State != "active" ||
 		r.Allocations[0].Resolution.Destination != "warm:"+vm {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"ready warm provenance does not match template",
 		)
 	}
@@ -190,8 +190,8 @@ func (s *Service) selectWarmTx(
 		return nil, err
 	}
 	if cost != t.Shape.DiskMiB {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"ready warm disk cost mismatch",
 		)
 	}
@@ -201,8 +201,8 @@ func (s *Service) selectWarmTx(
 		return nil, err
 	}
 	if refs != 1 {
-		return nil, api.Fail(
-			api.ManualRecovery,
+		return nil, Fail(
+			ErrManualRecovery,
 			"ready warm disk holder is missing",
 		)
 	}
@@ -212,8 +212,8 @@ func (s *Service) selectWarmTx(
 			return nil, err
 		}
 		if refs != 1 {
-			return nil, api.Fail(
-				api.ManualRecovery,
+			return nil, Fail(
+				ErrManualRecovery,
 				"ready warm backing holder is missing",
 			)
 		}
@@ -300,7 +300,7 @@ func (s *Service) commitSelectionActiveTx(
 		current.TenantID != r.TenantID ||
 		selection.Identity.VM != target.VM ||
 		selection.Identity.Instance != target.Instance {
-		return api.Fail(api.Conflict, "warm selection publication changed")
+		return Fail(ErrConflict, "warm selection publication changed")
 	}
 	var holders int
 	identity := selection.Identity
@@ -309,8 +309,8 @@ func (s *Service) commitSelectionActiveTx(
 		return err
 	}
 	if holders != 1 {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"selection active destination lost its disk holder",
 		)
 	}
@@ -320,8 +320,8 @@ func (s *Service) commitSelectionActiveTx(
 			return err
 		}
 		if holders != 1 {
-			return api.Fail(
-				api.ManualRecovery,
+			return Fail(
+				ErrManualRecovery,
 				"selection active destination lost its backing",
 			)
 		}
@@ -349,8 +349,8 @@ func retireSelectionReaderTx(
 		!r.Done ||
 		!groupStepsTerminal(r) ||
 		hasUnresolvedAllocations(r) {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"selection has no completed active destination",
 		)
 	}
@@ -385,8 +385,8 @@ func validateWarmSelection(
 	r resourceRecovery,
 ) error {
 	bad := func() error {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"warm selection differs from its frozen responsibility",
 		)
 	}
@@ -629,8 +629,8 @@ func validateWarmSelectionDestination(
 		return nil
 	}
 	bad := func() error {
-		return api.Fail(
-			api.ManualRecovery,
+		return Fail(
+			ErrManualRecovery,
 			"warm selection has no qualified durable destination",
 		)
 	}

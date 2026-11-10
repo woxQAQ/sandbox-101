@@ -13,13 +13,13 @@ import (
 func checkEgressPolicy(policy egress.Policy, secrets bool) error {
 	if policy.Mode != "none" && policy.Mode != "relay" &&
 		policy.Mode != "direct" {
-		return api.Fail(
-			api.Invalid,
+		return Fail(
+			ErrInvalid,
 			"network mode must be none, relay or direct",
 		)
 	}
 	if secrets && policy.Mode != "relay" {
-		return api.Fail(api.Invalid, "host credentials require relay mode")
+		return Fail(ErrInvalid, "host credentials require relay mode")
 	}
 	if policy.Mode == "direct" {
 		_, err := directPolicy(policy)
@@ -30,8 +30,8 @@ func checkEgressPolicy(policy egress.Policy, secrets bool) error {
 
 func directPolicy(policy egress.Policy) (*api.NetworkPolicy, error) {
 	if policy.Mode != "direct" || len(policy.AllowedHosts) != 0 {
-		return nil, api.Fail(
-			api.Invalid,
+		return nil, Fail(
+			ErrInvalid,
 			"direct mode requires an IPv4 address policy without allowed_hosts",
 		)
 	}
@@ -40,8 +40,8 @@ func directPolicy(policy egress.Policy) (*api.NetworkPolicy, error) {
 		limit = 256
 	}
 	if limit < 1 || limit > 65535 || len(policy.AllowedCIDRs) > 256 {
-		return nil, api.Fail(
-			api.Invalid,
+		return nil, Fail(
+			ErrInvalid,
 			"invalid direct connection budget or CIDR count",
 		)
 	}
@@ -51,8 +51,8 @@ func directPolicy(policy egress.Policy) (*api.NetworkPolicy, error) {
 		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() ||
 			prefix.String() != raw ||
 			seen[prefix] {
-			return nil, api.Fail(
-				api.Invalid,
+			return nil, Fail(
+				ErrInvalid,
 				"direct mode requires unique canonical IPv4 CIDRs",
 			)
 		}
@@ -82,20 +82,20 @@ func (s *Service) InstallDirect(
 		return nil, err
 	}
 	if b.TenantID != binding.TenantID || b.VMID == "" || b.RequiresSecrets {
-		return nil, api.Fail(
-			api.Conflict,
+		return nil, Fail(
+			ErrConflict,
 			"direct binding ownership or credential mode changed",
 		)
 	}
 	vm, err := s.opts.Engine.GetVM(ctx, b.VMID)
 	if err != nil {
-		return nil, err
+		return nil, engineFailure(err)
 	}
 	if !vm.Verified || !vm.AgentReady || vm.Phase != "running" ||
 		vm.Instance == "" ||
 		vm.VSockPath != binding.VSockPath {
-		return nil, api.Fail(
-			api.Conflict,
+		return nil, Fail(
+			ErrConflict,
 			"direct binding VM is not the verified activation instance",
 		)
 	}
@@ -119,12 +119,12 @@ func (s *Service) InstallDirect(
 		)
 		defer cancel()
 		current, lookupErr := s.opts.Engine.GetVM(cleanupCtx, vm.ID)
-		if isCode(lookupErr, api.NotFound) ||
+		if isEngineCode(lookupErr, api.NotFound) ||
 			(lookupErr == nil && current.Instance != vm.Instance) {
 			return nil
 		}
 		if lookupErr != nil {
-			return lookupErr
+			return engineFailure(lookupErr)
 		}
 		for _, step := range []struct{ suffix, action string }{{"off", "network"}, {"revoke", "network_policy"}} {
 			op, cleanupErr := api.Wait(
@@ -142,15 +142,15 @@ func (s *Service) InstallDirect(
 				}
 				// An instance can change after the lookup. Confirm that specific
 				// condition before treating a conflict as completed cleanup.
-				if isCode(cleanupErr, api.Conflict) ||
-					isCode(cleanupErr, api.NotFound) {
+				if isEngineCode(cleanupErr, api.Conflict) ||
+					isEngineCode(cleanupErr, api.NotFound) {
 					current, lookupErr = s.opts.Engine.GetVM(cleanupCtx, vm.ID)
-					if isCode(lookupErr, api.NotFound) ||
+					if isEngineCode(lookupErr, api.NotFound) ||
 						(lookupErr == nil && current.Instance != vm.Instance) {
 						return nil
 					}
 				}
-				return cleanupErr
+				return engineFailure(cleanupErr)
 			}
 		}
 		return nil
@@ -160,12 +160,12 @@ func (s *Service) InstallDirect(
 		s.opts.Engine,
 		request("off", "network", nil),
 	); err != nil {
-		return cleanup, err
+		return cleanup, engineFailure(err)
 	}
 	_, err = api.Wait(
 		ctx,
 		s.opts.Engine,
 		request("policy", "network_policy", p),
 	)
-	return cleanup, err
+	return cleanup, engineFailure(err)
 }

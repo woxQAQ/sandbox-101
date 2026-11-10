@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
@@ -27,7 +26,7 @@ func TestClaimIdempotencyAndTenantIsolation(t *testing.T) {
 		"claim-1",
 		Command{Action: "claim", TemplateID: "python", TTLSeconds: 20},
 	)
-	if !isCode(err, api.Conflict) {
+	if !isCode(err, ErrConflict) {
 		t.Fatalf("expected conflict: %v", err)
 	}
 	h := s.Handler()
@@ -61,7 +60,7 @@ func TestClaimIdempotencyAndTenantIsolation(t *testing.T) {
 		Command{Action: "claim", TemplateID: "python"},
 	); !isCode(
 		err,
-		api.NotFound,
+		ErrNotFound,
 	) {
 		t.Fatal("sandbox token created resources")
 	}
@@ -103,7 +102,7 @@ func TestConcurrentQuotaAdmission(t *testing.T) {
 				mu.Lock()
 				success++
 				mu.Unlock()
-			} else if !isCode(e, api.Exhausted) {
+			} else if !isCode(e, ErrExhausted) {
 				t.Errorf("unexpected admission error %v", e)
 			}
 		}(i)

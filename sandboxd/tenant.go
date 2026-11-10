@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-
-	"github.com/woxQAQ/sandbox-engine/api"
 )
 
 // Quota has exactly one source: the durable resource table. Root bypasses the
@@ -25,7 +23,7 @@ func (s *Service) quota(
 	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).
 		Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return api.Fail(api.NotFound, "not found")
+			return Fail(ErrNotFound, "not found")
 		}
 		return err
 	}
@@ -40,7 +38,7 @@ func (s *Service) quota(
 	}
 	if slots+int64(count) > int64(t.MaxSandboxes) ||
 		used+storage > t.MaxStorageMiB {
-		return api.Fail(api.Exhausted, "tenant quota exceeded")
+		return Fail(ErrExhausted, "tenant quota exceeded")
 	}
 	return nil
 }
@@ -51,11 +49,11 @@ func (s *Service) PutTenant(
 	t Tenant,
 ) (Tenant, error) {
 	if !p.Root {
-		return t, api.Fail(api.Conflict, "root access required")
+		return t, Fail(ErrForbidden, "root access required")
 	}
 	if t.ID == "" || t.MaxSandboxes < 1 || t.MaxStorageMiB < 1 {
-		return t, api.Fail(
-			api.Invalid,
+		return t, Fail(
+			ErrInvalid,
 			"tenant id and positive quotas required",
 		)
 	}

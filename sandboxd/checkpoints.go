@@ -15,7 +15,7 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 	defer unlock()
 	cp, err := s.store.checkpoint(s.ctx, o.Command.CheckpointID)
 	if err != nil {
-		if isCode(err, api.NotFound) {
+		if isCode(err, ErrNotFound) {
 			return nil
 		}
 		return err
@@ -54,7 +54,7 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 	if _, err = s.opts.Engine.GetSnapshot(
 		s.ctx,
 		cp.SnapshotID,
-	); isCode(
+	); isEngineCode(
 		err,
 		api.NotFound,
 	) {
@@ -65,7 +65,7 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 
 func (s *Service) rollback(o *Operation, b *Sandbox) error {
 	if b.State != "running" && b.State != "paused" && b.State != "resuming" {
-		return api.Fail(api.Conflict, "sandbox cannot roll back in %s", b.State)
+		return Fail(ErrConflict, "sandbox cannot roll back in %s", b.State)
 	}
 	unlock := s.lock("checkpoint:" + o.Command.CheckpointID)
 	defer unlock()
@@ -74,7 +74,7 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 		return err
 	}
 	if cp.SandboxID != b.ID || cp.TenantID != b.TenantID {
-		return api.Fail(api.NotFound, "not found")
+		return Fail(ErrNotFound, "not found")
 	}
 	if err = requireSnapshotOwner(
 		s.ctx,
@@ -85,8 +85,8 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"host credentials must be supplied before rollback",
 		)
 	}
@@ -159,7 +159,7 @@ func (s *Service) Checkpoints(
 	p Principal,
 ) ([]Checkpoint, error) {
 	if p.SandboxID != "" {
-		return nil, api.Fail(api.Conflict, "tenant access required")
+		return nil, Fail(ErrConflict, "tenant access required")
 	}
 	rows, err := s.store.db.QueryContext(
 		ctx,
@@ -195,7 +195,7 @@ func getCheckpointTx(
 	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
 		Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Checkpoint{}, api.Fail(api.NotFound, "not found")
+		return Checkpoint{}, Fail(ErrNotFound, "not found")
 	}
 	var cp Checkpoint
 	if err == nil {
@@ -209,7 +209,7 @@ func (s *store) checkpoint(ctx context.Context, id string) (Checkpoint, error) {
 	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
 		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Checkpoint{}, api.Fail(api.NotFound, "not found")
+		return Checkpoint{}, Fail(ErrNotFound, "not found")
 	}
 	var cp Checkpoint
 	if err == nil {

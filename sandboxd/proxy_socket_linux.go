@@ -6,7 +6,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/woxQAQ/sandbox-engine/api"
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
@@ -24,20 +23,20 @@ func (s *Service) PrepareProxySocket(
 		return err
 	}
 	if b.TenantID != binding.TenantID || b.VMID == "" {
-		return api.Fail(api.Conflict, "proxy binding ownership changed")
+		return Fail(ErrConflict, "proxy binding ownership changed")
 	}
 	vm, err := s.opts.Engine.GetVM(ctx, b.VMID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if !vm.Verified || !vm.AgentReady || vm.Phase != "running" ||
 		vm.Instance == "" ||
 		vm.VSockPath != binding.VSockPath ||
 		(b.Instance != "" && b.Instance != vm.Instance) {
-		return api.Fail(api.Conflict, "proxy VM identity is not verified")
+		return Fail(ErrConflict, "proxy VM identity is not verified")
 	}
 	if path != vm.VSockPath+"_2049" && path != vm.VSockPath+"_2050" {
-		return api.Fail(api.Invalid, "proxy socket is outside the VM binding")
+		return Fail(ErrInvalid, "proxy socket is outside the VM binding")
 	}
 	peer, err := unix.Open(
 		vm.VSockPath,
@@ -54,8 +53,8 @@ func (s *Service) PrepareProxySocket(
 	}
 	if identity.Mode&unix.S_IFMT != unix.S_IFSOCK || identity.Uid == 0 ||
 		identity.Gid == 0 {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"VMM socket does not have an unprivileged owner",
 		)
 	}
@@ -71,8 +70,8 @@ func (s *Service) PrepareProxySocket(
 	}
 	if actual.Mode()&os.ModeSocket == 0 || !os.SameFile(info, actual) ||
 		actual.Mode().Perm() != 0o600 {
-		return api.Fail(
-			api.Conflict,
+		return Fail(
+			ErrConflict,
 			"proxy socket identity or permissions changed",
 		)
 	}
@@ -87,11 +86,11 @@ func (s *Service) PrepareProxySocket(
 	}
 	current, err := s.opts.Engine.GetVM(ctx, b.VMID)
 	if err != nil {
-		return err
+		return engineFailure(err)
 	}
 	if !current.Verified || current.Instance != vm.Instance ||
 		current.VSockPath != vm.VSockPath {
-		return api.Fail(api.Conflict, "VM changed while granting proxy access")
+		return Fail(ErrConflict, "VM changed while granting proxy access")
 	}
 	return nil
 }

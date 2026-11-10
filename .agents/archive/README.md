@@ -27,6 +27,7 @@
 | [018](018-tree-push-cleanup-outcomes.md) | tree push 发布与后置清理的独立结果 |
 | [019](019-tree-pull-identity-investigation.md) | 双 UID 调查、保留 FD 与身份约束；未确认泄露 |
 | [022](022-responsibility-and-api-boundaries.md) | 职责/测试单元/API 重组，见 [结果](022-RESULT.md) |
+| [023](023-structured-error-design.md) | Guest RPC 分类与调用位置；sandboxd 自有错误契约、Engine/Agent 边界翻译及私有/公开诊断，见 [验证证据](evidence/023-structured-errors.md) |
 
 ## 历史批次与证据
 

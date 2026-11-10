@@ -1,13 +1,12 @@
 # 未完成计划
 
-本目录仅保留未完成工作。016 已完成并[归档](../.agents/archive/016-native-image-ci.md)；017、020、021 继续暂停。本轮仅获准提交并推送 016 专用 CI 分支，不授权共享分支合入或 VM 验收。
+本目录仅保留未完成工作。016 和本轮完成的 [023](../.agents/archive/023-structured-error-design.md) 已归档；017、020、021 继续暂停。本轮 023 实施授权不包含提交、推送、共享分支合入或 VM 验收。
 
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
-| [023：结构化错误与上下文设计](023-structured-error-design.md) | TODO / 未实施 | 面向动作的 Guest RPC `error_code`、`#[track_caller]` 位置上下文与 Go 操作步骤上下文收敛 |
 
 ## 恢复工作前
 
@@ -16,4 +15,4 @@
 3. 完成后记录真实命令与结果；必要验收缺失保留 BLOCKED。计划、设计审查、实现、运行验收与合入是不同状态。
 4. 实现及所需复核完成后，将计划和对应证据移入 [.agents/archive](../.agents/archive/README.md)，更新入链与本索引。
 
-已完成的 001–016、018、019、022，以及历史审计/执行/组合验收均在 [归档索引](../.agents/archive/README.md)。原完整计划索引保留为 [历史快照](../.agents/archive/PLAN-HISTORY.md)，不作为当前执行指令。
+已完成的 001–016、018、019、022、023，以及历史审计/执行/组合验收均在 [归档索引](../.agents/archive/README.md)。原完整计划索引保留为 [历史快照](../.agents/archive/PLAN-HISTORY.md)，不作为当前执行指令。

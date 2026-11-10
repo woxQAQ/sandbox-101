@@ -1,10 +1,10 @@
+use crate::{Error, ErrorCode, Result, ResultContext};
 use crate::{
     number,
     server::{Input, Output, next_input},
     string,
     wire::CHUNK,
 };
-use anyhow::{Result, bail, ensure};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
@@ -212,7 +212,7 @@ pub mod fixtures {
                     uid: metadata.uid(),
                     gid: metadata.gid(),
                 })
-                .map_err(|_| anyhow::anyhow!("fixture observer closed"))?;
+                .map_err(|_| Error::new(ErrorCode::Internal, "fixture observer closed"))?;
             let _ = self.release.await;
             Ok(())
         }
@@ -220,20 +220,23 @@ pub mod fixtures {
 }
 
 pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
-    let parent = parent(path)?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.as_file()
-        .set_permissions(std::fs::Permissions::from_mode(mode & 0o777))?;
-    temp.write_all(data)?;
-    temp.as_file().sync_all()?;
-    temp.persist(path).map_err(|e| e.error)?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
+    (|| -> Result<()> {
+        let parent = parent(path)?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        temp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode & 0o777))?;
+        temp.write_all(data)?;
+        temp.as_file().sync_all()?;
+        temp.persist(path).map_err(|e| e.error)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })()
+    .or_context(|| format!("atomic write {}", path.display()))
 }
 fn parent(path: &Path) -> Result<&Path> {
     path.parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("path needs a parent directory"))
+        .ok_or_else(|| Error::new(ErrorCode::Invalid, "path needs a parent directory"))
 }
 fn path(p: &serde_json::Value) -> Result<PathBuf> {
     let path = PathBuf::from(string(p, "path")?);
@@ -255,7 +258,7 @@ fn resolved_path(path: &Path) -> Result<PathBuf> {
         suffix.push(
             existing
                 .file_name()
-                .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
+                .ok_or_else(|| Error::new(ErrorCode::Invalid, "invalid path"))?,
         );
         existing = parent(existing)?;
     }
@@ -270,13 +273,13 @@ fn public_path(path: &Path, private: &Path, destructive_tree: bool) -> Result<()
     let resolved = resolved_path(path)?;
     ensure!(
         !resolved.starts_with(private) && !(destructive_tree && private.starts_with(&resolved)),
-        "agent private state is not accessible through the filesystem API"
+        Unauthorized => "agent private state is not accessible through the filesystem API"
     );
     Ok(())
 }
 
 fn metadata(path: &Path) -> Result<serde_json::Value> {
-    let m = std::fs::symlink_metadata(path)?;
+    let m = std::fs::symlink_metadata(path).or_context(|| format!("stat {}", path.display()))?;
     Ok(
         json!({"path":path.to_string_lossy(),"size":m.len().to_string(),"mode":m.mode() & 0o7777,"uid":m.uid(),"gid":m.gid(),"mtime_seconds":m.mtime(),"directory":m.is_dir(),"symlink":m.file_type().is_symlink()}),
     )
@@ -308,15 +311,15 @@ fn with_identity<T>(identity: (u32, u32), operation: impl FnOnce() -> Result<T>)
     }
     let groups = if unsafe { libc::geteuid() } == 0 {
         let n = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
-        ensure!(n >= 0, "cannot read supplementary groups");
+        ensure!(n >= 0, Internal => "cannot read supplementary groups");
         let mut groups = vec![0; n as usize];
         ensure!(
             unsafe { libc::getgroups(n, groups.as_mut_ptr()) } >= 0,
-            "cannot read supplementary groups"
+            Internal => "cannot read supplementary groups"
         );
         ensure!(
             unsafe { libc::syscall(libc::SYS_setgroups, 0, std::ptr::null::<libc::gid_t>()) } == 0,
-            "cannot clear filesystem supplementary groups"
+            Internal => "cannot clear filesystem supplementary groups"
         );
         Some(groups)
     } else {
@@ -329,7 +332,7 @@ fn with_identity<T>(identity: (u32, u32), operation: impl FnOnce() -> Result<T>)
     let current_gid = unsafe { libc::syscall(libc::SYS_setfsgid, u32::MAX) } as u32;
     ensure!(
         current_uid == identity.0 && current_gid == identity.1,
-        "cannot assume workload filesystem identity"
+        Internal => "cannot assume workload filesystem identity"
     );
     operation()
 }
@@ -368,7 +371,8 @@ pub async fn dispatch(
                 let file = OpenOptions::new()
                     .read(true)
                     .custom_flags(libc::O_NONBLOCK)
-                    .open(&target)?;
+                    .open(&target)
+                    .or_context(|| format!("open {} for read", target.display()))?;
                 ensure!(file.metadata()?.is_file(), "read requires a regular file");
                 Ok(file)
             })
@@ -389,7 +393,7 @@ pub async fn dispatch(
             let mut size = 0u64;
             while remaining > 0 {
                 let limit = remaining.min(CHUNK as u64) as usize;
-                let n = tokio::select! {_ = out.cancel.cancelled() => bail!("connection closed"), result = file.read(&mut buf[..limit]) => result?};
+                let n = tokio::select! {_ = out.cancel.cancelled() => bail!(Internal => "connection closed"), result = file.read(&mut buf[..limit]) => result?};
                 if n == 0 {
                     break;
                 }
@@ -438,11 +442,11 @@ pub async fn dispatch(
                 push_tree(&target, archive.path(), &token, Some(&private))
             })
             .await?;
-            let mut terminal = out.request.reply(outcome.params(), vec![], true);
-            if !outcome.publication_durable {
-                terminal.error = "tree publication fsync failed after commit".into();
+            let params = outcome.params();
+            if let Some(error) = outcome.publication_error {
+                return Err(error.with_params(params));
             }
-            out.send(terminal).await
+            out.done(params).await
         }
         "tree_pull" => {
             // Spooling bounds memory and permits a known-safe archive before exposing bytes.
@@ -476,7 +480,7 @@ pub async fn dispatch(
             let mut buf = vec![0; CHUNK];
             loop {
                 let n = tokio::select! {
-                    _ = out.cancel.cancelled() => bail!("connection closed"),
+                    _ = out.cancel.cancelled() => bail!(Internal => "connection closed"),
                     result = file.read(&mut buf) => result?,
                 };
                 if n == 0 {
@@ -501,10 +505,10 @@ pub async fn dispatch(
                     .into_iter()
                     .filter_entry(|e| public_path(e.path(), &private, false).is_ok())
                 {
-                    ensure!(!output.cancel.is_cancelled(), "connection closed");
+                    ensure!(!output.cancel.is_cancelled(), Internal => "connection closed");
                     let entry = entry?;
                     count += 1;
-                    ensure!(count <= 100_000, "find entry limit exceeded");
+                    ensure!(count <= 100_000, ResourceExhausted => "find entry limit exceeded");
                     if entry.file_name().to_string_lossy().contains(&needle) {
                         output
                             .tx
@@ -513,7 +517,7 @@ pub async fn dispatch(
                                 vec![],
                                 false,
                             ))
-                            .map_err(|_| anyhow::anyhow!("connection closed"))?;
+                            .map_err(|_| Error::new(ErrorCode::Internal, "connection closed"))?;
                     }
                 }
                 Ok(())
@@ -535,14 +539,14 @@ pub async fn dispatch(
                             }
                             ensure!(
                                 entries.len() < 10_000,
-                                "directory listing exceeds 10000 entries; use fs_find"
+                                ResourceExhausted => "directory listing exceeds 10000 entries; use fs_find"
                             );
                             entries.push(metadata(&entry.path())?);
                         }
                         let value = json!({"entries":entries});
                         ensure!(
                             serde_json::to_vec(&value)?.len() < 4 * 1024 * 1024,
-                            "directory listing too large; use fs_find"
+                            ResourceExhausted => "directory listing too large; use fs_find"
                         );
                         Ok(value)
                     }
@@ -562,7 +566,8 @@ pub async fn dispatch(
                     "fs_rename" => {
                         let destination = PathBuf::from(string(&p, "destination")?);
                         ensure!(destination.is_absolute(), "destination must be absolute");
-                        std::fs::rename(&target, &destination)?;
+                        std::fs::rename(&target, &destination)
+                            .or_context(|| format!("rename {} -> {}", target.display(), destination.display()))?;
                         File::open(parent(&destination)?)?.sync_all()?;
                         File::open(parent(&target)?)?.sync_all()?;
                         Ok(json!({}))
@@ -576,25 +581,23 @@ pub async fn dispatch(
                             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                             .open(&target)?;
                         let m = file.metadata()?;
-                        ensure!(
-                            m.is_file() && m.len() <= 8 * 1024 * 1024,
-                            "replace requires a regular UTF-8 file <=8 MiB"
-                        );
+                        ensure!(m.is_file(), "replace requires a regular UTF-8 file <=8 MiB");
+                        ensure!(m.len() <= 8 * 1024 * 1024, ResourceExhausted => "replace requires a regular UTF-8 file <=8 MiB");
                         let mut content = String::new();
                         std::io::Read::by_ref(&mut file)
                             .take(8 * 1024 * 1024 + 1)
                             .read_to_string(&mut content)?;
-                        ensure!(content.len() <= 8 * 1024 * 1024, "replace input too large");
+                        ensure!(content.len() <= 8 * 1024 * 1024, ResourceExhausted => "replace input too large");
                         let count = content.matches(needle).count();
                         let estimated = content
                             .len()
                             .checked_add(
                                 count
                                     .checked_mul(replacement.len().saturating_sub(needle.len()))
-                                    .ok_or_else(|| anyhow::anyhow!("replacement too large"))?,
+                                    .ok_or_else(|| Error::new(ErrorCode::ResourceExhausted, "replacement too large"))?,
                             )
-                            .ok_or_else(|| anyhow::anyhow!("replacement too large"))?;
-                        ensure!(estimated <= 8 * 1024 * 1024, "replacement too large");
+                            .ok_or_else(|| Error::new(ErrorCode::ResourceExhausted, "replacement too large"))?;
+                        ensure!(estimated <= 8 * 1024 * 1024, ResourceExhausted => "replacement too large");
                         atomic_write(
                             &target,
                             content.replace(needle, replacement).as_bytes(),
@@ -619,7 +622,7 @@ async fn receive(out: &Output, input: &mut Input, file: &File) -> Result<u64> {
     while !eof {
         let frame = next_input(input, out).await?;
         total += frame.data.len() as u64;
-        ensure!(total <= TRANSFER_LIMIT, "transfer exceeds 1 GiB");
+        ensure!(total <= TRANSFER_LIMIT, ResourceExhausted => "transfer exceeds 1 GiB");
         writer.write_all(&frame.data).await?;
         eof = frame.eof;
     }
@@ -627,7 +630,7 @@ async fn receive(out: &Output, input: &mut Input, file: &File) -> Result<u64> {
     writer.sync_all().await?;
     ensure!(
         !out.cancel.is_cancelled(),
-        "connection closed before commit"
+        Internal => "connection closed before commit"
     );
     Ok(total)
 }
@@ -638,7 +641,10 @@ struct LimitedWriter<W> {
 impl<W: Write> Write for LimitedWriter<W> {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
         if self.bytes + b.len() as u64 > TRANSFER_LIMIT {
-            return Err(std::io::Error::other("archive exceeds 1 GiB"));
+            return Err(std::io::Error::other(Error::new(
+                ErrorCode::ResourceExhausted,
+                "archive exceeds 1 GiB",
+            )));
         }
         let n = self.inner.write(b)?;
         self.bytes += n as u64;
@@ -661,31 +667,31 @@ fn public_descriptor(file: &File, private: &Path, destructive: bool) -> Result<(
     let path = std::fs::read_link(descriptor_path(file))?;
     ensure!(
         !path.starts_with(private) && !(destructive && private.starts_with(&path)),
-        "agent private state is not accessible through the filesystem API"
+        Unauthorized => "agent private state is not accessible through the filesystem API"
     );
     Ok(())
 }
 fn open_directory(path: &Path) -> Result<File> {
-    Ok(OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?)
+        .open(path)
+        .or_context(|| format!("open directory {}", path.display()))
 }
 fn open_at(directory: &File, name: &OsStr, flags: i32) -> Result<File> {
-    let name = CString::new(name.as_bytes())?;
+    let c_name = CString::new(name.as_bytes())?;
     let fd = unsafe {
         libc::openat(
             directory.as_raw_fd(),
-            name.as_ptr(),
+            c_name.as_ptr(),
             flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0o600,
         )
     };
-    ensure!(
-        fd >= 0,
-        "open tree entry: {}",
-        std::io::Error::last_os_error()
-    );
+    if fd < 0 {
+        return Err(Error::from(std::io::Error::last_os_error())
+            .context(format!("open tree entry {name:?}")));
+    }
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 fn tree_path(path: &Path) -> Result<PathBuf> {
@@ -726,10 +732,11 @@ fn tree_parent(root: &File, path: &Path, create: bool, budget: &mut TreeBudget) 
                 budget.entry()?;
             } else {
                 let error = std::io::Error::last_os_error();
-                ensure!(
-                    error.raw_os_error() == Some(libc::EEXIST),
-                    "create tree directory: {error}"
-                );
+                if error.raw_os_error() != Some(libc::EEXIST) {
+                    return Err(
+                        Error::from(error).context(format!("create tree directory {name:?}"))
+                    );
+                }
             }
         }
         directory = open_at(&directory, name, libc::O_RDONLY | libc::O_DIRECTORY)?;
@@ -747,10 +754,9 @@ fn unlink_leaf(directory: &File, name: &OsStr) -> Result<()> {
     let name = CString::new(name.as_bytes())?;
     if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } < 0 {
         let error = std::io::Error::last_os_error();
-        ensure!(
-            error.raw_os_error() == Some(libc::ENOENT),
-            "replace tree entry: {error}"
-        );
+        if error.raw_os_error() != Some(libc::ENOENT) {
+            return Err(Error::from(error).context(format!("replace tree entry {name:?}")));
+        }
     }
     Ok(())
 }
@@ -811,22 +817,22 @@ struct TreeBudget {
 impl TreeBudget {
     fn entry(&mut self) -> Result<()> {
         self.entries += 1;
-        ensure!(self.entries <= TREE_ENTRIES, "tree entry limit exceeded");
+        ensure!(self.entries <= TREE_ENTRIES, ResourceExhausted => "tree entry limit exceeded");
         Ok(())
     }
     fn data(&mut self, n: u64) -> Result<()> {
         self.bytes = self
             .bytes
             .checked_add(n)
-            .ok_or_else(|| anyhow::anyhow!("tree size overflow"))?;
-        ensure!(self.bytes <= TRANSFER_LIMIT, "expanded tree exceeds 1 GiB");
+            .ok_or_else(|| Error::new(ErrorCode::ResourceExhausted, "tree size overflow"))?;
+        ensure!(self.bytes <= TRANSFER_LIMIT, ResourceExhausted => "expanded tree exceeds 1 GiB");
         Ok(())
     }
     fn metadata(&mut self, n: usize) -> Result<()> {
         self.metadata += n;
         ensure!(
             self.metadata <= METADATA_LIMIT,
-            "tree metadata limit exceeded"
+            ResourceExhausted => "tree metadata limit exceeded"
         );
         Ok(())
     }
@@ -859,7 +865,7 @@ impl TreeMetadata {
                 let error = std::io::Error::last_os_error();
                 ensure!(
                     error.raw_os_error() == Some(libc::EOPNOTSUPP),
-                    "list user xattrs: {error}"
+                    Internal => "list user xattrs: {error}"
                 );
                 return Ok(result);
             }
@@ -880,7 +886,7 @@ impl TreeMetadata {
                 };
                 ensure!(
                     n >= 0,
-                    "read user xattr: {}",
+                    Internal => "read user xattr: {}",
                     std::io::Error::last_os_error()
                 );
                 value.truncate(n as usize);
@@ -998,7 +1004,7 @@ impl TreeMetadata {
             // Changing only to our own workload group is permitted without root.
             ensure!(
                 unsafe { libc::fchown(file.as_raw_fd(), u32::MAX, gid) } == 0,
-                "set workload group: {}",
+                Internal => "set workload group: {}",
                 std::io::Error::last_os_error()
             );
         }
@@ -1014,19 +1020,19 @@ impl TreeMetadata {
                         0,
                     )
                 } == 0,
-                "set user xattr: {}",
+                Internal => "set user xattr: {}",
                 std::io::Error::last_os_error()
             );
         }
         file.set_permissions(std::fs::Permissions::from_mode(self.mode))?;
         ensure!(
             file.metadata()?.mode() & 0o7777 == self.mode,
-            "filesystem did not preserve mode bits"
+            Internal => "filesystem did not preserve mode bits"
         );
         let times = self.times();
         ensure!(
             unsafe { libc::futimens(file.as_raw_fd(), times.as_ptr()) } == 0,
-            "set mtime: {}",
+            Internal => "set mtime: {}",
             std::io::Error::last_os_error()
         );
         file.sync_all()?;
@@ -1087,7 +1093,7 @@ fn archive_tree<W: Write>(
         path: &Path,
         state: &mut ArchiveState<'_, W>,
     ) -> Result<()> {
-        ensure!(!state.cancel.is_cancelled(), "connection closed");
+        ensure!(!state.cancel.is_cancelled(), Internal => "connection closed");
         ensure!(
             path.components().count() <= TREE_DEPTH,
             "tree depth limit exceeded"
@@ -1161,7 +1167,7 @@ fn archive_tree<W: Write>(
                 state.builder.append_data(&mut header, path, &mut reader)?;
                 ensure!(
                     reader.inner.limit() == 0,
-                    "source file changed during transfer"
+                    Conflict => "source file changed during transfer"
                 );
                 state.links.insert((m.dev(), m.ino()), path.to_owned());
             }
@@ -1219,18 +1225,18 @@ fn validate_archive(path: &Path, cancel: &tokio_util::sync::CancellationToken) -
     let file = File::open(path)?;
     ensure!(
         file.metadata()?.len() <= TRANSFER_LIMIT,
-        "archive exceeds 1 GiB"
+        ResourceExhausted => "archive exceeds 1 GiB"
     );
     let mut tar = tar::Archive::new(file);
     let mut count = 0;
     for entry in tar.entries()?.raw(true) {
-        ensure!(!cancel.is_cancelled(), "connection closed");
+        ensure!(!cancel.is_cancelled(), Internal => "connection closed");
         let entry = entry?;
         count += 1;
-        ensure!(count <= TREE_ENTRIES * 4, "tar header limit exceeded");
+        ensure!(count <= TREE_ENTRIES * 4, ResourceExhausted => "tar header limit exceeded");
         let kind = entry.header().entry_type();
         if kind.is_pax_local_extensions() || kind.is_gnu_longname() || kind.is_gnu_longlink() {
-            ensure!(entry.size() <= PAX_LIMIT, "tar extension too large");
+            ensure!(entry.size() <= PAX_LIMIT, ResourceExhausted => "tar extension too large");
         } else {
             ensure!(
                 kind.is_file() || kind.is_dir() || kind.is_symlink() || kind.is_hard_link(),
@@ -1238,7 +1244,7 @@ fn validate_archive(path: &Path, cancel: &tokio_util::sync::CancellationToken) -
             );
             ensure!(
                 entry.size() <= TRANSFER_LIMIT,
-                "expanded tree exceeds 1 GiB"
+                ResourceExhausted => "expanded tree exceeds 1 GiB"
             );
         }
     }
@@ -1262,7 +1268,7 @@ impl StagedTree {
         let mut seen = HashSet::new();
         let mut links = BTreeMap::new();
         for entry in tar.entries()? {
-            ensure!(!cancel.is_cancelled(), "connection closed");
+            ensure!(!cancel.is_cancelled(), Internal => "connection closed");
             let mut entry = entry?;
             self.budget.entry()?;
             let kind = entry.header().entry_type();
@@ -1285,10 +1291,10 @@ impl StagedTree {
                     let name = CString::new(path.file_name().unwrap().as_bytes())?;
                     if unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) } < 0 {
                         let error = std::io::Error::last_os_error();
-                        ensure!(
-                            error.raw_os_error() == Some(libc::EEXIST),
-                            "create directory: {error}"
-                        );
+                        if error.raw_os_error() != Some(libc::EEXIST) {
+                            return Err(Error::from(error)
+                                .context(format!("create tree directory {}", path.display())));
+                        }
                     }
                     tree_open(&self.root, &path, libc::O_RDONLY | libc::O_DIRECTORY)?;
                 }
@@ -1332,7 +1338,7 @@ impl StagedTree {
                 );
                 let link = entry
                     .link_name()?
-                    .ok_or_else(|| anyhow::anyhow!("missing symlink target"))?;
+                    .ok_or_else(|| Error::new(ErrorCode::Invalid, "missing symlink target"))?;
                 safe_symlink(&path, &link)?;
                 self.budget.metadata(link.as_os_str().len())?;
                 let link = CString::new(link.as_os_str().as_bytes())?;
@@ -1340,7 +1346,7 @@ impl StagedTree {
                 ensure!(
                     unsafe { libc::symlinkat(link.as_ptr(), directory.as_raw_fd(), name.as_ptr()) }
                         == 0,
-                    "create symlink: {}",
+                    Internal => "create symlink: {}",
                     std::io::Error::last_os_error()
                 );
                 let times = metadata.times();
@@ -1353,7 +1359,7 @@ impl StagedTree {
                             libc::AT_SYMLINK_NOFOLLOW,
                         )
                     } == 0,
-                    "set symlink mtime: {}",
+                    Internal => "set symlink mtime: {}",
                     std::io::Error::last_os_error()
                 );
                 let gid = unsafe { libc::syscall(libc::SYS_setfsgid, u32::MAX) } as u32;
@@ -1369,17 +1375,16 @@ impl StagedTree {
                                 libc::AT_SYMLINK_NOFOLLOW,
                             )
                         } == 0,
-                        "set symlink workload group: {}",
+                        Internal => "set symlink workload group: {}",
                         std::io::Error::last_os_error()
                     );
                 }
                 self.symlinks.insert(path);
             } else if kind.is_hard_link() {
-                let link = tree_path(
-                    &entry
-                        .link_name()?
-                        .ok_or_else(|| anyhow::anyhow!("missing hardlink target"))?,
-                )?;
+                let link =
+                    tree_path(&entry.link_name()?.ok_or_else(|| {
+                        Error::new(ErrorCode::Invalid, "missing hardlink target")
+                    })?)?;
                 ensure!(!link.as_os_str().is_empty(), "invalid hardlink target");
                 self.budget.metadata(link.as_os_str().len())?;
                 links.insert(path, link);
@@ -1416,13 +1421,13 @@ impl StagedTree {
                 unsafe {
                     libc::linkat(from.as_raw_fd(), a.as_ptr(), to.as_raw_fd(), b.as_ptr(), 0)
                 } == 0,
-                "create hardlink: {}",
+                Internal => "create hardlink: {}",
                 std::io::Error::last_os_error()
             );
             let metadata = tree
                 .metadata
                 .get(&target)
-                .ok_or_else(|| anyhow::anyhow!("hardlink target lacks metadata"))?
+                .ok_or_else(|| Error::new(ErrorCode::Invalid, "hardlink target lacks metadata"))?
                 .clone();
             tree.metadata.insert(path.to_owned(), metadata);
             Ok(())
@@ -1438,7 +1443,7 @@ impl StagedTree {
             cancel: &tokio_util::sync::CancellationToken,
         ) -> Result<()> {
             for entry in std::fs::read_dir(descriptor_path(root))? {
-                ensure!(!cancel.is_cancelled(), "connection closed");
+                ensure!(!cancel.is_cancelled(), Internal => "connection closed");
                 let entry = entry?;
                 let child = open_at(root, &entry.file_name(), libc::O_PATH)?;
                 if child.metadata()?.is_dir() {
@@ -1452,17 +1457,17 @@ impl StagedTree {
         // Include implicit parent directories, which have no archive metadata.
         sync_directories(&self.root, cancel)?;
         for path in &self.symlinks {
-            ensure!(!cancel.is_cancelled(), "connection closed");
+            ensure!(!cancel.is_cancelled(), Internal => "connection closed");
             confined_symlink(&self.root, path)?;
         }
         // Children precede parents so restrictive directory modes and directory
         // mtimes are applied only after all directory-entry changes are complete.
         let mut applied = HashSet::new();
         for (path, metadata) in self.metadata.iter().rev() {
-            ensure!(!cancel.is_cancelled(), "connection closed");
+            ensure!(!cancel.is_cancelled(), Internal => "connection closed");
             let file = tree_open(&self.root, path, libc::O_PATH)?;
             let m = file.metadata()?;
-            ensure!(m.is_file() || m.is_dir(), "metadata target changed");
+            ensure!(m.is_file() || m.is_dir(), Conflict => "metadata target changed");
             if m.is_file() && !applied.insert((m.dev(), m.ino())) {
                 continue;
             }
@@ -1505,7 +1510,7 @@ fn admit_tree_cleanup(root: &File, cancel: &tokio_util::sync::CancellationToken)
         budget: &mut TreeBudget,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<()> {
-        ensure!(!cancel.is_cancelled(), "connection closed");
+        ensure!(!cancel.is_cancelled(), Internal => "connection closed");
         ensure!(depth <= TREE_DEPTH, "tree depth limit exceeded");
         budget.entry()?;
         let metadata = root.metadata()?;
@@ -1513,11 +1518,11 @@ fn admit_tree_cleanup(root: &File, cancel: &tokio_util::sync::CancellationToken)
             let uid = unsafe { libc::syscall(libc::SYS_setfsuid, u32::MAX) } as u32;
             ensure!(
                 metadata.uid() == uid,
-                "old tree directory needs cleanup permissions owned by workload"
+                Unauthorized => "old tree directory needs cleanup permissions owned by workload"
             );
         }
         for entry in std::fs::read_dir(descriptor_path(root))? {
-            ensure!(!cancel.is_cancelled(), "connection closed");
+            ensure!(!cancel.is_cancelled(), Internal => "connection closed");
             let entry = entry?;
             let child = open_at(root, &entry.file_name(), libc::O_PATH)?;
             if child.metadata()?.is_dir() {
@@ -1552,7 +1557,7 @@ fn cleanup_tree(root: &File) -> Result<()> {
 
 // This value exists only after a successful rename; Err always means precommit.
 struct TreePushOutcome {
-    publication_durable: bool,
+    publication_error: Option<Error>,
     cleanup: TreeCleanup,
 }
 
@@ -1565,7 +1570,7 @@ impl TreePushOutcome {
     fn params(&self) -> serde_json::Value {
         let mut params = json!({
             "committed": true,
-            "publication_durable": self.publication_durable,
+            "publication_durable": self.publication_error.is_none(),
             "cleanup_complete": matches!(self.cleanup, TreeCleanup::Complete),
             "cleanup_required": matches!(self.cleanup, TreeCleanup::Pending { .. }),
         });
@@ -1593,7 +1598,7 @@ fn push_tree(
 ) -> Result<TreePushOutcome> {
     let name = target
         .file_name()
-        .ok_or_else(|| anyhow::anyhow!("cannot replace filesystem root"))?;
+        .ok_or_else(|| Error::new(ErrorCode::Invalid, "cannot replace filesystem root"))?;
     let directory = open_directory(&parent(target)?.canonicalize()?)?;
     if let Some(private) = private {
         // Pin the actual parent, then repeat the private-state check after any
@@ -1616,7 +1621,7 @@ fn push_tree(
         if root.metadata()?.gid() != gid {
             ensure!(
                 unsafe { libc::fchown(root.as_raw_fd(), u32::MAX, gid) } == 0,
-                "set staging workload group: {}",
+                Internal => "set staging workload group: {}",
                 std::io::Error::last_os_error()
             );
         }
@@ -1632,7 +1637,7 @@ fn push_tree(
             Ok(existing) => {
                 ensure!(
                     existing.metadata()?.is_dir(),
-                    "tree destination must be a directory"
+                    Conflict => "tree destination must be a directory"
                 );
                 if let Some(private) = private {
                     public_descriptor(&existing, private, true)?;
@@ -1657,7 +1662,7 @@ fn push_tree(
         };
         tree.extract(archive, cancel)?;
         tree.finish(cancel)?;
-        ensure!(!cancel.is_cancelled(), "connection closed before commit");
+        ensure!(!cancel.is_cancelled(), Internal => "connection closed before commit");
         let a = CString::new(stage_name.as_bytes())?;
         let b = CString::new(name.as_bytes())?;
         let flags = if exists {
@@ -1665,20 +1670,20 @@ fn push_tree(
         } else {
             libc::RENAME_NOREPLACE
         };
-        ensure!(
-            unsafe {
-                libc::syscall(
-                    libc::SYS_renameat2,
-                    directory.as_raw_fd(),
-                    a.as_ptr(),
-                    directory.as_raw_fd(),
-                    b.as_ptr(),
-                    flags,
-                )
-            } == 0,
-            "commit tree: {}",
-            std::io::Error::last_os_error()
-        );
+        let renamed = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                directory.as_raw_fd(),
+                a.as_ptr(),
+                directory.as_raw_fd(),
+                b.as_ptr(),
+                flags,
+            )
+        };
+        if renamed != 0 {
+            return Err(Error::from(std::io::Error::last_os_error())
+                .context(format!("commit tree {}", target.display())));
+        }
         Ok(exists)
     })();
     let exists = match result {
@@ -1689,14 +1694,20 @@ fn push_tree(
             return Err(error);
         }
     };
-    // Once rename succeeds, no error may pass through generic failure conversion:
-    // it would erase the commit fact. Never exchange back an already visible tree.
-    let publication: Result<()> = (|| {
+    // After rename, preserve the commit fact alongside any error. Never exchange
+    // back an already visible tree.
+    let publication: Result<()> = (|| -> Result<()> {
         #[cfg(feature = "filesystem-fixtures")]
         fixtures::check_push(&fixture, fixtures::PushFailure::PublicationSync)?;
         directory.sync_all()?;
         Ok(())
-    })();
+    })()
+    .or_context(|| {
+        format!(
+            "tree publication fsync failed after commit: {}",
+            target.display()
+        )
+    });
     let publication_durable = publication.is_ok();
     let cleanup = if !exists {
         TreeCleanup::Complete
@@ -1720,7 +1731,7 @@ fn push_tree(
         }
     };
     Ok(TreePushOutcome {
-        publication_durable,
+        publication_error: publication.err(),
         cleanup,
     })
 }
@@ -1751,11 +1762,12 @@ async fn watch(identity: (u32, u32), out: &Output, target: &Path) -> Result<()> 
     })
     .await?;
     // OwnedFd keeps the descriptor stable and open for the registration lifetime.
-    let fd = unsafe { tokio::io::unix::AsyncFd::register(fd) }?;
+    let fd = unsafe { tokio::io::unix::AsyncFd::register(fd) }
+        .map_err(|e| Error::new(ErrorCode::Internal, format!("register inotify: {e}")))?;
     out.event(json!({"ready":true}), vec![]).await?;
     let mut buffer = vec![0u8; CHUNK];
     loop {
-        let mut ready = tokio::select! {_ = out.cancel.cancelled()=>bail!("connection closed"),r=fd.readable()=>r?};
+        let mut ready = tokio::select! {_ = out.cancel.cancelled()=>bail!(Internal => "connection closed"),r=fd.readable()=>r?};
         let n = match ready.try_io(|f| {
             let n = unsafe { libc::read(f.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
             if n < 0 {
@@ -1774,11 +1786,11 @@ async fn watch(identity: (u32, u32), out: &Output, target: &Path) -> Result<()> 
             };
             ensure!(
                 event.mask & libc::IN_Q_OVERFLOW == 0,
-                "watch queue overflow; rescan required"
+                ResourceExhausted => "watch queue overflow; rescan required"
             );
             let start = offset + std::mem::size_of::<libc::inotify_event>();
             let end = start + event.len as usize;
-            ensure!(end <= n, "invalid inotify event");
+            ensure!(end <= n, Internal => "invalid inotify event");
             let name = &buffer[start..end];
             let name = &name[..name.iter().position(|b| *b == 0).unwrap_or(name.len())];
             out.event(json!({"mask":event.mask,"cookie":event.cookie,"name":String::from_utf8_lossy(name)}),vec![]).await?;

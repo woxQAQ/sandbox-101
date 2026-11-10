@@ -159,7 +159,7 @@ func requireDataReadyBlocked(t *testing.T, s *Service, p Principal, id string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := s.DataReady(ctx, p, id); !isCode(err, api.Conflict) {
+	if _, err := s.DataReady(ctx, p, id); !isCode(err, ErrConflict) {
 		t.Fatalf("fenced sandbox admitted to data: %v", err)
 	}
 }
@@ -1378,7 +1378,7 @@ func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
 				before.ID,
 			); !isCode(
 				err,
-				api.Conflict,
+				ErrConflict,
 			) {
 				t.Fatalf("revoke failure admitted workload: %v", err)
 			}
@@ -1620,7 +1620,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 						before.ID,
 					); !isCode(
 						err,
-						api.Conflict,
+						ErrConflict,
 					) {
 						t.Errorf(
 							"incomplete teardown admitted DataReady: %v",
@@ -1678,7 +1678,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					}
 				}
 				_, err = s.DataReady(ctx, p, before.ID)
-				if (fault == "save_ok" && !isCode(err, api.Conflict)) ||
+				if (fault == "save_ok" && !isCode(err, ErrConflict)) ||
 					(fault != "save_ok" && err != nil) {
 					t.Fatalf(
 						"cleanup retry changed diagnostic admission semantics: %v",
@@ -2629,7 +2629,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 			s.store.db,
 			r.Sandbox.ID,
 			res.OperationID,
-		); !isCode(err, api.Conflict) {
+		); !isCode(err, ErrConflict) {
 			t.Fatalf("superseded clear was not rejected: %v", err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "op_newer")
@@ -2893,7 +2893,7 @@ func TestHostSecretNeverPersistedAndRestartFailsClosed(t *testing.T) {
 		r.Sandbox.ID,
 	); !isCode(
 		err,
-		api.Conflict,
+		ErrConflict,
 	) {
 		t.Fatalf("restart served sandbox without credentials: %v", err)
 	}

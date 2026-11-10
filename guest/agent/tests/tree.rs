@@ -55,6 +55,10 @@ async fn reply(stream: &mut UnixStream) -> (Vec<u8>, String) {
         assert!(frame.data.len() <= CHUNK);
         data.extend_from_slice(&frame.data);
         if frame.eof {
+            if !frame.error.is_empty() {
+                assert!(frame.params_json()["error_code"].is_string(), "{frame:?}");
+                assert!(frame.error.contains("guest/agent/src/"), "{frame:?}");
+            }
             return (data, frame.error);
         }
     }
