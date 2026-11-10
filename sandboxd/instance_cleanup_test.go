@@ -25,21 +25,14 @@ func TestQuotaLedgerHistoricalHandoffMergesCleanupHolder(t *testing.T) {
 	ledgerMoney(t, s, p.TenantID, 1, 256)
 }
 
-func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(
-	t *testing.T,
-) {
+func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	ledgerLimit(t, s, p, 1, 64)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
 	f.control.Lock()
 	f.failDeletes = 3
 	f.control.Unlock()
-	first, err := s.Execute(
-		s.ctx,
-		p,
-		"release-A",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	first, err := s.Execute(s.ctx, p, "release-A", Command{Action: "release", SandboxID: b.ID})
 	if err == nil {
 		t.Fatal("public A failure missing")
 	}
@@ -48,12 +41,7 @@ func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(
 		t.Fatal("missing A intent", err)
 	}
 	frozen := encode(origin.Release.Request)
-	second, err := s.Execute(
-		s.ctx,
-		p,
-		"release-R2",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	second, err := s.Execute(s.ctx, p, "release-R2", Command{Action: "release", SandboxID: b.ID})
 	if err == nil || second.OperationID == first.OperationID {
 		t.Fatal("fresh failed compensation not reached")
 	}
@@ -73,8 +61,7 @@ func TestQuotaLedgerOrdinaryReleaseCompensationSurvivesFreshRelease(
 		t.Fatal(err)
 	}
 	for _, r := range all {
-		if r.Release != nil &&
-			(!bytes.Equal(frozen, encode(r.Release.Request)) || r.Source != origin.Source) {
+		if r.Release != nil && (!bytes.Equal(frozen, encode(r.Release.Request)) || r.Source != origin.Source) {
 			t.Fatal("fresh release created another A sequence")
 		}
 		if r.Kind == "instance_cleanup" {
@@ -95,12 +82,7 @@ func TestQuotaLedgerReleaseIntentAtomicity(t *testing.T) {
 			if _, err := s.store.db.Exec(trigger); err != nil {
 				t.Fatal(err)
 			}
-			_, err := s.Execute(
-				s.ctx,
-				p,
-				"release",
-				Command{Action: "release", SandboxID: b.ID},
-			)
+			_, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID})
 			if err == nil {
 				t.Fatal("SQL fault missing")
 			}
@@ -116,13 +98,7 @@ func TestQuotaLedgerReleaseIntentAtomicity(t *testing.T) {
 				t.Fatal(err)
 			}
 			if boundary == "intent" {
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"release-retry",
-					Command{Action: "release", SandboxID: b.ID},
-				)
+				ledgerExecute(t, s, p, "release-retry", Command{Action: "release", SandboxID: b.ID})
 			} else {
 				for range 3 {
 					_ = s.recoverResources()

@@ -16,10 +16,7 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	base := filepath.Join(dir, "vsock")
-	stale, err := net.ListenUnix(
-		"unix",
-		&net.UnixAddr{Name: base + "_2049", Net: "unix"},
-	)
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: base + "_2049", Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +29,7 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		Options{
 			RecoverStaleSocket: func(b Binding, path string, info os.FileInfo) bool {
 				proofCalls.Add(1)
-				return b.SandboxID == "s" && path == base+"_2049" &&
-					info.Mode()&os.ModeSocket != 0
+				return b.SandboxID == "s" && path == base+"_2049" && info.Mode()&os.ModeSocket != 0
 			},
 		},
 	)
@@ -41,14 +37,7 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Bind(
-		context.Background(),
-		"s",
-		"t",
-		base,
-		Policy{Mode: "relay"},
-		nil,
-	); err != nil {
+	if err := m.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if proofCalls.Load() != 1 {
@@ -64,24 +53,14 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if err := other.Bind(
-		context.Background(),
-		"s",
-		"t",
-		base,
-		Policy{Mode: "relay"},
-		nil,
-	); err == nil {
+	if err := other.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err == nil {
 		t.Fatal("replaced a live socket")
 	}
 	// Revoke must not unlink a different inode installed at the same pathname.
 	if err := os.Remove(base + "_2049"); err != nil {
 		t.Fatal(err)
 	}
-	replacement, err := net.ListenUnix(
-		"unix",
-		&net.UnixAddr{Name: base + "_2049", Net: "unix"},
-	)
+	replacement, err := net.ListenUnix("unix", &net.UnixAddr{Name: base + "_2049", Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}

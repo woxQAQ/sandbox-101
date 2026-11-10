@@ -45,11 +45,7 @@ func (s *Service) trackedConnection(id string, c net.Conn) net.Conn {
 	return t
 }
 
-func (s *Service) DataReady(
-	ctx context.Context,
-	p Principal,
-	id string,
-) (Sandbox, error) {
+func (s *Service) DataReady(ctx context.Context, p Principal, id string) (Sandbox, error) {
 	// Serialize admission before choosing a durable resume attempt. Explicit resume
 	// operations still converge under the sandbox lock in change.
 	admit := s.lock("auto-resume:" + id)
@@ -64,15 +60,8 @@ func (s *Service) DataReady(
 		return b, err
 	}
 	if b.State == "paused" || b.State == "resuming" {
-		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(
-			b.ResumeAttempt,
-		)
-		_, err = s.Execute(
-			ctx,
-			Principal{TenantID: b.TenantID},
-			key,
-			Command{Action: "resume", SandboxID: id},
-		)
+		key := "auto-resume:" + b.ID + ":" + b.SnapshotID + ":" + fmt.Sprint(b.ResumeAttempt)
+		_, err = s.Execute(ctx, Principal{TenantID: b.TenantID}, key, Command{Action: "resume", SandboxID: id})
 		if err != nil {
 			return b, err
 		}
@@ -92,27 +81,18 @@ func (s *Service) DataReady(
 		return b, Fail(ErrConflict, "sandbox lease is not active")
 	}
 	if b.SnapshotID != "" {
-		if err = s.commitRunning(
-			Operation{ID: "handoff:" + b.ID + ":" + b.SnapshotID},
-			&b,
-		); err != nil {
+		if err = s.commitRunning(Operation{ID: "handoff:" + b.ID + ":" + b.SnapshotID}, &b); err != nil {
 			return b, err
 		}
 	}
 	if s.credentialsMissing(b) {
-		return b, Fail(
-			ErrConflict,
-			"host credentials must be supplied again after daemon restart",
-		)
+		return b, Fail(ErrConflict, "host credentials must be supplied again after daemon restart")
 	}
 	if b.Policy.Mode == "none" {
 		// Confirm residual teardown before admission; LastError is diagnostic
 		// and its persistence may have failed during maintenance.
 		if err = s.bind(ctx, b, ""); err != nil {
-			return b, Fail(
-				ErrConflict,
-				"egress policy could not be revoked",
-			)
+			return b, Fail(ErrConflict, "egress policy could not be revoked")
 		}
 	}
 	if s.opts.Egress != nil && b.Policy.Mode != "none" {
@@ -137,9 +117,7 @@ func (s *Service) DataReady(
 	}
 	defer publication()
 	if b.AutoRenew {
-		b.Deadline = time.Now().
-			UTC().
-			Add(time.Duration(b.TTLSeconds) * time.Second)
+		b.Deadline = time.Now().UTC().Add(time.Duration(b.TTLSeconds) * time.Second)
 		if err = saveSandbox(ctx, s.store.db, b); err != nil {
 			return b, err
 		}
@@ -152,8 +130,7 @@ func (s *Service) verifiedVM(ctx context.Context, b Sandbox) (api.VM, error) {
 	if err != nil {
 		return v, engineFailure(err)
 	}
-	if v.Instance != b.Instance || v.Phase != "running" || !v.AgentReady ||
-		!v.Verified {
+	if v.Instance != b.Instance || v.Phase != "running" || !v.AgentReady || !v.Verified {
 		return v, Fail(ErrConflict, "engine VM is not verified ready")
 	}
 	return v, nil
@@ -175,9 +152,7 @@ func (s *Service) dataFence(ctx context.Context, id string) error {
 // the final local decision and connection registration with configure Submit.
 // VM/agent calls and teardown must finish before acquiring it; delivery and
 // stream IO start after releasing it.
-func (s *Service) lockDataAdmission(
-	ctx context.Context, p Principal, id string,
-) (Sandbox, func(), error) {
+func (s *Service) lockDataAdmission(ctx context.Context, p Principal, id string) (Sandbox, func(), error) {
 	// Reject an already committed intent without waiting for its teardown to
 	// release the configuration guard.
 	if err := s.dataFence(ctx, id); err != nil {
@@ -192,10 +167,7 @@ func (s *Service) lockDataAdmission(
 		err = Fail(ErrConflict, "sandbox lease is not active")
 	}
 	if err == nil && s.credentialsMissing(b) {
-		err = Fail(
-			ErrConflict,
-			"host credentials must be supplied again after daemon restart",
-		)
+		err = Fail(ErrConflict, "host credentials must be supplied again after daemon restart")
 	}
 	if err == nil && b.LastError != "" {
 		err = Fail(ErrConflict, "sandbox is blocked; operator review required")

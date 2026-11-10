@@ -18,13 +18,7 @@ func TestTemplateQuotaSelectedReaderRetirement(t *testing.T) {
 	tpl = templateQuotaTarget(t, s, p, tpl, 1)
 	s.pools()
 	s.wg.Wait()
-	claim := ledgerExecute(
-		t,
-		s,
-		p,
-		"reader-claim",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	claim := ledgerExecute(t, s, p, "reader-claim", Command{Action: "claim", TemplateID: tpl.ID})
 	if claim.Sandbox.ProvisionSource != "warm" {
 		t.Fatal("ready warm not selected")
 	}
@@ -34,20 +28,8 @@ func TestTemplateQuotaSelectedReaderRetirement(t *testing.T) {
 	}
 	public := encode(o)
 	templateQuotaTarget(t, s, p, tpl, 0)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"reader-release",
-		Command{Action: "release", SandboxID: claim.Sandbox.ID},
-	)
-	newer := ledgerExecute(
-		t,
-		s,
-		p,
-		"reader-rebuild",
-		templateQuotaBuild(tpl.ID),
-	)
+	ledgerExecute(t, s, p, "reader-release", Command{Action: "release", SandboxID: claim.Sandbox.ID})
+	newer := ledgerExecute(t, s, p, "reader-rebuild", templateQuotaBuild(tpl.ID))
 	for range 2 {
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
@@ -74,13 +56,7 @@ func TestTemplateQuotaSelectedReaderRetirement(t *testing.T) {
 		t.Fatal("old successful public bytes changed")
 	}
 	ledgerLimit(t, s, p, 2, 447)
-	next := ledgerExecute(
-		t,
-		s,
-		p,
-		"reader-new-claim",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	next := ledgerExecute(t, s, p, "reader-new-claim", Command{Action: "claim", TemplateID: tpl.ID})
 	if next.Sandbox.VMID == claim.Sandbox.VMID {
 		t.Fatal("reused released VM")
 	}
@@ -95,8 +71,7 @@ func TestTemplateQuotaReadyWarmStartup(t *testing.T) {
 			s.pools()
 			s.wg.Wait()
 			var vm string
-			if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).
-				Scan(&vm); err != nil {
+			if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).Scan(&vm); err != nil {
 				t.Fatal(err)
 			}
 			statement := map[string]string{
@@ -140,8 +115,7 @@ func TestTemplateQuotaReadyWarmStartup(t *testing.T) {
 		s.pools()
 		s.wg.Wait()
 		var vm string
-		if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).
-			Scan(&vm); err != nil {
+		if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).Scan(&vm); err != nil {
 			t.Fatal(err)
 		}
 		command := templateQuotaBuild(tpl.ID)
@@ -157,28 +131,10 @@ func TestTemplateQuotaReadyWarmStartup(t *testing.T) {
 		}
 		s.pools()
 		s.wg.Wait()
-		claim := ledgerExecute(
-			t,
-			s,
-			p,
-			"ready-claim",
-			Command{Action: "claim", TemplateID: tpl.ID},
-		)
+		claim := ledgerExecute(t, s, p, "ready-claim", Command{Action: "claim", TemplateID: tpl.ID})
 		s = ledgerRestart(t, s)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"ready-pause",
-			Command{Action: "pause", SandboxID: claim.Sandbox.ID},
-		)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"ready-release",
-			Command{Action: "release", SandboxID: claim.Sandbox.ID},
-		)
+		ledgerExecute(t, s, p, "ready-pause", Command{Action: "pause", SandboxID: claim.Sandbox.ID})
+		ledgerExecute(t, s, p, "ready-release", Command{Action: "release", SandboxID: claim.Sandbox.ID})
 		s = ledgerRestart(t, s)
 		if err := s.recoverResources(); err != nil {
 			t.Fatal(err)
@@ -198,12 +154,7 @@ func templateQuotaRejectedSelection(
 		f.failDeletes = 1
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"qualified-selection",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	o, err := s.Submit(s.ctx, p, "qualified-selection", Command{Action: "claim", TemplateID: tpl.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,12 +175,10 @@ func templateQuotaRejectedSelection(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Group.Selection.Stage != "rejected" ||
-		!r.Group.Selection.Deletion.Dispatched {
+	if r.Group.Selection.Stage != "rejected" || !r.Group.Selection.Deletion.Dispatched {
 		t.Fatal("no durable deletion marker")
 	}
-	if history &&
-		(r.Group.Selection.Attempt != 1 || len(r.Group.Selection.History) != 1) {
+	if history && (r.Group.Selection.Attempt != 1 || len(r.Group.Selection.History) != 1) {
 		t.Fatal("terminal failure history missing")
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)
@@ -267,14 +216,7 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 			before := templateQuotaState(t, s)
 			n, _ := e.counts()
 			selected := recoverySandbox(t, s, r.Group.Subject.ID)
-			if err := s.discardWarm(
-				o,
-				&selected,
-				r.Group.Template,
-			); !isCode(
-				err,
-				ErrManualRecovery,
-			) {
+			if err := s.discardWarm(o, &selected, r.Group.Template); !isCode(err, ErrManualRecovery) {
 				t.Fatal("malformed receipt was adopted", err)
 			}
 			if after, _ := e.counts(); after != n {
@@ -310,18 +252,10 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 		e.mu.Unlock()
 		n, _ := e.counts()
 		b := recoverySandbox(t, s, r.Group.Subject.ID)
-		if err := s.discardWarm(
-			o,
-			&b,
-			r.Group.Template,
-		); !isCode(
-			err,
-			ErrManualRecovery,
-		) {
+		if err := s.discardWarm(o, &b, r.Group.Template); !isCode(err, ErrManualRecovery) {
 			t.Fatal("post-Find corruption reached dispatch", err)
 		}
-		if len(changed) == 0 ||
-			!bytes.Equal(changed, templateQuotaState(t, s)) {
+		if len(changed) == 0 || !bytes.Equal(changed, templateQuotaState(t, s)) {
 			t.Fatal("corruption was repaired or consumed")
 		}
 		if after, _ := e.counts(); after != n {
@@ -331,13 +265,7 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 	})
 	t.Run("fallback-history-keeps-original-generation", func(t *testing.T) {
 		s, _, p, tpl := warmFallbackFixture(t, true)
-		claim := ledgerExecute(
-			t,
-			s,
-			p,
-			"history-fallback",
-			Command{Action: "claim", TemplateID: tpl.ID},
-		)
+		claim := ledgerExecute(t, s, p, "history-fallback", Command{Action: "claim", TemplateID: tpl.ID})
 		o, err := s.store.byKey(s.ctx, p.TenantID, "history-fallback")
 		if err != nil {
 			t.Fatal(err)
@@ -346,27 +274,14 @@ func TestTemplateQuotaSelectionReplayBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.Group.Selection.Stage != "fallback_reserved" ||
-			r.Group.Identity == nil ||
+		if r.Group.Selection.Stage != "fallback_reserved" || r.Group.Identity == nil ||
 			r.Group.Identity.Instance == r.Group.Selection.Identity.Instance {
 			t.Fatal("replacement did not retain distinct original warm history")
 		}
 		old := templateQuotaCopy(r.Group.Selection)
 		s = ledgerRestart(t, s)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"history-pause",
-			Command{Action: "pause", SandboxID: claim.Sandbox.ID},
-		)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"history-release",
-			Command{Action: "release", SandboxID: claim.Sandbox.ID},
-		)
+		ledgerExecute(t, s, p, "history-pause", Command{Action: "pause", SandboxID: claim.Sandbox.ID})
+		ledgerExecute(t, s, p, "history-release", Command{Action: "release", SandboxID: claim.Sandbox.ID})
 		s = ledgerRestart(t, s)
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
@@ -494,10 +409,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 					t.Parallel()
 					permits <- struct{}{}
 					defer func() { <-permits }()
-					s, f, e, p, o, r := templateQuotaRejectedSelection(
-						t,
-						tc.history,
-					)
+					s, f, e, p, o, r := templateQuotaRejectedSelection(t, tc.history)
 					public, _ := s.store.operation(s.ctx, o.ID)
 					original := encode(public)
 					tc.damage(&r)
@@ -523,10 +435,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 						if !isCode(err, ErrManualRecovery) {
 							t.Fatal("startup accepted invalid selection", err)
 						}
-						if !bytes.Equal(
-							before,
-							templateQuotaReadOnlyState(t, opts),
-						) {
+						if !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 							t.Fatal("startup changed durable rows")
 						}
 					} else {
@@ -549,20 +458,10 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 						}
 						ledgerMoney(t, s, p.TenantID, 1, 256)
 					}
-					if after, afterFind := e.counts(); after != n ||
-						afterFind != finds {
-						t.Fatalf(
-							"unqualified Engine attempt: submit %d->%d find %d->%d",
-							n,
-							after,
-							finds,
-							afterFind,
-						)
+					if after, afterFind := e.counts(); after != n || afterFind != finds {
+						t.Fatalf("unqualified Engine attempt: submit %d->%d find %d->%d", n, after, finds, afterFind)
 					}
-					if _, err := f.GetVM(
-						context.Background(),
-						r.Group.Selection.Identity.VM,
-					); err != nil {
+					if _, err := f.GetVM(context.Background(), r.Group.Selection.Identity.VM); err != nil {
 						t.Fatal("resource disappeared", err)
 					}
 				},
@@ -624,12 +523,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 		s.mu.Lock()
 		s.closing = true
 		s.mu.Unlock()
-		o, err := s.Submit(
-			s.ctx,
-			p,
-			"selected-absence",
-			Command{Action: "claim", TemplateID: tpl.ID},
-		)
+		o, err := s.Submit(s.ctx, p, "selected-absence", Command{Action: "claim", TemplateID: tpl.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -655,13 +549,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 		}
 		e := &templateQuotaSelectionClient{Client: base}
 		s.opts.Engine = e
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"selected-release",
-			Command{Action: "release", SandboxID: r.Group.Subject.ID},
-		)
+		ledgerExecute(t, s, p, "selected-release", Command{Action: "release", SandboxID: r.Group.Subject.ID})
 		s = ledgerRestart(t, s)
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
@@ -671,8 +559,7 @@ func TestTemplateQuotaSelectionQualification(t *testing.T) {
 			t.Fatal("absence invented delete/replacement")
 		}
 		r, err = s.loadRecovery(r.ID)
-		if err != nil || r.Group.Selection.Deletion.Bound ||
-			r.Group.Selection.Stage != "cleanup_done" {
+		if err != nil || r.Group.Selection.Deletion.Bound || r.Group.Selection.Stage != "cleanup_done" {
 			t.Fatal("unbound absence destination invalid", err)
 		}
 	})
@@ -691,11 +578,7 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 					} else {
 						r.Group.Selection.Stage = damage
 					}
-					result, err := s.store.db.Exec(
-						`UPDATE resource_recovery SET body=? WHERE id=?`,
-						encode(r),
-						r.ID,
-					)
+					result, err := s.store.db.Exec(`UPDATE resource_recovery SET body=? WHERE id=?`, encode(r), r.ID)
 					if err = requireSQLWrite(result, err); err != nil {
 						t.Fatal(err)
 					}
@@ -704,25 +587,14 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 					opts := s.opts
 					opts.Initialize = false
 					if !startup {
-						if err = s.recoverResources(); !isCode(
-							err,
-							ErrManualRecovery,
-						) {
+						if err = s.recoverResources(); !isCode(err, ErrManualRecovery) {
 							t.Fatal("runtime consumed invalid destination", err)
 						}
 						if !bytes.Equal(before, templateQuotaState(t, s)) {
 							t.Fatal("runtime changed full responsibility")
 						}
-						if _, err = s.loadRecovery(
-							r.ID,
-						); !isCode(
-							err,
-							ErrManualRecovery,
-						) {
-							t.Fatal(
-								"durable read accepted incomplete context",
-								err,
-							)
+						if _, err = s.loadRecovery(r.ID); !isCode(err, ErrManualRecovery) {
+							t.Fatal("durable read accepted incomplete context", err)
 						}
 						ledgerMoney(t, s, p.TenantID, 1, 256)
 					}
@@ -736,18 +608,11 @@ func TestTemplateQuotaSelectionDestinationRequired(t *testing.T) {
 					if !isCode(err, ErrManualRecovery) {
 						t.Fatal("startup consumed invalid destination", err)
 					}
-					if !bytes.Equal(
-						before,
-						templateQuotaReadOnlyState(t, opts),
-					) {
+					if !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 						t.Fatal("startup repaired or retired responsibility")
 					}
 					if nn, ff := e.counts(); nn != n || ff != finds {
-						t.Fatal(
-							"invalid context reached Engine",
-							nn-n,
-							ff-finds,
-						)
+						t.Fatal("invalid context reached Engine", nn-n, ff-finds)
 					}
 					v, err := f.GetVM(context.Background(), i.VM)
 					if err != nil || v.Instance != i.Instance {
@@ -782,18 +647,12 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 			}
 			e := &templateQuotaSelectionClient{Client: hidden}
 			s.opts.Engine = e
-			o, err := s.Submit(
-				s.ctx,
-				p,
-				"typed-destination",
-				Command{Action: "claim", TemplateID: tpl.ID},
-			)
+			o, err := s.Submit(s.ctx, p, "typed-destination", Command{Action: "claim", TemplateID: tpl.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
 			_, err = s.Wait(s.ctx, p, o.ID)
-			if (tc.phase == "active" && err != nil) ||
-				(tc.phase != "active" && !isCode(err, ErrUnknown)) {
+			if (tc.phase == "active" && err != nil) || (tc.phase != "active" && !isCode(err, ErrUnknown)) {
 				t.Fatal("unexpected claim outcome", err)
 			}
 			if tc.phase == "known" || tc.phase == "cleanup" {
@@ -818,9 +677,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 					t.Fatal("expected retained known or cleanup destination")
 				}
 				if tc.phase == "known" {
-					if _, err = s.store.db.Exec(
-						`DROP TRIGGER handoff_fault`,
-					); err != nil {
+					if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -840,8 +697,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 				"cleanup": "cleanup",
 				"active":  "active",
 			}
-			if r.Group.Selection.Stage != "fallback_reserved" ||
-				a.Resolution.State != states[tc.phase] {
+			if r.Group.Selection.Stage != "fallback_reserved" || a.Resolution.State != states[tc.phase] {
 				t.Fatal("missing actual destination", encode(r))
 			}
 			// Reopen each valid phase before corrupting it. Failed unknown pending
@@ -899,11 +755,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 				t.Fatal(err)
 			}
 			if n, err := result.RowsAffected(); err != nil || n != 1 {
-				t.Fatal(
-					"reference mutation must affect one producer row",
-					n,
-					err,
-				)
+				t.Fatal("reference mutation must affect one producer row", n, err)
 			}
 			before := templateQuotaState(t, s)
 			n, finds := e.counts()
@@ -927,12 +779,8 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 			if next != nil {
 				next.Close()
 			}
-			if !isCode(openErr, ErrManualRecovery) ||
-				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
-				t.Fatal(
-					"startup accepted or repaired incomplete destination",
-					openErr,
-				)
+			if !isCode(openErr, ErrManualRecovery) || !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+				t.Fatal("startup accepted or repaired incomplete destination", openErr)
 			}
 			if nn, ff := e.counts(); nn != n || ff != finds {
 				t.Fatal("incomplete destination reached Engine", nn-n, ff-finds)
@@ -959,13 +807,7 @@ func TestTemplateQuotaDestinationReferenceKinds(t *testing.T) {
 
 func TestTemplateQuotaActiveAndCleanupReferenceLifecycle(t *testing.T) {
 	s, base, p, tpl := warmFallbackFixture(t, true)
-	claim := ledgerExecute(
-		t,
-		s,
-		p,
-		"typed-positive",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	claim := ledgerExecute(t, s, p, "typed-positive", Command{Action: "claim", TemplateID: tpl.ID})
 	o, err := s.store.byKey(s.ctx, p.TenantID, "typed-positive")
 	if err != nil {
 		t.Fatal(err)
@@ -979,8 +821,7 @@ func TestTemplateQuotaActiveAndCleanupReferenceLifecycle(t *testing.T) {
 	for _, kind := range []string{"active_use", "cleanup"} {
 		var count int
 		if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND holder_kind=? AND holder_id=?`, p.TenantID, i.VM, kind, "sandbox:"+claim.Sandbox.ID).
-			Scan(&count); err != nil ||
-			count != 1 {
+			Scan(&count); err != nil || count != 1 {
 			t.Fatal("missing natural coexisting holder", kind, count, err)
 		}
 	}

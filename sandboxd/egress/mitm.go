@@ -21,12 +21,7 @@ const (
 
 // serveTunnel keeps the original tracked/idle connection underneath TLS. The
 // worker is registered under the same lock that prevents additions at revoke.
-func (b *binding) serveTunnel(
-	client net.Conn,
-	ctx *goproxy.ProxyCtx,
-	proxy *goproxy.ProxyHttpServer,
-	t tunnel,
-) {
+func (b *binding) serveTunnel(client net.Conn, ctx *goproxy.ProxyCtx, proxy *goproxy.ProxyHttpServer, t tunnel) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -38,15 +33,10 @@ func (b *binding) serveTunnel(
 	defer b.workers.Done()
 	defer func() { _ = client.Close() }()
 
-	if err := client.SetDeadline(
-		time.Now().Add(b.manager.opts.DialTimeout),
-	); err != nil {
+	if err := client.SetDeadline(time.Now().Add(b.manager.opts.DialTimeout)); err != nil {
 		return
 	}
-	if _, err := io.WriteString(
-		client,
-		"HTTP/1.1 200 Connection established\r\n\r\n",
-	); err != nil {
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 		return
 	}
 	reader := bufio.NewReaderSize(client, 4096)
@@ -58,11 +48,7 @@ func (b *binding) serveTunnel(
 	// any request line or headers, and retain any buffered handshake bytes.
 	if first[0] != 0x16 {
 		_ = b.audit("", "CONNECT", "deny", "tls_required")
-		_ = deniedResponse(
-			ctx.Req,
-			http.StatusForbidden,
-			"egress: request denied\n",
-		).Write(client)
+		_ = deniedResponse(ctx.Req, http.StatusForbidden, "egress: request denied\n").Write(client)
 		return
 	}
 	cfg, err := b.tunnelTLSConfig(t, ctx)
@@ -97,9 +83,7 @@ func (b *binding) serveTunnel(
 				r.URL.Scheme = "https"
 				r.URL.Host = r.Host
 			}
-			r = r.WithContext(
-				context.WithValue(r.Context(), tunnelContextKey{}, t),
-			)
+			r = r.WithContext(context.WithValue(r.Context(), tunnelContextKey{}, t))
 			proxy.ServeHTTP(w, r)
 		}),
 		ConnState: func(_ net.Conn, state http.ConnState) {
@@ -114,16 +98,8 @@ func (b *binding) serveTunnel(
 	_ = server.Serve(listener)
 }
 
-func (b *binding) tunnelTLSConfig(
-	t tunnel,
-	ctx *goproxy.ProxyCtx,
-) (*tls.Config, error) {
-	cfg, err := goproxy.TLSConfigFromCA(
-		&b.manager.ca,
-	)(
-		net.JoinHostPort(t.host, t.port),
-		ctx,
-	)
+func (b *binding) tunnelTLSConfig(t tunnel, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
+	cfg, err := goproxy.TLSConfigFromCA(&b.manager.ca)(net.JoinHostPort(t.host, t.port), ctx)
 	if err != nil {
 		return nil, ErrDenied
 	}
@@ -149,9 +125,7 @@ type bufferedTunnelConn struct {
 	reader *bufio.Reader
 }
 
-func (c *bufferedTunnelConn) Read(
-	p []byte,
-) (int, error) {
+func (c *bufferedTunnelConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
 

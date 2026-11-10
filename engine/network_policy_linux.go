@@ -66,9 +66,7 @@ func renderNetworkPolicy(p *api.NetworkPolicy) string {
  }
 `, p.MaxConnections)
 	}
-	rules.WriteString(
-		" chain forward { type filter hook forward priority filter; policy drop;\n",
-	)
+	rules.WriteString(" chain forward { type filter hook forward priority filter; policy drop;\n")
 	if p != nil {
 		rules.WriteString(`  meta nfproto != ipv4 drop
   ct state invalid drop
@@ -109,11 +107,7 @@ func networkRulesHash(data []byte) (string, error) {
 		}
 		for kind, raw := range entry {
 			var object map[string]json.RawMessage
-			if err := json.Unmarshal(
-				raw,
-				&object,
-			); err != nil ||
-				object == nil {
+			if err := json.Unmarshal(raw, &object); err != nil || object == nil {
 				return "", api.Fail(api.Unknown, "invalid nft %s object", kind)
 			}
 			delete(object, "handle")
@@ -133,39 +127,18 @@ func networkRulesHash(data []byte) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func (b *CloudHypervisor) networkPolicyHash(
-	ctx context.Context,
-	r Resource,
-) (string, error) {
+func (b *CloudHypervisor) networkPolicyHash(ctx context.Context, r Resource) (string, error) {
 	ns, _, _, _, _, _ := netNames(r)
-	out, err := command(
-		ctx,
-		"ip",
-		"netns",
-		"exec",
-		ns,
-		"nft",
-		"-j",
-		"-s",
-		"list",
-		"ruleset",
-	)
+	out, err := command(ctx, "ip", "netns", "exec", ns, "nft", "-j", "-s", "list", "ruleset")
 	if err != nil {
 		return "", err
 	}
 	return networkRulesHash(out)
 }
 
-func (b *CloudHypervisor) InstallNetworkPolicy(
-	ctx context.Context,
-	r Resource,
-	p *api.NetworkPolicy,
-) error {
+func (b *CloudHypervisor) InstallNetworkPolicy(ctx context.Context, r Resource, p *api.NetworkPolicy) error {
 	if r.Instance == "" {
-		return api.Fail(
-			api.Invalid,
-			"direct policy requires a running instance identity",
-		)
+		return api.Fail(api.Invalid, "direct policy requires a running instance identity")
 	}
 	if err := validateNetworkPolicy(p); err != nil {
 		return err
@@ -175,25 +148,15 @@ func (b *CloudHypervisor) InstallNetworkPolicy(
 		return err
 	}
 	if active {
-		return api.Fail(
-			api.Conflict,
-			"all owned interfaces must be down before policy replacement",
-		)
+		return api.Fail(api.Conflict, "all owned interfaces must be down before policy replacement")
 	}
-	if _, err = os.Stat(
-		filepath.Join(r.Dir, "network-removing.json"),
-	); err == nil {
+	if _, err = os.Stat(filepath.Join(r.Dir, "network-removing.json")); err == nil {
 		return api.Fail(api.Conflict, "network cleanup in progress")
-	} else if !os.IsNotExist(
-		err,
-	) {
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	var nsReceipt networkReceipt
-	if err = readJSON(
-		filepath.Join(r.Dir, "network.json"),
-		&nsReceipt,
-	); err != nil {
+	if err = readJSON(filepath.Join(r.Dir, "network.json"), &nsReceipt); err != nil {
 		return err
 	}
 	// A new key with an identical policy is a verified no-op. Stale receipts or
@@ -204,9 +167,7 @@ func (b *CloudHypervisor) InstallNetworkPolicy(
 	ns, _, _, _, _, _ := netNames(r)
 	// add is deliberately non-exclusive. Add/delete/recreate is one atomic nft
 	// transaction, works with an absent table, and never flushes foreign tables.
-	rules := "add table inet engine_policy\ndelete table inet engine_policy\n" + renderNetworkPolicy(
-		p,
-	)
+	rules := "add table inet engine_policy\ndelete table inet engine_policy\n" + renderNetworkPolicy(p)
 	if err = namespaceNFT(ctx, ns, rules); err != nil {
 		return err
 	}
@@ -226,11 +187,7 @@ func (b *CloudHypervisor) InstallNetworkPolicy(
 	)
 }
 
-func (b *CloudHypervisor) VerifyNetworkPolicy(
-	ctx context.Context,
-	r Resource,
-	p *api.NetworkPolicy,
-) error {
+func (b *CloudHypervisor) VerifyNetworkPolicy(ctx context.Context, r Resource, p *api.NetworkPolicy) error {
 	if err := validateNetworkPolicy(p); err != nil {
 		return err
 	}
@@ -238,26 +195,14 @@ func (b *CloudHypervisor) VerifyNetworkPolicy(
 		return err
 	}
 	var receipt networkPolicyReceipt
-	if err := readJSON(
-		filepath.Join(r.Dir, "network-policy.json"),
-		&receipt,
-	); err != nil {
-		return api.Fail(
-			api.Unknown,
-			"network policy receipt unavailable: %v",
-			err,
-		)
+	if err := readJSON(filepath.Join(r.Dir, "network-policy.json"), &receipt); err != nil {
+		return api.Fail(api.Unknown, "network policy receipt unavailable: %v", err)
 	}
 	var nsReceipt networkReceipt
-	if err := readJSON(
-		filepath.Join(r.Dir, "network.json"),
-		&nsReceipt,
-	); err != nil {
+	if err := readJSON(filepath.Join(r.Dir, "network.json"), &nsReceipt); err != nil {
 		return err
 	}
-	if receipt.Version != 1 || r.Instance == "" ||
-		receipt.Instance != r.Instance ||
-		receipt.Namespace != nsReceipt ||
+	if receipt.Version != 1 || r.Instance == "" || receipt.Instance != r.Instance || receipt.Namespace != nsReceipt ||
 		!reflect.DeepEqual(receipt.Policy, p) {
 		return api.Fail(
 			api.Conflict,
@@ -266,17 +211,10 @@ func (b *CloudHypervisor) VerifyNetworkPolicy(
 	}
 	hash, err := b.networkPolicyHash(ctx, r)
 	if err != nil {
-		return api.Fail(
-			api.Unknown,
-			"network policy kernel verification failed: %v",
-			err,
-		)
+		return api.Fail(api.Unknown, "network policy kernel verification failed: %v", err)
 	}
 	if receipt.RulesHash != hash {
-		return api.Fail(
-			api.Unknown,
-			"namespace rules differ from the installed network policy",
-		)
+		return api.Fail(api.Unknown, "namespace rules differ from the installed network policy")
 	}
 	return nil
 }

@@ -42,10 +42,7 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 		return err
 	}
 	if len(data) > 64<<20 {
-		return api.Fail(
-			api.Incompatible,
-			"snapshot state exceeds validation limit",
-		)
+		return api.Fail(api.Incompatible, "snapshot state exceeds validation limit")
 	}
 	var snapshot struct {
 		Snapshots map[string]struct {
@@ -59,10 +56,7 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 	}
 	manager := snapshot.Snapshots["memory-manager"]
 	if manager.Data == nil {
-		return api.Fail(
-			api.Incompatible,
-			"snapshot memory manager state missing",
-		)
+		return api.Fail(api.Incompatible, "snapshot memory manager state missing")
 	}
 	var state struct {
 		MemoryRanges struct {
@@ -75,13 +69,9 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 	if err = json.Unmarshal([]byte(manager.Data.State), &state); err != nil {
 		return api.Fail(api.Incompatible, "invalid saved RAM topology")
 	}
-	if state.BootRAM != memoryBytes || state.CurrentRAM != memoryBytes ||
-		len(state.Mappings) == 0 ||
+	if state.BootRAM != memoryBytes || state.CurrentRAM != memoryBytes || len(state.Mappings) == 0 ||
 		len(state.Mappings) != len(state.MemoryRanges.Data) {
-		return api.Fail(
-			api.Incompatible,
-			"COW requires complete static RAM ranges",
-		)
+		return api.Fail(api.Incompatible, "COW requires complete static RAM ranges")
 	}
 	page := uint64(os.Getpagesize())
 	sort.Slice(
@@ -90,8 +80,7 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 	)
 	var total, end uint64
 	for i, mapping := range state.Mappings {
-		if mapping.Size == 0 || mapping.GPA%page != 0 ||
-			mapping.Size%page != 0 ||
+		if mapping.Size == 0 || mapping.GPA%page != 0 || mapping.Size%page != 0 ||
 			mapping.GPA+mapping.Size < mapping.GPA ||
 			mapping.VirtioMem ||
 			mapping.ZoneID != "mem0" ||
@@ -100,12 +89,8 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 			return api.Fail(api.Incompatible, "unsupported COW RAM region")
 		}
 		saved := state.MemoryRanges.Data[i]
-		if saved.GPA != mapping.GPA || saved.Length != mapping.Size ||
-			total+mapping.Size < total {
-			return api.Fail(
-				api.Incompatible,
-				"saved range does not cover one private RAM region",
-			)
+		if saved.GPA != mapping.GPA || saved.Length != mapping.Size || total+mapping.Size < total {
+			return api.Fail(api.Incompatible, "saved range does not cover one private RAM region")
 		}
 		total += mapping.Size
 		end = mapping.GPA + mapping.Size
@@ -114,23 +99,15 @@ func validateCOWTopology(dir string, memoryBytes uint64) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || total != memoryBytes ||
-		uint64(info.Size()) != total {
-		return api.Fail(
-			api.Incompatible,
-			"COW memory file length does not match saved ranges",
-		)
+	if !info.Mode().IsRegular() || total != memoryBytes || uint64(info.Size()) != total {
+		return api.Fail(api.Incompatible, "COW memory file length does not match saved ranges")
 	}
 	return nil
 }
 
 // Verify the actual retained inode is mapped MAP_PRIVATE over every saved byte.
 // An accepted API request alone cannot establish that CH avoided eager copying.
-func verifyCOWFileMappings(
-	maps io.Reader,
-	backing *unix.Stat_t,
-	size uint64,
-) error {
+func verifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) error {
 	type extent struct{ offset, end uint64 }
 	var extents []extent
 	scanner := bufio.NewScanner(maps)
@@ -155,16 +132,12 @@ func verifyCOWFileMappings(
 		if err != nil {
 			return err
 		}
-		if inode != backing.Ino ||
-			unix.Mkdev(uint32(major), uint32(minor)) != uint64(backing.Dev) {
+		if inode != backing.Ino || unix.Mkdev(uint32(major), uint32(minor)) != uint64(backing.Dev) {
 			continue
 		}
 		startText, endText, ok := strings.Cut(fields[0], "-")
 		if !ok || fields[1] != "rw-p" {
-			return api.Fail(
-				api.Incompatible,
-				"COW backing is not mapped private writable",
-			)
+			return api.Fail(api.Incompatible, "COW backing is not mapped private writable")
 		}
 		start, err := strconv.ParseUint(startText, 16, 64)
 		if err != nil {
@@ -179,10 +152,7 @@ func verifyCOWFileMappings(
 			return err
 		}
 		if end <= start || end-start > size || offset > size-(end-start) {
-			return api.Fail(
-				api.Incompatible,
-				"COW mapping exceeds retained memory file",
-			)
+			return api.Fail(api.Incompatible, "COW mapping exceeds retained memory file")
 		}
 		extents = append(extents, extent{offset, offset + end - start})
 	}
@@ -196,18 +166,12 @@ func verifyCOWFileMappings(
 	var covered uint64
 	for _, extent := range extents {
 		if extent.offset != covered {
-			return api.Fail(
-				api.Incompatible,
-				"COW memory mappings have gaps or aliases",
-			)
+			return api.Fail(api.Incompatible, "COW memory mappings have gaps or aliases")
 		}
 		covered = extent.end
 	}
 	if size == 0 || covered != size {
-		return api.Fail(
-			api.Incompatible,
-			"VMM did not map the complete retained COW backing",
-		)
+		return api.Fail(api.Incompatible, "VMM did not map the complete retained COW backing")
 	}
 	return nil
 }
@@ -218,16 +182,10 @@ func (b *CloudHypervisor) verifyCOWMappings(r Resource) error {
 		return err
 	}
 	if !alive {
-		return api.Fail(
-			api.ManualRecovery,
-			"restored VMM exited before COW verification",
-		)
+		return api.Fail(api.ManualRecovery, "restored VMM exited before COW verification")
 	}
 	var backing unix.Stat_t
-	if err = unix.Stat(
-		filepath.Join(r.RestoreDir, "memory-ranges"),
-		&backing,
-	); err != nil {
+	if err = unix.Stat(filepath.Join(r.RestoreDir, "memory-ranges"), &backing); err != nil {
 		return err
 	}
 	maps, err := os.Open(fmt.Sprintf("/proc/%d/maps", process.PID))
@@ -235,19 +193,12 @@ func (b *CloudHypervisor) verifyCOWMappings(r Resource) error {
 		return err
 	}
 	defer func() { _ = maps.Close() }()
-	if err = verifyCOWFileMappings(
-		maps,
-		&backing,
-		uint64(backing.Size),
-	); err != nil {
+	if err = verifyCOWFileMappings(maps, &backing, uint64(backing.Size)); err != nil {
 		return err
 	}
 	start, _, err := procStart(process.PID)
 	if err != nil || start != process.StartTime {
-		return api.Fail(
-			api.ManualRecovery,
-			"VMM identity changed during COW verification",
-		)
+		return api.Fail(api.ManualRecovery, "VMM identity changed during COW verification")
 	}
 	return nil
 }

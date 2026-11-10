@@ -46,25 +46,14 @@ func (b *testBackend) Prepare(_ context.Context, r Resource) error {
 		}
 	}
 	if _, e := os.Stat(r.Disk); os.IsNotExist(e) {
-		if e = os.WriteFile(
-			r.Disk,
-			[]byte("disk-generation-1"),
-			0o600,
-		); e != nil {
+		if e = os.WriteFile(r.Disk, []byte("disk-generation-1"), 0o600); e != nil {
 			return e
 		}
 	}
-	return os.WriteFile(
-		filepath.Join(r.ImageDir, "image.json"),
-		[]byte(`{"format":1}`),
-		0o600,
-	)
+	return os.WriteFile(filepath.Join(r.ImageDir, "image.json"), []byte(`{"format":1}`), 0o600)
 }
 
-func (b *testBackend) Inspect(
-	_ context.Context,
-	r Resource,
-) (Observation, error) {
+func (b *testBackend) Inspect(_ context.Context, r Resource) (Observation, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.states[r.Instance], b.inspectError
@@ -123,11 +112,7 @@ func (b *testBackend) Pause(ctx context.Context, r Resource) error {
 	return nil
 }
 
-func (b *testBackend) Capture(
-	ctx context.Context,
-	r Resource,
-	dst string,
-) error {
+func (b *testBackend) Capture(ctx context.Context, r Resource, dst string) error {
 	if b.captureGate != nil {
 		select {
 		case <-b.captureGate:
@@ -186,13 +171,7 @@ func config() *api.Config {
 	}
 }
 
-func openTest(
-	t *testing.T,
-	dir string,
-	b Backend,
-	init bool,
-	fault func(string) error,
-) *Engine {
+func openTest(t *testing.T, dir string, b Backend, init bool, fault func(string) error) *Engine {
 	t.Helper()
 	if init {
 		if err := os.Chmod(dir, 0o700); err != nil {
@@ -324,25 +303,15 @@ func TestLifecycleIdempotencyAndIndependentDeletion(t *testing.T) {
 			NetworkEnabled:   true,
 		},
 	)
-	s := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: a.VMID},
-	)
+	s := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: a.VMID})
 	sr, _ := e.loadSnapshot(context.Background(), s.SnapshotID)
 	disk, err := os.ReadFile(filepath.Join(sr.Dir, "disk.raw"))
 	if err != nil || string(disk) != "disk-generation-1" {
 		t.Fatalf("disk captured after source resume: %q %v", disk, err)
 	}
-	child := wait(
-		t,
-		e,
-		api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID},
-	)
+	child := wait(t, e, api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID})
 	cr, _ := e.loadVM(context.Background(), child.VMID)
-	before, err := os.Stat(
-		filepath.Join(cr.Resource.RestoreDir, "memory-ranges"),
-	)
+	before, err := os.Stat(filepath.Join(cr.Resource.RestoreDir, "memory-ranges"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,11 +319,7 @@ func TestLifecycleIdempotencyAndIndependentDeletion(t *testing.T) {
 	if !os.SameFile(before, source) {
 		t.Fatal("COW backing not hardline")
 	}
-	wait(
-		t,
-		e,
-		api.Request{Key: "delete-source", Action: "delete", VMID: a.VMID},
-	)
+	wait(t, e, api.Request{Key: "delete-source", Action: "delete", VMID: a.VMID})
 	wait(
 		t,
 		e,
@@ -364,9 +329,7 @@ func TestLifecycleIdempotencyAndIndependentDeletion(t *testing.T) {
 			SnapshotID: s.SnapshotID,
 		},
 	)
-	if _, err = os.Stat(
-		filepath.Join(cr.Resource.RestoreDir, "memory-ranges"),
-	); err != nil {
+	if _, err = os.Stat(filepath.Join(cr.Resource.RestoreDir, "memory-ranges")); err != nil {
 		t.Fatal("snapshot deletion broke backing", err)
 	}
 	if _, err = os.Stat(cr.Resource.Disk); err != nil {
@@ -377,11 +340,7 @@ func TestLifecycleIdempotencyAndIndependentDeletion(t *testing.T) {
 		t.Fatalf("clone failed independence %+v %v", vm, err)
 	}
 	wait(t, e, api.Request{Key: "stop-child", Action: "stop", VMID: child.VMID})
-	wait(
-		t,
-		e,
-		api.Request{Key: "delete-child", Action: "delete", VMID: child.VMID},
-	)
+	wait(t, e, api.Request{Key: "delete-child", Action: "delete", VMID: child.VMID})
 	vms, _ := e.ListVMs(context.Background())
 	snaps, _ := e.ListSnapshots(context.Background())
 	if len(vms) != 0 || len(snaps) != 0 {
@@ -447,14 +406,9 @@ type instanceRecoveryBackend struct {
 	networkOn   atomic.Int32
 }
 
-func (b *instanceRecoveryBackend) Launch(
-	ctx context.Context,
-	r Resource,
-	restore bool,
-) error {
+func (b *instanceRecoveryBackend) Launch(ctx context.Context, r Resource, restore bool) error {
 	b.launchCalls.Add(1)
-	interrupt := b.armed.Load() &&
-		(b.boundary == "instance_persisted" || b.boundary == "launch_unrecorded")
+	interrupt := b.armed.Load() && (b.boundary == "instance_persisted" || b.boundary == "launch_unrecorded")
 	if interrupt && b.boundary == "instance_persisted" {
 		b.armed.Store(false)
 		close(b.interrupted)
@@ -476,19 +430,12 @@ func (b *instanceRecoveryBackend) Stop(ctx context.Context, r Resource) error {
 	return b.testBackend.Stop(ctx, r)
 }
 
-func (b *instanceRecoveryBackend) Remove(
-	ctx context.Context,
-	r Resource,
-) error {
+func (b *instanceRecoveryBackend) Remove(ctx context.Context, r Resource) error {
 	b.removes.Add(1)
 	return b.testBackend.Remove(ctx, r)
 }
 
-func (b *instanceRecoveryBackend) Network(
-	ctx context.Context,
-	r Resource,
-	on bool,
-) error {
+func (b *instanceRecoveryBackend) Network(ctx context.Context, r Resource, on bool) error {
 	if on {
 		b.networkOn.Add(1)
 	}
@@ -505,10 +452,7 @@ type instanceRecoveryFixture struct {
 	record  opRecord
 }
 
-func newInstanceRecoveryFixture(
-	t *testing.T,
-	action, boundary string,
-) *instanceRecoveryFixture {
+func newInstanceRecoveryFixture(t *testing.T, action, boundary string) *instanceRecoveryFixture {
 	t.Helper()
 	b := &instanceRecoveryBackend{
 		testBackend: newTestBackend(),
@@ -524,23 +468,11 @@ func newInstanceRecoveryFixture(
 		return nil
 	})
 	t.Cleanup(func() { _ = f.e.Close() })
-	vm := wait(
-		t,
-		f.e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	wait(
-		t,
-		f.e,
-		api.Request{Key: "first-start", Action: "start", VMID: vm.VMID},
-	)
+	vm := wait(t, f.e, api.Request{Key: "create", Action: "create", Config: config()})
+	wait(t, f.e, api.Request{Key: "first-start", Action: "start", VMID: vm.VMID})
 	f.request = api.Request{Key: "conditional", Action: action, VMID: vm.VMID}
 	if action == "restore" {
-		snapshot := wait(
-			t,
-			f.e,
-			api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-		)
+		snapshot := wait(t, f.e, api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID})
 		f.request.SnapshotID = snapshot.SnapshotID
 	}
 	wait(t, f.e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
@@ -594,10 +526,7 @@ func (b *instanceRecoveryBackend) effects() instanceRecoveryEffects {
 	}
 }
 
-func (f *instanceRecoveryFixture) mutate(
-	t *testing.T,
-	change func(*opRecord, *vmRecord),
-) {
+func (f *instanceRecoveryFixture) mutate(t *testing.T, change func(*opRecord, *vmRecord)) {
 	t.Helper()
 	lock := f.e.vmLock(f.op.VMID)
 	lock.Lock()
@@ -635,28 +564,16 @@ func restoreCandidateFixture(
 		}
 		return nil
 	})
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	snap := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-	)
+	snap := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID})
 	request := api.Request{
 		Key:        "clone",
 		Action:     "clone",
 		SnapshotID: snap.SnapshotID,
 	}
 	if len(actions) != 0 && actions[0] == "restore" {
-		wait(
-			t,
-			e,
-			api.Request{Key: "stop-source", Action: "stop", VMID: vm.VMID},
-		)
+		wait(t, e, api.Request{Key: "stop-source", Action: "stop", VMID: vm.VMID})
 		request.Action, request.VMID = "restore", vm.VMID
 	}
 	armed.Store(true)

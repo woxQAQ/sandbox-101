@@ -28,18 +28,12 @@ import (
 // egress guard accepts the destination without host DNS.
 type publicAddrResolver struct{}
 
-func (publicAddrResolver) LookupNetIP(
-	context.Context,
-	string,
-	string,
-) ([]netip.Addr, error) {
+func (publicAddrResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
 	return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 }
 
 // upstreamDialer routes every guarded numeric dial to the local test upstream.
-func upstreamDialer(
-	target string,
-) func(context.Context, string, string) (net.Conn, error) {
+func upstreamDialer(target string) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		h, _, err := net.SplitHostPort(addr)
 		if err != nil || net.ParseIP(h) == nil {
@@ -53,9 +47,7 @@ func upstreamDialer(
 // egress.Manager. Guest proxy listeners live under the fake engine's private
 // socket directory; upstream dials reach only the local test server. The
 // returned factory builds a fresh manager for a simulated daemon restart.
-func egressFixture(
-	t *testing.T,
-) (*Service, *fakeEngine, *fakeAgent, Principal, func() *egress.Manager) {
+func egressFixture(t *testing.T) (*Service, *fakeEngine, *fakeAgent, Principal, func() *egress.Manager) {
 	t.Helper()
 	upstream := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,11 +127,7 @@ func egressFixture(
 
 // restartEgress reopens the service on the same state directory with a fresh
 // egress manager, modeling a daemon restart.
-func restartEgress(
-	t *testing.T,
-	s *Service,
-	newManager func() *egress.Manager,
-) *Service {
+func restartEgress(t *testing.T, s *Service, newManager func() *egress.Manager) *Service {
 	t.Helper()
 	opts := s.opts
 	opts.Initialize = false
@@ -164,14 +152,7 @@ func requireDataReadyBlocked(t *testing.T, s *Service, p Principal, id string) {
 	}
 }
 
-func claimRelay(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	key string,
-	env map[string]EnvVar,
-	policy egress.Policy,
-) Result {
+func claimRelay(t *testing.T, s *Service, p Principal, key string, env map[string]EnvVar, policy egress.Policy) Result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -198,11 +179,7 @@ func claimRelay(
 // proxyHTTPPath locates the live relay listener of a claimed sandbox.
 func proxyHTTPPath(t *testing.T, s *Service, f *fakeEngine, id string) string {
 	t.Helper()
-	b, err := s.Get(
-		context.Background(),
-		Principal{Root: true, TenantID: "root"},
-		id,
-	)
+	b, err := s.Get(context.Background(), Principal{Root: true, TenantID: "root"}, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,12 +226,7 @@ func holdTunnel(t *testing.T, httpPath, authority string) net.Conn {
 		t.Fatal(err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err = fmt.Fprintf(
-		conn,
-		"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
-		authority,
-		authority,
-	); err != nil {
+	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", authority, authority); err != nil {
 		t.Fatal(err)
 	}
 	reader := bufio.NewReader(conn)
@@ -317,11 +289,7 @@ func rotatedSecretEnv(value string) map[string]EnvVar {
 
 // gateAgent consumes one gate per call. Cleanup always releases a blocked
 // worker, including when an assertion fails before the explicit release.
-func gateAgent(
-	t *testing.T,
-	a *fakeAgent,
-	phase string,
-) (<-chan struct{}, func()) {
+func gateAgent(t *testing.T, a *fakeAgent, phase string) (<-chan struct{}, func()) {
 	t.Helper()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -368,10 +336,7 @@ type workloadRelayAgent struct {
 	peers chan net.Conn
 }
 
-func (a *workloadRelayAgent) Connect(
-	ctx context.Context,
-	_ api.VM,
-) (net.Conn, error) {
+func (a *workloadRelayAgent) Connect(ctx context.Context, _ api.VM) (net.Conn, error) {
 	up, peer := net.Pipe()
 	select {
 	case a.peers <- peer:
@@ -385,13 +350,7 @@ func (a *workloadRelayAgent) Connect(
 
 // openWorkloadRelay returns the client and guest endpoints only after the real
 // Service has admitted and tracked both sides. Cleanup joins the hijacked handler.
-func openWorkloadRelay(
-	t *testing.T,
-	s *Service,
-	a *workloadRelayAgent,
-	p Principal,
-	id string,
-) (net.Conn, net.Conn) {
+func openWorkloadRelay(t *testing.T, s *Service, a *workloadRelayAgent, p Principal, id string) (net.Conn, net.Conn) {
 	t.Helper()
 	done := make(chan struct{})
 	server := httptest.NewServer(
@@ -425,11 +384,7 @@ func openWorkloadRelay(
 		}
 	})
 	var err error
-	client, err = net.DialTimeout(
-		"tcp",
-		server.Listener.Addr().String(),
-		2*time.Second,
-	)
+	client, err = net.DialTimeout("tcp", server.Listener.Addr().String(), 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,10 +416,7 @@ func exchangeWorkload(t *testing.T, client, guest net.Conn) {
 	}{{client, guest, "client-to-guest"}, {guest, client, "guest-to-client"}} {
 		_ = direction.from.SetDeadline(time.Now().Add(3 * time.Second))
 		_ = direction.to.SetDeadline(time.Now().Add(3 * time.Second))
-		if _, err := io.WriteString(
-			direction.from,
-			direction.payload,
-		); err != nil {
+		if _, err := io.WriteString(direction.from, direction.payload); err != nil {
 			t.Fatalf("workload write: %v", err)
 		}
 		data := make([]byte, len(direction.payload))
@@ -520,18 +472,11 @@ func (a *admissionStreamAgent) stream(ctx context.Context) (net.Conn, error) {
 	return up, nil
 }
 
-func (a *admissionStreamAgent) Connect(
-	ctx context.Context,
-	_ api.VM,
-) (net.Conn, error) {
+func (a *admissionStreamAgent) Connect(ctx context.Context, _ api.VM) (net.Conn, error) {
 	return a.stream(ctx)
 }
 
-func (a *admissionStreamAgent) Forward(
-	ctx context.Context,
-	_ api.VM,
-	_ int,
-) (net.Conn, error) {
+func (a *admissionStreamAgent) Forward(ctx context.Context, _ api.VM, _ int) (net.Conn, error) {
 	return a.stream(ctx)
 }
 
@@ -583,13 +528,7 @@ func startAdmissionHTTP(
 	path := "/connect"
 	if mode == "preview" {
 		var err error
-		path, err = s.PreviewURL(
-			context.Background(),
-			p,
-			b.ID,
-			8080,
-			time.Minute,
-		)
+		path, err = s.PreviewURL(context.Background(), p, b.ID, 8080, time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -605,11 +544,7 @@ func startAdmissionHTTP(
 			}
 		}),
 	)
-	client, err := net.DialTimeout(
-		"tcp",
-		server.Listener.Addr().String(),
-		2*time.Second,
-	)
+	client, err := net.DialTimeout("tcp", server.Listener.Addr().String(), 2*time.Second)
 	if err != nil {
 		server.Close()
 		t.Fatal(err)
@@ -662,14 +597,7 @@ func admissionPeer(t *testing.T, a *admissionStreamAgent) net.Conn {
 	}
 }
 
-func requireAdmissionSource(
-	t *testing.T,
-	s *Service,
-	f *fakeEngine,
-	p Principal,
-	before Sandbox,
-	activations int,
-) {
+func requireAdmissionSource(t *testing.T, s *Service, f *fakeEngine, p Principal, before Sandbox, activations int) {
 	t.Helper()
 	after, err := s.Get(context.Background(), p, before.ID)
 	if err != nil || after.State != "running" || after.Policy.Mode != "none" ||
@@ -689,13 +617,7 @@ func requireAdmissionSource(
 	}
 }
 
-func submitGatedConfigure(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	id string,
-	gate *configureRevokeGate,
-) {
+func submitGatedConfigure(t *testing.T, s *Service, p Principal, id string, gate *configureRevokeGate) {
 	t.Helper()
 	gate.armed.Store(true)
 	submitted := make(chan Operation, 1)
@@ -717,10 +639,7 @@ func submitGatedConfigure(
 		select {
 		case o := <-submitted:
 			if o.ID != "" {
-				waitCtx, stop := context.WithTimeout(
-					context.Background(),
-					5*time.Second,
-				)
+				waitCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 				defer stop()
 				if _, err := s.Wait(waitCtx, p, o.ID); err != nil {
 					t.Error("configure completion", err)
@@ -743,8 +662,7 @@ func requirePendingConfigure(t *testing.T, s *Service, id string) string {
 		}
 		if fence != "" {
 			o, err := s.store.operation(ctx, fence)
-			if err != nil || o.Status != "pending" ||
-				o.Command.Action != "configure" {
+			if err != nil || o.Status != "pending" || o.Command.Action != "configure" {
 				t.Fatal("configure fence lacks durable pending intent", err)
 			}
 			return fence
@@ -808,11 +726,7 @@ func TestConfigureEgressAdmissionRejectsConcurrentIntent(t *testing.T) {
 			}
 			if boundary == "none_cleanup_autorenew" {
 				b.AutoRenew = true
-				if err = saveSandbox(
-					context.Background(),
-					s.store.db,
-					b,
-				); err != nil {
+				if err = saveSandbox(context.Background(), s.store.db, b); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -834,15 +748,7 @@ func TestConfigureEgressAdmissionRejectsConcurrentIntent(t *testing.T) {
 			} else {
 				a.armed.Store(true)
 			}
-			client, reader := startAdmissionHTTP(
-				t,
-				s,
-				a,
-				p,
-				b,
-				mode,
-				mode == "relay",
-			)
+			client, reader := startAdmissionHTTP(t, s, a, p, b, mode, mode == "relay")
 			if cleanup {
 				awaitAgent(t, cleanupEntered)
 			} else {
@@ -900,11 +806,7 @@ func TestConfigureEgressAdmissionRejectsConcurrentIntent(t *testing.T) {
 				want = http.StatusBadGateway
 			}
 			if response.StatusCode != want {
-				t.Errorf(
-					"fenced admission status=%d want=%d",
-					response.StatusCode,
-					want,
-				)
+				t.Errorf("fenced admission status=%d want=%d", response.StatusCode, want)
 				_ = client.Close()
 			}
 			if peer != nil {
@@ -912,9 +814,7 @@ func TestConfigureEgressAdmissionRejectsConcurrentIntent(t *testing.T) {
 					select {
 					case copied := <-forwarded:
 						if copied {
-							t.Error(
-								"fenced preview forwarded an upstream request",
-							)
+							t.Error("fenced preview forwarded an upstream request")
 						}
 					case <-time.After(5 * time.Second):
 						t.Fatal("preview probe did not exit")
@@ -1019,10 +919,7 @@ func TestConfigureEgressAdmissionRegistersBeforeIntent(t *testing.T) {
 			client, peer := openAdmittedStream(t, s, a, p, b, mode)
 			for range 2 {
 				s.reconcile()
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					5*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_, err := s.DataReady(ctx, p, b.ID)
 				cancel()
 				if err != nil {
@@ -1065,20 +962,10 @@ func TestConfigureEgressNonePolicyKeepsWorkloadConnections(t *testing.T) {
 				peers:     make(chan net.Conn, 1),
 			}
 			s.opts.Agent = a
-			r := claimRelay(
-				t,
-				s,
-				p,
-				"claim",
-				map[string]EnvVar{},
-				egress.Policy{Mode: "none"},
-			)
+			r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, egress.Policy{Mode: "none"})
 			before := *r.Sandbox
 			if scenario == "fork" {
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					10*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				fork, err := s.Execute(
 					ctx,
@@ -1100,16 +987,10 @@ func TestConfigureEgressNonePolicyKeepsWorkloadConnections(t *testing.T) {
 			initialBinding := s.bindings[before.ID] != ""
 			s.mu.Unlock()
 			if initialBinding {
-				t.Error(
-					"healthy none activation created a Service proxy binding",
-				)
+				t.Error("healthy none activation created a Service proxy binding")
 			}
-			if _, bound := s.opts.Egress.(*egress.Manager).Binding(
-				before.ID,
-			); bound {
-				t.Error(
-					"healthy none activation created a Manager proxy binding",
-				)
+			if _, bound := s.opts.Egress.(*egress.Manager).Binding(before.ID); bound {
+				t.Error("healthy none activation created a Manager proxy binding")
 			}
 			client, guest := openWorkloadRelay(t, s, a, p, before.ID)
 			exchangeWorkload(t, client, guest)
@@ -1179,8 +1060,7 @@ func TestConfigureEgressNonePolicyKeepsWorkloadConnections(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.Instance != before.Instance ||
-				after.Epoch != before.Epoch ||
+			if after.Instance != before.Instance || after.Epoch != before.Epoch ||
 				!after.Deadline.Equal(before.Deadline) {
 				t.Fatal("maintenance changed identity or lease")
 			}
@@ -1214,11 +1094,7 @@ func TestConfigureEgressClosesOldWorkloadConnections(t *testing.T) {
 					AllowedHosts: []string{"other.example"},
 				}
 			case "secret":
-				env, nextEnv = rotatedSecretEnv(
-					"unused-old-credential",
-				), rotatedSecretEnv(
-					"unused-new-credential",
-				)
+				env, nextEnv = rotatedSecretEnv("unused-old-credential"), rotatedSecretEnv("unused-new-credential")
 				policy = wide
 			}
 			r := claimRelay(t, s, p, "claim", env, wide)
@@ -1226,10 +1102,7 @@ func TestConfigureEgressClosesOldWorkloadConnections(t *testing.T) {
 			held := holdTunnel(t, path, "example.com:443")
 			client, guest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
 			exchangeWorkload(t, client, guest)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if _, err := s.Execute(
 				ctx,
@@ -1253,19 +1126,11 @@ func TestConfigureEgressClosesOldWorkloadConnections(t *testing.T) {
 				host := "example.com"
 				if target == "narrow" {
 					host = "other.example"
-					if status, _ := proxyGet(
-						t,
-						path,
-						"http://example.com/",
-					); status != http.StatusForbidden {
+					if status, _ := proxyGet(t, path, "http://example.com/"); status != http.StatusForbidden {
 						t.Fatalf("old wide permission survived: %d", status)
 					}
 				}
-				if status, _ := proxyGet(
-					t,
-					path,
-					"http://"+host+"/",
-				); status != http.StatusOK {
+				if status, _ := proxyGet(t, path, "http://"+host+"/"); status != http.StatusOK {
 					t.Fatalf("new policy not delivered: %d", status)
 				}
 			}
@@ -1319,10 +1184,7 @@ func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
 			before := *r.Sandbox
 			client, guest := openWorkloadRelay(t, s, a, p, before.ID)
 			exchangeWorkload(t, client, guest)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if phase == "none_maintenance" {
 				v, err := f.GetVM(ctx, before.VMID)
@@ -1365,21 +1227,10 @@ func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
 			}
 			requireStreamClosed(t, client)
 			blocked, err := s.Get(ctx, p, before.ID)
-			if err != nil || blocked.LastError == "" ||
-				blocked.Policy.Mode != before.Policy.Mode {
-				t.Fatalf(
-					"revoke failure lost saved policy or diagnostic: %v",
-					err,
-				)
+			if err != nil || blocked.LastError == "" || blocked.Policy.Mode != before.Policy.Mode {
+				t.Fatalf("revoke failure lost saved policy or diagnostic: %v", err)
 			}
-			if _, err = s.DataReady(
-				ctx,
-				p,
-				before.ID,
-			); !isCode(
-				err,
-				ErrConflict,
-			) {
+			if _, err = s.DataReady(ctx, p, before.ID); !isCode(err, ErrConflict) {
 				t.Fatalf("revoke failure admitted workload: %v", err)
 			}
 			if _, bound := manager.Binding(before.ID); !bound {
@@ -1411,13 +1262,7 @@ func TestConfigureEgressRevokeFailureStaysClosed(t *testing.T) {
 
 // requireWorkloadAdmissionBlocked exercises the real HTTP upgrade. If admission
 // regresses, exchange bytes before reporting it and join the hijacked handler.
-func requireWorkloadAdmissionBlocked(
-	t *testing.T,
-	s *Service,
-	a *workloadRelayAgent,
-	p Principal,
-	id string,
-) {
+func requireWorkloadAdmissionBlocked(t *testing.T, s *Service, a *workloadRelayAgent, p Principal, id string) {
 	t.Helper()
 	done := make(chan struct{})
 	server := httptest.NewServer(
@@ -1445,11 +1290,7 @@ func requireWorkloadAdmissionBlocked(
 		}
 	}()
 	var err error
-	client, err = net.DialTimeout(
-		"tcp",
-		server.Listener.Addr().String(),
-		2*time.Second,
-	)
+	client, err = net.DialTimeout("tcp", server.Listener.Addr().String(), 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1472,17 +1313,12 @@ func requireWorkloadAdmissionBlocked(
 			t.Fatal("admitted probe has no guest endpoint")
 		}
 		exchangeWorkload(t, client, peer)
-		t.Error(
-			"fresh HTTP 101 workload transferred while direct teardown still fails",
-		)
+		t.Error("fresh HTTP 101 workload transferred while direct teardown still fails")
 		return
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusConflict {
-		t.Fatalf(
-			"admission returned HTTP %d, want conflict",
-			response.StatusCode,
-		)
+		t.Fatalf("admission returned HTTP %d, want conflict", response.StatusCode)
 	}
 }
 
@@ -1504,9 +1340,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					return func() error {
 						cleanupCalls.Add(1)
 						if fail.Load() {
-							return errors.New(
-								"injected direct teardown failure",
-							)
+							return errors.New("injected direct teardown failure")
 						}
 						rulesOwned.Store(false)
 						return nil
@@ -1525,9 +1359,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 						engine.requestMu.Unlock()
 					}
 				}
-				manager, err := egress.New(
-					egress.Options{InstallDirect: install},
-				)
+				manager, err := egress.New(egress.Options{InstallDirect: install})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1541,24 +1373,14 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					engine.failRevoke = false
 					engine.requestMu.Unlock()
 				})
-				r := claimRelay(
-					t,
-					s,
-					p,
-					"claim",
-					map[string]EnvVar{},
-					egress.Policy{Mode: "none"},
-				)
+				r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, egress.Policy{Mode: "none"})
 				before := *r.Sandbox
 				old, guest := openWorkloadRelay(t, s, a, p, before.ID)
 				exchangeWorkload(t, old, guest)
 				agent.mu.Lock()
 				activations := len(agent.activations)
 				agent.mu.Unlock()
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					15*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
 				v, err := f.GetVM(ctx, before.VMID)
 				if err != nil {
@@ -1607,95 +1429,60 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 				}
 				diagnostic := after.LastError
 				if (fault == "save_ok") != (diagnostic != "") {
-					t.Fatal(
-						"diagnostic write control/fault did not take effect",
-					)
+					t.Fatal("diagnostic write control/fault did not take effect")
 				}
 				requireFence(t, s, before.ID, "")
 				for range 2 {
 					arm()
-					if _, err = s.DataReady(
-						ctx,
-						p,
-						before.ID,
-					); !isCode(
-						err,
-						ErrConflict,
-					) {
-						t.Errorf(
-							"incomplete teardown admitted DataReady: %v",
-							err,
-						)
+					if _, err = s.DataReady(ctx, p, before.ID); !isCode(err, ErrConflict) {
+						t.Errorf("incomplete teardown admitted DataReady: %v", err)
 					}
 					arm()
 					requireWorkloadAdmissionBlocked(t, s, a, p, before.ID)
-					if info, bound := manager.Binding(
-						before.ID,
-					); !bound ||
-						info.Mode != "direct" {
+					if info, bound := manager.Binding(before.ID); !bound || info.Mode != "direct" {
 						t.Fatal("failed teardown lost actual Manager ownership")
 					}
 					vm, lookupErr := f.GetVM(ctx, before.VMID)
-					if lookupErr != nil || vm.NetworkActual ||
-						vm.NetworkEnabled {
+					if lookupErr != nil || vm.NetworkActual || vm.NetworkEnabled {
 						t.Fatalf("none NIC state changed: %v", lookupErr)
 					}
 					if backend == "install_direct" && vm.NetworkPolicy == nil {
-						t.Fatal(
-							"production teardown fault did not retain engine policy",
-						)
+						t.Fatal("production teardown fault did not retain engine policy")
 					}
 				}
-				if backend == "manager" &&
-					(!rulesOwned.Load() || cleanupCalls.Load() == 0) {
-					t.Fatal(
-						"fixture did not retain actual retryable direct ownership",
-					)
+				if backend == "manager" && (!rulesOwned.Load() || cleanupCalls.Load() == 0) {
+					t.Fatal("fixture did not retain actual retryable direct ownership")
 				}
 				if backend == "install_direct" {
 					engine.requestMu.Lock()
 					revokes := 0
 					for _, request := range engine.requests {
-						if request.Action == "network_policy" &&
-							request.Policy == nil {
+						if request.Action == "network_policy" && request.Policy == nil {
 							revokes++
 						}
 					}
 					engine.failRevoke = false
 					engine.requestMu.Unlock()
 					if revokes == 0 {
-						t.Fatal(
-							"production teardown fault did not reach policy revocation",
-						)
+						t.Fatal("production teardown fault did not reach policy revocation")
 					}
 				}
 				fail.Store(false)
 				if fault != "save_ok" {
-					if _, err = s.store.db.Exec(
-						"DROP TRIGGER reject_diagnostic",
-					); err != nil {
+					if _, err = s.store.db.Exec("DROP TRIGGER reject_diagnostic"); err != nil {
 						t.Fatal(err)
 					}
 				}
 				_, err = s.DataReady(ctx, p, before.ID)
-				if (fault == "save_ok" && !isCode(err, ErrConflict)) ||
-					(fault != "save_ok" && err != nil) {
-					t.Fatalf(
-						"cleanup retry changed diagnostic admission semantics: %v",
-						err,
-					)
+				if (fault == "save_ok" && !isCode(err, ErrConflict)) || (fault != "save_ok" && err != nil) {
+					t.Fatalf("cleanup retry changed diagnostic admission semantics: %v", err)
 				}
 				after, err = s.Get(ctx, p, before.ID)
 				if err != nil || after.LastError != diagnostic {
 					t.Fatal("implicit cleanup changed the persisted diagnostic")
 				}
-				if _, bound := manager.Binding(
-					before.ID,
-				); bound &&
-					fault != "save_ok" {
-					t.Fatal(
-						"successful admission cleanup retained Manager ownership",
-					)
+				if _, bound := manager.Binding(before.ID); bound && fault != "save_ok" {
+					t.Fatal("successful admission cleanup retained Manager ownership")
 				}
 				if fault == "save_ok" {
 					if _, err = s.Execute(ctx, p, "configure-retry", Command{
@@ -1716,8 +1503,7 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					exchangeWorkload(t, fresh, freshGuest)
 				}
 				after, err = s.Get(ctx, p, before.ID)
-				if err != nil || after.Instance != before.Instance ||
-					after.Epoch != before.Epoch ||
+				if err != nil || after.Instance != before.Instance || after.Epoch != before.Epoch ||
 					!after.Deadline.Equal(before.Deadline) ||
 					after.ResumeAttempt != before.ResumeAttempt {
 					t.Fatal("cleanup changed guest identity or lease")
@@ -1733,15 +1519,13 @@ func TestConfigureEgressNoneAdmissionConfirmsRevocation(t *testing.T) {
 					t.Fatal("implicit cleanup replayed guest activation")
 				}
 				vm, err := f.GetVM(ctx, before.VMID)
-				if err != nil || vm.NetworkActual || vm.NetworkEnabled ||
-					vm.NetworkPolicy != nil {
+				if err != nil || vm.NetworkActual || vm.NetworkEnabled || vm.NetworkPolicy != nil {
 					t.Fatal("cleanup left engine authorization behind")
 				}
 				f.mu.Lock()
 				defer f.mu.Unlock()
 				for _, op := range f.ops {
-					if op.Request.Action == "network" &&
-						op.Request.NetworkEnabled {
+					if op.Request.Action == "network" && op.Request.NetworkEnabled {
 						t.Fatal("none admission enabled NIC")
 					}
 				}
@@ -1758,22 +1542,11 @@ func TestConfigureEgressNoneAdmissionWithoutManager(t *testing.T) {
 	s.opts.Egress = nil
 	a := &workloadRelayAgent{fakeAgent: agent, peers: make(chan net.Conn, 1)}
 	s.opts.Agent = a
-	r := claimRelay(
-		t,
-		s,
-		p,
-		"claim",
-		map[string]EnvVar{},
-		egress.Policy{Mode: "none"},
-	)
+	r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, egress.Policy{Mode: "none"})
 	client, guest := openWorkloadRelay(t, s, a, p, r.Sandbox.ID)
 	for range 2 {
 		s.reconcile()
-		if _, err := s.DataReady(
-			context.Background(),
-			p,
-			r.Sandbox.ID,
-		); err != nil {
+		if _, err := s.DataReady(context.Background(), p, r.Sandbox.ID); err != nil {
 			t.Fatal(err)
 		}
 		exchangeWorkload(t, client, guest)
@@ -1841,10 +1614,7 @@ func TestConfigureEgressPersistenceFailures(t *testing.T) {
 				}
 			}
 			entered, release := gateAgent(t, agent, "activate")
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				12*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
 			command := Command{
 				Action:    "configure",
@@ -1862,11 +1632,7 @@ func TestConfigureEgressPersistenceFailures(t *testing.T) {
 				awaitAgent(t, entered)
 				// The newly published binding really reaches upstream before the
 				// final transaction fails, including an existing CONNECT stream.
-				if status, _ := proxyGet(
-					t,
-					path,
-					"http://other.example/",
-				); status != 200 {
+				if status, _ := proxyGet(t, path, "http://other.example/"); status != 200 {
 					t.Fatalf("new binding never served: %d", status)
 				}
 				published = holdTunnel(t, path, "other.example:443")
@@ -1881,16 +1647,11 @@ func TestConfigureEgressPersistenceFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			if stored.Status != "failed" {
-				t.Errorf(
-					"failed persistence was not recorded as failure: %s",
-					stored.Status,
-				)
+				t.Errorf("failed persistence was not recorded as failure: %s", stored.Status)
 			}
 			// Remove the injected fault before recovery checks. A missing fence
 			// cannot be concealed by leaving a failing DELETE trigger installed.
-			if _, err = s.store.db.Exec(
-				"DROP TRIGGER fail_config",
-			); err != nil {
+			if _, err = s.store.db.Exec("DROP TRIGGER fail_config"); err != nil {
 				t.Fatal(err)
 			}
 			requireFence(t, s, before.ID, op.ID)
@@ -1921,12 +1682,9 @@ func TestConfigureEgressPersistenceFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.Instance != before.Instance ||
-				after.Epoch != before.Epoch ||
+			if after.Instance != before.Instance || after.Epoch != before.Epoch ||
 				!after.Deadline.Equal(before.Deadline) {
-				t.Fatal(
-					"persistence failure recovery changed identity or lease",
-				)
+				t.Fatal("persistence failure recovery changed identity or lease")
 			}
 			if _, err = restarted.Execute(ctx, p, "retry-new", Command{
 				Action: "configure", SandboxID: before.ID,
@@ -1936,12 +1694,7 @@ func TestConfigureEgressPersistenceFailures(t *testing.T) {
 			}
 			requireFence(t, restarted, before.ID, "")
 			// The old operation's idempotency result remains fixed after repair.
-			if _, err = restarted.Execute(
-				ctx,
-				p,
-				"configure",
-				command,
-			); err == nil {
+			if _, err = restarted.Execute(ctx, p, "configure", command); err == nil {
 				t.Fatal("failed operation was changed to success")
 			}
 		})
@@ -1967,12 +1720,7 @@ func TestConfigureEgressFenceRevokesWithoutVerifiedInventory(t *testing.T) {
 			held := holdTunnel(t, path, "example.com:443")
 			// A recovered fence may coexist with a local proxy. Maintenance owns
 			// revocation of that proxy even when it cannot prove VM authority.
-			if err := recordConfigFence(
-				context.Background(),
-				s.store.db,
-				r.Sandbox.ID,
-				"op_crashed",
-			); err != nil {
+			if err := recordConfigFence(context.Background(), s.store.db, r.Sandbox.ID, "op_crashed"); err != nil {
 				t.Fatal(err)
 			}
 			f.mu.Lock()
@@ -2017,10 +1765,7 @@ func TestConfigureEgressSupersedingFence(t *testing.T) {
 			path := proxyHTTPPath(t, s, f, r.Sandbox.ID)
 			held := holdTunnel(t, path, "example.com:443")
 			entered, release := gateAgent(t, agent, phase)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				12*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
 			oldCommand := Command{
 				Action:    "configure",
@@ -2070,18 +1815,10 @@ func TestConfigureEgressSupersedingFence(t *testing.T) {
 				t.Fatal(err)
 			}
 			requireFence(t, s, r.Sandbox.ID, "")
-			if status, _ := proxyGet(
-				t,
-				path,
-				"http://example.com/",
-			); status != 403 {
+			if status, _ := proxyGet(t, path, "http://example.com/"); status != 403 {
 				t.Fatalf("old policy reopened: %d", status)
 			}
-			if status, _ := proxyGet(
-				t,
-				path,
-				"http://other.example/",
-			); status != 200 {
+			if status, _ := proxyGet(t, path, "http://other.example/"); status != 200 {
 				t.Fatalf("new policy not delivered: %d", status)
 			}
 			if _, err = s.Execute(ctx, p, "old", oldCommand); err == nil {
@@ -2091,8 +1828,7 @@ func TestConfigureEgressSupersedingFence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.Instance != r.Sandbox.Instance ||
-				after.Epoch != r.Sandbox.Epoch ||
+			if after.Instance != r.Sandbox.Instance || after.Epoch != r.Sandbox.Epoch ||
 				!after.Deadline.Equal(r.Sandbox.Deadline) {
 				t.Fatal("supersession changed lease or identity")
 			}
@@ -2174,21 +1910,13 @@ func TestConfigureEgressStaleQueuedIntentCannotReopen(t *testing.T) {
 	awaitWorker(t, s, winner.ID)
 	completed, err := s.Operation(ctx, p, winner.ID)
 	if err != nil || completed.Status != "succeeded" {
-		t.Fatalf(
-			"fixed delivery result was overwritten: %s %v",
-			completed.Status,
-			err,
-		)
+		t.Fatalf("fixed delivery result was overwritten: %s %v", completed.Status, err)
 	}
 	restarted := restartEgress(t, s, manager)
 	requireFence(t, restarted, r.Sandbox.ID, "")
 	completed, err = restarted.Operation(ctx, p, winner.ID)
 	if err != nil || completed.Status != "succeeded" {
-		t.Fatalf(
-			"restart lost successful delivery responsibility: %s %v",
-			completed.Status,
-			err,
-		)
+		t.Fatalf("restart lost successful delivery responsibility: %s %v", completed.Status, err)
 	}
 	if _, err = restarted.DataReady(ctx, p, r.Sandbox.ID); err != nil {
 		t.Fatal(err)
@@ -2246,10 +1974,7 @@ func TestConfigureEgressInfoFailureRevokesOldBinding(t *testing.T) {
 			agent.mu.Lock()
 			agent.failInfo = true
 			agent.mu.Unlock()
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			_, err := s.Execute(
 				ctx,
@@ -2343,28 +2068,14 @@ func TestConfigureEgressFailureMatrix(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f, agent, p, _ := egressFixture(t)
-			r := claimRelay(
-				t,
-				s,
-				p,
-				"claim",
-				map[string]EnvVar{},
-				wide,
-			)
+			r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
 			httpPath := proxyHTTPPath(t, s, f, r.Sandbox.ID)
-			if status, _ := proxyGet(
-				t,
-				httpPath,
-				"http://example.com/",
-			); status != 200 {
+			if status, _ := proxyGet(t, httpPath, "http://example.com/"); status != 200 {
 				t.Fatalf("relay never served: %d", status)
 			}
 			held := holdTunnel(t, httpPath, "example.com:443")
 			tc.inject(f, agent)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			command := Command{
 				Action:    "configure",
@@ -2381,28 +2092,15 @@ func TestConfigureEgressFailureMatrix(t *testing.T) {
 				t.Fatal(err)
 			}
 			if b.LastError == "" || b.State != "running" {
-				t.Fatalf(
-					"failed configure lost its diagnostic: state=%s error=%q",
-					b.State,
-					b.LastError,
-				)
+				t.Fatalf("failed configure lost its diagnostic: state=%s error=%q", b.State, b.LastError)
 			}
 			requireFence(t, s, r.Sandbox.ID, res.OperationID)
 			assertDataPathDead(t, httpPath, held)
 			requireDataReadyBlocked(t, s, p, r.Sandbox.ID)
 			// The accepted operation and its key keep their terminal result.
-			again, err := s.Execute(
-				ctx,
-				p,
-				"configure-"+tc.name,
-				command,
-			)
+			again, err := s.Execute(ctx, p, "configure-"+tc.name, command)
 			if err == nil || again.OperationID != res.OperationID {
-				t.Fatalf(
-					"terminal configure replay changed: id=%s err=%v",
-					again.OperationID,
-					err,
-				)
+				t.Fatalf("terminal configure replay changed: id=%s err=%v", again.OperationID, err)
 			}
 		})
 	}
@@ -2415,18 +2113,9 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		AllowedHosts: []string{"other.example"},
 	}
 	none := egress.Policy{Mode: "none"}
-	configure := func(
-		t *testing.T,
-		s *Service,
-		p Principal,
-		key, id string,
-		policy egress.Policy,
-	) (Result, error) {
+	configure := func(t *testing.T, s *Service, p Principal, key, id string, policy egress.Policy) (Result, error) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			10*time.Second,
-		)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return s.Execute(
 			ctx,
@@ -2445,12 +2134,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 	// relay policy and the fence.
 	revokedCrashed := func(t *testing.T, s *Service, id string) {
 		t.Helper()
-		if err := recordConfigFence(
-			context.Background(),
-			s.store.db,
-			id,
-			"op_crashed",
-		); err != nil {
+		if err := recordConfigFence(context.Background(), s.store.db, id, "op_crashed"); err != nil {
 			t.Fatal(err)
 		}
 		s.closeConnections(id)
@@ -2462,11 +2146,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		s, f, _, p, newManager := egressFixture(t)
 		r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
 		httpPath := proxyHTTPPath(t, s, f, r.Sandbox.ID)
-		if status, _ := proxyGet(
-			t,
-			httpPath,
-			"http://example.com/",
-		); status != 200 {
+		if status, _ := proxyGet(t, httpPath, "http://example.com/"); status != 200 {
 			t.Fatalf("relay never served: %d", status)
 		}
 		revokedCrashed(t, s, r.Sandbox.ID)
@@ -2479,11 +2159,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		}
 		requireDataReadyBlocked(t, s, p, r.Sandbox.ID)
 		s.reconcile()
-		if conn, err := net.DialTimeout(
-			"unix",
-			httpPath,
-			300*time.Millisecond,
-		); err == nil {
+		if conn, err := net.DialTimeout("unix", httpPath, 300*time.Millisecond); err == nil {
 			_ = conn.Close()
 			t.Fatal("maintenance reopened the revoked proxy")
 		}
@@ -2501,27 +2177,15 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !after.Deadline.Equal(before.Deadline) ||
-			after.Instance != before.Instance ||
-			after.Epoch != before.Epoch {
+		if !after.Deadline.Equal(before.Deadline) || after.Instance != before.Instance || after.Epoch != before.Epoch {
 			t.Fatal("the fence changed the lease or identity")
 		}
 		// Only a new explicit configure delivers the saved intent.
-		if _, err = configure(
-			t,
-			restarted,
-			p,
-			"configure-none",
-			r.Sandbox.ID,
-			none,
-		); err != nil {
+		if _, err = configure(t, restarted, p, "configure-none", r.Sandbox.ID, none); err != nil {
 			t.Fatal(err)
 		}
 		requireFence(t, restarted, r.Sandbox.ID, "")
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err = restarted.DataReady(ctx, p, r.Sandbox.ID); err != nil {
 			t.Fatal(err)
@@ -2554,9 +2218,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !after.Deadline.Equal(before.Deadline) ||
-			after.Instance != before.Instance ||
-			after.Epoch != before.Epoch {
+		if !after.Deadline.Equal(before.Deadline) || after.Instance != before.Instance || after.Epoch != before.Epoch {
 			t.Fatal("recovery changed the lease or identity")
 		}
 		agent.mu.Lock()
@@ -2564,22 +2226,11 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		agent.mu.Unlock()
 		// A new key admits the replacement intent; it must deliver the new
 		// narrow policy rather than reviving the old wide one.
-		if _, err = configure(
-			t,
-			restarted,
-			p,
-			"configure-narrow",
-			r.Sandbox.ID,
-			narrow,
-		); err != nil {
+		if _, err = configure(t, restarted, p, "configure-narrow", r.Sandbox.ID, narrow); err != nil {
 			t.Fatal(err)
 		}
 		requireFence(t, restarted, r.Sandbox.ID, "")
-		if status, _ := proxyGet(
-			t,
-			httpPath,
-			"http://example.com/",
-		); status != 403 {
+		if status, _ := proxyGet(t, httpPath, "http://example.com/"); status != 403 {
 			t.Fatalf("old wide policy still served: %d", status)
 		}
 		if status, body := proxyGet(
@@ -2589,10 +2240,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		); status != 200 || body != "upstream other.example" {
 			t.Fatalf("narrow policy not delivered: %d %q", status, body)
 		}
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ready, err := restarted.DataReady(ctx, p, r.Sandbox.ID)
 		if err != nil {
@@ -2616,12 +2264,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		requireFence(t, s, r.Sandbox.ID, res.OperationID)
 		// A newer admission replaces the fence; the old operation's terminal
 		// clear is rejected against it.
-		if err = recordConfigFence(
-			context.Background(),
-			s.store.db,
-			r.Sandbox.ID,
-			"op_newer",
-		); err != nil {
+		if err = recordConfigFence(context.Background(), s.store.db, r.Sandbox.ID, "op_newer"); err != nil {
 			t.Fatal(err)
 		}
 		if err = clearConfigFence(
@@ -2633,12 +2276,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 			t.Fatalf("superseded clear was not rejected: %v", err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "op_newer")
-		if err = clearConfigFence(
-			context.Background(),
-			s.store.db,
-			r.Sandbox.ID,
-			"op_newer",
-		); err != nil {
+		if err = clearConfigFence(context.Background(), s.store.db, r.Sandbox.ID, "op_newer"); err != nil {
 			t.Fatal(err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "")
@@ -2646,28 +2284,13 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 	t.Run("paused_configure_does_not_wake", func(t *testing.T) {
 		s, f, _, p, _ := egressFixture(t)
 		r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			10*time.Second,
-		)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if _, err := s.Execute(
-			ctx,
-			p,
-			"pause",
-			Command{Action: "pause", SandboxID: r.Sandbox.ID},
-		); err != nil {
+		if _, err := s.Execute(ctx, p, "pause", Command{Action: "pause", SandboxID: r.Sandbox.ID}); err != nil {
 			t.Fatal(err)
 		}
 		clones := f.count("clone")
-		if _, err := configure(
-			t,
-			s,
-			p,
-			"configure-none",
-			r.Sandbox.ID,
-			none,
-		); err != nil {
+		if _, err := configure(t, s, p, "configure-none", r.Sandbox.ID, none); err != nil {
 			t.Fatal(err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "")
@@ -2688,28 +2311,13 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		if len(entries) != 0 {
 			t.Fatal("paused configuration created a proxy listener")
 		}
-		if _, err = s.Execute(
-			ctx,
-			p,
-			"resume",
-			Command{Action: "resume", SandboxID: r.Sandbox.ID},
-		); err != nil {
+		if _, err = s.Execute(ctx, p, "resume", Command{Action: "resume", SandboxID: r.Sandbox.ID}); err != nil {
 			t.Fatal(err)
 		}
-		if entries, err = os.ReadDir(
-			f.sockDir,
-		); err != nil ||
-			len(entries) != 0 {
-			t.Fatalf(
-				"none policy created listeners on resume: %v %v",
-				entries,
-				err,
-			)
+		if entries, err = os.ReadDir(f.sockDir); err != nil || len(entries) != 0 {
+			t.Fatalf("none policy created listeners on resume: %v %v", entries, err)
 		}
-		readyCtx, readyCancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+		readyCtx, readyCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer readyCancel()
 		ready, err := s.DataReady(readyCtx, p, r.Sandbox.ID)
 		if err != nil {
@@ -2723,14 +2331,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		s, f, _, p, _ := egressFixture(t)
 		r := claimRelay(t, s, p, "claim", map[string]EnvVar{}, wide)
 		httpPath := proxyHTTPPath(t, s, f, r.Sandbox.ID)
-		if _, err := configure(
-			t,
-			s,
-			p,
-			"configure-none",
-			r.Sandbox.ID,
-			none,
-		); err != nil {
+		if _, err := configure(t, s, p, "configure-none", r.Sandbox.ID, none); err != nil {
 			t.Fatal(err)
 		}
 		requireFence(t, s, r.Sandbox.ID, "")
@@ -2747,24 +2348,13 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		if err = s.opts.Egress.Revoke(b.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err = s.opts.Egress.Bind(
-			context.Background(),
-			b.ID,
-			b.TenantID,
-			v.VSockPath,
-			wide,
-			nil,
-		); err != nil {
+		if err = s.opts.Egress.Bind(context.Background(), b.ID, b.TenantID, v.VSockPath, wide, nil); err != nil {
 			t.Fatal(err)
 		}
 		s.mu.Lock()
 		s.bindings[b.ID] = "residual"
 		s.mu.Unlock()
-		if status, _ := proxyGet(
-			t,
-			httpPath,
-			"http://example.com/",
-		); status != 200 {
+		if status, _ := proxyGet(t, httpPath, "http://example.com/"); status != 200 {
 			t.Fatalf("residual binding never served: %d", status)
 		}
 		s.reconcile()
@@ -2794,19 +2384,10 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		// Maintenance must compare the saved effective policy against a
 		// nonempty binding; no explicit bind or activation repairs this test.
 		s.reconcile()
-		if status, _ := proxyGet(
-			t,
-			httpPath,
-			"http://example.com/",
-		); status != 403 {
+		if status, _ := proxyGet(t, httpPath, "http://example.com/"); status != 403 {
 			t.Fatalf("maintenance retained old wide authorization: %d", status)
 		}
-		if status, body := proxyGet(
-			t,
-			httpPath,
-			"http://other.example/",
-		); status != 200 ||
-			body != "upstream other.example" {
+		if status, body := proxyGet(t, httpPath, "http://other.example/"); status != 200 || body != "upstream other.example" {
 			t.Fatalf("saved policy was not delivered: %d %q", status, body)
 		}
 		_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -2824,8 +2405,7 @@ func TestConfigureEgressRecoveryHonorsSavedPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if after.Instance != b.Instance || after.Epoch != b.Epoch ||
-			!after.Deadline.Equal(b.Deadline) {
+		if after.Instance != b.Instance || after.Epoch != b.Epoch || !after.Deadline.Equal(b.Deadline) {
 			t.Fatal("maintenance changed identity or lease")
 		}
 	})
@@ -2887,14 +2467,7 @@ func TestHostSecretNeverPersistedAndRestartFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if _, err = s2.DataReady(
-		context.Background(),
-		p,
-		r.Sandbox.ID,
-	); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if _, err = s2.DataReady(context.Background(), p, r.Sandbox.ID); !isCode(err, ErrConflict) {
 		t.Fatalf("restart served sandbox without credentials: %v", err)
 	}
 	_ = f

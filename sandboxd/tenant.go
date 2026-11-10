@@ -9,19 +9,12 @@ import (
 
 // Quota has exactly one source: the durable resource table. Root bypasses the
 // limit comparison only; the same admission transaction still records costs.
-func (s *Service) quota(
-	ctx context.Context,
-	tx *sql.Tx,
-	p Principal,
-	count int,
-	storage int64,
-) error {
+func (s *Service) quota(ctx context.Context, tx *sql.Tx, p Principal, count int, storage int64) error {
 	if p.Root {
 		return nil
 	}
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).
-		Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT body FROM tenants WHERE id=?", p.TenantID).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Fail(ErrNotFound, "not found")
 		}
@@ -36,26 +29,18 @@ func (s *Service) quota(
 		Scan(&slots, &used); err != nil {
 		return err
 	}
-	if slots+int64(count) > int64(t.MaxSandboxes) ||
-		used+storage > t.MaxStorageMiB {
+	if slots+int64(count) > int64(t.MaxSandboxes) || used+storage > t.MaxStorageMiB {
 		return Fail(ErrExhausted, "tenant quota exceeded")
 	}
 	return nil
 }
 
-func (s *Service) PutTenant(
-	ctx context.Context,
-	p Principal,
-	t Tenant,
-) (Tenant, error) {
+func (s *Service) PutTenant(ctx context.Context, p Principal, t Tenant) (Tenant, error) {
 	if !p.Root {
 		return t, Fail(ErrForbidden, "root access required")
 	}
 	if t.ID == "" || t.MaxSandboxes < 1 || t.MaxStorageMiB < 1 {
-		return t, Fail(
-			ErrInvalid,
-			"tenant id and positive quotas required",
-		)
+		return t, Fail(ErrInvalid, "tenant id and positive quotas required")
 	}
 	if t.Token == "" {
 		t.Token = newID("tenant_")

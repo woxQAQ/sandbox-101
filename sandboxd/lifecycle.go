@@ -36,12 +36,7 @@ func (s *Service) claim(o *Operation) error {
 			return err
 		}
 	}
-	if err = requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		t.SnapshotID,
-		b.TenantID,
-	); err != nil {
+	if err = requireSnapshotOwner(s.ctx, s.store.db, t.SnapshotID, b.TenantID); err != nil {
 		return err
 	}
 	if b.ProvisionSource == "warm" {
@@ -71,11 +66,7 @@ func (s *Service) claim(o *Operation) error {
 		}
 		var op api.Operation
 		if t.SnapshotID != "" {
-			op, err = s.engine(
-				*o,
-				"provision",
-				api.Request{Action: "clone", SnapshotID: t.SnapshotID},
-			)
+			op, err = s.engine(*o, "provision", api.Request{Action: "clone", SnapshotID: t.SnapshotID})
 		} else {
 			op, err = s.engine(
 				*o,
@@ -102,11 +93,7 @@ func (s *Service) claim(o *Operation) error {
 		}
 	}
 	if t.SnapshotID == "" {
-		if _, err = s.engine(
-			*o,
-			"start",
-			api.Request{Action: "start", VMID: b.VMID},
-		); err != nil {
+		if _, err = s.engine(*o, "start", api.Request{Action: "start", VMID: b.VMID}); err != nil {
 			return s.failProvision(*o, &b, err)
 		}
 	}
@@ -139,11 +126,7 @@ func (s *Service) failProvision(o Operation, b *Sandbox, cause error) error {
 		return cause
 	}
 	if b.VMID != "" {
-		if _, err := s.engine(
-			o,
-			"failed-delete:"+b.ID,
-			api.Request{Action: "delete", VMID: b.VMID},
-		); err != nil {
+		if _, err := s.engine(o, "failed-delete:"+b.ID, api.Request{Action: "delete", VMID: b.VMID}); err != nil {
 			b.LastError = "provisioning failed; cleanup pending: " + err.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
 			return err
@@ -173,8 +156,7 @@ func (s *Service) change(o *Operation) error {
 		if b.State == "paused" {
 			deadline = b.PausedUntil
 		}
-		if !deadline.Equal(o.Command.LeaseDeadline) ||
-			time.Now().Before(deadline) {
+		if !deadline.Equal(o.Command.LeaseDeadline) || time.Now().Before(deadline) {
 			o.Result.Sandbox = &b
 			return nil
 		}
@@ -216,12 +198,7 @@ func (s *Service) change(o *Operation) error {
 		// keep that engine snapshot alive without starting another VM.
 		switch b.State {
 		case "paused":
-			if err = requireSnapshotOwner(
-				s.ctx,
-				s.store.db,
-				b.SnapshotID,
-				b.TenantID,
-			); err != nil {
+			if err = requireSnapshotOwner(s.ctx, s.store.db, b.SnapshotID, b.TenantID); err != nil {
 				return err
 			}
 			cp.SnapshotID = b.SnapshotID
@@ -240,11 +217,7 @@ func (s *Service) change(o *Operation) error {
 			}
 			cp.SnapshotID = snap.SnapshotID
 		default:
-			return Fail(
-				ErrConflict,
-				"sandbox cannot checkpoint in %s",
-				b.State,
-			)
+			return Fail(ErrConflict, "sandbox cannot checkpoint in %s", b.State)
 		}
 		ownership := s.lockResourceOwnership()
 		tx, e := s.store.db.BeginTx(s.ctx, nil)
@@ -330,11 +303,7 @@ func (s *Service) pause(o *Operation, b *Sandbox) error {
 			b.OperationID = ""
 			b.LastError = err.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
-			restoreErr := s.activate(
-				Operation{ID: o.ID + ":rollback"},
-				b,
-				false,
-			)
+			restoreErr := s.activate(Operation{ID: o.ID + ":rollback"}, b, false)
 			if restoreErr != nil {
 				b.LastError = "pause failed; network remains blocked: " + restoreErr.Error()
 				_ = saveSandbox(s.ctx, s.store.db, *b)
@@ -373,17 +342,9 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		return Fail(ErrConflict, "sandbox cannot resume in %s", b.State)
 	}
 	if s.credentialsMissing(*b) {
-		return Fail(
-			ErrConflict,
-			"host credentials must be supplied again after daemon restart",
-		)
+		return Fail(ErrConflict, "host credentials must be supplied again after daemon restart")
 	}
-	if err := requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		b.SnapshotID,
-		b.TenantID,
-	); err != nil {
+	if err := requireSnapshotOwner(s.ctx, s.store.db, b.SnapshotID, b.TenantID); err != nil {
 		return err
 	}
 	b.State = "resuming"
@@ -392,11 +353,7 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		return err
 	}
 	if b.VMID == "" {
-		op, err := s.engine(
-			*o,
-			"resume-clone",
-			api.Request{Action: "clone", SnapshotID: b.SnapshotID},
-		)
+		op, err := s.engine(*o, "resume-clone", api.Request{Action: "clone", SnapshotID: b.SnapshotID})
 		b.VMID = op.VMID
 		if saveErr := s.saveSandboxReference(*b); saveErr != nil {
 			return saveErr
@@ -416,11 +373,7 @@ func (s *Service) resume(o *Operation, b *Sandbox) error {
 		if s.opts.Egress != nil {
 			err = errors.Join(err, s.revoke(b.ID))
 		}
-		if _, cleanup := s.engine(
-			*o,
-			"resume-rollback",
-			api.Request{Action: "delete", VMID: b.VMID},
-		); cleanup != nil {
+		if _, cleanup := s.engine(*o, "resume-rollback", api.Request{Action: "delete", VMID: b.VMID}); cleanup != nil {
 			b.LastError = "resume failed; cleanup pending: " + cleanup.Error()
 			_ = saveSandbox(s.ctx, s.store.db, *b)
 			return cleanup
@@ -472,12 +425,8 @@ func (s *Service) proveReleaseInstance(o Operation, b *Sandbox) error {
 	if err != nil {
 		return err
 	}
-	if proof == nil || proof.Status != "succeeded" || proof.VMID != b.VMID ||
-		proof.Request.ExpectedInstance == "" {
-		return Fail(
-			ErrManualRecovery,
-			"sandbox VM instance cannot be proven for release",
-		)
+	if proof == nil || proof.Status != "succeeded" || proof.VMID != b.VMID || proof.Request.ExpectedInstance == "" {
+		return Fail(ErrManualRecovery, "sandbox VM instance cannot be proven for release")
 	}
 	b.Instance = proof.Request.ExpectedInstance
 	return saveSandbox(s.ctx, s.store.db, *b)
@@ -567,34 +516,20 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 				return e
 			}
 			if origin.Release.Dispatched && e == nil {
-				if proof.Key != request.Key ||
-					!reflect.DeepEqual(proof.Request, request) {
-					return Fail(
-						ErrManualRecovery,
-						"release receipt differs from frozen intent",
-					)
+				if proof.Key != request.Key || !reflect.DeepEqual(proof.Request, request) {
+					return Fail(ErrManualRecovery, "release receipt differs from frozen intent")
 				}
 				if proof.Status == "failed" {
-					compensationKey := stepKey(
-						origin.operation(),
-						releaseVMStep(b.ID),
-					)
-					compensation, e := s.opts.Engine.FindOperation(
-						s.ctx,
-						compensationKey,
-					)
+					compensationKey := stepKey(origin.operation(), releaseVMStep(b.ID))
+					compensation, e := s.opts.Engine.FindOperation(s.ctx, compensationKey)
 					if e != nil && !isEngineCode(e, api.NotFound) {
 						return e
 					}
 					if e == nil {
 						expected := request
 						expected.Key = compensationKey
-						if compensation.Key != compensationKey ||
-							!reflect.DeepEqual(compensation.Request, expected) {
-							return Fail(
-								ErrManualRecovery,
-								"A compensation receipt mismatch",
-							)
+						if compensation.Key != compensationKey || !reflect.DeepEqual(compensation.Request, expected) {
+							return Fail(ErrManualRecovery, "A compensation receipt mismatch")
 						}
 						if compensation.Status == "failed" {
 							origin.Attempt++
@@ -616,11 +551,7 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 			}
 		}
 		request.Key = ""
-		if _, err := s.engine(
-			deletionOp,
-			releaseVMStep(b.ID),
-			request,
-		); err != nil {
+		if _, err := s.engine(deletionOp, releaseVMStep(b.ID), request); err != nil {
 			return err
 		}
 		b.VMID = ""
@@ -652,21 +583,13 @@ func (s *Service) release(o *Operation, b *Sandbox) error {
 	if err = saveSandbox(s.ctx, tx, *b); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		"DELETE FROM configuration_fences WHERE sandbox_id=?",
-		b.ID,
-	); err != nil {
+	if _, err = tx.ExecContext(s.ctx, "DELETE FROM configuration_fences WHERE sandbox_id=?", b.ID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Service) Get(
-	ctx context.Context,
-	p Principal,
-	id string,
-) (Sandbox, error) {
+func (s *Service) Get(ctx context.Context, p Principal, id string) (Sandbox, error) {
 	b, err := getSandbox(ctx, s.store.db, id)
 	if err != nil {
 		return b, err
@@ -699,11 +622,7 @@ func (s *Service) ttl(n int64) (int64, error) {
 		n = 300
 	}
 	if n < 1 || time.Duration(n) > s.opts.MaxTTL/time.Second {
-		return 0, Fail(
-			ErrInvalid,
-			"ttl_seconds must be between 1 and %d",
-			int64(s.opts.MaxTTL/time.Second),
-		)
+		return 0, Fail(ErrInvalid, "ttl_seconds must be between 1 and %d", int64(s.opts.MaxTTL/time.Second))
 	}
 	return n, nil
 }
@@ -736,8 +655,7 @@ func saveSandbox(ctx context.Context, e executor, b Sandbox) error {
 
 func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 	var b []byte
-	err := e.QueryRowContext(ctx, "SELECT body FROM sandboxes WHERE id=?", id).
-		Scan(&b)
+	err := e.QueryRowContext(ctx, "SELECT body FROM sandboxes WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Sandbox{}, Fail(ErrNotFound, "not found")
 	}
@@ -748,10 +666,7 @@ func getSandbox(ctx context.Context, e executor, id string) (Sandbox, error) {
 }
 
 func (s *store) sandboxes(ctx context.Context) ([]Sandbox, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		"SELECT body FROM sandboxes ORDER BY id",
-	)
+	rows, err := s.db.QueryContext(ctx, "SELECT body FROM sandboxes ORDER BY id")
 	if err != nil {
 		return nil, err
 	}

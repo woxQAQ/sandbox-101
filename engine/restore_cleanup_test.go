@@ -27,22 +27,16 @@ type restoreScopeBackend struct {
 	removes   int
 }
 
-func (b *restoreScopeBackend) Inspect(
-	ctx context.Context,
-	r Resource,
-) (Observation, error) {
+func (b *restoreScopeBackend) Inspect(ctx context.Context, r Resource) (Observation, error) {
 	entries, err := os.ReadDir(b.scopes)
 	if err != nil {
 		return Observation{}, err
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), r.VMID+"-") ||
-			entry.Name() == r.VMID+"-"+r.Instance {
+		if !strings.HasPrefix(entry.Name(), r.VMID+"-") || entry.Name() == r.VMID+"-"+r.Instance {
 			continue
 		}
-		data, err := os.ReadFile(
-			filepath.Join(b.scopes, entry.Name(), "cgroup.procs"),
-		)
+		data, err := os.ReadFile(filepath.Join(b.scopes, entry.Name(), "cgroup.procs"))
 		if err != nil {
 			return Observation{}, err
 		}
@@ -56,8 +50,7 @@ func (b *restoreScopeBackend) Inspect(
 }
 
 func (b *restoreScopeBackend) Stop(ctx context.Context, r Resource) error {
-	if r.Instance == b.uncertain && r.Instance != "" ||
-		r.Instance != "" && !b.known[r.Instance] {
+	if r.Instance == b.uncertain && r.Instance != "" || r.Instance != "" && !b.known[r.Instance] {
 		return api.Fail(api.ManualRecovery, "instance identity is uncertain")
 	}
 	if err := b.testBackend.Stop(ctx, r); err != nil {
@@ -72,11 +65,7 @@ func (b *restoreScopeBackend) Stop(ctx context.Context, r Resource) error {
 	return os.WriteFile(path, nil, 0o600)
 }
 
-func (b *restoreScopeBackend) Network(
-	ctx context.Context,
-	r Resource,
-	enabled bool,
-) error {
+func (b *restoreScopeBackend) Network(ctx context.Context, r Resource, enabled bool) error {
 	b.networks++
 	return b.testBackend.Network(ctx, r, enabled)
 }
@@ -90,15 +79,9 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 	t.Run("production-sibling-scopes", func(t *testing.T) {
 		for _, scenario := range []string{"candidate-alive", "multiple-known-alive", "unknown-sibling", "uncertain-candidate"} {
 			t.Run(scenario, func(t *testing.T) {
-				dir, b, op, record, _ := restoreCandidateFixture(
-					t,
-					"launched",
-					"restore",
-				)
+				dir, b, op, record, _ := restoreCandidateFixture(t, "launched", "restore")
 				b.mu.Lock()
-				b.agentError = errors.New(
-					"restore agent handshake failed after launch",
-				)
+				b.agentError = errors.New("restore agent handshake failed after launch")
 				b.mu.Unlock()
 				e := openTest(t, dir, b, false, nil)
 				failed := awaitStatus(t, e, op.ID)
@@ -112,10 +95,8 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 				scopes := t.TempDir()
 				backend := &restoreScopeBackend{
 					testBackend: b,
-					cloud: NewCloudHypervisor(
-						CloudOptions{CgroupRoot: scopes},
-					),
-					scopes: scopes,
+					cloud:       NewCloudHypervisor(CloudOptions{CgroupRoot: scopes}),
+					scopes:      scopes,
 					known: map[string]bool{
 						record.Journal.Old.Instance:      true,
 						record.Journal.Resource.Instance: true,
@@ -123,11 +104,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 				}
 				defer backend.cloud.Close()
 				if scenario == "multiple-known-alive" {
-					if err := b.Launch(
-						context.Background(),
-						*record.Journal.Old,
-						false,
-					); err != nil {
+					if err := b.Launch(context.Background(), *record.Journal.Old, false); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -142,31 +119,16 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 					if err := os.Mkdir(path, 0o700); err != nil {
 						t.Fatal(err)
 					}
-					if err := os.WriteFile(
-						filepath.Join(path, "cgroup.procs"),
-						[]byte("12345\n"),
-						0o600,
-					); err != nil {
+					if err := os.WriteFile(filepath.Join(path, "cgroup.procs"), []byte("12345\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
-				unknown := filepath.Join(
-					scopes,
-					op.VMID+"-run-unknown",
-					"cgroup.procs",
-				)
+				unknown := filepath.Join(scopes, op.VMID+"-run-unknown", "cgroup.procs")
 				if scenario == "unknown-sibling" {
-					if err := os.Mkdir(
-						filepath.Dir(unknown),
-						0o700,
-					); err != nil {
+					if err := os.Mkdir(filepath.Dir(unknown), 0o700); err != nil {
 						t.Fatal(err)
 					}
-					if err := os.WriteFile(
-						unknown,
-						[]byte("67890\n"),
-						0o600,
-					); err != nil {
+					if err := os.WriteFile(unknown, []byte("67890\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -201,32 +163,22 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 				lock := e.vmLock(op.VMID)
 				lock.Lock()
 				defer lock.Unlock()
-				uncertain := scenario == "unknown-sibling" ||
-					scenario == "uncertain-candidate"
+				uncertain := scenario == "unknown-sibling" || scenario == "uncertain-candidate"
 				if uncertain {
-					if final.Status != "failed" || final.Error == nil ||
-						final.Error.Code != api.ManualRecovery {
+					if final.Status != "failed" || final.Error == nil || final.Error.Code != api.ManualRecovery {
 						t.Fatalf("uncertain deletion accepted: %+v", final)
 					}
 					if backend.networks != 0 || backend.removes != 0 {
-						t.Fatal(
-							"uncertainty allowed network/device mutation or removal",
-						)
+						t.Fatal("uncertainty allowed network/device mutation or removal")
 					}
-					if _, err = os.Stat(
-						record.Journal.Resource.Disk,
-					); err != nil {
+					if _, err = os.Stat(record.Journal.Resource.Disk); err != nil {
 						t.Fatalf("candidate evidence removed: %v", err)
 					}
-					if _, err = e.GetVM(
-						context.Background(),
-						op.VMID,
-					); err != nil {
+					if _, err = e.GetVM(context.Background(), op.VMID); err != nil {
 						t.Fatal("uncertain VM ownership removed")
 					}
 					blocked, x := e.loadOp(context.Background(), op.ID)
-					if x != nil || !blocked.Journal.RestoreBlocked ||
-						blocked.Journal.RestoreCleaned {
+					if x != nil || !blocked.Journal.RestoreBlocked || blocked.Journal.RestoreCleaned {
 						t.Fatal("uncertain restore fence cleared")
 					}
 					if scenario == "unknown-sibling" {
@@ -237,22 +189,12 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 					}
 				} else {
 					if final.Status != "succeeded" {
-						t.Fatalf(
-							"known instances could not be deleted: %+v",
-							final,
-						)
+						t.Fatalf("known instances could not be deleted: %+v", final)
 					}
-					if _, err = e.GetVM(
-						context.Background(),
-						op.VMID,
-					); err == nil {
+					if _, err = e.GetVM(context.Background(), op.VMID); err == nil {
 						t.Fatal("deleted VM retained")
 					}
-					if _, err = os.Stat(
-						record.Journal.Resource.Disk,
-					); !os.IsNotExist(
-						err,
-					) {
+					if _, err = os.Stat(record.Journal.Resource.Disk); !os.IsNotExist(err) {
 						t.Fatalf("deleted candidate retained: %v", err)
 					}
 				}
@@ -269,11 +211,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 		}
 	})
 	t.Run("existing-restore-target", func(t *testing.T) {
-		dir, b, op, record, source := restoreCandidateFixture(
-			t,
-			"restore_materials_complete",
-			"restore",
-		)
+		dir, b, op, record, source := restoreCandidateFixture(t, "restore_materials_complete", "restore")
 		damageRestoreCandidate(t, record.Journal.Resource.Disk, "rewrite")
 		e := openTest(t, dir, b, false, nil)
 		defer e.Close()
@@ -282,8 +220,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 			t.Fatalf("damaged restore succeeded: %+v", failed)
 		}
 		original := encode(failed)
-		if record.Journal.Old.Instance == "" ||
-			record.Journal.Old.Instance == record.Journal.Resource.Instance {
+		if record.Journal.Old.Instance == "" || record.Journal.Old.Instance == record.Journal.Resource.Instance {
 			t.Fatal("fixture lacks distinct old and candidate identities")
 		}
 		for _, r := range []*Resource{record.Journal.Old, record.Journal.Resource} {
@@ -360,8 +297,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 				}
 			}
 			var leases int
-			if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE operation=?", op.ID).
-				Scan(&leases); err != nil {
+			if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE operation=?", op.ID).Scan(&leases); err != nil {
 				t.Fatal(err)
 			}
 			if (boundary != "restore_resources_ready") != (leases == 1) {
@@ -406,10 +342,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 				); err != nil {
 					t.Fatal(err)
 				}
-				if err = AcknowledgeRecovery(
-					dir,
-					"review retained restore materials",
-				); err != nil {
+				if err = AcknowledgeRecovery(dir, "review retained restore materials"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -420,11 +353,7 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 			e = openTest(t, dir, b, false, nil)
 			fenced, x := e.GetVM(context.Background(), op.VMID)
 			if x != nil || fenced.OperationID != op.ID {
-				t.Fatalf(
-					"recovery acknowledgement cleared restore fence: %+v %v",
-					fenced,
-					x,
-				)
+				t.Fatalf("recovery acknowledgement cleared restore fence: %+v %v", fenced, x)
 			}
 			if _, x = e.Submit(
 				context.Background(),
@@ -465,15 +394,8 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 			}
 			b.mu.Unlock()
 			e = openTest(t, dir, b, false, nil)
-			unknown := filepath.Join(
-				filepath.Dir(record.Journal.Resource.Disk),
-				"unknown-evidence",
-			)
-			if err = os.WriteFile(
-				unknown,
-				[]byte("retain"),
-				0o600,
-			); err != nil {
+			unknown := filepath.Join(filepath.Dir(record.Journal.Resource.Disk), "unknown-evidence")
+			if err = os.WriteFile(unknown, []byte("retain"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			request.Key = "delete-unknown-entry"
@@ -532,37 +454,25 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 			}
 			e = openTest(t, dir, b, false, nil)
 			defer e.Close()
-			if final := awaitStatus(
-				t,
-				e,
-				deletion.ID,
-			); final.Status != "succeeded" {
+			if final := awaitStatus(t, e, deletion.ID); final.Status != "succeeded" {
 				t.Fatalf("delete replay failed: %+v", final)
 			}
 			b.mu.Lock()
 			oldState, candidateState := b.states[record.Journal.Old.Instance], b.states[record.Journal.Resource.Instance]
 			b.mu.Unlock()
-			if oldState.Alive || oldState.Network || candidateState.Alive ||
-				candidateState.Network {
+			if oldState.Alive || oldState.Network || candidateState.Alive || candidateState.Network {
 				t.Fatal("delete left a known instance/device active")
 			}
 			repeated, err := e.Submit(context.Background(), request)
-			if err != nil || repeated.ID != deletion.ID ||
-				repeated.Status != "succeeded" {
+			if err != nil || repeated.ID != deletion.ID || repeated.Status != "succeeded" {
 				t.Fatalf("delete lost-response retry: %+v %v", repeated, err)
 			}
 			after, err := e.GetOperation(context.Background(), op.ID)
 			if err != nil || !bytes.Equal(original, encode(after)) {
-				t.Fatalf(
-					"original failure response mutated: %s %s %v",
-					original,
-					encode(after),
-					err,
-				)
+				t.Fatalf("original failure response mutated: %s %s %v", original, encode(after), err)
 			}
 			cleaned, err := e.loadOp(context.Background(), op.ID)
-			if err != nil || !cleaned.Journal.RestoreCleaned ||
-				cleaned.Journal.Lease {
+			if err != nil || !cleaned.Journal.RestoreCleaned || cleaned.Journal.Lease {
 				t.Fatalf("cleanup marker missing: %+v %v", cleaned.Journal, err)
 			}
 			if _, err = e.GetVM(context.Background(), op.VMID); err == nil {
@@ -577,15 +487,8 @@ func TestRestoreCandidateRetentionAndExplicitDeletion(t *testing.T) {
 					args = []any{op.VMID, op.VMID + ":%"}
 				}
 				var count int
-				if err = e.db.QueryRow(query, args...).
-					Scan(&count); err != nil ||
-					count != 0 {
-					t.Fatalf(
-						"cleanup ledger retained: %s count=%d %v",
-						query,
-						count,
-						err,
-					)
+				if err = e.db.QueryRow(query, args...).Scan(&count); err != nil || count != 0 {
+					t.Fatalf("cleanup ledger retained: %s count=%d %v", query, count, err)
 				}
 			}
 		})

@@ -10,7 +10,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs,
-    os::unix::{fs::MetadataExt, process::CommandExt},
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{fs::MetadataExt, process::CommandExt},
+    },
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -265,7 +268,6 @@ fn loopback() -> Result<()> {
         return Err(InitError::from(std::io::Error::last_os_error())
             .context("open loopback ioctl socket".into()));
     }
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
     let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
     request.ifr_name[0] = b'l' as _;

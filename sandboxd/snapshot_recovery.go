@@ -13,10 +13,7 @@ import (
 
 // retireSnapshot holds the shared sandbox reference lock until engine deletion
 // finishes. A checkpoint may share a sleeping sandbox's immutable capture.
-func (s *Service) retireSnapshot(
-	o Operation,
-	snapshot, excludeSandbox, excludeCheckpoint string,
-) error {
+func (s *Service) retireSnapshot(o Operation, snapshot, excludeSandbox, excludeCheckpoint string) error {
 	if snapshot == "" {
 		return nil
 	}
@@ -25,17 +22,8 @@ func (s *Service) retireSnapshot(
 	return s.retireSnapshotOwned(o, snapshot, excludeSandbox, excludeCheckpoint)
 }
 
-func (s *Service) retireSnapshotOwned(
-	o Operation,
-	snapshot, excludeSandbox, excludeCheckpoint string,
-) error {
-	return s.retireSnapshotOwnedExcept(
-		o,
-		snapshot,
-		excludeSandbox,
-		excludeCheckpoint,
-		o.ID,
-	)
+func (s *Service) retireSnapshotOwned(o Operation, snapshot, excludeSandbox, excludeCheckpoint string) error {
+	return s.retireSnapshotOwnedExcept(o, snapshot, excludeSandbox, excludeCheckpoint, o.ID)
 }
 
 func (s *Service) retireSnapshotOwnedExcept(
@@ -56,26 +44,14 @@ func (s *Service) retireSnapshotOwnedExcept(
 	if users > 0 {
 		return nil
 	}
-	_, err := s.engine(
-		o,
-		"retire-snapshot:"+snapshot,
-		api.Request{Action: "delete_snapshot", SnapshotID: snapshot},
-	)
+	_, err := s.engine(o, "retire-snapshot:"+snapshot, api.Request{Action: "delete_snapshot", SnapshotID: snapshot})
 	return err
 }
 
 func (s *Service) proveRetiredSnapshot(b Sandbox) error {
-	if err := requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		b.SnapshotID,
-		b.TenantID,
-	); err != nil {
+	if err := requireSnapshotOwner(s.ctx, s.store.db, b.SnapshotID, b.TenantID); err != nil {
 		if isCode(err, ErrNotFound) {
-			return Fail(
-				ErrManualRecovery,
-				"sleep snapshot provenance cannot be proven",
-			)
+			return Fail(ErrManualRecovery, "sleep snapshot provenance cannot be proven")
 		}
 		return err
 	}
@@ -124,13 +100,7 @@ func (s *Service) recoverRetiredSnapshot(r *resourceRecovery) error {
 		return nil
 	}
 	o := r.operation()
-	if err = s.retireSnapshotOwnedExcept(
-		o,
-		r.Snapshot,
-		"",
-		"",
-		r.Source,
-	); err != nil {
+	if err = s.retireSnapshotOwnedExcept(o, r.Snapshot, "", "", r.Source); err != nil {
 		return s.finishRecoveryAttempt(r, err, "retire-snapshot:"+r.Snapshot)
 	}
 	// A shared live reference leaves both the intent and its charge intact.
@@ -147,20 +117,12 @@ func (s *Service) recoverySnapshotReady(id string) error {
 		return err
 	}
 	if !snap.Published || snap.Deleting {
-		return Fail(
-			ErrConflict,
-			"recovery snapshot %s is not published",
-			id,
-		)
+		return Fail(ErrConflict, "recovery snapshot %s is not published", id)
 	}
 	return nil
 }
 
-func snapshotCollector(
-	ctx context.Context,
-	e executor,
-	tenant, sid, source string,
-) (resourceRecovery, error) {
+func snapshotCollector(ctx context.Context, e executor, tenant, sid, source string) (resourceRecovery, error) {
 	var raw []byte
 	err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind')='retired_snapshot' AND json_extract(body,'$.snapshot_id')=? AND COALESCE(json_extract(body,'$.done'),0)=0 ORDER BY id LIMIT 1`, sid).
 		Scan(&raw)
@@ -168,19 +130,14 @@ func snapshotCollector(
 	if err == nil {
 		err = json.Unmarshal(raw, &r)
 		if err == nil && r.TenantID != tenant {
-			err = Fail(
-				ErrManualRecovery,
-				"snapshot collector owner mismatch",
-			)
+			err = Fail(ErrManualRecovery, "snapshot collector owner mismatch")
 		}
 		return r, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
-	h := sha256.Sum256(
-		encode([]string{"plan013-retired-snapshot-v1", tenant, sid}),
-	)
+	h := sha256.Sum256(encode([]string{"plan013-retired-snapshot-v1", tenant, sid}))
 	r = resourceRecovery{
 		ID:       "template-retired:" + hex.EncodeToString(h[:]),
 		Source:   source,
@@ -191,41 +148,25 @@ func snapshotCollector(
 	if err = insertRecovery(ctx, e, r); err != nil {
 		return r, err
 	}
-	err = putQuotaRef(
-		ctx,
-		e,
-		tenant,
-		"snapshot",
-		sid,
-		quotaRef{Kind: "cleanup", ID: "recovery:" + r.ID},
-	)
+	err = putQuotaRef(ctx, e, tenant, "snapshot", sid, quotaRef{Kind: "cleanup", ID: "recovery:" + r.ID})
 	return r, err
 }
 
 // Snapshot owners record immutable authorization provenance, never GC roots.
 // captured means a sandboxd engine receipt; external_import means a root grant.
-func requireSnapshotOwner(
-	ctx context.Context,
-	e executor,
-	snapshot, tenant string,
-) error {
+func requireSnapshotOwner(ctx context.Context, e executor, snapshot, tenant string) error {
 	if snapshot == "" {
 		return nil
 	}
 	var owner string
-	err := e.QueryRowContext(ctx, "SELECT tenant_id FROM snapshot_owners WHERE snapshot_id=?", snapshot).
-		Scan(&owner)
+	err := e.QueryRowContext(ctx, "SELECT tenant_id FROM snapshot_owners WHERE snapshot_id=?", snapshot).Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != tenant) {
 		return Fail(ErrNotFound, "not found")
 	}
 	return err
 }
 
-func recordSnapshotOwner(
-	ctx context.Context,
-	e executor,
-	snapshot, tenant, operation, kind string,
-) error {
+func recordSnapshotOwner(ctx context.Context, e executor, snapshot, tenant, operation, kind string) error {
 	if snapshot == "" || tenant == "" || operation == "" {
 		return Fail(ErrManualRecovery, "snapshot source is incomplete")
 	}
@@ -249,10 +190,7 @@ func recordSnapshotOwner(
 		return Fail(ErrNotFound, "not found")
 	}
 	if source != operation || sourceKind != kind {
-		return Fail(
-			ErrManualRecovery,
-			"snapshot source conflicts with immutable provenance",
-		)
+		return Fail(ErrManualRecovery, "snapshot source conflicts with immutable provenance")
 	}
 	return nil
 }

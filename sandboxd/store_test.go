@@ -34,12 +34,10 @@ func TestFutureStoreSchemaIsRejectedBeforeDDL(t *testing.T) {
 	}
 	defer db.Close()
 	var tables, version int
-	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='checkpoints'").
-		Scan(&tables); err != nil {
+	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='checkpoints'").Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.QueryRow("SELECT version FROM version").
-		Scan(&version); err != nil {
+	if err = db.QueryRow("SELECT version FROM version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if tables != 0 || version != storeSchemaVersion+1 {
@@ -56,9 +54,7 @@ func TestSchemaThreeStateIsRejectedBeforeDDL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.db.Exec(
-		"UPDATE version SET version=3; DROP TABLE template_intents",
-	); err != nil {
+	if _, err = store.db.Exec("UPDATE version SET version=3; DROP TABLE template_intents"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -95,8 +91,7 @@ func TestSchemaThreeStateIsRejectedBeforeDDL(t *testing.T) {
 	}
 	defer db.Close()
 	var version, intents int
-	if err = db.QueryRow("SELECT version FROM version").
-		Scan(&version); err != nil {
+	if err = db.QueryRow("SELECT version FROM version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.QueryRow(

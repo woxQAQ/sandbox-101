@@ -38,17 +38,10 @@ func mergedOCIBuilder(tools map[string]string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func mergedOCITools(
-	ctx context.Context,
-	tools map[string]string,
-) (map[string]string, error) {
+func mergedOCITools(ctx context.Context, tools map[string]string) (map[string]string, error) {
 	for _, tool := range []string{"umoci", "unshare"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			return nil, api.Fail(
-				api.Incompatible,
-				"required OCI compatibility tool missing: %s",
-				tool,
-			)
+			return nil, api.Fail(api.Incompatible, "required OCI compatibility tool missing: %s", tool)
 		}
 		out, err := command(ctx, tool, "--version")
 		if err != nil {
@@ -57,17 +50,13 @@ func mergedOCITools(
 		tools[tool] = strings.TrimSpace(string(out))
 	}
 	if !supportedUmoci(tools["umoci"]) {
-		return nil, api.Fail(
-			api.Incompatible,
-			"OCI compatibility materializer requires umoci 0.6.0",
-		)
+		return nil, api.Fail(api.Incompatible, "OCI compatibility materializer requires umoci 0.6.0")
 	}
 	return tools, nil
 }
 
 func supportedUmoci(version string) bool {
-	return strings.HasPrefix(version, "umoci version 0.6.0\n") ||
-		version == "umoci version 0.6.0"
+	return strings.HasPrefix(version, "umoci version 0.6.0\n") || version == "umoci version 0.6.0"
 }
 
 // Security/resource/digest validation is shared with native layered preflight.
@@ -76,19 +65,12 @@ func supportedUmoci(version string) bool {
 //nolint:staticcheck // Validate both legacy tar headers and the deprecated xattr map accepted by archive/tar.
 func validateMergedOCIEntry(h *tar.Header) error {
 	bad := func(reason string) error {
-		return api.Fail(
-			api.Incompatible,
-			"unsupported OCI compatibility entry %q: %s",
-			h.Name,
-			reason,
-		)
+		return api.Fail(api.Incompatible, "unsupported OCI compatibility entry %q: %s", h.Name, reason)
 	}
 	if path.Clean(h.Name) == "." && h.Typeflag != tar.TypeDir {
 		return api.Fail(api.Invalid, "OCI root entry must be a directory")
 	}
-	if h.Uid < 0 || uint64(h.Uid) >= 1<<32-1 || h.Gid < 0 ||
-		uint64(h.Gid) >= 1<<32-1 ||
-		h.Mode < 0 ||
+	if h.Uid < 0 || uint64(h.Uid) >= 1<<32-1 || h.Gid < 0 || uint64(h.Gid) >= 1<<32-1 || h.Mode < 0 ||
 		h.Mode & ^int64(0o7777) != 0 ||
 		h.ModTime.Unix() < 0 {
 		return bad("metadata outside supported range")
@@ -99,15 +81,8 @@ func validateMergedOCIEntry(h *tar.Header) error {
 	if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA && h.Size != 0 {
 		return api.Fail(api.Invalid, "OCI nonregular entry has data")
 	}
-	if base := path.Base(
-		path.Clean(h.Name),
-	); strings.HasPrefix(base, ".wh.") &&
-		base != ".wh..wh..opq" {
-		if victim := strings.TrimPrefix(
-			base,
-			".wh.",
-		); victim == "" || victim == "." ||
-			victim == ".." {
+	if base := path.Base(path.Clean(h.Name)); strings.HasPrefix(base, ".wh.") && base != ".wh..wh..opq" {
+		if victim := strings.TrimPrefix(base, ".wh."); victim == "" || victim == "." || victim == ".." {
 			return api.Fail(api.Invalid, "invalid OCI whiteout target")
 		}
 	}
@@ -141,9 +116,7 @@ func validateMergedOCIEntry(h *tar.Header) error {
 
 func (m ImageManifest) validateMergedOCI() error {
 	bad := func() error { return api.Fail(api.Incompatible, "invalid OCI merged EROFS materialization identity") }
-	if m.Format != 3 || m.Layout != MergedOCIEROFSLayout ||
-		m.Architecture != runtime.GOARCH ||
-		len(m.Artifacts) != 0 ||
+	if m.Format != 3 || m.Layout != MergedOCIEROFSLayout || m.Architecture != runtime.GOARCH || len(m.Artifacts) != 0 ||
 		len(m.DiffIDs) == 0 ||
 		len(m.DiffIDs) > MaxImageDataDevices ||
 		len(m.Layers) != len(m.DiffIDs) ||
@@ -156,11 +129,7 @@ func (m ImageManifest) validateMergedOCI() error {
 	if _, err := shaName(
 		m.Builder,
 	); err != nil || m.Builder != mergedOCIBuilder(m.Tools) || !supportedUmoci(m.Tools["umoci"]) || m.Tools["bwrap"] == "" || m.Tools["unshare"] == "" || !supportedEROFSVersion(m.Tools["mkfs.erofs"]) || !supportedEROFSVersion(m.Tools["fsck.erofs"]) ||
-		erofsVersion.FindString(
-			m.Tools["mkfs.erofs"],
-		) != erofsVersion.FindString(
-			m.Tools["fsck.erofs"],
-		) {
+		erofsVersion.FindString(m.Tools["mkfs.erofs"]) != erofsVersion.FindString(m.Tools["fsck.erofs"]) {
 		return bad()
 	}
 	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
@@ -186,13 +155,9 @@ func (m ImageManifest) verifyMergedOCI(dir, want string) error {
 	if err := m.validateMergedOCI(); err != nil {
 		return err
 	}
-	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir ||
-		filepath.Base(dir) != m.Digest[7:] ||
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || filepath.Base(dir) != m.Digest[7:] ||
 		filepath.Base(filepath.Dir(dir)) != "images" {
-		return api.Fail(
-			api.Incompatible,
-			"image directory does not match manifest",
-		)
+		return api.Fail(api.Incompatible, "image directory does not match manifest")
 	}
 	for _, parent := range []string{filepath.Dir(dir), dir} {
 		st, err := os.Lstat(parent)
@@ -200,10 +165,7 @@ func (m ImageManifest) verifyMergedOCI(dir, want string) error {
 			return err
 		}
 		if !st.IsDir() {
-			return api.Fail(
-				api.Incompatible,
-				"image directory traverses a symlink or nondirectory",
-			)
+			return api.Fail(api.Incompatible, "image directory traverses a symlink or nondirectory")
 		}
 	}
 	return m.verifyMergedOCIArtifacts(dir)
@@ -222,29 +184,18 @@ func (m ImageManifest) verifyMergedOCIArtifacts(dir string) error {
 	if err != nil {
 		return err
 	}
-	if binary.LittleEndian.Uint16(sb[86:]) != 0 ||
-		binary.LittleEndian.Uint32(sb[80:]) != 0 ||
+	if binary.LittleEndian.Uint16(sb[86:]) != 0 || binary.LittleEndian.Uint32(sb[80:]) != 0 ||
 		uint64(binary.LittleEndian.Uint32(sb[36:])) != uint64(size/4096) ||
 		hex.EncodeToString(sb[48:64]) != m.Digest[7:39] {
-		return api.Fail(
-			api.Incompatible,
-			"invalid self-contained OCI merged EROFS superblock",
-		)
+		return api.Fail(api.Incompatible, "invalid self-contained OCI merged EROFS superblock")
 	}
 	return nil
 }
 
-func materializeMergedOCI(
-	ctx context.Context,
-	input, out, digest string,
-	expandedLimit int64,
-) error {
+func materializeMergedOCI(ctx context.Context, input, out, digest string, expandedLimit int64) error {
 	// Construct a minimal trusted index. No source index tags, URLs, annotations
 	// or runtime configuration can select a different image for unpacking.
-	if err := writeJSON(
-		filepath.Join(input, "oci-layout"),
-		v1.ImageLayout{Version: "1.0.0"},
-	); err != nil {
+	if err := writeJSON(filepath.Join(input, "oci-layout"), v1.ImageLayout{Version: "1.0.0"}); err != nil {
 		return err
 	}
 	n, _ := shaName(digest)

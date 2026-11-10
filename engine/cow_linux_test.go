@@ -63,10 +63,7 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 			if name == "missing" {
 				snapshot = map[string]any{"snapshots": map[string]any{}}
 			}
-			if err = writeJSON(
-				filepath.Join(dir, "state.json"),
-				snapshot,
-			); err != nil {
+			if err = writeJSON(filepath.Join(dir, "state.json"), snapshot); err != nil {
 				t.Fatal(err)
 			}
 			file, err := os.Create(filepath.Join(dir, "memory-ranges"))
@@ -116,13 +113,7 @@ func TestCOWActualMappingsRequireCompletePrivateBacking(t *testing.T) {
 				if name == "partial" {
 					length /= 2
 				}
-				mapping, err := unix.Mmap(
-					int(file.Fd()),
-					0,
-					length,
-					unix.PROT_READ|unix.PROT_WRITE,
-					flags,
-				)
+				mapping, err := unix.Mmap(int(file.Fd()), 0, length, unix.PROT_READ|unix.PROT_WRITE, flags)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -130,11 +121,7 @@ func TestCOWActualMappingsRequireCompletePrivateBacking(t *testing.T) {
 				mapping[0] = 42
 				if name == "private" {
 					var original [1]byte
-					if _, err = file.ReadAt(
-						original[:],
-						0,
-					); err != nil ||
-						original[0] != 0 {
+					if _, err = file.ReadAt(original[:], 0); err != nil || original[0] != 0 {
 						t.Fatal("private write changed retained backing", err)
 					}
 				}

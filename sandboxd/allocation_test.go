@@ -12,18 +12,12 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-func templateQuotaFaultObserved(
-	t *testing.T,
-	s *Service,
-	fault string,
-	err error,
-) {
+func templateQuotaFaultObserved(t *testing.T, s *Service, fault string, err error) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("required SQL fault not reached")
 	}
-	if fault == "commit" &&
-		!strings.Contains(privateDiagnostic(err), "FOREIGN KEY") {
+	if fault == "commit" && !strings.Contains(privateDiagnostic(err), "FOREIGN KEY") {
 		t.Fatal("not a deferred COMMIT error", err)
 	}
 	t.Logf("SQL fault=%s actual=%v", fault, err)
@@ -38,12 +32,7 @@ func templateQuotaCaptureFault(t *testing.T, target, fault string) {
 		hideCapture: true,
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"capture-atomic",
-		templateQuotaBuild("capture-atomic"),
-	)
+	o, err := s.Submit(s.ctx, p, "capture-atomic", templateQuotaBuild("capture-atomic"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +76,7 @@ func templateQuotaCaptureFault(t *testing.T, target, fault string) {
 		t.Fatal(err)
 	}
 	ledgerMoney(t, s, p.TenantID, 0, 0)
-	if f.count("create") != 1 || f.count("snapshot") != 1 ||
-		f.count("delete") != 1 {
+	if f.count("create") != 1 || f.count("snapshot") != 1 || f.count("delete") != 1 {
 		t.Fatal("receipt recovery repeated physical effects")
 	}
 	now, _ := s.store.operation(s.ctx, o.ID)
@@ -128,12 +116,7 @@ func templateQuotaQualifiedFixture(
 	}
 	if subject == "build" {
 		var err error
-		o, err = s.Submit(
-			s.ctx,
-			p,
-			"qualified-build",
-			templateQuotaBuild("qualified-build"),
-		)
+		o, err = s.Submit(s.ctx, p, "qualified-build", templateQuotaBuild("qualified-build"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,13 +146,10 @@ func templateQuotaQualifiedFixture(
 		templateQuotaTarget(t, s, p, tpl, 0)
 	}
 	err := s.recoverResources()
-	if err == nil ||
-		!strings.Contains(privateDiagnostic(err), "qualification setup") {
+	if err == nil || !strings.Contains(privateDiagnostic(err), "qualification setup") {
 		t.Fatal("qualified setup not reached", err)
 	}
-	if _, err = s.store.db.Exec(
-		`DROP TRIGGER qualification_setup`,
-	); err != nil {
+	if _, err = s.store.db.Exec(`DROP TRIGGER qualification_setup`); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.loadRecovery(allocationGroupID(o))
@@ -246,20 +226,14 @@ func templateQuotaQualifiedFault(t *testing.T, subject, point, fault string) {
 	}
 	templateQuotaFaultObserved(t, s, fault, err)
 	if !bytes.Equal(before, templateQuotaState(t, s)) {
-		t.Fatalf(
-			"qualified %s/%s partially transferred responsibility",
-			subject,
-			point,
-		)
+		t.Fatalf("qualified %s/%s partially transferred responsibility", subject, point)
 	}
 	if !retirement {
 		e.mu.Lock()
 		attempts := e.attempts["delete"]
 		e.mu.Unlock()
 		if attempts != 0 {
-			t.Fatal(
-				"delete dispatched without its collector/marker transaction",
-			)
+			t.Fatal("delete dispatched without its collector/marker transaction")
 		}
 	}
 	if subject == "build" {
@@ -300,13 +274,7 @@ func templateQuotaLegacyReaderFault(t *testing.T, fault string) {
 	tpl = templateQuotaTarget(t, s, p, tpl, 1)
 	s.pools()
 	s.wg.Wait()
-	claim := ledgerExecute(
-		t,
-		s,
-		p,
-		"legacy-active",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	claim := ledgerExecute(t, s, p, "legacy-active", Command{Action: "claim", TemplateID: tpl.ID})
 	o, err := s.store.byKey(s.ctx, p.TenantID, "legacy-active")
 	if err != nil {
 		t.Fatal(err)
@@ -342,9 +310,7 @@ func templateQuotaLegacyReaderFault(t *testing.T, fault string) {
 	err = s.recoverResources()
 	templateQuotaFaultObserved(t, s, fault, err)
 	if !bytes.Equal(before, templateQuotaState(t, s)) {
-		t.Fatal(
-			"active reader fault changed historical destination or another reader",
-		)
+		t.Fatal("active reader fault changed historical destination or another reader")
 	}
 	if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
 		t.Fatal(err)
@@ -354,13 +320,8 @@ func templateQuotaLegacyReaderFault(t *testing.T, fault string) {
 	}
 	var readers int
 	if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency'`, tpl.SnapshotID).
-		Scan(&readers); err != nil ||
-		readers != 1 {
-		t.Fatal(
-			"retirement removed an independent unknown reader",
-			readers,
-			err,
-		)
+		Scan(&readers); err != nil || readers != 1 {
+		t.Fatal("retirement removed an independent unknown reader", readers, err)
 	}
 	now, _ := s.store.operation(s.ctx, o.ID)
 	if !bytes.Equal(public, encode(now)) {
@@ -373,13 +334,7 @@ func templateQuotaLegacyReaderFault(t *testing.T, fault string) {
 	if err = s.recoverResources(); err != nil {
 		t.Fatal(err)
 	}
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"legacy-release",
-		Command{Action: "release", SandboxID: claim.Sandbox.ID},
-	)
+	ledgerExecute(t, s, p, "legacy-release", Command{Action: "release", SandboxID: claim.Sandbox.ID})
 	s = ledgerRestart(t, s)
 	if err = s.recoverResources(); err != nil {
 		t.Fatal(err)
@@ -403,8 +358,7 @@ func templateQuotaPartialQualifiedRetirement(t *testing.T) {
 			ExpectedInstance: i.Instance,
 		},
 	)
-	if err != nil || restored.ResultInstance == "" ||
-		restored.ResultInstance == i.Instance {
+	if err != nil || restored.ResultInstance == "" || restored.ResultInstance == i.Instance {
 		t.Fatal("external version not produced", err)
 	}
 	version := i.VM + ":restore:" + restored.ID
@@ -449,8 +403,7 @@ func templateQuotaPartialQualifiedRetirement(t *testing.T) {
 	}
 	before := templateQuotaState(t, s)
 	err = s.recoverResources()
-	if !isCode(err, ErrManualRecovery) ||
-		!strings.Contains(err.Error(), "not fully retired") {
+	if !isCode(err, ErrManualRecovery) || !strings.Contains(err.Error(), "not fully retired") {
 		t.Fatal("partial multirow deletion was accepted", err)
 	}
 	if !bytes.Equal(before, templateQuotaState(t, s)) {
@@ -479,10 +432,7 @@ func templateQuotaPartialQualifiedRetirement(t *testing.T) {
 func templateQuotaWithoutStepProgress(t *testing.T, s *Service) []byte {
 	t.Helper()
 	var state map[string][]string
-	if err := json.Unmarshal(
-		templateQuotaWithoutOperations(t, s),
-		&state,
-	); err != nil {
+	if err := json.Unmarshal(templateQuotaWithoutOperations(t, s), &state); err != nil {
 		t.Fatal(err)
 	}
 	for n, raw := range state["resource_recovery"] {
@@ -519,12 +469,7 @@ func templateQuotaSelectionPublicationFault(t *testing.T, fault string) {
 	s.mu.Lock()
 	s.closing = true
 	s.mu.Unlock()
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"active-reader-transaction",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	o, err := s.Submit(s.ctx, p, "active-reader-transaction", Command{Action: "claim", TemplateID: tpl.ID})
 	s.mu.Lock()
 	s.closing = false
 	s.mu.Unlock()
@@ -545,14 +490,10 @@ func templateQuotaSelectionPublicationFault(t *testing.T, fault string) {
 	err = s.activateWarm(o, &b)
 	templateQuotaFaultObserved(t, s, fault, err)
 	if !bytes.Equal(memory, encode(b)) {
-		t.Fatal(
-			"uncommitted running metadata escaped through the staged Sandbox",
-		)
+		t.Fatal("uncommitted running metadata escaped through the staged Sandbox")
 	}
 	if !bytes.Equal(before, templateQuotaWithoutStepProgress(t, s)) {
-		t.Fatal(
-			"active transaction partially changed metadata, holder, destination or fee",
-		)
+		t.Fatal("active transaction partially changed metadata, holder, destination or fee")
 	}
 	r, err := s.loadRecovery(allocationGroupID(o))
 	if err != nil {
@@ -576,13 +517,7 @@ func templateQuotaSelectionPublicationFault(t *testing.T, fault string) {
 		t.Fatal("publication retry allocated a replacement")
 	}
 	templateQuotaTarget(t, s, p, tpl, 0)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"active-reader-release",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	ledgerExecute(t, s, p, "active-reader-release", Command{Action: "release", SandboxID: b.ID})
 	s = ledgerRestart(t, s)
 	if err = s.recoverResources(); err != nil {
 		t.Fatal(err)
@@ -627,8 +562,5 @@ func TestTemplateQuotaSQLHandoffRevision(t *testing.T) {
 			func(t *testing.T) { templateQuotaSelectionPublicationFault(t, fault) },
 		)
 	}
-	t.Run(
-		"qualified-partial-multirow-ignore",
-		templateQuotaPartialQualifiedRetirement,
-	)
+	t.Run("qualified-partial-multirow-ignore", templateQuotaPartialQualifiedRetirement)
 }

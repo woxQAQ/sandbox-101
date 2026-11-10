@@ -26,17 +26,11 @@ type BackupPoint struct {
 
 // Backup captures a consistent SQLite snapshot and the immutable token/audit key.
 // Guest snapshots belong to engine and must be backed up separately.
-func (s *Service) Backup(
-	ctx context.Context,
-	destination string,
-) (BackupPoint, error) {
+func (s *Service) Backup(ctx context.Context, destination string) (BackupPoint, error) {
 	return s.store.backup(ctx, destination)
 }
 
-func (s *store) backup(
-	ctx context.Context,
-	destination string,
-) (BackupPoint, error) {
+func (s *store) backup(ctx context.Context, destination string) (BackupPoint, error) {
 	point := BackupPoint{
 		Format:    1,
 		ID:        newID("sandboxd-backup_"),
@@ -52,10 +46,7 @@ func (s *store) backup(
 	if err := syncPrivateFile(database); err != nil {
 		return point, err
 	}
-	if err := atomicFile(
-		filepath.Join(destination, "node.key"),
-		s.key,
-	); err != nil {
+	if err := atomicFile(filepath.Join(destination, "node.key"), s.key); err != nil {
 		return point, err
 	}
 	var err error
@@ -67,19 +58,13 @@ func (s *store) backup(
 	if err != nil {
 		return point, err
 	}
-	if err = atomicFile(
-		filepath.Join(destination, "backup.json"),
-		encode(point),
-	); err != nil {
+	if err = atomicFile(filepath.Join(destination, "backup.json"), encode(point)); err != nil {
 		return point, err
 	}
 	return point, nil
 }
 
-func BackupState(
-	ctx context.Context,
-	state, destination string,
-) (BackupPoint, error) {
+func BackupState(ctx context.Context, state, destination string) (BackupPoint, error) {
 	st, err := openStore(state, false)
 	if err != nil {
 		return BackupPoint{}, err
@@ -94,10 +79,7 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", Fail(
-			ErrInvalid,
-			"backup component is not a regular file",
-		)
+		return "", Fail(ErrInvalid, "backup component is not a regular file")
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -128,11 +110,7 @@ func copyBackupFile(source, destination string) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(
-		destination,
-		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
-		0o600,
-	)
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -163,28 +141,18 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 			return point, err
 		}
 		if got != want {
-			return point, Fail(
-				ErrInvalid,
-				"backup checksum mismatch for %s",
-				name,
-			)
+			return point, Fail(ErrInvalid, "backup checksum mismatch for %s", name)
 		}
 	}
 	if err = os.Mkdir(state, 0o700); err != nil {
 		return point, err
 	}
 	// Install the recovery fence first: a partial restoration cannot become a new node.
-	if err = atomicFile(
-		filepath.Join(state, "RECOVERY_REQUIRED"),
-		raw,
-	); err != nil {
+	if err = atomicFile(filepath.Join(state, "RECOVERY_REQUIRED"), raw); err != nil {
 		return point, err
 	}
 	for _, name := range []string{"sandboxd.db", "node.key"} {
-		if err = copyBackupFile(
-			filepath.Join(source, name),
-			filepath.Join(state, name),
-		); err != nil {
+		if err = copyBackupFile(filepath.Join(source, name), filepath.Join(state, name)); err != nil {
 			return point, err
 		}
 	}
@@ -199,16 +167,9 @@ func RestoreStateBackup(state, source string) (BackupPoint, error) {
 
 func AcknowledgeStateRecovery(state, note string) error {
 	if len(strings.TrimSpace(note)) < 16 {
-		return Fail(
-			ErrInvalid,
-			"a review note describing engine inventory and missing history is required",
-		)
+		return Fail(ErrInvalid, "a review note describing engine inventory and missing history is required")
 	}
-	lock, err := os.OpenFile(
-		filepath.Join(state, "writer.lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
+	lock, err := os.OpenFile(filepath.Join(state, "writer.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}

@@ -30,10 +30,7 @@ func gcNode(st os.FileInfo) gcIdentity {
 }
 
 func (g *gcGraph) loadDeletions() error {
-	rows, err := g.e.db.QueryContext(
-		g.ctx,
-		"SELECT path,body FROM gc_deletions",
-	)
+	rows, err := g.e.db.QueryContext(g.ctx, "SELECT path,body FROM gc_deletions")
 	if err != nil {
 		return err
 	}
@@ -69,15 +66,11 @@ func (g *gcGraph) loadDeletions() error {
 				parts[2] == "disks" && gcID(strings.TrimSuffix(strings.TrimSuffix(parts[3], ".pending"), ".raw"), "op-") &&
 					!d.Dir
 		}
-		if !valid || d.Path != path || filepath.Clean(path) != path ||
-			d.Format != 1 ||
-			len(d.Nodes) == 0 {
+		if !valid || d.Path != path || filepath.Clean(path) != path || d.Format != 1 || len(d.Nodes) == 0 {
 			return fmt.Errorf("GC corrupt deletion ownership: %s", path)
 		}
 		for rel, n := range d.Nodes {
-			if filepath.IsAbs(rel) || filepath.Clean(rel) != rel ||
-				strings.HasPrefix(rel, "../") ||
-				rel == ".." ||
+			if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") || rel == ".." ||
 				strings.Contains(rel, "\\") ||
 				n.Inode == 0 ||
 				(!os.FileMode(n.Mode).IsDir() && !os.FileMode(n.Mode).IsRegular()) {
@@ -89,11 +82,7 @@ func (g *gcGraph) loadDeletions() error {
 	return rows.Err()
 }
 
-func (g *gcGraph) deletion(
-	path string,
-	files []string,
-	dir bool,
-) (gcDeletion, error) {
+func (g *gcGraph) deletion(path string, files []string, dir bool) (gcDeletion, error) {
 	d := gcDeletion{
 		Format: 1,
 		Path:   path,
@@ -151,10 +140,7 @@ func (g *gcGraph) resumeFiles(d gcDeletion) ([]string, error) {
 				return err
 			}
 			if want, ok := d.Nodes[rel]; !ok || gcNode(st) != want {
-				return fmt.Errorf(
-					"GC deletion inode replaced or unknown: %s",
-					p,
-				)
+				return fmt.Errorf("GC deletion inode replaced or unknown: %s", p)
 			}
 			if !entry.IsDir() {
 				paths = append(paths, p)
@@ -166,12 +152,7 @@ func (g *gcGraph) resumeFiles(d gcDeletion) ([]string, error) {
 }
 
 func (g *gcGraph) journalDeletion(d gcDeletion) error {
-	if _, err := g.e.db.ExecContext(
-		g.ctx,
-		"INSERT INTO gc_deletions VALUES(?,?)",
-		d.Path,
-		encode(d),
-	); err != nil {
+	if _, err := g.e.db.ExecContext(g.ctx, "INSERT INTO gc_deletions VALUES(?,?)", d.Path, encode(d)); err != nil {
 		return err
 	}
 	g.deletions[d.Path] = d
@@ -185,11 +166,7 @@ func (g *gcGraph) journalDeletion(d gcDeletion) error {
 }
 
 func (g *gcGraph) finishDeletion(path string) error {
-	if _, err := g.e.db.ExecContext(
-		g.ctx,
-		"DELETE FROM gc_deletions WHERE path=?",
-		path,
-	); err != nil {
+	if _, err := g.e.db.ExecContext(g.ctx, "DELETE FROM gc_deletions WHERE path=?", path); err != nil {
 		return err
 	}
 	delete(g.deletions, path)

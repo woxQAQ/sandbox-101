@@ -18,12 +18,8 @@ func (s *Service) activationFence(o Operation, id string) error {
 	if err != nil {
 		return err
 	}
-	if (o.Command.Action == "configure" && fence != o.ID) ||
-		(o.Command.Action != "configure" && fence != "") {
-		return Fail(
-			ErrConflict,
-			"sandbox configuration operation is fenced or superseded",
-		)
+	if (o.Command.Action == "configure" && fence != o.ID) || (o.Command.Action != "configure" && fence != "") {
+		return Fail(ErrConflict, "sandbox configuration operation is fenced or superseded")
 	}
 	return nil
 }
@@ -54,10 +50,7 @@ func (s *Service) configure(o *Operation, b *Sandbox) (err error) {
 	}()
 	if b.State != "running" && b.State != "paused" {
 		configuration()
-		return Fail(
-			ErrConflict,
-			"configuration requires running or paused sandbox",
-		)
+		return Fail(ErrConflict, "configuration requires running or paused sandbox")
 	}
 	s.closeConnections(b.ID)
 	if err = s.revoke(b.ID); err != nil {
@@ -124,27 +117,16 @@ func (s *Service) configure(o *Operation, b *Sandbox) (err error) {
 	return nil
 }
 
-func splitEnv(
-	env map[string]EnvVar,
-) (map[string]string, map[string]egress.Secret, error) {
+func splitEnv(env map[string]EnvVar) (map[string]string, map[string]egress.Secret, error) {
 	visibleEnv := map[string]string{}
 	secrets := map[string]egress.Secret{}
 	for k, v := range env {
-		if k == "" || strings.ContainsAny(k, "=\x00\n") || len(k) > 256 ||
-			strings.ContainsRune(v.Value, 0) {
-			return nil, nil, Fail(
-				ErrInvalid,
-				"invalid environment variable",
-			)
+		if k == "" || strings.ContainsAny(k, "=\x00\n") || len(k) > 256 || strings.ContainsRune(v.Value, 0) {
+			return nil, nil, Fail(ErrInvalid, "invalid environment variable")
 		}
 		if v.isSecret() {
-			if v.Inject == nil || len(v.Inject.Hosts) == 0 ||
-				v.Inject.Header == "" ||
-				v.Value == "" {
-				return nil, nil, Fail(
-					ErrInvalid,
-					"host secret requires value, authorized hosts and header",
-				)
+			if v.Inject == nil || len(v.Inject.Hosts) == 0 || v.Inject.Header == "" || v.Value == "" {
+				return nil, nil, Fail(ErrInvalid, "host secret requires value, authorized hosts and header")
 			}
 			secrets[k] = egress.Secret{
 				Value:       v.Value,
@@ -182,11 +164,7 @@ func cloneEnv(e map[string]EnvVar) map[string]EnvVar {
 // recordConfigFence atomically admits a configure intent. A newer explicit
 // configure replaces the fence; an older operation can never remove it.
 // Only identities are stored here, never previous or new parameters.
-func recordConfigFence(
-	ctx context.Context,
-	e executor,
-	sandboxID, operationID string,
-) error {
+func recordConfigFence(ctx context.Context, e executor, sandboxID, operationID string) error {
 	_, err := e.ExecContext(
 		ctx,
 		"INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id",
@@ -198,11 +176,7 @@ func recordConfigFence(
 
 // configFence returns the operation owning the configuration boundary. A
 // failed query is never reported as the absence of a fence.
-func configFence(
-	ctx context.Context,
-	e executor,
-	sandboxID string,
-) (string, error) {
+func configFence(ctx context.Context, e executor, sandboxID string) (string, error) {
 	var operation string
 	err := e.QueryRowContext(
 		ctx,
@@ -216,11 +190,7 @@ func configFence(
 }
 
 // clearConfigFence removes only the fence owned by this operation.
-func clearConfigFence(
-	ctx context.Context,
-	e executor,
-	sandboxID, operationID string,
-) error {
+func clearConfigFence(ctx context.Context, e executor, sandboxID, operationID string) error {
 	res, err := e.ExecContext(
 		ctx,
 		"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?",

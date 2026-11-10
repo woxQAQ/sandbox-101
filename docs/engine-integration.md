@@ -13,7 +13,7 @@ GOWORK=off go -C engine test -race ./...
 GOWORK=off go -C engine vet ./...
 ```
 
-Keep the relative source replacements declared in [engine/go.mod](../engine/go.mod#L1) when building outside the workspace. A consumer importing the runtime must carry the same go-erofs replacement, as sandboxd does: Go does not inherit dependency modules' replace directives. The patched builder identity and provenance are maintained in [UPSTREAM.md](../engine/third_party/go-erofs/UPSTREAM.md).
+Keep the relative source replacements declared in [engine/go.mod](../engine/go.mod#L1) when building outside the workspace, including the repository-level `third_party/go-erofs` directory. A consumer importing the runtime must carry the same go-erofs replacement, as sandboxd does: Go does not inherit dependency modules' replace directives. The patched builder identity and provenance are maintained in [UPSTREAM.md](../third_party/go-erofs/UPSTREAM.md).
 
 The public UDS client satisfies `api.Client`:
 
@@ -89,7 +89,7 @@ Lists return all current records, including unpublished/deleting snapshots. Only
 
 ## Command line
 
-`engine/cmd/engined` uses Viper with pflag. Explicit flags override `ENGINE_*` environment variables, then a file selected with `--config` or `ENGINE_CONFIG`, then defaults. File keys match flag names; environment names replace hyphens with underscores (`ENGINE_GC_INTERVAL=30s`, for example). YAML, JSON and TOML are supported, with typed decoding and rejection of unknown keys. Files are loaded once, with no implicit discovery or runtime reload. See [engined.example.yaml](../deploy/host/engined.example.yaml).
+The public [`config.Config`](../engine/config/engine.go#L10) data model defines engine host settings and administrative actions, separately from the per-VM `api.Config`. `engine/cmd/engined` registers flag defaults and uses Viper with pflag to load it; the HTTP adapter is private to that command under `cmd/engined/internal/server`. Explicit flags override `ENGINE_*` environment variables, then a file selected with `--config` or `ENGINE_CONFIG`, then defaults. File keys match flag names; environment names replace hyphens with underscores (`ENGINE_GC_INTERVAL=30s`, for example). YAML, JSON and TOML are supported, with typed decoding and rejection of unknown keys. Files are loaded once, with no implicit discovery or runtime reload. See [engined.example.yaml](../deploy/host/engined.example.yaml).
 
 | Flag | Default / meaning |
 | --- | --- |

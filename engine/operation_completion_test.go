@@ -43,11 +43,7 @@ func TestOperationFailureContextIsDurableAndImmutable(t *testing.T) {
 			dir := t.TempDir()
 			e := openTest(t, dir, b, true, nil)
 			defer func() { _ = e.Close() }()
-			created := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
+			created := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 			cause := error(errors.New("private agent diagnostic"))
 			if classified {
 				cause = api.Fail(api.Unknown, "unconfirmed agent result")
@@ -69,24 +65,16 @@ func TestOperationFailureContextIsDurableAndImmutable(t *testing.T) {
 				t.Fatalf("missing failure receipt: %+v", final)
 			}
 			if classified {
-				if final.Error.Code != api.Unknown ||
-					final.Error.Message != "unconfirmed agent result" {
+				if final.Error.Code != api.Unknown || final.Error.Message != "unconfirmed agent result" {
 					t.Fatalf("classified error changed: %+v", final.Error)
 				}
 			} else if final.Error.Code != api.Internal || final.Step == "" ||
-				!strings.HasPrefix(
-					final.Error.Message,
-					"start ("+final.Step+"): ",
-				) ||
-				!strings.Contains(
-					final.Error.Message,
-					"private agent diagnostic",
-				) {
+				!strings.HasPrefix(final.Error.Message, "start ("+final.Step+"): ") ||
+				!strings.Contains(final.Error.Message, "private agent diagnostic") {
 				t.Fatalf("operation context missing: %+v", final)
 			}
 			vm, err := e.GetVM(context.Background(), created.VMID)
-			if err != nil ||
-				!strings.Contains(vm.BlockedReason, final.Error.Message) {
+			if err != nil || !strings.Contains(vm.BlockedReason, final.Error.Message) {
 				t.Fatalf("VM diagnostic diverged: %+v err=%v", vm, err)
 			}
 			before := encode(final)
@@ -96,11 +84,7 @@ func TestOperationFailureContextIsDurableAndImmutable(t *testing.T) {
 			e = openTest(t, dir, b, false, nil)
 			replay, err := e.Submit(context.Background(), req)
 			if err != nil || !bytes.Equal(before, encode(replay)) {
-				t.Fatalf(
-					"terminal context changed after restart: %+v %v",
-					replay,
-					err,
-				)
+				t.Fatalf("terminal context changed after restart: %+v %v", replay, err)
 			}
 		})
 	}
@@ -121,32 +105,19 @@ func TestOperationResultInstanceLifecycle(t *testing.T) {
 	b := newTestBackend()
 	e := openTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
-	create := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	start := wait(
-		t,
-		e,
-		api.Request{Key: "start", Action: "start", VMID: create.VMID},
-	)
+	create := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+	start := wait(t, e, api.Request{Key: "start", Action: "start", VMID: create.VMID})
 	v, err := e.GetVM(context.Background(), create.VMID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resultInstance(t, start) == "" ||
-		resultInstance(t, start) != v.Instance {
+	if resultInstance(t, start) == "" || resultInstance(t, start) != v.Instance {
 		t.Fatalf("start lacks immutable instance witness: %+v", start)
 	}
 	if resultInstance(t, create) != "" {
 		t.Fatal("create has generation witness")
 	}
-	snap := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: v.ID},
-	)
+	snap := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: v.ID})
 	stop := wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: v.ID})
 	restored := wait(
 		t,
@@ -160,8 +131,7 @@ func TestOperationResultInstanceLifecycle(t *testing.T) {
 		},
 	)
 	current, err := e.GetVM(context.Background(), v.ID)
-	if err != nil || resultInstance(t, restored) != current.Instance ||
-		current.Instance == v.Instance {
+	if err != nil || resultInstance(t, restored) != current.Instance || current.Instance == v.Instance {
 		t.Fatalf("restore witness: %+v %+v %v", restored, current, err)
 	}
 	clone := wait(
@@ -175,8 +145,7 @@ func TestOperationResultInstanceLifecycle(t *testing.T) {
 		},
 	)
 	cloned, err := e.GetVM(context.Background(), clone.VMID)
-	if err != nil || clone.Request.VMID != "" ||
-		resultInstance(t, clone) == "" ||
+	if err != nil || clone.Request.VMID != "" || resultInstance(t, clone) == "" ||
 		resultInstance(t, clone) != cloned.Instance {
 		t.Fatalf("clone witness: %+v %v", clone, err)
 	}
@@ -196,15 +165,9 @@ func TestOperationResultInstanceLifecycle(t *testing.T) {
 		},
 	)
 	var conflictAPI *api.Error
-	if !errors.As(conflictErr, &conflictAPI) ||
-		conflictAPI.Code != api.Conflict ||
-		conflict.Status != "failed" ||
+	if !errors.As(conflictErr, &conflictAPI) || conflictAPI.Code != api.Conflict || conflict.Status != "failed" ||
 		conflict.ResultInstance != "" {
-		t.Fatalf(
-			"running start contract changed: %+v %v",
-			conflict,
-			conflictErr,
-		)
+		t.Fatalf("running start contract changed: %+v %v", conflict, conflictErr)
 	}
 	network := wait(
 		t,
@@ -277,32 +240,24 @@ func TestOperationResultInstanceAtomicCompletion(t *testing.T) {
 				op, err := f.e.loadOp(context.Background(), f.op.ID)
 				v, vErr := f.e.GetVM(context.Background(), f.op.VMID)
 				lock.Unlock()
-				if err != nil || vErr != nil || terminal(op.Operation.Status) ||
-					op.Operation.ResultInstance != "" ||
+				if err != nil || vErr != nil || terminal(op.Operation.Status) || op.Operation.ResultInstance != "" ||
 					v.OperationID != f.op.ID ||
 					v.Instance != candidate {
 					t.Fatalf("half completion: %+v %+v %v %v", op, v, err, vErr)
 				}
-				if _, err = f.e.db.Exec(
-					`DROP TRIGGER IF EXISTS reject_finish`,
-				); err != nil {
+				if _, err = f.e.db.Exec(`DROP TRIGGER IF EXISTS reject_finish`); err != nil {
 					t.Fatal(err)
 				}
 				launches := f.b.launchCalls.Load()
 				f.restart(t)
 				final := awaitStatus(t, f.e, f.op.ID)
-				if final.Status != "succeeded" ||
-					final.ResultInstance != candidate ||
+				if final.Status != "succeeded" || final.ResultInstance != candidate ||
 					f.b.launchCalls.Load() != launches {
 					t.Fatalf("same generation not adopted: %+v", final)
 				}
-				found, err := f.e.FindOperation(
-					context.Background(),
-					f.request.Key,
-				)
+				found, err := f.e.FindOperation(context.Background(), f.request.Key)
 				cached, cErr := f.e.Submit(context.Background(), f.request)
-				if err != nil || cErr != nil ||
-					!bytes.Equal(encode(found), encode(final)) ||
+				if err != nil || cErr != nil || !bytes.Equal(encode(found), encode(final)) ||
 					!bytes.Equal(encode(cached), encode(final)) {
 					t.Fatal("receipt cache differs", err, cErr)
 				}
@@ -340,9 +295,7 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 						var installErr error
 						install.Do(func() {
 							defer close(reached)
-							_, installErr = current.db.Exec(
-								`CREATE TABLE ignored_finish_writes(n INTEGER)`,
-							)
+							_, installErr = current.db.Exec(`CREATE TABLE ignored_finish_writes(n INTEGER)`)
 							if installErr != nil {
 								return
 							}
@@ -362,12 +315,7 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 				f.e = current
 				close(gate)
 				finishAttemptSettled(t, current, f.op.VMID, reached)
-				op, vm, leases, hits := finishIgnoredState(
-					t,
-					current,
-					f.op.ID,
-					f.op.VMID,
-				)
+				op, vm, leases, hits := finishIgnoredState(t, current, f.op.ID, f.op.VMID)
 				f.b.mu.Lock()
 				physicalFault := f.b.states[candidate.Instance]
 				f.b.mu.Unlock()
@@ -379,13 +327,10 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 					f.b.launchCalls.Load(),
 					launches,
 				)
-				if physicalFault != physicalBefore ||
-					f.b.launchCalls.Load() != launches {
+				if physicalFault != physicalBefore || f.b.launchCalls.Load() != launches {
 					t.Error("completion changed candidate runtime effects")
 				}
-				if terminal(op.Operation.Status) ||
-					op.Operation.ResultInstance != "" ||
-					vm.VM.OperationID != f.op.ID ||
+				if terminal(op.Operation.Status) || op.Operation.ResultInstance != "" || vm.VM.OperationID != f.op.ID ||
 					vm.VM.Instance != candidate.Instance ||
 					!reflect.DeepEqual(vm.Resource, candidate) ||
 					!reflect.DeepEqual(op.Journal, f.record.Journal) ||
@@ -402,46 +347,23 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 						hits,
 					)
 				}
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					100*time.Millisecond,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 				waited, waitErr := api.Wait(ctx, current, f.request)
 				cancel()
-				t.Logf(
-					"fault Wait: request=%s operation=%s error=%v",
-					encode(f.request),
-					encode(waited),
-					waitErr,
-				)
+				t.Logf("fault Wait: request=%s operation=%s error=%v", encode(f.request), encode(waited), waitErr)
 				if !errors.Is(waitErr, context.DeadlineExceeded) {
-					t.Errorf(
-						"fault published terminal response: %+v %v",
-						waited,
-						waitErr,
-					)
+					t.Errorf("fault published terminal response: %+v %v", waited, waitErr)
 				}
-				found, err := current.FindOperation(
-					context.Background(),
-					f.request.Key,
-				)
-				if err != nil ||
-					!bytes.Equal(encode(found), encode(op.Operation)) {
+				found, err := current.FindOperation(context.Background(), f.request.Key)
+				if err != nil || !bytes.Equal(encode(found), encode(op.Operation)) {
 					t.Fatal("fault Find differs from durable receipt", err)
 				}
-				if _, err = current.db.Exec(
-					`DROP TRIGGER ignore_finish`,
-				); err != nil {
+				if _, err = current.db.Exec(`DROP TRIGGER ignore_finish`); err != nil {
 					t.Fatal(err)
 				}
 				f.restart(t)
 				final := wait(t, f.e, f.request)
-				after, restored, _, afterHits := finishIgnoredState(
-					t,
-					f.e,
-					f.op.ID,
-					f.op.VMID,
-				)
+				after, restored, _, afterHits := finishIgnoredState(t, f.e, f.op.ID, f.op.VMID)
 				f.b.mu.Lock()
 				physical := f.b.states[candidate.Instance]
 				f.b.mu.Unlock()
@@ -453,9 +375,7 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 					launches,
 					physical,
 				)
-				if final.ID != f.op.ID ||
-					final.Status != "succeeded" ||
-					final.ResultInstance != candidate.Instance ||
+				if final.ID != f.op.ID || final.Status != "succeeded" || final.ResultInstance != candidate.Instance ||
 					restored.VM.OperationID != "" ||
 					!reflect.DeepEqual(restored.Resource, candidate) ||
 					!reflect.DeepEqual(after.Journal, f.record.Journal) ||
@@ -465,12 +385,7 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 					!physical.Booted ||
 					restored.VM.PID != physical.PID ||
 					restored.VM.StartTime != physical.StartTime {
-					t.Errorf(
-						"same candidate did not converge: final=%+v VM=%+v hits=%d",
-						final,
-						restored,
-						afterHits,
-					)
+					t.Errorf("same candidate did not converge: final=%+v VM=%+v hits=%d", final, restored, afterHits)
 				}
 				row := assertFinishReceiptImmutable(t, f.e, final, f.request)
 				// A new exact-B delete must be admissible after completion releases ownership.
@@ -485,13 +400,8 @@ func TestOperationResultInstanceIgnoredWrites(t *testing.T) {
 					},
 				)
 				f.restart(t)
-				if !bytes.Equal(
-					row,
-					assertFinishReceiptImmutable(t, f.e, final, f.request),
-				) {
-					t.Error(
-						"terminal SQL body changed after deletion and reopen",
-					)
+				if !bytes.Equal(row, assertFinishReceiptImmutable(t, f.e, final, f.request)) {
+					t.Error("terminal SQL body changed after deletion and reopen")
 				}
 				if f.b.launchCalls.Load() != launches {
 					t.Fatal("terminal reads or deletion relaunched a candidate")
@@ -507,10 +417,7 @@ type finishLeaseFailureBackend struct {
 	failCheck atomic.Bool
 }
 
-func (b *finishLeaseFailureBackend) Check(
-	ctx context.Context,
-	c api.Config,
-) error {
+func (b *finishLeaseFailureBackend) Check(ctx context.Context, c api.Config) error {
 	if b.failCheck.Load() {
 		return errors.New("restore pre-candidate backend check failed")
 	}
@@ -528,14 +435,11 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 	reached := make(chan struct{})
 	var e *Engine
 	e = openTest(t, dir, b, true, func(step string) error {
-		if step != "finish_candidate_ready" ||
-			!armed.CompareAndSwap(true, false) {
+		if step != "finish_candidate_ready" || !armed.CompareAndSwap(true, false) {
 			return nil
 		}
 		defer close(reached)
-		if _, err := e.db.Exec(
-			`CREATE TABLE ignored_finish_writes(n INTEGER)`,
-		); err != nil {
+		if _, err := e.db.Exec(`CREATE TABLE ignored_finish_writes(n INTEGER)`); err != nil {
 			return err
 		}
 		_, err := e.db.Exec(
@@ -545,21 +449,9 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 		return err
 	})
 	t.Cleanup(func() { _ = e.Close() })
-	created := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	started := wait(
-		t,
-		e,
-		api.Request{Key: "start", Action: "start", VMID: created.VMID},
-	)
-	snap := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: created.VMID},
-	)
+	created := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+	started := wait(t, e, api.Request{Key: "start", Action: "start", VMID: created.VMID})
+	snap := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: created.VMID})
 	wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: created.VMID})
 	launches := b.launchCalls.Load()
 	b.failCheck.Store(true)
@@ -588,18 +480,10 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 			hits,
 		)
 	}
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		100*time.Millisecond,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	waited, waitErr := api.Wait(ctx, e, req)
 	cancel()
-	t.Logf(
-		"fault Wait: request=%s operation=%s error=%v",
-		encode(req),
-		encode(waited),
-		waitErr,
-	)
+	t.Logf("fault Wait: request=%s operation=%s error=%v", encode(req), encode(waited), waitErr)
 	if !errors.Is(waitErr, context.DeadlineExceeded) {
 		t.Errorf("fault published terminal failure: %+v %v", waited, waitErr)
 	}
@@ -612,15 +496,8 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 	// The backend failure remains armed: restart must finish failure, not retry a successful restore.
 	e = openTest(t, dir, b, false, nil)
 	final := awaitStatus(t, e, accepted.ID)
-	after, afterVM, afterLeases, afterHits := finishIgnoredState(
-		t,
-		e,
-		accepted.ID,
-		created.VMID,
-	)
-	if final.Status != "failed" ||
-		final.ResultInstance != "" ||
-		final.Error == nil ||
+	after, afterVM, afterLeases, afterHits := finishIgnoredState(t, e, accepted.ID, created.VMID)
+	if final.Status != "failed" || final.ResultInstance != "" || final.Error == nil ||
 		final.Error.Message != "restore (): restore pre-candidate backend check failed" ||
 		after.Journal.Resource != nil ||
 		after.Journal.RestoreBlocked ||
@@ -654,21 +531,14 @@ func TestOperationResultInstanceIgnoredLeaseDelete(t *testing.T) {
 	}
 	e = openTest(t, dir, b, false, nil)
 	if !bytes.Equal(row, assertFinishReceiptImmutable(t, e, final, req)) {
-		t.Error(
-			"failed terminal SQL body changed after snapshot deletion and reopen",
-		)
+		t.Error("failed terminal SQL body changed after snapshot deletion and reopen")
 	}
 	if b.launchCalls.Load() != launches {
 		t.Fatal("pre-candidate failure launched a new instance")
 	}
 }
 
-func finishAttemptSettled(
-	t *testing.T,
-	e *Engine,
-	vmID string,
-	reached <-chan struct{},
-) {
+func finishAttemptSettled(t *testing.T, e *Engine, vmID string, reached <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-reached:
@@ -689,11 +559,7 @@ func finishAttemptSettled(
 	}
 }
 
-func finishIgnoredState(
-	t *testing.T,
-	e *Engine,
-	opID, vmID string,
-) (opRecord, vmRecord, int, int) {
+func finishIgnoredState(t *testing.T, e *Engine, opID, vmID string) (opRecord, vmRecord, int, int) {
 	t.Helper()
 	o, err := e.loadOp(context.Background(), opID)
 	if err != nil {
@@ -709,23 +575,17 @@ func finishIgnoredState(
 		Scan(&status, &operationRow); err != nil {
 		t.Fatal(err)
 	}
-	if err = e.db.QueryRow(`SELECT body FROM vms WHERE id=?`, vmID).
-		Scan(&vmRow); err != nil {
+	if err = e.db.QueryRow(`SELECT body FROM vms WHERE id=?`, vmID).Scan(&vmRow); err != nil {
 		t.Fatal(err)
 	}
 	var leases, hits int
-	if err = e.db.QueryRow(`SELECT count(*) FROM leases WHERE operation=?`, opID).
-		Scan(&leases); err != nil {
+	if err = e.db.QueryRow(`SELECT count(*) FROM leases WHERE operation=?`, opID).Scan(&leases); err != nil {
 		t.Fatal(err)
 	}
-	if err = e.db.QueryRow(`SELECT count(*) FROM ignored_finish_writes`).
-		Scan(&hits); err != nil {
+	if err = e.db.QueryRow(`SELECT count(*) FROM ignored_finish_writes`).Scan(&hits); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := e.db.Query(
-		`SELECT snapshot,operation FROM leases WHERE operation=?`,
-		opID,
-	)
+	rows, err := e.db.Query(`SELECT snapshot,operation FROM leases WHERE operation=?`, opID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,16 +617,10 @@ func finishIgnoredState(
 	return o, v, leases, hits
 }
 
-func assertFinishReceiptImmutable(
-	t *testing.T,
-	e *Engine,
-	final api.Operation,
-	req api.Request,
-) []byte {
+func assertFinishReceiptImmutable(t *testing.T, e *Engine, final api.Operation, req api.Request) []byte {
 	t.Helper()
 	var row []byte
-	if err := e.db.QueryRow(`SELECT body FROM operations WHERE id=?`, final.ID).
-		Scan(&row); err != nil {
+	if err := e.db.QueryRow(`SELECT body FROM operations WHERE id=?`, final.ID).Scan(&row); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("terminal SQL body: key=%q body=%s", req.Key, row)
@@ -780,17 +634,8 @@ func assertFinishReceiptImmutable(
 	if gErr != nil || fErr != nil || cErr != nil ||
 		(final.Status == "succeeded" && waitErr != nil) || (final.Status == "failed" && waitErr == nil) ||
 		!bytes.Equal(want, encode(get)) || !bytes.Equal(want, encode(find)) ||
-		!bytes.Equal(
-			want,
-			encode(cached),
-		) || !bytes.Equal(want, encode(waited)) {
-		t.Fatal(
-			"terminal Get/Find/cache/Wait changed receipt",
-			gErr,
-			fErr,
-			cErr,
-			waitErr,
-		)
+		!bytes.Equal(want, encode(cached)) || !bytes.Equal(want, encode(waited)) {
+		t.Fatal("terminal Get/Find/cache/Wait changed receipt", gErr, fErr, cErr, waitErr)
 	}
 	return row
 }
@@ -838,10 +683,7 @@ func TestOperationResultInstanceRejectsForeignCandidate(t *testing.T) {
 						v.Resource.NetworkToken += "foreign"
 					}
 					if damage == "decode" {
-						_, err = current.db.Exec(
-							`UPDATE vms SET body='{' WHERE id=?`,
-							f.op.VMID,
-						)
+						_, err = current.db.Exec(`UPDATE vms SET body='{' WHERE id=?`, f.op.VMID)
 					} else {
 						err = current.saveVM(v)
 					}
@@ -875,16 +717,8 @@ func TestOperationResultInstanceSurvivesRestartAndNewerInstance(t *testing.T) {
 	dir := t.TempDir()
 	e := openTest(t, dir, b, true, nil)
 	defer func() { _ = e.Close() }()
-	created := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	first := wait(
-		t,
-		e,
-		api.Request{Key: "start-A", Action: "start", VMID: created.VMID},
-	)
+	created := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+	first := wait(t, e, api.Request{Key: "start-A", Action: "start", VMID: created.VMID})
 	snapshot := wait(
 		t,
 		e,
@@ -963,16 +797,8 @@ func TestOperationResultInstanceFailureAndLegacy(t *testing.T) {
 	for _, fault := range []string{"inspect", "agent", "legacy", "material"} {
 		t.Run(fault, func(t *testing.T) {
 			if fault == "material" {
-				f := newInstanceRecoveryFixture(
-					t,
-					"restore",
-					"restore_resources_ready",
-				)
-				if err := os.WriteFile(
-					f.record.Journal.Resource.Disk,
-					[]byte("damaged"),
-					0o600,
-				); err != nil {
+				f := newInstanceRecoveryFixture(t, "restore", "restore_resources_ready")
+				if err := os.WriteFile(f.record.Journal.Resource.Disk, []byte("damaged"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				f.restart(t)
@@ -986,11 +812,7 @@ func TestOperationResultInstanceFailureAndLegacy(t *testing.T) {
 			dir := t.TempDir()
 			e := openTest(t, dir, b, true, nil)
 			defer func() { _ = e.Close() }()
-			created := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
+			created := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 			if fault != "legacy" {
 				b.mu.Lock()
 				if fault == "inspect" {
@@ -1027,11 +849,7 @@ func TestOperationResultInstanceFailureAndLegacy(t *testing.T) {
 				t.Fatal(err)
 			}
 			record.Operation.ResultInstance = ""
-			if _, err = e.db.Exec(
-				`UPDATE operations SET body=? WHERE id=?`,
-				encode(record),
-				op.ID,
-			); err != nil {
+			if _, err = e.db.Exec(`UPDATE operations SET body=? WHERE id=?`, encode(record), op.ID); err != nil {
 				t.Fatal(err)
 			}
 			before := encode(record.Operation)

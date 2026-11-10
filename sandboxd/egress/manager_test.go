@@ -22,10 +22,7 @@ import (
 
 type resolverFunc func(context.Context, string, string) ([]netip.Addr, error)
 
-func (f resolverFunc) LookupNetIP(
-	c context.Context,
-	n, h string,
-) ([]netip.Addr, error) {
+func (f resolverFunc) LookupNetIP(c context.Context, n, h string) ([]netip.Addr, error) {
 	return f(c, n, h)
 }
 
@@ -37,10 +34,7 @@ func publicResolver() Resolver {
 	)
 }
 
-func targetDialer(
-	target string,
-	count *atomic.Int32,
-) func(context.Context, string, string) (net.Conn, error) {
+func targetDialer(target string, count *atomic.Int32) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, n, addr string) (net.Conn, error) {
 		h, _, err := net.SplitHostPort(addr)
 		if err != nil || net.ParseIP(h) == nil {
@@ -53,12 +47,7 @@ func targetDialer(
 	}
 }
 
-func newTestManager(
-	t *testing.T,
-	opts Options,
-	p Policy,
-	secrets map[string]Secret,
-) (*Manager, Binding) {
+func newTestManager(t *testing.T, opts Options, p Policy, secrets map[string]Secret) (*Manager, Binding) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "egress-")
 	if err != nil {
@@ -152,12 +141,7 @@ func connectTunnel(t *testing.T, path, host string) net.Conn {
 		t.Fatal(err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, _ = fmt.Fprintf(
-		conn,
-		"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
-		host,
-		host,
-	)
+	_, _ = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, &http.Request{Method: "CONNECT"})
 	if err != nil {
@@ -174,11 +158,7 @@ func connectTunnel(t *testing.T, path, host string) net.Conn {
 	return conn
 }
 
-func socksConnect(
-	t *testing.T,
-	path, host string,
-	command byte,
-) (net.Conn, byte) {
+func socksConnect(t *testing.T, path, host string, command byte) (net.Conn, byte) {
 	t.Helper()
 	conn, err := net.Dial("unix", path)
 	if err != nil {
@@ -239,10 +219,7 @@ func TestConnectionBudgetAndRevoke(t *testing.T) {
 	}
 	defer extra.Close()
 	_ = extra.SetDeadline(time.Now().Add(time.Second))
-	_, _ = io.WriteString(
-		extra,
-		"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n",
-	)
+	_, _ = io.WriteString(extra, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	var one [1]byte
 	if n, err := extra.Read(one[:]); n != 0 || err == nil {
 		t.Fatal("shared connection budget exceeded")
@@ -274,47 +251,22 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 	}
 	defer m.Close()
 	for _, mode := range []string{"", "unknown", "direct"} {
-		if err := m.Bind(
-			context.Background(),
-			mode+"id",
-			"t",
-			"/tmp/not-used",
-			Policy{Mode: mode},
-			nil,
-		); err == nil {
+		if err := m.Bind(context.Background(), mode+"id", "t", "/tmp/not-used", Policy{Mode: mode}, nil); err == nil {
 			t.Errorf("accepted mode %q", mode)
 		}
 	}
 	dir := t.TempDir()
 	base := filepath.Join(dir, "vsock")
-	if err := m.Bind(
-		context.Background(),
-		"none",
-		"t",
-		base,
-		Policy{Mode: "none"},
-		nil,
-	); err != nil {
+	if err := m.Bind(context.Background(), "none", "t", base, Policy{Mode: "none"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(base + "_2049"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("none mode created a listener")
 	}
-	if err := os.WriteFile(
-		base+"_2050",
-		[]byte("owner data"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(base+"_2050", []byte("owner data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(
-		context.Background(),
-		"relay",
-		"t",
-		base,
-		Policy{Mode: "relay"},
-		nil,
-	); err == nil {
+	if err := m.Bind(context.Background(), "relay", "t", base, Policy{Mode: "relay"}, nil); err == nil {
 		t.Fatal("overwrote existing path")
 	}
 	if _, err := os.Stat(base + "_2049"); !errors.Is(err, os.ErrNotExist) {
@@ -337,14 +289,7 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer direct.Close()
-	if err := direct.Bind(
-		context.Background(),
-		"direct",
-		"t",
-		base,
-		Policy{Mode: "direct"},
-		nil,
-	); err != nil {
+	if err := direct.Bind(context.Background(), "direct", "t", base, Policy{Mode: "direct"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !installed.Load() {
@@ -379,14 +324,7 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	defer os.RemoveAll(dir)
 	p := Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := m.Bind(
-		ctx,
-		"s",
-		"t",
-		filepath.Join(dir, "vsock"),
-		p,
-		nil,
-	); err != nil {
+	if err := m.Bind(ctx, "s", "t", filepath.Join(dir, "vsock"), p, nil); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -396,30 +334,13 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal("binding changed after caller mutation or context cancellation")
 	}
-	if err := m.Bind(
-		context.Background(),
-		"s",
-		"t",
-		filepath.Join(dir, "vsock"),
-		p,
-		nil,
-	); err == nil {
+	if err := m.Bind(context.Background(), "s", "t", filepath.Join(dir, "vsock"), p, nil); err == nil {
 		t.Fatal("duplicate binding was silently accepted")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(
-		context.Background(),
-		"s2",
-		"t",
-		filepath.Join(dir, "vsock"),
-		p,
-		nil,
-	); !errors.Is(
-		err,
-		ErrClosed,
-	) {
+	if err := m.Bind(context.Background(), "s2", "t", filepath.Join(dir, "vsock"), p, nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed manager accepted binding: %v", err)
 	}
 }

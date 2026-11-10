@@ -30,13 +30,8 @@ func TestAuthenticatedForeignTenantCannotDiscoverObjects(t *testing.T) {
 		s.Handler().ServeHTTP(w, q)
 		return w
 	}
-	foreign, missing := request(
-		"/v1/sandboxes/"+r.Sandbox.ID,
-	), request(
-		"/v1/sandboxes/missing",
-	)
-	if foreign.Code != 404 || missing.Code != 404 ||
-		foreign.Body.String() != missing.Body.String() {
+	foreign, missing := request("/v1/sandboxes/"+r.Sandbox.ID), request("/v1/sandboxes/missing")
+	if foreign.Code != 404 || missing.Code != 404 || foreign.Body.String() != missing.Body.String() {
 		t.Fatal("authenticated tenant can distinguish foreign object")
 	}
 }
@@ -54,34 +49,20 @@ func TestSandboxTokenCannotReadForkOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sp := Principal{TenantID: p.TenantID, SandboxID: source.Sandbox.ID}
-	if _, err := s.Operation(
-		context.Background(),
-		sp,
-		r.OperationID,
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err := s.Operation(context.Background(), sp, r.OperationID); !isCode(err, ErrNotFound) {
 		t.Fatalf("fork operation visible to source: %v", err)
 	}
 	h := s.Handler()
 	get := func(id string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/v1/operations/"+id, nil)
-		req.Header.Set(
-			"Authorization",
-			"Bearer "+source.Tokens[source.Sandbox.ID],
-		)
+		req.Header.Set("Authorization", "Bearer "+source.Tokens[source.Sandbox.ID])
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		return w
 	}
 	foreign, missing := get(r.OperationID), get("missing")
 	if foreign.Code != 404 || foreign.Body.String() != missing.Body.String() {
-		t.Fatalf(
-			"foreign response differs: %d %s",
-			foreign.Code,
-			foreign.Body.String(),
-		)
+		t.Fatalf("foreign response differs: %d %s", foreign.Code, foreign.Body.String())
 	}
 }
 
@@ -107,14 +88,7 @@ func TestSandboxTokenCanPollOwnLeaseOperations(t *testing.T) {
 			t.Fatal("terminated token issued")
 		}
 		for _, other := range []Principal{{TenantID: p.TenantID, SandboxID: "other"}, {TenantID: "other"}} {
-			if _, err := s.Operation(
-				context.Background(),
-				other,
-				o.ID,
-			); !isCode(
-				err,
-				ErrNotFound,
-			) {
+			if _, err := s.Operation(context.Background(), other, o.ID); !isCode(err, ErrNotFound) {
 				t.Fatalf("foreign read: %v", err)
 			}
 		}
@@ -156,30 +130,15 @@ func TestOperationResultTokensRespectPrincipal(t *testing.T) {
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)
 		var got Operation
-		if err := json.Unmarshal(
-			w.Body.Bytes(),
-			&got,
-		); err != nil || w.Code != 200 || len(got.Result.Tokens) != 2 ||
-			got.Result.Tokens["forged"] != "" {
-			t.Fatalf(
-				"HTTP result tokens were not rebuilt: status=%d decode=%v",
-				w.Code,
-				err,
-			)
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || len(got.Result.Tokens) != 2 || got.Result.Tokens["forged"] != "" {
+			t.Fatalf("HTTP result tokens were not rebuilt: status=%d decode=%v", w.Code, err)
 		}
 	}
 	o.Result.Sandboxes[0].TenantID = "foreign"
 	if err := saveOp(context.Background(), s.store.db, o); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Operation(
-		context.Background(),
-		p,
-		o.ID,
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err := s.Operation(context.Background(), p, o.ID); !isCode(err, ErrNotFound) {
 		t.Fatalf("foreign result exposed: %v", err)
 	}
 }

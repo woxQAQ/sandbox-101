@@ -69,10 +69,7 @@ func TestInvalidAndTruncatedFrames(t *testing.T) {
 			t.Fatalf("accepted invalid wire %x", wire)
 		}
 	}
-	if err := WriteFrame(
-		io.Discard,
-		&Frame{Id: "huge", Data: make([]byte, MaxFrameSize)},
-	); err == nil {
+	if err := WriteFrame(io.Discard, &Frame{Id: "huge", Data: make([]byte, MaxFrameSize)}); err == nil {
 		t.Fatal("accepted oversized encoded frame")
 	}
 }

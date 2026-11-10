@@ -71,11 +71,7 @@ func (s *Service) reap() {
 			if b.OnExpire == "pause" {
 				action = "pause"
 			}
-			key = "reap:" + b.ID + ":" + b.Deadline.UTC().
-				Format(time.RFC3339Nano) +
-				":" + newID(
-				"",
-			)
+			key = "reap:" + b.ID + ":" + b.Deadline.UTC().Format(time.RFC3339Nano) + ":" + newID("")
 		}
 		if b.State == "paused" && !now.Before(b.PausedUntil) {
 			deadline = b.PausedUntil
@@ -158,8 +154,7 @@ func (s *Service) reconcile() {
 			}
 			ok = e == nil
 		}
-		if !ok || (v.Verified && v.Phase == "stopped") ||
-			v.Instance != b.Instance {
+		if !ok || (v.Verified && v.Phase == "stopped") || v.Instance != b.Instance {
 			s.closeConnections(b.ID)
 			if s.opts.Egress != nil {
 				_ = s.revoke(b.ID)

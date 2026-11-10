@@ -71,23 +71,11 @@ func InternalLaunch(specPath string) error {
 	if err = unix.Close(netfd); err != nil {
 		return err
 	}
-	if err = unix.Mount(
-		"",
-		"/",
-		"",
-		unix.MS_REC|unix.MS_PRIVATE,
-		"",
-	); err != nil {
+	if err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return err
 	}
 	// tmpfs prevents access through the mountpoint's old directory entries.
-	if err = unix.Mount(
-		"tmpfs",
-		s.Root,
-		"tmpfs",
-		unix.MS_NOSUID|unix.MS_NODEV,
-		"mode=0755,size=16m",
-	); err != nil {
+	if err = unix.Mount("tmpfs", s.Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=16m"); err != nil {
 		return err
 	}
 	for _, d := range []string{"boot", "images", "sandbox/ro", "disks", "run", "capture", "restore", "dev", "dev/net", "proc", "tmp", "bin"} {
@@ -151,21 +139,13 @@ func InternalLaunch(specPath string) error {
 		return err
 	}
 	for _, binding := range bindings {
-		if err = bind(
-			binding.HostPath,
-			strings.TrimPrefix(binding.GuestPath, "/"),
-			true,
-		); err != nil {
+		if err = bind(binding.HostPath, strings.TrimPrefix(binding.GuestPath, "/"), true); err != nil {
 			return fmt.Errorf("bind image device %s: %w", binding.Serial, err)
 		}
 	}
 	if s.Resource.RestoreDir != "" {
 		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
-			if err = bind(
-				filepath.Join(s.Resource.RestoreDir, name),
-				"restore/"+name,
-				true,
-			); err != nil {
+			if err = bind(filepath.Join(s.Resource.RestoreDir, name), "restore/"+name, true); err != nil {
 				return err
 			}
 		}
@@ -203,13 +183,7 @@ func InternalLaunch(specPath string) error {
 		return err
 	}
 	for cap := 0; cap <= 40; cap++ {
-		if err = unix.Prctl(
-			unix.PR_CAPBSET_DROP,
-			uintptr(cap),
-			0,
-			0,
-			0,
-		); err != nil {
+		if err = unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(cap), 0, 0, 0); err != nil {
 			return err
 		}
 	}
@@ -224,11 +198,7 @@ func InternalLaunch(specPath string) error {
 	}
 	// Go runtime descriptors are CLOEXEC. Explicitly close any accidental inherited
 	// descriptor as well, preserving only stdin/out/err for serial diagnostics.
-	if err = unix.CloseRange(
-		3,
-		^uint(0),
-		unix.CLOSE_RANGE_CLOEXEC,
-	); err != nil {
+	if err = unix.CloseRange(3, ^uint(0), unix.CLOSE_RANGE_CLOEXEC); err != nil {
 		return err
 	}
 	return unix.Exec(
@@ -248,11 +218,7 @@ func openTapInNamespace(r Resource) (*os.File, error) {
 	// Namespace changes are per-thread. Never return this thread to Go's pool
 	// unless the original namespace was successfully restored.
 	runtime.LockOSThread()
-	original, err := unix.Open(
-		"/proc/self/ns/net",
-		unix.O_RDONLY|unix.O_CLOEXEC,
-		0,
-	)
+	original, err := unix.Open("/proc/self/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, err
@@ -286,12 +252,7 @@ func openTapInNamespace(r Resource) (*os.File, error) {
 		if fd >= 0 {
 			_ = unix.Close(fd)
 		}
-		panic(
-			fmt.Sprintf(
-				"cannot restore engine network namespace: %v",
-				restoreErr,
-			),
-		)
+		panic(fmt.Sprintf("cannot restore engine network namespace: %v", restoreErr))
 	}
 	runtime.UnlockOSThread()
 	if openErr != nil {

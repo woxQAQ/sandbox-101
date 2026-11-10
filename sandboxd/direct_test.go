@@ -88,12 +88,8 @@ func TestDirectPolicyActivationAndRetryableRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	vm, err := engine.GetVM(context.Background(), result.Sandbox.VMID)
-	if err != nil || !vm.NetworkActual || vm.NetworkPolicy == nil ||
-		vm.NetworkPolicy.MaxConnections != 256 {
-		t.Fatal(
-			"direct activation did not commit the default budget and network state",
-			err,
-		)
+	if err != nil || !vm.NetworkActual || vm.NetworkPolicy == nil || vm.NetworkPolicy.MaxConnections != 256 {
+		t.Fatal("direct activation did not commit the default budget and network state", err)
 	}
 	engine.requestMu.Lock()
 	policyAt, enabledAt := -1, -1
@@ -134,15 +130,7 @@ func TestDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 		{Policy: egress.Policy{Mode: "direct"}, Env: map[string]EnvVar{"TOKEN": {Value: "host-only", Guest: &no, Inject: &Injection{Hosts: []string{"example.com"}, Header: "Authorization"}}}},
 	} {
 		command.Action, command.TemplateID = "claim", "python"
-		if _, err := s.Submit(
-			context.Background(),
-			p,
-			newID("invalid-direct"),
-			command,
-		); !isCode(
-			err,
-			ErrInvalid,
-		) {
+		if _, err := s.Submit(context.Background(), p, newID("invalid-direct"), command); !isCode(err, ErrInvalid) {
 			t.Fatalf("invalid direct request accepted: %v", err)
 		}
 	}

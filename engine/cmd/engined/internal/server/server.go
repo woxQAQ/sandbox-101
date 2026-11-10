@@ -1,4 +1,5 @@
-// Package server exposes the engine contract over a permission-protected UDS.
+// Package server is engined's private HTTP adapter for the engine contract over
+// a permission-protected UDS.
 package server
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
+// Handler maps the versioned engine routes to the durable client contract.
 func Handler(client api.Client) http.Handler {
 	router := gin.New()
 	router.RedirectTrailingSlash = false
@@ -29,9 +31,7 @@ func Handler(client api.Client) http.Handler {
 	v1 := router.Group("/v1")
 	v1.POST("/operations", func(c *gin.Context) {
 		var req api.Request
-		d := json.NewDecoder(
-			http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20),
-		)
+		d := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
 		d.DisallowUnknownFields()
 		err := d.Decode(&req)
 		if err == nil {
@@ -132,10 +132,7 @@ func Serve(ctx context.Context, socket string, c api.Client) error {
 	go func() {
 		select {
 		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(
-				context.Background(),
-				5*time.Second,
-			)
+			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
 		case <-done:

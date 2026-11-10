@@ -10,30 +10,16 @@ import (
 	"time"
 )
 
-func (s *Service) Submit(
-	ctx context.Context,
-	p Principal,
-	key string,
-	c Command,
-) (Operation, error) {
+func (s *Service) Submit(ctx context.Context, p Principal, key string, c Command) (Operation, error) {
 	o, err := s.submit(ctx, p, key, c)
 	return publicOperation(o), err
 }
 
-func (s *Service) submit(
-	ctx context.Context,
-	p Principal,
-	key string,
-	c Command,
-) (Operation, error) {
+func (s *Service) submit(ctx context.Context, p Principal, key string, c Command) (Operation, error) {
 	if len(key) < 1 || len(key) > 256 {
-		return Operation{}, Fail(
-			ErrInvalid,
-			"Idempotency-Key required (max 256 bytes)",
-		)
+		return Operation{}, Fail(ErrInvalid, "Idempotency-Key required (max 256 bytes)")
 	}
-	if p.SandboxID != "" &&
-		(c.SandboxID != p.SandboxID || (c.Action != "renew" && c.Action != "release")) {
+	if p.SandboxID != "" && (c.SandboxID != p.SandboxID || (c.Action != "renew" && c.Action != "release")) {
 		return Operation{}, Fail(ErrNotFound, "not found")
 	}
 	// HMAC permits comparing retries without persisting credential material or a guessable secret hash.
@@ -43,10 +29,7 @@ func (s *Service) submit(
 	old, err := s.store.byKey(ctx, p.TenantID, key)
 	if err == nil {
 		if old.hash != hash {
-			return old, Fail(
-				ErrConflict,
-				"idempotency key has different parameters",
-			)
+			return old, Fail(ErrConflict, "idempotency key has different parameters")
 		}
 		if !visible(p, old.TenantID, old.Command.SandboxID) && !p.Root {
 			return Operation{}, Fail(ErrNotFound, "not found")
@@ -81,13 +64,8 @@ func (s *Service) submit(
 	}
 	// Source inspection precedes ownership/SQL; trusted captures need no Engine query.
 	var snapshotSource *templateSnapshotSource
-	if c.Action == "template_put" && c.Template != nil &&
-		c.Template.SnapshotID != "" {
-		if snapshotSource, err = s.templateSource(
-			ctx,
-			p,
-			*c.Template,
-		); err != nil {
+	if c.Action == "template_put" && c.Template != nil && c.Template.SnapshotID != "" {
+		if snapshotSource, err = s.templateSource(ctx, p, *c.Template); err != nil {
 			return o, err
 		}
 	}
@@ -124,12 +102,7 @@ func (s *Service) submit(
 			if t.State != "ready" {
 				return o, Fail(ErrConflict, "template is not ready")
 			}
-			if err = requireSnapshotOwner(
-				ctx,
-				tx,
-				t.SnapshotID,
-				o.ChargeTenantID,
-			); err != nil {
+			if err = requireSnapshotOwner(ctx, tx, t.SnapshotID, o.ChargeTenantID); err != nil {
 				return o, err
 			}
 			o.Command.Template = &t
@@ -164,23 +137,14 @@ func (s *Service) submit(
 					return o, Fail(ErrNotFound, "not found")
 				}
 				if source.State != "running" && source.State != "paused" {
-					return o, Fail(
-						ErrConflict,
-						"sandbox cannot fork in %s",
-						source.State,
-					)
+					return o, Fail(ErrConflict, "sandbox cannot fork in %s", source.State)
 				}
 			}
 			if source.TenantID != p.TenantID {
 				return o, Fail(ErrNotFound, "not found")
 			}
 			o.ChargeTenantID = source.TenantID
-			if err = requireSnapshotOwner(
-				ctx,
-				tx,
-				source.SnapshotID,
-				o.ChargeTenantID,
-			); err != nil {
+			if err = requireSnapshotOwner(ctx, tx, source.SnapshotID, o.ChargeTenantID); err != nil {
 				return o, err
 			}
 			o.SnapshotID = source.SnapshotID
@@ -196,13 +160,7 @@ func (s *Service) submit(
 		if c.Action == "fork" && source.State == "running" {
 			o.ReservedMiB = source.Shape.MemoryMiB + source.Shape.DiskMiB
 		}
-		sharedCost, e := quoteSnapshot(
-			ctx,
-			tx,
-			o.ChargeTenantID,
-			o.SnapshotID,
-			t.Shape,
-		)
+		sharedCost, e := quoteSnapshot(ctx, tx, o.ChargeTenantID, o.SnapshotID, t.Shape)
 		if e != nil {
 			return o, e
 		}
@@ -237,14 +195,7 @@ func (s *Service) submit(
 			return o, err
 		}
 		if o.ReservedMiB > 0 {
-			if err = reserveQuotaStep(
-				ctx,
-				tx,
-				o,
-				"fork-snapshot",
-				source.ID,
-				o.ReservedMiB,
-			); err != nil {
+			if err = reserveQuotaStep(ctx, tx, o, "fork-snapshot", source.ID, o.ReservedMiB); err != nil {
 				return o, err
 			}
 		}
@@ -295,14 +246,7 @@ func (s *Service) submit(
 				if err = s.claimWarmTx(ctx, tx, o, &b, t, *warm); err != nil {
 					return o, err
 				}
-			} else if err = reserveQuotaStep(
-				ctx,
-				tx,
-				o,
-				step,
-				b.ID,
-				b.Shape.DiskMiB,
-			); err != nil {
+			} else if err = reserveQuotaStep(ctx, tx, o, step, b.ID, b.Shape.DiskMiB); err != nil {
 				return o, err
 			}
 			if err = saveSandbox(ctx, tx, b); err != nil {
@@ -345,11 +289,7 @@ func (s *Service) submit(
 		}
 		if c.Action == "checkpoint" {
 			if source.State != "running" && source.State != "paused" {
-				return o, Fail(
-					ErrConflict,
-					"sandbox cannot checkpoint in %s",
-					source.State,
-				)
+				return o, Fail(ErrConflict, "sandbox cannot checkpoint in %s", source.State)
 			}
 			o.ReservedMiB = 0
 			if source.State == "running" {
@@ -368,8 +308,7 @@ func (s *Service) submit(
 				step = "checkpoint-capture"
 			}
 		case "pause":
-			if source.State == "running" ||
-				(source.State == "pausing" && source.SnapshotID == "") {
+			if source.State == "running" || (source.State == "pausing" && source.SnapshotID == "") {
 				step = "hibernate-snapshot"
 			}
 		case "resume":
@@ -378,8 +317,7 @@ func (s *Service) submit(
 				o.ReservedMiB = source.Shape.DiskMiB
 			}
 		case "rollback":
-			if source.State == "running" || source.State == "paused" ||
-				source.State == "resuming" {
+			if source.State == "running" || source.State == "paused" || source.State == "resuming" {
 				step = "rollback-clone"
 				if source.VMID != "" {
 					step = "rollback-restore"
@@ -399,29 +337,13 @@ func (s *Service) submit(
 			}
 		}
 		if step != "" {
-			if err = reserveQuotaStep(
-				ctx,
-				tx,
-				o,
-				step,
-				source.ID,
-				o.ReservedMiB,
-			); err != nil {
+			if err = reserveQuotaStep(ctx, tx, o, step, source.ID, o.ReservedMiB); err != nil {
 				return o, err
 			}
 		}
-		if o.SnapshotID != "" &&
-			(c.Action == "resume" || c.Action == "rollback" || c.Action == "checkpoint") {
-			if e := requireSnapshotOwner(
-				ctx,
-				tx,
-				o.SnapshotID,
-				o.ChargeTenantID,
-			); e != nil {
-				return o, Fail(
-					ErrManualRecovery,
-					"snapshot responsibility has no trusted provenance",
-				)
+		if o.SnapshotID != "" && (c.Action == "resume" || c.Action == "rollback" || c.Action == "checkpoint") {
+			if e := requireSnapshotOwner(ctx, tx, o.SnapshotID, o.ChargeTenantID); e != nil {
+				return o, Fail(ErrManualRecovery, "snapshot responsibility has no trusted provenance")
 			}
 			if err = putQuotaRef(
 				ctx,
@@ -436,10 +358,7 @@ func (s *Service) submit(
 		}
 		if c.Action == "configure" {
 			if c.Env == nil {
-				return o, Fail(
-					ErrInvalid,
-					"env is required; an empty object clears environment",
-				)
+				return o, Fail(ErrInvalid, "env is required; an empty object clears environment")
 			}
 			policy := c.Policy
 			if policy.Mode == "" {
@@ -452,12 +371,7 @@ func (s *Service) submit(
 			// operation. It blocks automatic resume/rebind until this
 			// configure delivers, is replaced by a newer explicit configure,
 			// or the sandbox is released.
-			if err = recordConfigFence(
-				ctx,
-				tx,
-				c.SandboxID,
-				o.ID,
-			); err != nil {
+			if err = recordConfigFence(ctx, tx, c.SandboxID, o.ID); err != nil {
 				return o, err
 			}
 		}
@@ -475,17 +389,13 @@ func (s *Service) submit(
 			return o, Fail(ErrInvalid, "template required")
 		}
 		t := *c.Template
-		if t.ID == "" || t.Shape.VCPUs < 1 || t.Shape.VCPUs > 255 ||
-			t.Shape.MemoryMiB < 128 ||
+		if t.ID == "" || t.Shape.VCPUs < 1 || t.Shape.VCPUs > 255 || t.Shape.MemoryMiB < 128 ||
 			t.Shape.MemoryMiB > 1<<24 ||
 			t.Shape.DiskMiB < 64 ||
 			t.Shape.DiskMiB > 1<<30 ||
 			t.TargetWarm < 0 ||
 			t.TargetWarm > s.opts.MaxWarm {
-			return o, Fail(
-				ErrInvalid,
-				"invalid template shape or pool target",
-			)
+			return o, Fail(ErrInvalid, "invalid template shape or pool target")
 		}
 		existing, e := getTemplateTx(ctx, tx, t.ID)
 		if e != nil && !isCode(e, ErrNotFound) {
@@ -497,16 +407,11 @@ func (s *Service) submit(
 		}
 		// Foreign and missing names share one response; root must name the
 		// owning tenant explicitly and can never transfer the reservation.
-		if owner != "" && owner != p.TenantID ||
-			owner == "" && existing.ID != "" &&
-				existing.TenantID != p.TenantID {
+		if owner != "" && owner != p.TenantID || owner == "" && existing.ID != "" && existing.TenantID != p.TenantID {
 			return o, Fail(ErrNotFound, "not found")
 		}
 		if existing.ID != "" && (owner == "" || existing.TenantID != owner) {
-			return o, Fail(
-				ErrManualRecovery,
-				"published template has missing or conflicting ownership provenance",
-			)
+			return o, Fail(ErrManualRecovery, "published template has missing or conflicting ownership provenance")
 		}
 		if current != "" {
 			var tenant, status string
@@ -517,10 +422,7 @@ func (s *Service) submit(
 				current,
 			).Scan(&tenant, &status, &body)
 			if errors.Is(e, sql.ErrNoRows) {
-				return o, Fail(
-					ErrManualRecovery,
-					"template intent references a missing operation",
-				)
+				return o, Fail(ErrManualRecovery, "template intent references a missing operation")
 			}
 			if e != nil {
 				return o, e
@@ -531,24 +433,15 @@ func (s *Service) submit(
 				(prior.Command.Action != "template_put" && prior.Command.Action != "template_build") ||
 				prior.Command.Template == nil || prior.Command.Template.ID != t.ID ||
 				prior.Command.Template.TenantID != owner {
-				return o, Fail(
-					ErrManualRecovery,
-					"template intent operation has inconsistent provenance",
-				)
+				return o, Fail(ErrManualRecovery, "template intent operation has inconsistent provenance")
 			}
 			switch status {
 			case "pending", "running":
-				return o, Fail(
-					ErrConflict,
-					"template publication is already in flight",
-				)
+				return o, Fail(ErrConflict, "template publication is already in flight")
 			case "succeeded", "failed":
 				// Recycle only a proven terminal pointer, retaining its result.
 			default:
-				return o, Fail(
-					ErrManualRecovery,
-					"template intent operation has an unknown status",
-				)
+				return o, Fail(ErrManualRecovery, "template intent operation has an unknown status")
 			}
 		}
 		if !p.Root {
@@ -557,10 +450,7 @@ func (s *Service) submit(
 				target = existing.TargetWarm
 			}
 			if t.TargetWarm != target {
-				return o, Fail(
-					ErrForbidden,
-					"root access required to change pool target",
-				)
+				return o, Fail(ErrForbidden, "root access required to change pool target")
 			}
 		}
 		if p.TenantID == "" {
@@ -582,33 +472,15 @@ func (s *Service) submit(
 				if p.TenantID == "" {
 					return o, Fail(ErrInvalid, "target tenant required")
 				}
-				if e := requireSnapshotOwner(
-					ctx,
-					tx,
-					t.SnapshotID,
-					p.TenantID,
-				); e != nil {
+				if e := requireSnapshotOwner(ctx, tx, t.SnapshotID, p.TenantID); e != nil {
 					if !p.Root || !isCode(e, ErrNotFound) {
 						return o, e
 					}
-					if e = recordSnapshotOwner(
-						ctx,
-						tx,
-						t.SnapshotID,
-						p.TenantID,
-						o.ID,
-						"external_import",
-					); e != nil {
+					if e = recordSnapshotOwner(ctx, tx, t.SnapshotID, p.TenantID, o.ID, "external_import"); e != nil {
 						return o, e
 					}
 				}
-				if e := recheckTemplateSource(
-					ctx,
-					tx,
-					snapshotSource,
-					t,
-					p.TenantID,
-				); e != nil {
+				if e := recheckTemplateSource(ctx, tx, snapshotSource, t, p.TenantID); e != nil {
 					return o, e
 				}
 				if e := tx.QueryRowContext(ctx, `SELECT source_operation_id,source_kind FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=?`, t.SnapshotID, p.TenantID).
@@ -617,21 +489,12 @@ func (s *Service) submit(
 				}
 			}
 			if t.SnapshotID == "" && t.Image == "" {
-				return o, Fail(
-					ErrInvalid,
-					"template requires image or snapshot",
-				)
+				return o, Fail(ErrInvalid, "template requires image or snapshot")
 			}
 		}
 		o.Command.Template = &t
 		if c.Action == "template_build" {
-			if err = s.quota(
-				ctx,
-				tx,
-				p,
-				1,
-				2*t.Shape.DiskMiB+t.Shape.MemoryMiB,
-			); err != nil {
+			if err = s.quota(ctx, tx, p, 1, 2*t.Shape.DiskMiB+t.Shape.MemoryMiB); err != nil {
 				return o, err
 			}
 			if err = s.admitBuildTx(ctx, tx, o, t); err != nil {
@@ -660,11 +523,7 @@ func (s *Service) submit(
 					return o, err
 				}
 			}
-			r := newAllocationGroup(
-				o,
-				allocationSubject{Kind: "build", ID: o.ID},
-				t,
-			)
+			r := newAllocationGroup(o, allocationSubject{Kind: "build", ID: o.ID}, t)
 			r.Group.SnapshotSource = snapshotSource
 			if err = insertRecovery(ctx, tx, r); err != nil {
 				return o, err

@@ -31,12 +31,7 @@ func openCaptureDir(path string) (*os.File, error) {
 		return nil, err
 	}
 	for component := range strings.SplitSeq(strings.TrimPrefix(path, "/"), "/") {
-		next, x := unix.Openat(
-			fd,
-			component,
-			unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
-			0,
-		)
+		next, x := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		_ = unix.Close(fd)
 		if x != nil {
 			return nil, x
@@ -47,20 +42,10 @@ func openCaptureDir(path string) (*os.File, error) {
 }
 
 func captureChild(parent *os.File, name string, mode uint32) (*os.File, error) {
-	if err := unix.Mkdirat(
-		int(parent.Fd()),
-		name,
-		mode,
-	); err != nil &&
-		!errors.Is(err, unix.EEXIST) {
+	if err := unix.Mkdirat(int(parent.Fd()), name, mode); err != nil && !errors.Is(err, unix.EEXIST) {
 		return nil, err
 	}
-	fd, err := unix.Openat(
-		int(parent.Fd()),
-		name,
-		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
-		0,
-	)
+	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +57,7 @@ func privateCaptureDir(f *os.File, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) ||
-		st.Mode().Perm()&0o022 != 0 {
+	if st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) || st.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("incompatible capture parent ownership: %s", f.Name())
 	}
 	return f.Chmod(mode)
@@ -154,8 +138,7 @@ func (c *captureBoundary) open() (*os.File, error) {
 func delegateCapture(r Resource, dst string, uid, gid int) error {
 	rel, err := filepath.Rel(filepath.Join(r.Dir, "capture"), dst)
 	parts := strings.Split(rel, string(filepath.Separator))
-	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") ||
-		parts[1] != "ch" {
+	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") || parts[1] != "ch" {
 		return fmt.Errorf("invalid capture destination")
 	}
 	parent, err := openCaptureDir(filepath.Dir(dst))
@@ -228,19 +211,13 @@ func materializeCapture(c *captureBoundary, memoryMiB int64) error {
 		if !ok {
 			return fmt.Errorf("unexpected capture artifact %q", name)
 		}
-		fd, x := unix.Openat(
-			int(source.Fd()),
-			name,
-			unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC,
-			0,
-		)
+		fd, x := unix.Openat(int(source.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 		if x != nil {
 			return x
 		}
 		in := os.NewFile(uintptr(fd), name)
 		st, x := in.Stat()
-		if x == nil &&
-			(!st.Mode().IsRegular() || st.Size() < 0 || st.Size() > limit || st.Size() > remaining) {
+		if x == nil && (!st.Mode().IsRegular() || st.Size() < 0 || st.Size() > limit || st.Size() > remaining) {
 			x = fmt.Errorf("nonregular or oversized capture artifact %s", name)
 		}
 		if x != nil {
@@ -248,12 +225,7 @@ func materializeCapture(c *captureBoundary, memoryMiB int64) error {
 			return x
 		}
 		// A replay may replace only our private, unpublished destination entries.
-		if x = unix.Unlinkat(
-			int(dest.Fd()),
-			name,
-			0,
-		); x != nil &&
-			!errors.Is(x, unix.ENOENT) {
+		if x = unix.Unlinkat(int(dest.Fd()), name, 0); x != nil && !errors.Is(x, unix.ENOENT) {
 			_ = in.Close()
 			return x
 		}

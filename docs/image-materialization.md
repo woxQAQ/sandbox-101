@@ -29,7 +29,7 @@ A new manifest referencing verified cached `diff_id`s can rebuild fsmeta and boo
 
 ## Shared data pipeline
 
-The layered materializer requires matching erofs-utils versions **>=1.9.4 and <2**, plus bubblewrap with usable user and mount namespaces. The implementation has been exercised with erofs-utils 1.9.4. The engine uses the public Writer API of [go-erofs](../engine/third_party/go-erofs/UPSTREAM.md) for per-image metadata composition.
+The layered materializer requires matching erofs-utils versions **>=1.9.4 and <2**, plus bubblewrap with usable user and mount namespaces. The implementation has been exercised with erofs-utils 1.9.4. The engine uses the public Writer API of [go-erofs](../third_party/go-erofs/UPSTREAM.md) for per-image metadata composition.
 
 For each missing layer, preflight validates canonical sha256 descriptors, compressed-blob checksum and size, the complete uncompressed tar digest, decompression/entry bounds and supported metadata. Normalization writes a private tar with every regular entry version at an indexed `data/<entry-index>` name. Overwritten versions stay available because another hardlink may still refer to their inode. Original headers and OCI operations are encoded with standard `encoding/gob` as `headers.gob` in the same cache EROFS. Attribute maps are sorted before encoding; arbitrary binary capability/ACL values retain their bytes. The cache hash authenticates this index along with all payloads. Cached index decoding bounds its size using the authenticated receipt, checks entry counts and attribute ordering, revalidates headers and refuses trailing data.
 
@@ -46,7 +46,7 @@ fsck.erofs --extract layer.erofs
 
 For each image, the engine opens these verified caches in OCI bottom-to-top order. A metadata-only `fs.FS` adapter exposes payload extents to go-erofs `CopyFrom(..., MetadataOnly())`; its `Open` method deliberately refuses file reads. Public `Link`, `RemoveAll`, `Mkdir`, `Chown`, `Chtimes` and xattr APIs compose the final namespace. Each cache contributes one ordered external device. Regular payloads remain in shared cache files; only directory/symlink/xattr/chunk-reference metadata is written to fsmeta. The dependency owns all EROFS inode, directory, xattr, device-table and chunk serialization.
 
-The pinned dependency is `v0.3.3-0.20261101155608-4c135619312a`, with a documented one-line fix to its device-table offset calculation. Its patched identity ends in `+sandbox-devtable-v1` and participates in the builder hash. The engine never patches emitted filesystem bytes. See [dependency provenance](../engine/third_party/go-erofs/UPSTREAM.md) for the commit, license and patch.
+The pinned dependency is `v0.3.3-0.20261101155608-4c135619312a`, with a documented one-line fix to its device-table offset calculation. Its patched identity ends in `+sandbox-devtable-v1` and participates in the builder hash. The engine never patches emitted filesystem bytes. See [dependency provenance](../third_party/go-erofs/UPSTREAM.md) for the commit, license and patch.
 
 The importer strictly validates superblock features, actual layer UUIDs, ordered slot counts and block geometry. This library profile emits explicit chunk device IDs with zero fsmeta UUID/device tags and zero concatenated mapped addresses; the manifest hashes, authenticated receipts and ordered bindings fix device identity. The older native-rebuild profile retains its distinct UUID-tag and concatenated-address checks. Neither profile accepts the other's geometry.
 
@@ -119,7 +119,7 @@ Special devices/FIFOs, zstd layers, unknown PAX attributes, unsupported xattr na
 
 The older native-rebuild profile remains frozen for existing catalog verification. Its native tar conversion required explicit parents and backward same-layer regular hardlinks; rebuild synthesized its root and could not express the broader cases above. In erofs-utils 1.9.4, `lib/tar.c` requires a hardlink target already in the current tar tree, while `lib/rebuild.c` walks source root children without importing root inode metadata. The new profile uses public library composition to remove those namespace restrictions while preserving native shared payload storage.
 
-Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d135aa2550326a5acf20f53c518aea5a8900015ce50700044e40f818c31dd80`), especially `man/mkfs.erofs.1`, `mkfs/main.c`, `lib/rebuild.c`, `lib/tar.c`, `lib/inode.c` and `lib/super.c`. The pinned library source and local patch are recorded separately in [UPSTREAM.md](../engine/third_party/go-erofs/UPSTREAM.md).
+Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d135aa2550326a5acf20f53c518aea5a8900015ce50700044e40f818c31dd80`), especially `man/mkfs.erofs.1`, `mkfs/main.c`, `lib/rebuild.c`, `lib/tar.c`, `lib/inode.c` and `lib/super.c`. The pinned library source and local patch are recorded separately in [UPSTREAM.md](../third_party/go-erofs/UPSTREAM.md).
 
 ## Validation
 

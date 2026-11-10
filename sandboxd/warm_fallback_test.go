@@ -17,37 +17,24 @@ func TestRejectedWarmFallsBackAndKeepsDeterministicReplay(t *testing.T) {
 			func(t *testing.T) {
 				s, engine, principal, _ := warmFallbackFixture(t, golden)
 				result := claimTest(t, s, principal, "claim", nil)
-				if result.Sandbox.ProvisionSource == "warm" ||
-					result.Sandbox.State != "running" ||
+				if result.Sandbox.ProvisionSource == "warm" || result.Sandbox.State != "running" ||
 					result.Sandbox.VMID == engine.warmCandidate {
-					t.Fatalf(
-						"rejected warm instance was delivered: %+v",
-						result.Sandbox,
-					)
+					t.Fatalf("rejected warm instance was delivered: %+v", result.Sandbox)
 				}
-				if _, err := engine.GetVM(
-					context.Background(),
-					engine.warmCandidate,
-				); !isEngineCode(
-					err,
-					api.NotFound,
-				) {
+				if _, err := engine.GetVM(context.Background(), engine.warmCandidate); !isEngineCode(err, api.NotFound) {
 					t.Fatal("rejected warm instance was retained", err)
 				}
 				if engine.count("delete") != 1 {
 					t.Fatal("warm instance was not deleted exactly once")
 				}
-				if golden &&
-					(engine.count("clone") != 1 || engine.count("create") != 0) {
+				if golden && (engine.count("clone") != 1 || engine.count("create") != 0) {
 					t.Fatal("golden fallback did not use one clone")
 				}
-				if !golden &&
-					(engine.count("create") != 1 || engine.count("start") != 1) {
+				if !golden && (engine.count("create") != 1 || engine.count("start") != 1) {
 					t.Fatal("cold fallback did not use one create/start")
 				}
 				replay := claimTest(t, s, principal, "claim", nil)
-				if replay.Sandbox.VMID != result.Sandbox.VMID ||
-					engine.count("delete") != 1 {
+				if replay.Sandbox.VMID != result.Sandbox.VMID || engine.count("delete") != 1 {
 					t.Fatal("claim retry supplied another VM")
 				}
 			},
@@ -89,10 +76,7 @@ func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 	if engine.count("delete") != 1 {
 		t.Fatal("fault did not follow physical warm deletion")
 	}
-	if _, err = s.store.db.ExecContext(
-		s.ctx,
-		`DROP TRIGGER fallback_metadata_fault`,
-	); err != nil {
+	if _, err = s.store.db.ExecContext(s.ctx, `DROP TRIGGER fallback_metadata_fault`); err != nil {
 		t.Fatal(err)
 	}
 	// The durable sandbox still names the rejected VM, as after a crash between
@@ -100,8 +84,7 @@ func TestWarmFallbackRecoversDeletionBeforeReferenceCommit(t *testing.T) {
 	if err := s.claim(&o); err != nil {
 		t.Fatal(err)
 	}
-	if o.Result.Sandbox.ProvisionSource != "golden" ||
-		engine.count("clone") != 1 {
+	if o.Result.Sandbox.ProvisionSource != "golden" || engine.count("clone") != 1 {
 		t.Fatal("replay failed to finish the original fallback")
 	}
 	if err := s.claim(&o); err != nil || engine.count("clone") != 1 {
@@ -114,12 +97,7 @@ func TestWarmFallbackPreservesChangedInstance(t *testing.T) {
 	s.mu.Lock()
 	s.closing = true
 	s.mu.Unlock()
-	o, err := s.Submit(
-		s.ctx,
-		principal,
-		"review",
-		Command{Action: "claim", TemplateID: template.ID},
-	)
+	o, err := s.Submit(s.ctx, principal, "review", Command{Action: "claim", TemplateID: template.ID})
 	s.mu.Lock()
 	s.closing = false
 	s.mu.Unlock()
@@ -128,14 +106,7 @@ func TestWarmFallbackPreservesChangedInstance(t *testing.T) {
 	}
 	b := recoverySandbox(t, s, o.IDs[0])
 	b.Instance = "old-instance"
-	if err := s.discardWarm(
-		o,
-		&b,
-		template,
-	); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if err := s.discardWarm(o, &b, template); !isCode(err, ErrConflict) {
 		t.Fatalf("changed warm instance was not rejected: %v", err)
 	}
 	if engine.count("delete") != 0 || b.VMID == "" {
@@ -155,12 +126,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			}
 			e := &templateQuotaSelectionClient{Client: hidden}
 			s.opts.Engine = e
-			o, err := s.Submit(
-				s.ctx,
-				p,
-				"destination-pending",
-				Command{Action: "claim", TemplateID: tpl.ID},
-			)
+			o, err := s.Submit(s.ctx, p, "destination-pending", Command{Action: "claim", TemplateID: tpl.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,9 +137,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r.Group.Selection.Stage != "fallback_reserved" ||
-				r.Group.Identity != nil ||
-				len(r.Allocations) != 1 ||
+			if r.Group.Selection.Stage != "fallback_reserved" || r.Group.Identity != nil || len(r.Allocations) != 1 ||
 				!r.Group.Steps["provision"].Dispatched {
 				t.Fatal("missing fallback pending destination")
 			}
@@ -225,11 +189,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			case "missing-selection":
 				r.Group.Selection = nil
 			}
-			if _, err = s.store.db.Exec(
-				`UPDATE resource_recovery SET body=? WHERE id=?`,
-				encode(r),
-				r.ID,
-			); err != nil {
+			if _, err = s.store.db.Exec(`UPDATE resource_recovery SET body=? WHERE id=?`, encode(r), r.ID); err != nil {
 				t.Fatal(err)
 			}
 			before := templateQuotaState(t, s)
@@ -249,8 +209,7 @@ func TestTemplateQuotaFallbackDestinationQualification(t *testing.T) {
 			if next != nil {
 				next.Close()
 			}
-			if !isCode(err, ErrManualRecovery) ||
-				!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+			if !isCode(err, ErrManualRecovery) || !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 				t.Fatal("startup accepted or repaired destination", err)
 			}
 			if nn, ff := e.counts(); nn != n || ff != finds {
@@ -280,12 +239,7 @@ func TestTemplateQuotaFallbackCancelledAndUnknownStep(t *testing.T) {
 					"abort",
 				)
 			}
-			o, err := s.Submit(
-				s.ctx,
-				p,
-				"destination-unfinished",
-				Command{Action: "claim", TemplateID: tpl.ID},
-			)
+			o, err := s.Submit(s.ctx, p, "destination-unfinished", Command{Action: "claim", TemplateID: tpl.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -294,9 +248,7 @@ func TestTemplateQuotaFallbackCancelledAndUnknownStep(t *testing.T) {
 			}
 			public, _ := s.store.operation(s.ctx, o.ID)
 			if !unknown {
-				if _, err = s.store.db.Exec(
-					`DROP TRIGGER handoff_fault`,
-				); err != nil {
+				if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -337,31 +289,13 @@ func TestTemplateQuotaFallbackCancelledAndUnknownStep(t *testing.T) {
 
 func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 	s, _, p, tpl := warmFallbackFixture(t, true)
-	claim := ledgerExecute(
-		t,
-		s,
-		p,
-		"historical-fallback-context",
-		Command{Action: "claim", TemplateID: tpl.ID},
-	)
+	claim := ledgerExecute(t, s, p, "historical-fallback-context", Command{Action: "claim", TemplateID: tpl.ID})
 	o, err := s.store.byKey(s.ctx, p.TenantID, "historical-fallback-context")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"historical-context-pause",
-		Command{Action: "pause", SandboxID: claim.Sandbox.ID},
-	)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"historical-context-release",
-		Command{Action: "release", SandboxID: claim.Sandbox.ID},
-	)
+	ledgerExecute(t, s, p, "historical-context-pause", Command{Action: "pause", SandboxID: claim.Sandbox.ID})
+	ledgerExecute(t, s, p, "historical-context-release", Command{Action: "release", SandboxID: claim.Sandbox.ID})
 	s = ledgerRestart(t, s)
 	r, err := s.loadRecovery(allocationGroupID(o))
 	if err != nil {
@@ -372,11 +306,7 @@ func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 		t.Fatal("missing distinct historical generations")
 	}
 	r.Group.Selection = nil
-	if _, err = s.store.db.Exec(
-		`UPDATE resource_recovery SET body=? WHERE id=?`,
-		encode(r),
-		r.ID,
-	); err != nil {
+	if _, err = s.store.db.Exec(`UPDATE resource_recovery SET body=? WHERE id=?`, encode(r), r.ID); err != nil {
 		t.Fatal(err)
 	}
 	e := &templateQuotaSelectionClient{Client: s.opts.Engine}
@@ -397,8 +327,7 @@ func TestTemplateQuotaFallbackHistoricalContextRequired(t *testing.T) {
 	if next != nil {
 		next.Close()
 	}
-	if !isCode(err, ErrManualRecovery) ||
-		!bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
+	if !isCode(err, ErrManualRecovery) || !bytes.Equal(before, templateQuotaReadOnlyState(t, opts)) {
 		t.Fatal("startup lost historical transfer", err)
 	}
 	if n, f := e.counts(); n != 0 || f != 0 {

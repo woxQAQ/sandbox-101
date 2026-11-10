@@ -103,17 +103,12 @@ func newOwnerEngine() *ownerEngine {
 	}
 }
 
-func (e *ownerEngine) id(
-	prefix string,
-) string {
+func (e *ownerEngine) id(prefix string) string {
 	e.next++
 	return fmt.Sprintf("%s%d", prefix, e.next)
 }
 
-func (e *ownerEngine) Submit(
-	ctx context.Context,
-	input api.Request,
-) (api.Operation, error) {
+func (e *ownerEngine) Submit(ctx context.Context, input api.Request) (api.Operation, error) {
 	if input.Action == "delete" {
 		e.mu.Lock()
 		e.deleteAttempts++
@@ -130,8 +125,7 @@ func (e *ownerEngine) Submit(
 	e.gateMu.Lock()
 	gate := e.deletion
 	e.gateMu.Unlock()
-	if gate != nil && input.Action == "delete" &&
-		strings.HasSuffix(input.Key, ":step:hibernate-delete") {
+	if gate != nil && input.Action == "delete" && strings.HasSuffix(input.Key, ":step:hibernate-delete") {
 		if err := gate.wait(ctx); err != nil {
 			return api.Operation{}, err
 		}
@@ -141,10 +135,7 @@ func (e *ownerEngine) Submit(
 	r := ownerCopy(input)
 	if old, ok := e.ops[r.Key]; ok {
 		if !reflect.DeepEqual(old.Request, r) {
-			return api.Operation{}, api.Fail(
-				api.Conflict,
-				"immutable request mismatch",
-			)
+			return api.Operation{}, api.Fail(api.Conflict, "immutable request mismatch")
 		}
 		return ownerCopy(old), nil
 	}
@@ -152,8 +143,7 @@ func (e *ownerEngine) Submit(
 		return api.Operation{}, api.Fail(api.Invalid, "invalid key")
 	}
 	p, exists := e.vms[r.VMID]
-	if r.Action != "create" && r.Action != "clone" &&
-		r.Action != "delete_snapshot" {
+	if r.Action != "create" && r.Action != "clone" && r.Action != "delete_snapshot" {
 		if !exists {
 			return api.Operation{}, api.Fail(api.NotFound, "VM absent")
 		}
@@ -169,10 +159,7 @@ func (e *ownerEngine) Submit(
 			return api.Operation{}, api.Fail(api.NotFound, "snapshot absent")
 		}
 		if !snap.Published || snap.Deleting {
-			return api.Operation{}, api.Fail(
-				api.Conflict,
-				"snapshot unavailable",
-			)
+			return api.Operation{}, api.Fail(api.Conflict, "snapshot unavailable")
 		}
 		if r.Action == "clone" && r.VMID != "" {
 			return api.Operation{}, api.Fail(api.Invalid, "clone allocates VM")
@@ -208,10 +195,7 @@ func (e *ownerEngine) Submit(
 			return api.Operation{}, api.Fail(api.Conflict, "start phase")
 		}
 		if r.Action == "restore" && p.VM.Phase != "stopped" {
-			return api.Operation{}, api.Fail(
-				api.Conflict,
-				"restore requires stop",
-			)
+			return api.Operation{}, api.Fail(api.Conflict, "restore requires stop")
 		}
 		if r.Action == "clone" {
 			o.VMID = e.id("vm-")
@@ -238,9 +222,7 @@ func (e *ownerEngine) Submit(
 		p.VM.NetworkPolicyInstance = ""
 		o.ResultInstance = p.VM.Instance
 	case "snapshot":
-		if r.ExpectedInstance == "" || p.VM.Phase != "running" ||
-			!p.VM.Verified ||
-			!p.VM.AgentReady {
+		if r.ExpectedInstance == "" || p.VM.Phase != "running" || !p.VM.Verified || !p.VM.AgentReady {
 			return api.Operation{}, api.Fail(api.Conflict, "capture identity")
 		}
 		o.SnapshotID = e.id("sid-")
@@ -259,16 +241,12 @@ func (e *ownerEngine) Submit(
 		p.VM.NetworkActual = false
 		p.VM.NetworkEnabled = false
 	case "network", "network_policy":
-		if r.ExpectedInstance == "" || p.VM.Phase != "running" ||
-			!p.VM.Verified {
+		if r.ExpectedInstance == "" || p.VM.Phase != "running" || !p.VM.Verified {
 			return api.Operation{}, api.Fail(api.Conflict, "network identity")
 		}
 		if r.Action == "network_policy" {
 			if p.VM.NetworkActual || p.VM.NetworkEnabled {
-				return api.Operation{}, api.Fail(
-					api.Conflict,
-					"policy requires NIC off",
-				)
+				return api.Operation{}, api.Fail(api.Conflict, "policy requires NIC off")
 			}
 			p.VM.NetworkPolicy = ownerCopy(r.Policy)
 			p.VM.NetworkPolicyInstance = ""
@@ -276,12 +254,8 @@ func (e *ownerEngine) Submit(
 				p.VM.NetworkPolicyInstance = p.VM.Instance
 			}
 		} else {
-			if r.NetworkEnabled &&
-				(p.VM.NetworkPolicy == nil || p.VM.NetworkPolicyInstance != p.VM.Instance) {
-				return api.Operation{}, api.Fail(
-					api.Conflict,
-					"network requires current policy",
-				)
+			if r.NetworkEnabled && (p.VM.NetworkPolicy == nil || p.VM.NetworkPolicyInstance != p.VM.Instance) {
+				return api.Operation{}, api.Fail(api.Conflict, "network requires current policy")
 			}
 			p.VM.NetworkActual = r.NetworkEnabled
 			p.VM.NetworkEnabled = r.NetworkEnabled
@@ -299,10 +273,7 @@ func (e *ownerEngine) Submit(
 		}
 		delete(e.snaps, r.SnapshotID)
 	default:
-		return api.Operation{}, api.Fail(
-			api.Invalid,
-			"unsupported component action",
-		)
+		return api.Operation{}, api.Fail(api.Invalid, "unsupported component action")
 	}
 	if r.Action != "delete" && r.Action != "delete_snapshot" {
 		e.vms[o.VMID] = p
@@ -312,10 +283,7 @@ func (e *ownerEngine) Submit(
 	return ownerCopy(o), nil
 }
 
-func (e *ownerEngine) GetOperation(
-	_ context.Context,
-	id string,
-) (api.Operation, error) {
+func (e *ownerEngine) GetOperation(_ context.Context, id string) (api.Operation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, o := range e.ops {
@@ -326,10 +294,7 @@ func (e *ownerEngine) GetOperation(
 	return api.Operation{}, api.Fail(api.NotFound, "receipt absent")
 }
 
-func (e *ownerEngine) FindOperation(
-	_ context.Context,
-	key string,
-) (api.Operation, error) {
+func (e *ownerEngine) FindOperation(_ context.Context, key string) (api.Operation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	o, ok := e.ops[key]
@@ -394,17 +359,11 @@ func (e *ownerEngine) inventorySnapshot() []api.VM {
 	return out
 }
 
-func (e *ownerEngine) GetSnapshot(
-	_ context.Context,
-	id string,
-) (api.Snapshot, error) {
+func (e *ownerEngine) GetSnapshot(_ context.Context, id string) (api.Snapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.snapshotQueryError {
-		return api.Snapshot{}, api.Fail(
-			api.Internal,
-			"injected catalog query failure",
-		)
+		return api.Snapshot{}, api.Fail(api.Internal, "injected catalog query failure")
 	}
 	s, ok := e.snaps[id]
 	if !ok {
@@ -449,17 +408,12 @@ type ownerAgent struct {
 	wg         sync.WaitGroup
 }
 
-func (a *ownerAgent) observe(
-	ctx context.Context,
-	v api.VM,
-	action string,
-) error {
+func (a *ownerAgent) observe(ctx context.Context, v api.VM, action string) error {
 	current, err := a.engine.GetVM(ctx, v.ID)
 	if err != nil {
 		return err
 	}
-	if current.Instance != v.Instance || current.Phase != "running" ||
-		!current.AgentReady {
+	if current.Instance != v.Instance || current.Phase != "running" || !current.AgentReady {
 		return api.Fail(api.Conflict, "agent instance")
 	}
 	a.mu.Lock()
@@ -468,18 +422,11 @@ func (a *ownerAgent) observe(
 	return nil
 }
 
-func (a *ownerAgent) Info(
-	ctx context.Context,
-	v api.VM,
-) error {
+func (a *ownerAgent) Info(ctx context.Context, v api.VM) error {
 	return a.observe(ctx, v, "info")
 }
 
-func (a *ownerAgent) Activate(
-	ctx context.Context,
-	v api.VM,
-	x sandboxd.Activation,
-) error {
+func (a *ownerAgent) Activate(ctx context.Context, v api.VM, x sandboxd.Activation) error {
 	if err := a.observe(ctx, v, "activate"); err != nil {
 		return err
 	}
@@ -565,11 +512,7 @@ func (e *ownerEgress) Bind(
 	if p.Mode != "direct" {
 		return api.Fail(api.Invalid, "component direct binding required")
 	}
-	cleanup, err := e.service.InstallDirect(
-		ctx,
-		egress.Binding{SandboxID: id, TenantID: tenant, VSockPath: path},
-		p,
-	)
+	cleanup, err := e.service.InstallDirect(ctx, egress.Binding{SandboxID: id, TenantID: tenant, VSockPath: path}, p)
 	if cleanup != nil {
 		e.mu.Lock()
 		e.cleanups[id] = cleanup
@@ -648,12 +591,7 @@ func newOwnerFixture(t *testing.T) *ownerFixture {
 	return f
 }
 
-func ownerAwait(
-	t *testing.T,
-	ctx context.Context,
-	ch <-chan struct{},
-	stage string,
-) {
+func ownerAwait(t *testing.T, ctx context.Context, ch <-chan struct{}, stage string) {
 	t.Helper()
 	select {
 	case <-ch:
@@ -690,13 +628,7 @@ func (f *ownerFixture) open(initialize bool) {
 	out.service = s
 	f.server = httptest.NewServer(s.Handler())
 	f.root = sdk.New(f.server.URL, "component-manager-only")
-	db, err := sql.Open(
-		"sqlite",
-		"file:"+filepath.Join(
-			f.state,
-			"sandboxd.db",
-		)+"?mode=ro&_pragma=busy_timeout(1000)",
-	)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.state, "sandboxd.db")+"?mode=ro&_pragma=busy_timeout(1000)")
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -730,9 +662,7 @@ func (f *ownerFixture) close() {
 
 func (f *ownerFixture) reopen() { f.close(); f.open(false) }
 
-func (f *ownerFixture) client(
-	id string,
-) *sdk.Client {
+func (f *ownerFixture) client(id string) *sdk.Client {
 	return sdk.New(f.server.URL, f.tokens[id])
 }
 
@@ -755,12 +685,7 @@ func (f *ownerFixture) budget(id string, slots int, storage int64) {
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(
-		ctx,
-		"POST",
-		f.root.Endpoint+"/v1/tenants",
-		bytes.NewReader(raw),
-	)
+	req, err := http.NewRequestWithContext(ctx, "POST", f.root.Endpoint+"/v1/tenants", bytes.NewReader(raw))
 	if err != nil {
 		f.t.Fatal("budget request")
 	}
@@ -779,9 +704,7 @@ func (f *ownerFixture) budget(id string, slots int, storage int64) {
 		Slots   int    `json:"max_sandboxes"`
 		Storage int64  `json:"max_storage_mib"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&got) != nil ||
-		got.ID != id ||
-		got.Slots != slots ||
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&got) != nil || got.ID != id || got.Slots != slots ||
 		got.Storage != storage {
 		f.t.Fatal("budget response fields")
 	}
@@ -795,12 +718,7 @@ func ownerMust(t *testing.T, r sandboxd.Result, err error) sandboxd.Result {
 	return r
 }
 
-func (f *ownerFixture) template(
-	c *sdk.Client,
-	id string,
-	shape api.Shape,
-	build bool,
-) sandboxd.Template {
+func (f *ownerFixture) template(c *sdk.Client, id string, shape api.Shape, build bool) sandboxd.Template {
 	f.t.Helper()
 	r, err := c.PutTemplate(
 		f.ctx,
@@ -815,11 +733,7 @@ func (f *ownerFixture) template(
 	return *ownerMust(f.t, r, err).Template
 }
 
-func (f *ownerFixture) claim(
-	c *sdk.Client,
-	template, key string,
-	p egress.Policy,
-) sandboxd.Result {
+func (f *ownerFixture) claim(c *sdk.Client, template, key string, p egress.Policy) sandboxd.Result {
 	f.t.Helper()
 	r, err := c.Claim(
 		f.ctx,
@@ -834,10 +748,7 @@ func (f *ownerFixture) claim(
 	return ownerMust(f.t, r, err)
 }
 
-func (f *ownerFixture) change(
-	c *sdk.Client,
-	id, key, action string,
-) sandboxd.Result {
+func (f *ownerFixture) change(c *sdk.Client, id, key, action string) sandboxd.Result {
 	f.t.Helper()
 	r, err := c.Change(f.ctx, id, key, sandboxd.Command{Action: action})
 	return ownerMust(f.t, r, err)
@@ -888,14 +799,7 @@ func (f *ownerFixture) ledger() ownerLedger {
 	}
 	for rows.Next() {
 		var r ownerResource
-		if err = rows.Scan(
-			&r.Tenant,
-			&r.Kind,
-			&r.Key,
-			&r.Slots,
-			&r.Storage,
-			&r.Source,
-		); err != nil {
+		if err = rows.Scan(&r.Tenant, &r.Kind, &r.Key, &r.Slots, &r.Storage, &r.Source); err != nil {
 			f.t.Fatal(err)
 		}
 		out.Resources = append(out.Resources, r)
@@ -913,13 +817,7 @@ func (f *ownerFixture) ledger() ownerLedger {
 	}
 	for rows.Next() {
 		var r ownerRef
-		if err = rows.Scan(
-			&r.Tenant,
-			&r.Kind,
-			&r.Key,
-			&r.Holder,
-			&r.ID,
-		); err != nil {
+		if err = rows.Scan(&r.Tenant, &r.Kind, &r.Key, &r.Holder, &r.ID); err != nil {
 			f.t.Fatal(err)
 		}
 		out.Refs = append(out.Refs, r)
@@ -942,10 +840,7 @@ func (f *ownerFixture) scalar(query string, args ...any) int {
 
 func (f *ownerFixture) ops() []sandboxd.Operation {
 	f.t.Helper()
-	rows, err := f.db.QueryContext(
-		f.ctx,
-		"SELECT body FROM operations ORDER BY id",
-	)
+	rows, err := f.db.QueryContext(f.ctx, "SELECT body FROM operations ORDER BY id")
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -968,12 +863,7 @@ func (f *ownerFixture) ops() []sandboxd.Operation {
 	return out
 }
 
-func (f *ownerFixture) assertLedger(
-	stage, owner string,
-	slots int,
-	disks, sids []string,
-	shape api.Shape,
-) {
+func (f *ownerFixture) assertLedger(stage, owner string, slots int, disks, sids []string, shape api.Shape) {
 	f.t.Helper()
 	l := f.ledger()
 	want := map[string]int64{}
@@ -1002,30 +892,17 @@ func (f *ownerFixture) assertLedger(
 		}
 	}
 	if gotSlots != int64(slots) || !reflect.DeepEqual(got, want) {
-		f.t.Fatalf(
-			"stage=%s slots=%d want=%d identities=%v want=%v",
-			stage,
-			gotSlots,
-			slots,
-			got,
-			want,
-		)
+		f.t.Fatalf("stage=%s slots=%d want=%d identities=%v want=%v", stage, gotSlots, slots, got, want)
 	}
 	for _, r := range l.Resources {
 		found := false
 		for _, ref := range l.Refs {
-			if ref.Tenant == r.Tenant && ref.Kind == r.Kind &&
-				ref.Key == r.Key {
+			if ref.Tenant == r.Tenant && ref.Kind == r.Kind && ref.Key == r.Key {
 				found = true
 			}
 		}
 		if !found {
-			f.t.Fatalf(
-				"stage=%s unreferenced charged identity=%s/%s",
-				stage,
-				r.Kind,
-				r.Key,
-			)
+			f.t.Fatalf("stage=%s unreferenced charged identity=%s/%s", stage, r.Kind, r.Key)
 		}
 	}
 	raw, _ := json.Marshal(l)
@@ -1048,12 +925,7 @@ func (f *ownerFixture) prefix(c *sdk.Client, shape api.Shape) ownerPrefix {
 	b := *claim.Sandbox
 	f.info(c, b.ID, "")
 	cp := *f.change(c, b.ID, "life-cp", "checkpoint").Checkpoint
-	fork, err := c.Change(
-		f.ctx,
-		b.ID,
-		"life-fork",
-		sandboxd.Command{Action: "fork", Count: 2},
-	)
+	fork, err := c.Change(f.ctx, b.ID, "life-fork", sandboxd.Command{Action: "fork", Count: 2})
 	fork = ownerMust(f.t, fork, err)
 	if len(fork.Sandboxes) != 2 {
 		f.t.Fatal("two fork branches required")
@@ -1071,17 +943,10 @@ func (f *ownerFixture) prefix(c *sdk.Client, shape api.Shape) ownerPrefix {
 		f.info(c, branch.ID, "")
 	}
 	paused := *f.change(c, b.ID, "life-pause", "pause").Sandbox
-	if paused.State != "paused" || paused.VMID != "" ||
-		paused.SnapshotID == "" {
+	if paused.State != "paused" || paused.VMID != "" || paused.SnapshotID == "" {
 		f.t.Fatal("pause result")
 	}
-	if _, err = f.engine.GetVM(
-		f.ctx,
-		b.VMID,
-	); !ownerEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err = f.engine.GetVM(f.ctx, b.VMID); !ownerEngineCode(err, api.NotFound) {
 		f.t.Fatal("old VM not deleted")
 	}
 	f.assertLedger(
@@ -1104,11 +969,7 @@ func (f *ownerFixture) prefix(c *sdk.Client, shape api.Shape) ownerPrefix {
 }
 
 // Only selected-Bob uses raw upgrade: SDK.Connect intentionally bypasses HTTP.
-func ownerUpgrade(
-	ctx context.Context,
-	c *sdk.Client,
-	id, selected string,
-) (*sdk.Connection, error) {
+func ownerUpgrade(ctx context.Context, c *sdk.Client, id, selected string) (*sdk.Connection, error) {
 	u, err := url.Parse(c.Endpoint)
 	if err != nil {
 		return nil, err
@@ -1150,9 +1011,7 @@ func ownerUpgrade(
 		defer resp.Body.Close()
 		defer conn.Close()
 		var typed sandboxd.Error
-		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).
-			Decode(&typed) !=
-			nil {
+		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&typed) != nil {
 			return nil, errors.New("upgrade status")
 		}
 		return nil, &typed
@@ -1166,11 +1025,7 @@ func ownerUpgrade(
 	}, nil
 }
 
-func ownerInfo(
-	ctx context.Context,
-	c *sdk.Client,
-	id, selected string,
-) (string, error) {
+func ownerInfo(ctx context.Context, c *sdk.Client, id, selected string) (string, error) {
 	var conn *sdk.Connection
 	var err error
 	if selected == "" {
@@ -1205,11 +1060,7 @@ func ownerErrorCode(err error) sandboxd.ErrorCode {
 	return sandboxd.ErrInternal
 }
 
-func (f *ownerFixture) eight(
-	c *sdk.Client,
-	id, selected string,
-	want sandboxd.ErrorCode,
-) {
+func (f *ownerFixture) eight(c *sdk.Client, id, selected string, want sandboxd.ErrorCode) {
 	f.t.Helper()
 	type outcome struct {
 		Index int
@@ -1241,19 +1092,11 @@ func (f *ownerFixture) eight(
 		}
 	}
 	if failed != 0 {
-		f.t.Fatalf(
-			"eight-connect success oracle: mismatches=%d expected_code=%s",
-			failed,
-			want,
-		)
+		f.t.Fatalf("eight-connect success oracle: mismatches=%d expected_code=%s", failed, want)
 	}
 }
 
-func (f *ownerFixture) resumed(
-	p ownerPrefix,
-	c *sdk.Client,
-	selected string,
-) sandboxd.Sandbox {
+func (f *ownerFixture) resumed(p ownerPrefix, c *sdk.Client, selected string) sandboxd.Sandbox {
 	f.t.Helper()
 	before := f.engine.effects()["clone"]
 	beforeDeletes := f.engine.effects()["delete_snapshot"]
@@ -1261,8 +1104,7 @@ func (f *ownerFixture) resumed(
 	ops := len(f.ops())
 	f.eight(c, p.Source.ID, selected, "")
 	b := f.get(f.root, p.Source.ID)
-	if b.State != "running" || b.VMID == "" || b.Instance == "" ||
-		b.VMID == p.Source.VMID ||
+	if b.State != "running" || b.VMID == "" || b.Instance == "" || b.VMID == p.Source.VMID ||
 		f.engine.effects()["clone"] != before+1 ||
 		len(f.ops()) != ops+1 {
 		f.t.Fatal("eight connections did not converge to one resume")
@@ -1270,26 +1112,17 @@ func (f *ownerFixture) resumed(
 	if f.engine.effects()["delete_snapshot"] != beforeDeletes+1 ||
 		f.agent.effects()["connect"] != agentBefore["connect"]+8 ||
 		f.agent.effects()["activate"] != agentBefore["activate"]+1 {
-		f.t.Fatal(
-			"auto-resume duplicated retirement/activation/connection effects",
-		)
+		f.t.Fatal("auto-resume duplicated retirement/activation/connection effects")
 	}
 	found := 0
 	for _, o := range f.ops() {
 		if o.Command.Action == "resume" {
 			found++
-			if o.TenantID != p.Source.TenantID ||
-				o.ChargeTenantID != p.Source.TenantID ||
+			if o.TenantID != p.Source.TenantID || o.ChargeTenantID != p.Source.TenantID ||
 				o.Key != "auto-resume:"+p.Source.ID+":"+p.SleepSID+":0" {
 				f.t.Fatal("auto operation owner/namespace")
 			}
-			f.t.Logf(
-				"auto_operation=%s key=%s tenant=%s charge=%s",
-				o.ID,
-				o.Key,
-				o.TenantID,
-				o.ChargeTenantID,
-			)
+			f.t.Logf("auto_operation=%s key=%s tenant=%s charge=%s", o.ID, o.Key, o.TenantID, o.ChargeTenantID)
 		}
 	}
 	if found != 1 {
@@ -1328,12 +1161,9 @@ func TestProductionOwnerBudgetMissingRowHTTP(t *testing.T) {
 	f := newOwnerFixture(t)
 	shape := api.Shape{VCPUs: 1, MemoryMiB: 512, DiskMiB: 512}
 	p := f.prefix(f.root, shape)
-	before, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(
-		f.ops(),
-	)
+	before, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(f.ops())
 	f.eight(f.root, p.Source.ID, "", sandboxd.ErrNotFound)
-	if !reflect.DeepEqual(before, f.ledger()) ||
-		!reflect.DeepEqual(eff, f.engine.effects()) ||
+	if !reflect.DeepEqual(before, f.ledger()) || !reflect.DeepEqual(eff, f.engine.effects()) ||
 		!reflect.DeepEqual(agents, f.agent.effects()) ||
 		len(f.ops()) != ops ||
 		f.scalar("SELECT count(*) FROM tenants") != 0 {
@@ -1348,8 +1178,7 @@ func TestProductionOwnerBudgetMissingRowHTTP(t *testing.T) {
 	}
 	f.change(f.root, b.ID, "explicit-root-control", "resume")
 	f.info(f.root, b.ID, "")
-	if f.engine.effects()["clone"] != eff["clone"]+1 ||
-		f.scalar("SELECT count(*) FROM tenants") != 0 {
+	if f.engine.effects()["clone"] != eff["clone"]+1 || f.scalar("SELECT count(*) FROM tenants") != 0 {
 		t.Fatal("explicit control")
 	}
 	f.cleanupPrefix(f.root, p)
@@ -1403,24 +1232,15 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		disks[id] = true
 		lifeDisks = append(lifeDisks, id)
 	}
-	if len(physical.Disks) != 2 || !physical.Backings[p.SleepSID] ||
-		!physical.Backings[p.CP.SnapshotID] {
+	if len(physical.Disks) != 2 || !physical.Backings[p.SleepSID] || !physical.Backings[p.CP.SnapshotID] {
 		t.Fatal("lifecycle restore identities")
 	}
-	f.assertLedger(
-		"finite-rollback",
-		"root",
-		3,
-		lifeDisks,
-		[]string{p.CP.SnapshotID, p.ForkSID, p.SleepSID},
-		shape,
-	)
+	f.assertLedger("finite-rollback", "root", 3, lifeDisks, []string{p.CP.SnapshotID, p.ForkSID, p.SleepSID}, shape)
 	paused := *f.change(f.root, running.ID, "life-second-pause", "pause").Sandbox
 	sids[paused.SnapshotID] = true
 	before, agents := f.engine.effects(), f.agent.effects()
 	f.change(f.root, running.ID, "life-zero-wake", "release")
-	if f.engine.effects()["clone"] != before["clone"] ||
-		!reflect.DeepEqual(agents, f.agent.effects()) {
+	if f.engine.effects()["clone"] != before["clone"] || !reflect.DeepEqual(agents, f.agent.effects()) {
 		t.Fatal("finite zero wake")
 	}
 	f.deleteCP(f.root, p.CP)
@@ -1443,18 +1263,10 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	if built.SnapshotID == "" || built.State != "ready" {
 		t.Fatal("build did not publish template")
 	}
-	f.assertLedger(
-		"build-unclaimed-013",
-		"root",
-		0,
-		nil,
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("build-unclaimed-013", "root", 0, nil, []string{built.SnapshotID}, shape)
 	var buildOperation string
 	for _, o := range f.ops() {
-		if o.Command.Action == "template_build" &&
-			o.Command.Template.ID == built.ID {
+		if o.Command.Action == "template_build" && o.Command.Template.ID == built.ID {
 			buildOperation = o.ID
 		}
 	}
@@ -1463,10 +1275,7 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	}
 	buildProofs := map[string]api.Operation{}
 	for _, step := range []string{"build-create", "build-start", "build-snapshot", "build-delete"} {
-		proof, e := f.engine.FindOperation(
-			f.ctx,
-			"sbx-op:"+buildOperation+":step:"+step,
-		)
+		proof, e := f.engine.FindOperation(f.ctx, "sbx-op:"+buildOperation+":step:"+step)
 		if e != nil || proof.Status != "succeeded" {
 			t.Fatal("build receipt missing", step, e)
 		}
@@ -1478,18 +1287,10 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 		buildProofs["build-snapshot"].SnapshotID != built.SnapshotID {
 		t.Fatal("build generation or snapshot receipt mismatch")
 	}
-	if _, e := f.engine.GetVM(
-		f.ctx,
-		buildVM,
-	); !ownerEngineCode(
-		e,
-		api.NotFound,
-	) {
+	if _, e := f.engine.GetVM(f.ctx, buildVM); !ownerEngineCode(e, api.NotFound) {
 		t.Fatal("build VM did not actually retire", e)
 	}
-	if f.scalar(
-		`SELECT count(*) FROM quota_resources WHERE kind='build_slot'`,
-	) != 0 ||
+	if f.scalar(`SELECT count(*) FROM quota_resources WHERE kind='build_slot'`) != 0 ||
 		f.scalar(
 			`SELECT count(*) FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE r.id=? AND json_extract(a.value,'$.kind')='vm_disk' AND json_extract(a.value,'$.resolution.state')='reclaimed'`,
 			"allocation:"+buildOperation,
@@ -1502,14 +1303,7 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	if golden.ProvisionSource != "golden" {
 		t.Fatal("golden source")
 	}
-	f.assertLedger(
-		"golden",
-		"root",
-		1,
-		[]string{golden.VMID},
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("golden", "root", 1, []string{golden.VMID}, []string{built.SnapshotID}, shape)
 	f.change(f.root, golden.ID, "tier-golden-release", "release")
 	built.TargetWarm = 1
 	result, err := f.root.PutTemplate(f.ctx, "tier-enable", built, false)
@@ -1520,42 +1314,20 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.assertLedger(
-		"unclaimed-warm-013",
-		"root",
-		0,
-		[]string{warmID},
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("unclaimed-warm-013", "root", 0, []string{warmID}, []string{built.SnapshotID}, shape)
 	warm := *f.claim(f.root, "tiers", "tier-warm", egress.Policy{Mode: "none"}).Sandbox
 	record(warm)
-	if warm.ProvisionSource != "warm" || warm.VMID != warmID ||
-		warm.Instance != warmBefore.Instance {
+	if warm.ProvisionSource != "warm" || warm.VMID != warmID || warm.Instance != warmBefore.Instance {
 		t.Fatal("warm did not reuse current VM")
 	}
 	f.info(f.root, warm.ID, "")
-	f.assertLedger(
-		"claimed-warm",
-		"root",
-		1,
-		[]string{warm.VMID},
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("claimed-warm", "root", 1, []string{warm.VMID}, []string{built.SnapshotID}, shape)
 	f.nextRound()
 	successor, successorSource := f.readyWarm(built.ID)
 	if successor == warmID {
 		t.Fatal("claimed warm remained in pool")
 	}
-	f.assertLedger(
-		"claimed-and-successor",
-		"root",
-		1,
-		[]string{warmID, successor},
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("claimed-and-successor", "root", 1, []string{warmID, successor}, []string{built.SnapshotID}, shape)
 	built.TargetWarm = 0
 	result, err = f.root.PutTemplate(f.ctx, "tier-disable", built, false)
 	ownerMust(t, result, err)
@@ -1563,10 +1335,7 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	f.until("successor actual absence and destination retired", func() bool {
 		_, e := f.engine.GetVM(f.ctx, successor)
 		return ownerEngineCode(e, api.NotFound) &&
-			f.scalar(
-				`SELECT count(*) FROM quota_resources WHERE kind='vm_disk' AND resource_key=?`,
-				successor,
-			) == 0 &&
+			f.scalar(`SELECT count(*) FROM quota_resources WHERE kind='vm_disk' AND resource_key=?`, successor) == 0 &&
 			f.scalar(
 				`SELECT count(*) FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE r.id=? AND json_extract(a.value,'$.resolution.state')='reclaimed'`,
 				"allocation:"+successorSource,
@@ -1575,19 +1344,10 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	f.change(f.root, warm.ID, "tier-warm-release", "release")
 	f.until("pool disabled and settled", func() bool {
 		return f.scalar("SELECT count(*) FROM warm") == 0 &&
-			f.scalar(
-				"SELECT count(*) FROM operations WHERE status IN ('pending','running')",
-			) == 0
+			f.scalar("SELECT count(*) FROM operations WHERE status IN ('pending','running')") == 0
 	})
 	f.reopen()
-	f.assertLedger(
-		"tiers-cleaned",
-		"root",
-		0,
-		nil,
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("tiers-cleaned", "root", 0, nil, []string{built.SnapshotID}, shape)
 
 	// Replay the resource sequence of guest TCP with strict current-instance
 	// direct policy installation. No net.Pipe result claims guest TCP enforcement.
@@ -1600,27 +1360,14 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !vm.NetworkActual || vm.NetworkPolicy == nil ||
-		vm.NetworkPolicyInstance != direct.Instance {
+	if !vm.NetworkActual || vm.NetworkPolicy == nil || vm.NetworkPolicyInstance != direct.Instance {
 		t.Fatal("direct policy boundary not installed")
 	}
 	f.info(f.root, direct.ID, "")
 	f.info(f.root, none.ID, "")
-	f.assertLedger(
-		"tcp-direct-none",
-		"root",
-		2,
-		[]string{direct.VMID, none.VMID},
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("tcp-direct-none", "root", 2, []string{direct.VMID, none.VMID}, []string{built.SnapshotID}, shape)
 	f.change(f.root, none.ID, "tcp-none-release", "release")
-	fork, err := f.root.Change(
-		f.ctx,
-		direct.ID,
-		"tcp-fork",
-		sandboxd.Command{Action: "fork", Count: 1},
-	)
+	fork, err := f.root.Change(f.ctx, direct.ID, "tcp-fork", sandboxd.Command{Action: "fork", Count: 1})
 	fork = ownerMust(t, fork, err)
 	if len(fork.Sandboxes) != 1 {
 		t.Fatal("TCP branch")
@@ -1670,21 +1417,9 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	f.change(f.root, direct.ID, "tcp-direct-release", "release")
 	f.change(f.root, branch.ID, "tcp-branch-release", "release")
 	f.reopen()
-	f.assertLedger(
-		"full-sequence-cleaned",
-		"root",
-		0,
-		nil,
-		[]string{built.SnapshotID},
-		shape,
-	)
+	f.assertLedger("full-sequence-cleaned", "root", 0, nil, []string{built.SnapshotID}, shape)
 	if len(disks) != 12 || len(sids) != 7 || len(slots) != 9 {
-		t.Fatalf(
-			"fixed allocation identity counts disks=%d SIDs=%d slots=%d",
-			len(disks),
-			len(sids),
-			len(slots),
-		)
+		t.Fatalf("fixed allocation identity counts disks=%d SIDs=%d slots=%d", len(disks), len(sids), len(slots))
 	}
 	if disks[buildVM] || disks[successor] || buildVM == successor {
 		t.Fatal("extra build/refill identities overlap original12")
@@ -1692,18 +1427,14 @@ func TestProductionOwnerBudgetFiniteHTTP(t *testing.T) {
 	warmReceipts := map[string]bool{}
 	f.engine.mu.Lock()
 	for _, proof := range f.engine.ops {
-		if proof.Request.Action == "clone" &&
-			proof.Request.SnapshotID == built.SnapshotID &&
+		if proof.Request.Action == "clone" && proof.Request.SnapshotID == built.SnapshotID &&
 			strings.HasSuffix(proof.Key, ":step:warm-clone") {
 			warmReceipts[proof.VMID] = true
 		}
 	}
 	f.engine.mu.Unlock()
-	if len(warmReceipts) != 2 || !warmReceipts[warmID] ||
-		!warmReceipts[successor] {
-		t.Fatal(
-			"maintenance admitted more than the controlled W and Q identities",
-		)
+	if len(warmReceipts) != 2 || !warmReceipts[warmID] || !warmReceipts[successor] {
+		t.Fatal("maintenance admitted more than the controlled W and Q identities")
 	}
 	t.Logf(
 		"Plan013 extra allocation identities build=%s successor=%s original12=%d total=%d source=%s",
@@ -1765,12 +1496,8 @@ func (f *ownerFixture) readyWarm(template string) (string, string) {
 		f.t.Fatal(err)
 	}
 	f.until("original clone terminal receipt", func() bool {
-		proof, err := f.engine.FindOperation(
-			f.ctx,
-			"sbx-op:"+source+":step:warm-clone",
-		)
-		return err == nil && proof.Status == "succeeded" && proof.VMID == vm &&
-			proof.ResultInstance != ""
+		proof, err := f.engine.FindOperation(f.ctx, "sbx-op:"+source+":step:warm-clone")
+		return err == nil && proof.Status == "succeeded" && proof.VMID == vm && proof.ResultInstance != ""
 	})
 	f.until("warm group active destination", func() bool {
 		return f.scalar(
@@ -1812,18 +1539,11 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 		for _, caller := range callers {
 			for _, low := range []bool{false, true} {
 				t.Run(
-					fmt.Sprintf(
-						"D%d-M%d/%s/low=%t",
-						shape.DiskMiB,
-						shape.MemoryMiB,
-						caller,
-						low,
-					),
+					fmt.Sprintf("D%d-M%d/%s/low=%t", shape.DiskMiB, shape.MemoryMiB, caller, low),
 					func(t *testing.T) {
 						f := newOwnerFixture(t)
 						owner := "alice"
-						if caller == "manager-root" ||
-							caller == "ordinary-root" {
+						if caller == "manager-root" || caller == "ordinary-root" {
 							owner = "root"
 						}
 						s := shape.DiskMiB + shape.MemoryMiB
@@ -1833,8 +1553,7 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 						p := f.prefix(setup, shape)
 						c := f.client(owner)
 						principal, err := f.service.Authenticate(f.ctx, c.Token)
-						if err != nil || principal.Root ||
-							principal.TenantID != owner {
+						if err != nil || principal.Root || principal.TenantID != owner {
 							t.Fatal("ordinary tenant authentication changed")
 						}
 						selected := ""
@@ -1860,18 +1579,10 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 						}
 						f.budget(owner, 3, limit)
 						if low {
-							ledger, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(
-								f.ops(),
-							)
-							f.eight(
-								c,
-								p.Source.ID,
-								selected,
-								sandboxd.ErrExhausted,
-							)
+							ledger, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(f.ops())
+							f.eight(c, p.Source.ID, selected, sandboxd.ErrExhausted)
 							after := f.get(f.root, p.Source.ID)
-							if !reflect.DeepEqual(ledger, f.ledger()) ||
-								!reflect.DeepEqual(eff, f.engine.effects()) ||
+							if !reflect.DeepEqual(ledger, f.ledger()) || !reflect.DeepEqual(eff, f.engine.effects()) ||
 								!reflect.DeepEqual(agents, f.agent.effects()) ||
 								len(f.ops()) != ops ||
 								after.State != "paused" ||
@@ -1879,10 +1590,7 @@ func TestProductionOwnerBudgetAutoResumeBoundaryHTTP(t *testing.T) {
 								after.ResumeAttempt != p.Source.ResumeAttempt {
 								t.Fatal("low admission caused effects")
 							}
-							if _, err := f.engine.GetSnapshot(
-								f.ctx,
-								p.SleepSID,
-							); err != nil {
+							if _, err := f.engine.GetSnapshot(f.ctx, p.SleepSID); err != nil {
 								t.Fatal(err)
 							}
 							f.budget(owner, 3, exact)
@@ -1942,26 +1650,11 @@ func TestProductionOwnerBudgetLifecyclePeakHTTP(t *testing.T) {
 			if len(disk.Disks) != 2 || len(disk.Backings) != 2 {
 				t.Fatal("restore discarded disk/backing identity")
 			}
-			f.assertLedger(
-				"rollback-832",
-				"alice",
-				3,
-				disks,
-				[]string{p.CP.SnapshotID, p.ForkSID, p.SleepSID},
-				shape,
-			)
+			f.assertLedger("rollback-832", "alice", 3, disks, []string{p.CP.SnapshotID, p.ForkSID, p.SleepSID}, shape)
 			if limit == 1023 {
-				before, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(
-					f.ops(),
-				)
-				_, err = c.Change(
-					f.ctx,
-					running.ID,
-					"life-second-pause",
-					sandboxd.Command{Action: "pause"},
-				)
-				if !ownerCode(err, sandboxd.ErrExhausted) ||
-					!reflect.DeepEqual(before, f.ledger()) ||
+				before, eff, agents, ops := f.ledger(), f.engine.effects(), f.agent.effects(), len(f.ops())
+				_, err = c.Change(f.ctx, running.ID, "life-second-pause", sandboxd.Command{Action: "pause"})
+				if !ownerCode(err, sandboxd.ErrExhausted) || !reflect.DeepEqual(before, f.ledger()) ||
 					!reflect.DeepEqual(eff, f.engine.effects()) ||
 					!reflect.DeepEqual(agents, f.agent.effects()) ||
 					len(f.ops()) != ops {
@@ -1978,12 +1671,7 @@ func TestProductionOwnerBudgetLifecyclePeakHTTP(t *testing.T) {
 			}
 			done := make(chan result, 1)
 			go func() {
-				r, err := c.Change(
-					f.ctx,
-					running.ID,
-					"life-second-pause",
-					sandboxd.Command{Action: "pause"},
-				)
+				r, err := c.Change(f.ctx, running.ID, "life-second-pause", sandboxd.Command{Action: "pause"})
 				done <- result{r, err}
 			}()
 			ownerAwait(t, f.ctx, gate.entered, "second pause physical deletion")
@@ -1992,8 +1680,7 @@ func TestProductionOwnerBudgetLifecyclePeakHTTP(t *testing.T) {
 				Scan(&h2); err != nil {
 				t.Fatal(err)
 			}
-			if h2 == "" || h2 == p.SleepSID || h2 == p.CP.SnapshotID ||
-				h2 == p.ForkSID {
+			if h2 == "" || h2 == p.SleepSID || h2 == p.CP.SnapshotID || h2 == p.ForkSID {
 				t.Fatal("second sleep identity")
 			}
 			f.assertLedger(
@@ -2016,8 +1703,7 @@ func TestProductionOwnerBudgetLifecyclePeakHTTP(t *testing.T) {
 			vms := f.engine.inventorySnapshot()
 			f.change(c, running.ID, "life-zero-wake", "release")
 			after := f.engine.inventorySnapshot()
-			if f.engine.effects()["clone"] != before["clone"] ||
-				!reflect.DeepEqual(agents, f.agent.effects()) ||
+			if f.engine.effects()["clone"] != before["clone"] || !reflect.DeepEqual(agents, f.agent.effects()) ||
 				!reflect.DeepEqual(vms, after) {
 				t.Fatal("zero wake release woke guest")
 			}
@@ -2037,13 +1723,7 @@ func TestProductionOwnerBudgetRetainedIdentityHTTP(t *testing.T) {
 	p := f.prefix(c, shape)
 	running := f.resumed(p, c, "")
 	before := f.engine.effects()["clone"]
-	if _, err := f.engine.GetSnapshot(
-		f.ctx,
-		p.SleepSID,
-	); !ownerEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err := f.engine.GetSnapshot(f.ctx, p.SleepSID); !ownerEngineCode(err, api.NotFound) {
 		t.Fatal("retired catalog should be absent")
 	}
 	if !f.engine.physical(running.VMID).Backings[p.SleepSID] {
@@ -2083,15 +1763,9 @@ func TestProductionOwnerBudgetRetainedIdentityHTTP(t *testing.T) {
 		t.Fatal("same key receipt changed")
 	}
 	autoKey := "auto-resume:" + p.Source.ID + ":" + p.SleepSID + ":0"
-	replay, err := c.Change(
-		f.ctx,
-		p.Source.ID,
-		autoKey,
-		sandboxd.Command{Action: "resume"},
-	)
+	replay, err := c.Change(f.ctx, p.Source.ID, autoKey, sandboxd.Command{Action: "resume"})
 	replay = ownerMust(t, replay, err)
-	if replay.Sandbox == nil || replay.Sandbox.VMID != running.VMID ||
-		replay.Sandbox.Instance != running.Instance {
+	if replay.Sandbox == nil || replay.Sandbox.VMID != running.VMID || replay.Sandbox.Instance != running.Instance {
 		t.Fatal("public same-key resume result changed")
 	}
 	f.change(c, running.ID, "retained-release", "release")
@@ -2106,18 +1780,10 @@ func TestProductionOwnerBudgetRetainedIdentityHTTP(t *testing.T) {
 		[]string{p.CP.SnapshotID, p.ForkSID},
 		shape,
 	)
-	replayAfter, err := c.Change(
-		f.ctx,
-		p.Source.ID,
-		autoKey,
-		sandboxd.Command{Action: "resume"},
-	)
+	replayAfter, err := c.Change(f.ctx, p.Source.ID, autoKey, sandboxd.Command{Action: "resume"})
 	replayAfter = ownerMust(t, replayAfter, err)
-	if replayAfter.OperationID != replay.OperationID ||
-		!reflect.DeepEqual(replayAfter.Sandbox, replay.Sandbox) {
-		t.Fatal(
-			"public historical result was rewritten after physical deletion",
-		)
+	if replayAfter.OperationID != replay.OperationID || !reflect.DeepEqual(replayAfter.Sandbox, replay.Sandbox) {
+		t.Fatal("public historical result was rewritten after physical deletion")
 	}
 	got, err := f.engine.FindOperation(f.ctx, receipt.Key)
 	if err != nil {

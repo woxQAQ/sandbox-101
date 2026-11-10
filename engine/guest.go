@@ -15,11 +15,7 @@ import (
 	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
-func systemAgent(
-	ctx context.Context,
-	socket, instance string,
-	restore bool,
-) error {
+func systemAgent(ctx context.Context, socket, instance string, restore bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	call := func(method string, params map[string]any, data []byte) error {
@@ -27,11 +23,7 @@ func systemAgent(
 		var reader *bufio.Reader
 		var err error
 		for {
-			conn, err = (&net.Dialer{Timeout: time.Second}).DialContext(
-				ctx,
-				"unix",
-				socket,
-			)
+			conn, err = (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
 			if err == nil {
 				deadline, _ := ctx.Deadline()
 				_ = conn.SetDeadline(deadline)
@@ -43,8 +35,7 @@ func systemAgent(
 					var line []byte
 					line, err = reader.ReadSlice('\n')
 					if err == nil {
-						if len(line) > 128 ||
-							!strings.HasPrefix(string(line), "OK ") {
+						if len(line) > 128 || !strings.HasPrefix(string(line), "OK ") {
 							_ = conn.Close()
 							return fmt.Errorf("vsock handshake rejected")
 						}
@@ -90,8 +81,7 @@ func systemAgent(
 			return fmt.Errorf("agent %s: %s", method, frame.Error)
 		}
 		if method == "ping" {
-			if frame.Params == nil ||
-				frame.Params.Fields["protocol"].GetNumberValue() != 1 ||
+			if frame.Params == nil || frame.Params.Fields["protocol"].GetNumberValue() != 1 ||
 				frame.Params.Fields["portal"].GetStringValue() != "system" {
 				return fmt.Errorf("incompatible system agent portal")
 			}

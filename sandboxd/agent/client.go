@@ -55,8 +55,7 @@ func Dial(ctx context.Context, path string, port int) (net.Conn, error) {
 			break
 		}
 	}
-	if !strings.HasPrefix(string(line), "OK ") || len(line) == 128 ||
-		line[len(line)-1] != '\n' {
+	if !strings.HasPrefix(string(line), "OK ") || len(line) == 128 || line[len(line)-1] != '\n' {
 		_ = c.Close()
 		return nil, errors.New("invalid CH vsock handshake")
 	}
@@ -125,13 +124,7 @@ func Request(id, method string, params map[string]any) (*pb.Frame, error) {
 	return &pb.Frame{Id: id, Method: method, Params: p, Eof: true}, nil
 }
 
-func rpc(
-	ctx context.Context,
-	v api.VM,
-	port int,
-	method string,
-	params map[string]any,
-) (map[string]any, error) {
+func rpc(ctx context.Context, v api.VM, port int, method string, params map[string]any) (map[string]any, error) {
 	c, err := Dial(ctx, v.VSockPath, port)
 	if err != nil {
 		return nil, err
@@ -172,11 +165,7 @@ func rpc(
 						cause,
 					)
 				case "exec_key_conflict":
-					return nil, sandboxd.Wrap(
-						sandboxd.ErrConflict,
-						"guest exec_key has different parameters",
-						cause,
-					)
+					return nil, sandboxd.Wrap(sandboxd.ErrConflict, "guest exec_key has different parameters", cause)
 				case "exec_ledger_capacity_exhausted":
 					return nil, sandboxd.Wrap(
 						sandboxd.ErrExhausted,
@@ -201,11 +190,7 @@ func rpc(
 			// An unclassified keyed completion must still pass through Exec's
 			// conservative Unknown fence, never become an ordinary Internal error.
 			if method != "exec" || code != sandboxd.ErrInternal {
-				return nil, sandboxd.Wrap(
-					code,
-					"guest "+method+" failed",
-					cause,
-				)
+				return nil, sandboxd.Wrap(code, "guest "+method+" failed", cause)
 			}
 			return nil, cause
 		}
@@ -230,11 +215,7 @@ func (c *Client) Info(ctx context.Context, v api.VM) error {
 	return nil
 }
 
-func (c *Client) Activate(
-	ctx context.Context,
-	v api.VM,
-	a sandboxd.Activation,
-) error {
+func (c *Client) Activate(ctx context.Context, v api.VM, a sandboxd.Activation) error {
 	env := map[string]any{}
 	for k, v := range a.Env {
 		env[k] = v
@@ -267,42 +248,22 @@ func (c *Client) PrepareTemplate(ctx context.Context, v api.VM) error {
 	return nil
 }
 
-func (c *Client) Exec(
-	ctx context.Context,
-	v api.VM,
-	execKey, command string,
-) error {
+func (c *Client) Exec(ctx context.Context, v api.VM, execKey, command string) error {
 	if execKey == "" {
 		return errors.New("guest warmup requires an explicit exec_key")
 	}
-	p, err := rpc(
-		ctx,
-		v,
-		2048,
-		"exec",
-		map[string]any{"command": command, "exec_key": execKey},
-	)
+	p, err := rpc(ctx, v, 2048, "exec", map[string]any{"command": command, "exec_key": execKey})
 	if err != nil {
 		if _, ok := errors.AsType[*sandboxd.Error](err); ok {
 			return err
 		}
-		return sandboxd.Wrap(
-			sandboxd.ErrUnknown,
-			"guest exec completion unconfirmed; retain the same exec_key",
-			err,
-		)
+		return sandboxd.Wrap(sandboxd.ErrUnknown, "guest exec completion unconfirmed; retain the same exec_key", err)
 	}
 	if p["result_state"] != "completed" {
-		return sandboxd.Fail(
-			sandboxd.ErrUnknown,
-			"guest did not confirm a durable keyed exec result",
-		)
+		return sandboxd.Fail(sandboxd.ErrUnknown, "guest did not confirm a durable keyed exec result")
 	}
 	if _, ok := p["exit_code"].(float64); !ok {
-		return sandboxd.Fail(
-			sandboxd.ErrUnknown,
-			"guest keyed exec result omitted exit_code",
-		)
+		return sandboxd.Fail(sandboxd.ErrUnknown, "guest keyed exec result omitted exit_code")
 	}
 	if code := p["exit_code"].(float64); code != 0 {
 		return fmt.Errorf("guest warmup failed: exit_code=%v", p["exit_code"])
@@ -314,11 +275,7 @@ func (c *Client) Connect(ctx context.Context, v api.VM) (net.Conn, error) {
 	return Dial(ctx, v.VSockPath, 2048)
 }
 
-func (c *Client) Forward(
-	ctx context.Context,
-	v api.VM,
-	port int,
-) (net.Conn, error) {
+func (c *Client) Forward(ctx context.Context, v api.VM, port int) (net.Conn, error) {
 	conn, err := c.Connect(ctx, v)
 	if err != nil {
 		return nil, err
@@ -334,8 +291,7 @@ func (c *Client) Forward(
 		return nil, err
 	}
 	r, err := Read(conn)
-	if err != nil || r.Error != "" || r.Id != f.Id ||
-		r.Params.AsMap()["ready"] != true {
+	if err != nil || r.Error != "" || r.Id != f.Id || r.Params.AsMap()["ready"] != true {
 		_ = conn.Close()
 		return nil, errors.New("guest port forward failed")
 	}

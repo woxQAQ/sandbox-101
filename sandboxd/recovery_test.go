@@ -10,12 +10,7 @@ import (
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
-func seedRecoveryVM(
-	t *testing.T,
-	s *Service,
-	f *recoveryTestEngine,
-	action, step, vmid string,
-) Operation {
+func seedRecoveryVM(t *testing.T, s *Service, f *recoveryTestEngine, action, step, vmid string) Operation {
 	t.Helper()
 	o := Operation{
 		ID:        newID("op_"),
@@ -128,12 +123,8 @@ func TestRecoverResourcesCollectsOnlyProvenUnownedVMs(t *testing.T) {
 			t.Fatalf("protected or unproven VM %s was deleted: %v", id, err)
 		}
 	}
-	if f.count("delete") != 4 || f.count("clone") != 0 ||
-		f.count("create") != 0 {
-		t.Fatalf(
-			"recovery replayed an allocation or missed cleanup: %+v",
-			f.calls,
-		)
+	if f.count("delete") != 4 || f.count("clone") != 0 || f.count("create") != 0 {
+		t.Fatalf("recovery replayed an allocation or missed cleanup: %+v", f.calls)
 	}
 }
 
@@ -177,9 +168,7 @@ func TestRecoverResourcesRetainsPendingOperationSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.count("delete_snapshot") != 0 {
-		t.Fatal(
-			"snapshot referenced only by operations.snapshot_id was collected",
-		)
+		t.Fatal("snapshot referenced only by operations.snapshot_id was collected")
 	}
 	fork.Status = "failed"
 	if err := saveOp(s.ctx, s.store.db, fork); err != nil {
@@ -189,24 +178,13 @@ func TestRecoverResourcesRetainsPendingOperationSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.count("delete_snapshot") != 1 {
-		t.Fatal(
-			"snapshot did not become collectible when its final dependency ended",
-		)
+		t.Fatal("snapshot did not become collectible when its final dependency ended")
 	}
 }
 
-func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalSandboxOperation(
-	t *testing.T,
-) {
+func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalSandboxOperation(t *testing.T) {
 	s, f, _, _ := recoveryFixture(t)
-	source := seedRecoveryVM(
-		t,
-		s,
-		f,
-		"template_build",
-		"build-create",
-		"capturing",
-	)
+	source := seedRecoveryVM(t, s, f, "template_build", "build-create", "capturing")
 	key := stepKey(source, "build-snapshot")
 	f.mu.Lock()
 	f.ops[key] = api.Operation{
@@ -236,9 +214,7 @@ func TestRecoverResourcesProtectsInFlightEngineDependencyOfTerminalSandboxOperat
 	}
 }
 
-func TestRecoverResourcesOrphanDeletionRetriesHaveDistinctDurableKeys(
-	t *testing.T,
-) {
+func TestRecoverResourcesOrphanDeletionRetriesHaveDistinctDurableKeys(t *testing.T) {
 	s, f, _, _ := recoveryFixture(t)
 	seedRecoveryVM(t, s, f, "template_build", "build-create", "first")
 	seedRecoveryVM(t, s, f, "template_build", "build-create", "second")
@@ -262,10 +238,7 @@ func TestRecoverResourcesOrphanDeletionRetriesHaveDistinctDurableKeys(
 		seen[r.Key] = true
 	}
 	if len(seen) != 4 {
-		t.Fatalf(
-			"expected two independent cleanup attempts per orphan, got %d",
-			len(seen),
-		)
+		t.Fatalf("expected two independent cleanup attempts per orphan, got %d", len(seen))
 	}
 }
 
@@ -292,9 +265,7 @@ func TestRecoverResourcesQueryFailuresPreserveResources(t *testing.T) {
 	}
 }
 
-func TestRecoverResourcesOwnershipTransferIsSerializedWithCollection(
-	t *testing.T,
-) {
+func TestRecoverResourcesOwnershipTransferIsSerializedWithCollection(t *testing.T) {
 	s, f, _, _ := recoveryFixture(t)
 	seedRecoveryVM(t, s, f, "refill", "warm-clone", "transfer")
 	if _, err := s.store.db.ExecContext(
@@ -308,11 +279,7 @@ func TestRecoverResourcesOwnershipTransferIsSerializedWithCollection(
 		t.Fatal(err)
 	}
 	ownership := s.lockResourceOwnership()
-	if _, err := s.store.db.ExecContext(
-		s.ctx,
-		"DELETE FROM warm WHERE vm_id=?",
-		"transfer",
-	); err != nil {
+	if _, err := s.store.db.ExecContext(s.ctx, "DELETE FROM warm WHERE vm_id=?", "transfer"); err != nil {
 		ownership()
 		t.Fatal(err)
 	}
@@ -341,18 +308,14 @@ func TestRecoverResourcesOwnershipTransferIsSerializedWithCollection(
 		t.Fatal(err)
 	}
 	if f.count("delete") != 0 {
-		t.Fatal(
-			"GC deleted the VM between warm pop and sandbox ownership publication",
-		)
+		t.Fatal("GC deleted the VM between warm pop and sandbox ownership publication")
 	}
 	if _, err = f.GetVM(s.ctx, "transfer"); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestRecoverResourcesHoldsOwnershipUntilEngineDeletionCompletes(
-	t *testing.T,
-) {
+func TestRecoverResourcesHoldsOwnershipUntilEngineDeletionCompletes(t *testing.T) {
 	s, f, _, _ := recoveryFixture(t)
 	seedRecoveryVM(t, s, f, "template_build", "build-create", "orphan")
 	gate := make(chan struct{})

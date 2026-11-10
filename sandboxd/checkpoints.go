@@ -30,11 +30,7 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(
-		s.ctx,
-		"DELETE FROM checkpoints WHERE id=?",
-		cp.ID,
-	)
+	result, err := tx.ExecContext(s.ctx, "DELETE FROM checkpoints WHERE id=?", cp.ID)
 	if err = requireSQLWrite(result, err); err != nil {
 		return err
 	}
@@ -51,13 +47,7 @@ func (s *Service) deleteCheckpoint(o *Operation) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if _, err = s.opts.Engine.GetSnapshot(
-		s.ctx,
-		cp.SnapshotID,
-	); isEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err = s.opts.Engine.GetSnapshot(s.ctx, cp.SnapshotID); isEngineCode(err, api.NotFound) {
 		return s.reclaimQuota("snapshot", cp.SnapshotID)
 	}
 	return err
@@ -76,19 +66,11 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 	if cp.SandboxID != b.ID || cp.TenantID != b.TenantID {
 		return Fail(ErrNotFound, "not found")
 	}
-	if err = requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		cp.SnapshotID,
-		b.TenantID,
-	); err != nil {
+	if err = requireSnapshotOwner(s.ctx, s.store.db, cp.SnapshotID, b.TenantID); err != nil {
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return Fail(
-			ErrConflict,
-			"host credentials must be supplied before rollback",
-		)
+		return Fail(ErrConflict, "host credentials must be supplied before rollback")
 	}
 	s.closeConnections(b.ID)
 	if err = s.revoke(b.ID); err != nil {
@@ -133,11 +115,7 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 			return err
 		}
 	} else {
-		op, e := s.engine(
-			*o,
-			"rollback-clone",
-			api.Request{Action: "clone", SnapshotID: cp.SnapshotID},
-		)
+		op, e := s.engine(*o, "rollback-clone", api.Request{Action: "clone", SnapshotID: cp.SnapshotID})
 		if e != nil {
 			return e
 		}
@@ -154,17 +132,11 @@ func (s *Service) rollback(o *Operation, b *Sandbox) error {
 
 // Checkpoints lists a tenant's checkpoints, or all checkpoints for root callers.
 // Sandbox-scoped principals cannot list checkpoints.
-func (s *Service) Checkpoints(
-	ctx context.Context,
-	p Principal,
-) ([]Checkpoint, error) {
+func (s *Service) Checkpoints(ctx context.Context, p Principal) ([]Checkpoint, error) {
 	if p.SandboxID != "" {
 		return nil, Fail(ErrConflict, "tenant access required")
 	}
-	rows, err := s.store.db.QueryContext(
-		ctx,
-		"SELECT body FROM checkpoints ORDER BY id",
-	)
+	rows, err := s.store.db.QueryContext(ctx, "SELECT body FROM checkpoints ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -186,14 +158,9 @@ func (s *Service) Checkpoints(
 	return out, rows.Err()
 }
 
-func getCheckpointTx(
-	ctx context.Context,
-	e executor,
-	id string,
-) (Checkpoint, error) {
+func getCheckpointTx(ctx context.Context, e executor, id string) (Checkpoint, error) {
 	var b []byte
-	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
-		Scan(&b)
+	err := e.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Checkpoint{}, Fail(ErrNotFound, "not found")
 	}
@@ -206,8 +173,7 @@ func getCheckpointTx(
 
 func (s *store) checkpoint(ctx context.Context, id string) (Checkpoint, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).
-		Scan(&raw)
+	err := s.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Checkpoint{}, Fail(ErrNotFound, "not found")
 	}

@@ -16,15 +16,18 @@ import (
 
 const rootlessChildEnv = "SANDBOX_KERNEL_ISOLATION_CHILD"
 
-// These acceptance tests require real unprivileged namespaces and cgroup v2
-// delegation. They deliberately fail, rather than skip, when either is missing.
+// Shared harness for TestKernelIsolationRootlessNetwork and
+// TestKernelIsolationRootlessCgroup: real nft/NAT/TCP policy enforcement and
+// cgroup v2 PID/CPU/memory/I/O limits, without a VM or the production launcher.
+// These kernel integration tests require unprivileged namespaces and cgroup v2
+// delegation. They fail, rather than skip, when either prerequisite is missing.
 // Every kernel allocation happens after exec into new user/net/mount/PID
 // namespaces. A PID namespace also reaps any owned descendant on abnormal exit.
 func rootlessRun(t *testing.T, mode string) bool {
 	t.Helper()
 	if child := os.Getenv(rootlessChildEnv); child != "" {
 		if child != mode {
-			t.Skip("another acceptance subprocess")
+			t.Skip("another kernel-isolation subprocess")
 		}
 		rootlessRequireNamespaces(t)
 		return true
@@ -64,14 +67,9 @@ func rootlessRun(t *testing.T, mode string) bool {
 	)
 	cmd.Env = append(env, rootlessChildEnv+"="+mode, "GOMAXPROCS=2")
 	out, err := cmd.CombinedOutput()
-	t.Logf("private namespace acceptance:\n%s", out)
+	t.Logf("private namespace kernel integration:\n%s", out)
 	if err != nil {
-		t.Fatalf(
-			"real kernel %s acceptance failed: %v (context: %v)",
-			mode,
-			err,
-			ctx.Err(),
-		)
+		t.Fatalf("real kernel %s integration failed: %v (context: %v)", mode, err, ctx.Err())
 	}
 	return false
 }
@@ -103,28 +101,13 @@ func rootlessPrivateRun(t *testing.T) {
 			paths = append(paths, resolved)
 		}
 	}
-	if err := os.Setenv(
-		"PATH",
-		strings.Join(paths, string(os.PathListSeparator)),
-	); err != nil {
+	if err := os.Setenv("PATH", strings.Join(paths, string(os.PathListSeparator))); err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Mount(
-		"",
-		"/",
-		"",
-		unix.MS_REC|unix.MS_PRIVATE,
-		"",
-	); err != nil {
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Mount(
-		"tmpfs",
-		"/run",
-		"tmpfs",
-		unix.MS_NOSUID|unix.MS_NODEV,
-		"mode=0755,size=4m",
-	); err != nil {
+	if err := unix.Mount("tmpfs", "/run", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir("/run/netns", 0o755); err != nil {
@@ -173,7 +156,7 @@ func rootlessArtifact(t *testing.T, name string, data []byte) {
 		return
 	}
 	if !filepath.IsAbs(dir) {
-		t.Fatal("acceptance artifact directory must be absolute")
+		t.Fatal("kernel-isolation artifact directory must be absolute")
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 		t.Fatal(err)

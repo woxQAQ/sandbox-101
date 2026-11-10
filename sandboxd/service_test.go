@@ -56,18 +56,12 @@ func (f *fakeEngine) vsockPath(id string) string {
 	return "/tmp/" + id + "/vsock"
 }
 
-func (f *fakeEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (f *fakeEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	f.mu.Lock()
 	if o, ok := f.ops[r.Key]; ok {
 		f.mu.Unlock()
 		if !bytes.Equal(encode(o.Request), encode(r)) {
-			return o, api.Fail(
-				api.Conflict,
-				"key already belongs to different parameters",
-			)
+			return o, api.Fail(api.Conflict, "key already belongs to different parameters")
 		}
 		return o, nil
 	}
@@ -84,10 +78,7 @@ func (f *fakeEngine) Submit(
 	defer f.mu.Unlock()
 	if o, ok := f.ops[r.Key]; ok {
 		if !bytes.Equal(encode(o.Request), encode(r)) {
-			return o, api.Fail(
-				api.Conflict,
-				"key already belongs to different parameters",
-			)
+			return o, api.Fail(api.Conflict, "key already belongs to different parameters")
 		}
 		return o, nil
 	}
@@ -188,18 +179,14 @@ func (f *fakeEngine) Submit(
 	default:
 		return o, fmt.Errorf("unexpected action %s", r.Action)
 	}
-	if o.Status == "succeeded" &&
-		(r.Action == "start" || r.Action == "restore" || r.Action == "clone") {
+	if o.Status == "succeeded" && (r.Action == "start" || r.Action == "restore" || r.Action == "clone") {
 		o.ResultInstance = f.vms[o.VMID].Instance
 	}
 	f.ops[r.Key] = o
 	return o, nil
 }
 
-func (f *fakeEngine) GetOperation(
-	ctx context.Context,
-	id string,
-) (api.Operation, error) {
+func (f *fakeEngine) GetOperation(ctx context.Context, id string) (api.Operation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	o, ok := f.ops[id]
@@ -209,10 +196,7 @@ func (f *fakeEngine) GetOperation(
 	return o, nil
 }
 
-func (f *fakeEngine) FindOperation(
-	ctx context.Context,
-	key string,
-) (api.Operation, error) {
+func (f *fakeEngine) FindOperation(ctx context.Context, key string) (api.Operation, error) {
 	return f.GetOperation(ctx, key)
 }
 
@@ -242,10 +226,7 @@ func (f *fakeEngine) ListVMs(ctx context.Context) ([]api.VM, error) {
 	return all, nil
 }
 
-func (f *fakeEngine) GetSnapshot(
-	ctx context.Context,
-	id string,
-) (api.Snapshot, error) {
+func (f *fakeEngine) GetSnapshot(ctx context.Context, id string) (api.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	v, ok := f.snaps[id]
@@ -255,9 +236,7 @@ func (f *fakeEngine) GetSnapshot(
 	return v, nil
 }
 
-func (f *fakeEngine) ListSnapshots(
-	ctx context.Context,
-) ([]api.Snapshot, error) {
+func (f *fakeEngine) ListSnapshots(ctx context.Context) ([]api.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var all []api.Snapshot
@@ -305,11 +284,7 @@ func (f *fakeAgent) Info(ctx context.Context, _ api.VM) error {
 	return nil
 }
 
-func (f *fakeAgent) Activate(
-	ctx context.Context,
-	_ api.VM,
-	a Activation,
-) error {
+func (f *fakeAgent) Activate(ctx context.Context, _ api.VM, a Activation) error {
 	f.mu.Lock()
 	entered, gate := f.activateEntered, f.activateGate
 	f.activateEntered, f.activateGate = nil, nil
@@ -331,19 +306,11 @@ func (f *fakeAgent) Activate(
 	return nil
 }
 
-func (f *fakeAgent) PrepareTemplate(
-	context.Context,
-	api.VM,
-) error {
+func (f *fakeAgent) PrepareTemplate(context.Context, api.VM) error {
 	return nil
 }
 
-func (f *fakeAgent) Exec(
-	context.Context,
-	api.VM,
-	string,
-	string,
-) error {
+func (f *fakeAgent) Exec(context.Context, api.VM, string, string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.execError
@@ -448,9 +415,7 @@ func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
 			func(t *testing.T) {
 				s, _, a, p := fixture(t)
 				a.mu.Lock()
-				a.execError = errors.New(
-					"private warmup diagnostic /private/host/path",
-				)
+				a.execError = errors.New("private warmup diagnostic /private/host/path")
 				if classified {
 					a.execError = Fail(ErrUnknown, "unconfirmed warmup")
 				}
@@ -476,8 +441,7 @@ func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
 					t.Fatal("warmup failure was lost")
 				}
 				final, err := s.Operation(s.ctx, p, accepted.ID)
-				if err != nil || final.Status != "failed" ||
-					final.Error == nil {
+				if err != nil || final.Status != "failed" || final.Error == nil {
 					t.Fatalf("missing failure receipt: %+v %v", final, err)
 				}
 				if classified {
@@ -490,20 +454,9 @@ func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
 					t.Fatalf("missing action/step context: %+v", final)
 				}
 				durable, err := s.store.operation(s.ctx, accepted.ID)
-				if err != nil ||
-					!strings.Contains(
-						durable.Error.Message,
-						"template_build (warmup_inflight): ",
-					) ||
-					strings.Contains(
-						durable.Error.Message,
-						"/private/host/path",
-					) {
-					t.Fatalf(
-						"unsafe or contextless durable error: %+v %v",
-						durable.Error,
-						err,
-					)
+				if err != nil || !strings.Contains(durable.Error.Message, "template_build (warmup_inflight): ") ||
+					strings.Contains(durable.Error.Message, "/private/host/path") {
+					t.Fatalf("unsafe or contextless durable error: %+v %v", durable.Error, err)
 				}
 				before, _ := json.Marshal(final)
 				replay, err := s.Submit(s.ctx, p, "failure-context", command)
@@ -513,21 +466,13 @@ func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
 				}
 				if !classified {
 					body, _ := json.Marshal(command)
-					request := httptest.NewRequest(
-						http.MethodPost,
-						"/v1/templates",
-						bytes.NewReader(body),
-					)
+					request := httptest.NewRequest(http.MethodPost, "/v1/templates", bytes.NewReader(body))
 					request.Header.Set("Authorization", "Bearer alice-token")
 					request.Header.Set("Idempotency-Key", "failure-context")
 					response := httptest.NewRecorder()
 					s.Handler().ServeHTTP(response, request)
 					var public Error
-					if err := json.Unmarshal(
-						response.Body.Bytes(),
-						&public,
-					); err != nil ||
-						response.Code != 500 || public.Code != ErrInternal ||
+					if err := json.Unmarshal(response.Body.Bytes(), &public); err != nil || response.Code != 500 || public.Code != ErrInternal ||
 						public.Message != "internal error" {
 						t.Fatalf(
 							"HTTP internal diagnostic leaked: status=%d body=%s err=%v",
@@ -542,13 +487,7 @@ func TestOperationFailureContextAndHTTPRedaction(t *testing.T) {
 	}
 }
 
-func claimTest(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	key string,
-	env map[string]EnvVar,
-) Result {
+func claimTest(t *testing.T, s *Service, p Principal, key string, env map[string]EnvVar) Result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -588,10 +527,7 @@ type directTestEngine struct {
 	failRevoke bool
 }
 
-func (f *directTestEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (f *directTestEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	f.requestMu.Lock()
 	f.requests = append(f.requests, r)
 	fail := r.Action == "network_policy" && r.Policy == nil && f.failRevoke
@@ -636,13 +572,7 @@ func (f *directTestEngine) Submit(
 	return o, nil
 }
 
-func ledgerLimit(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	slots int,
-	storage int64,
-) {
+func ledgerLimit(t *testing.T, s *Service, p Principal, slots int, storage int64) {
 	t.Helper()
 	if _, err := s.PutTenant(
 		s.ctx,
@@ -658,26 +588,12 @@ func ledgerLimit(
 	}
 }
 
-func ledgerRejectClaim(
-	t *testing.T,
-	s *Service,
-	f *recoveryTestEngine,
-	p Principal,
-	key string,
-) {
+func ledgerRejectClaim(t *testing.T, s *Service, f *recoveryTestEngine, p Principal, key string) {
 	t.Helper()
 	before := f.count("create") + f.count("clone")
 	ctx, cancel := context.WithTimeout(s.ctx, time.Second)
 	defer cancel()
-	if _, err := s.Submit(
-		ctx,
-		p,
-		key,
-		Command{Action: "claim", TemplateID: "python"},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	if _, err := s.Submit(ctx, p, key, Command{Action: "claim", TemplateID: "python"}); !isCode(err, ErrExhausted) {
 		t.Fatalf("wanted Exhausted before engine effects, got %v", err)
 	}
 	if after := f.count("create") + f.count("clone"); after != before {
@@ -685,12 +601,7 @@ func ledgerRejectClaim(
 	}
 }
 
-func ledgerMoney(
-	t *testing.T,
-	s *Service,
-	tenant string,
-	slots, storage int64,
-) {
+func ledgerMoney(t *testing.T, s *Service, tenant string, slots, storage int64) {
 	t.Helper()
 	var actualSlots, actualStorage int64
 	if err := s.store.db.QueryRowContext(s.ctx, `SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id=?`, tenant).
@@ -709,13 +620,7 @@ func ledgerMoney(
 	}
 }
 
-func ledgerExecute(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	key string,
-	c Command,
-) Result {
+func ledgerExecute(t *testing.T, s *Service, p Principal, key string, c Command) Result {
 	t.Helper()
 	r, err := s.Execute(s.ctx, p, key, c)
 	if err != nil {
@@ -763,10 +668,7 @@ type recoveryTestEngine struct {
 	deleteGate             <-chan struct{}
 }
 
-func (f *recoveryTestEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (f *recoveryTestEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	f.mu.Lock()
 	previous, cached := f.ops[r.Key]
 	f.mu.Unlock()
@@ -804,16 +706,12 @@ func (f *recoveryTestEngine) Submit(
 	}
 	f.control.Unlock()
 	if r.Action == "network" && failNetwork {
-		return api.Operation{}, api.Fail(
-			api.Internal,
-			"network request failed before receipt",
-		)
+		return api.Operation{}, api.Fail(api.Internal, "network request failed before receipt")
 	}
 	if r.Action == "delete_snapshot" && unknown {
 		return api.Operation{}, api.Fail(api.Unknown, "delete response unknown")
 	}
-	if (r.Action == "delete" || r.Action == "delete_snapshot") &&
-		entered != nil {
+	if (r.Action == "delete" || r.Action == "delete_snapshot") && entered != nil {
 		select {
 		case entered <- struct{}{}:
 		default:
@@ -825,10 +723,7 @@ func (f *recoveryTestEngine) Submit(
 		}
 	}
 	if dropBeforeAccept {
-		return api.Operation{}, api.Fail(
-			api.Unknown,
-			"delete transport failed before acceptance",
-		)
+		return api.Operation{}, api.Fail(api.Unknown, "delete transport failed before acceptance")
 	}
 	if dropDelete {
 		f.mu.Lock()
@@ -840,10 +735,7 @@ func (f *recoveryTestEngine) Submit(
 			Status:  "running",
 		}
 		f.mu.Unlock()
-		return api.Operation{}, api.Fail(
-			api.Unknown,
-			"accepted delete response lost",
-		)
+		return api.Operation{}, api.Fail(api.Unknown, "accepted delete response lost")
 	}
 	if fail {
 		f.mu.Lock()
@@ -925,9 +817,7 @@ func (f *recoveryTestEngine) Submit(
 	return o, err
 }
 
-func (f *recoveryTestEngine) ListSnapshots(
-	ctx context.Context,
-) ([]api.Snapshot, error) {
+func (f *recoveryTestEngine) ListSnapshots(ctx context.Context) ([]api.Snapshot, error) {
 	f.control.Lock()
 	err := f.snapshotError
 	f.control.Unlock()
@@ -937,10 +827,7 @@ func (f *recoveryTestEngine) ListSnapshots(
 	return f.fakeEngine.ListSnapshots(ctx)
 }
 
-func (f *recoveryTestEngine) FindOperation(
-	ctx context.Context,
-	key string,
-) (api.Operation, error) {
+func (f *recoveryTestEngine) FindOperation(ctx context.Context, key string) (api.Operation, error) {
 	f.control.Lock()
 	err := f.findError
 	f.control.Unlock()
@@ -950,9 +837,7 @@ func (f *recoveryTestEngine) FindOperation(
 	return f.fakeEngine.FindOperation(ctx, key)
 }
 
-func recoveryFixture(
-	t *testing.T,
-) (*Service, *recoveryTestEngine, *fakeAgent, Principal) {
+func recoveryFixture(t *testing.T) (*Service, *recoveryTestEngine, *fakeAgent, Principal) {
 	t.Helper()
 	s, engine, agent, p := fixture(t)
 	// Keep the existing fixture, database and lifecycle implementation, but drive
@@ -1011,10 +896,7 @@ func templateQuotaCopy[T any](value T) T {
 	return copy
 }
 
-func (e *templateQuotaEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (e *templateQuotaEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	e.mu.Lock()
 	e.attempts[r.Action]++
 	action := e.gateAction
@@ -1035,10 +917,7 @@ func (e *templateQuotaEngine) Submit(
 		}
 	}
 	if r.Action == "delete" && r.ExpectedInstance == "" {
-		return api.Operation{}, api.Fail(
-			api.Invalid,
-			"strict fixture requires nonempty delete witness",
-		)
+		return api.Operation{}, api.Fail(api.Invalid, "strict fixture requires nonempty delete witness")
 	}
 	e.mu.Lock()
 	failStart := e.failStart
@@ -1112,8 +991,7 @@ func (e *templateQuotaEngine) Submit(
 		f.mu.Unlock()
 	}
 	e.mu.Lock()
-	hidden := (e.hideCapture && r.Action == "snapshot") ||
-		(e.hideClone && r.Action == "clone") ||
+	hidden := (e.hideCapture && r.Action == "snapshot") || (e.hideClone && r.Action == "clone") ||
 		(e.hideStart && r.Action == "start") ||
 		(e.hideNetwork && r.Action == "network" && (e.capture == nil || e.capture.Key == r.Key))
 	if hidden {
@@ -1127,14 +1005,9 @@ func (e *templateQuotaEngine) Submit(
 	return proof, err
 }
 
-func (e *templateQuotaEngine) FindOperation(
-	ctx context.Context,
-	key string,
-) (api.Operation, error) {
+func (e *templateQuotaEngine) FindOperation(ctx context.Context, key string) (api.Operation, error) {
 	e.mu.Lock()
-	hidden := (e.hideCapture || e.hideClone || e.hideStart || e.hideNetwork) &&
-		e.capture != nil &&
-		e.capture.Key == key
+	hidden := (e.hideCapture || e.hideClone || e.hideStart || e.hideNetwork) && e.capture != nil && e.capture.Key == key
 	e.mu.Unlock()
 	if hidden {
 		return api.Operation{}, api.Fail(api.NotFound, "receipt not visible")
@@ -1143,18 +1016,12 @@ func (e *templateQuotaEngine) FindOperation(
 	return templateQuotaCopy(proof), err
 }
 
-func (e *templateQuotaEngine) GetOperation(
-	ctx context.Context,
-	id string,
-) (api.Operation, error) {
+func (e *templateQuotaEngine) GetOperation(ctx context.Context, id string) (api.Operation, error) {
 	proof, err := e.Client.GetOperation(ctx, id)
 	return templateQuotaCopy(proof), err
 }
 
-func (e *templateQuotaEngine) GetSnapshot(
-	ctx context.Context,
-	id string,
-) (api.Snapshot, error) {
+func (e *templateQuotaEngine) GetSnapshot(ctx context.Context, id string) (api.Snapshot, error) {
 	snapshot, err := e.Client.GetSnapshot(ctx, id)
 	e.mu.Lock()
 	park := e.snapshotGate != nil && !e.snapshotOnce
@@ -1174,10 +1041,7 @@ func (e *templateQuotaEngine) GetSnapshot(
 	return templateQuotaCopy(snapshot), err
 }
 
-func (e *templateQuotaEngine) GetVM(
-	ctx context.Context,
-	id string,
-) (api.VM, error) {
+func (e *templateQuotaEngine) GetVM(ctx context.Context, id string) (api.VM, error) {
 	v, err := e.Client.GetVM(ctx, id)
 	e.mu.Lock()
 	gate := e.queryGate
@@ -1211,12 +1075,7 @@ func templateQuotaBuild(name string) Command {
 
 // Ready fixture allocations carry real Engine create/start receipts; no user
 // sandbox is introduced for the preexisting cold-pool control case.
-func seedTemplateQuotaWarm(
-	t *testing.T,
-	s *Service,
-	template Template,
-	created, started api.Operation,
-) {
+func seedTemplateQuotaWarm(t *testing.T, s *Service, template Template, created, started api.Operation) {
 	t.Helper()
 	o := Operation{
 		ID:             "fixture-warm",
@@ -1233,11 +1092,7 @@ func seedTemplateQuotaWarm(
 		FinishedAt: time.Now().UTC(),
 	}
 	o.hash = s.store.sign(o.ID)
-	r := newAllocationGroup(
-		o,
-		allocationSubject{Kind: "warm", ID: o.ID},
-		template,
-	)
+	r := newAllocationGroup(o, allocationSubject{Kind: "warm", ID: o.ID}, template)
 	r.Group.Identity = &allocationIdentity{
 		VM:         created.VMID,
 		Owner:      template.TenantID,
@@ -1372,29 +1227,15 @@ func templateQuotaState(t *testing.T, s *Service) []byte {
 	return encode(state)
 }
 
-func templateQuotaGolden(
-	t *testing.T,
-) (*Service, *recoveryTestEngine, Principal, Template) {
+func templateQuotaGolden(t *testing.T) (*Service, *recoveryTestEngine, Principal, Template) {
 	t.Helper()
 	s, f, _, p := recoveryFixture(t)
-	built := ledgerExecute(
-		t,
-		s,
-		p,
-		"golden-build",
-		templateQuotaBuild("golden-quota"),
-	)
+	built := ledgerExecute(t, s, p, "golden-build", templateQuotaBuild("golden-quota"))
 	ledgerMoney(t, s, p.TenantID, 0, 192)
 	return s, f, p, *built.Template
 }
 
-func templateQuotaTarget(
-	t *testing.T,
-	s *Service,
-	p Principal,
-	template Template,
-	target int,
-) Template {
+func templateQuotaTarget(t *testing.T, s *Service, p Principal, template Template, target int) Template {
 	t.Helper()
 	template.TargetWarm = target
 	return *ledgerExecute(t, s, Principal{Root: true, TenantID: p.TenantID}, fmt.Sprintf("target-%d-%s", target, newID("")), Command{Action: "template_put", Template: &template}).Template
@@ -1415,14 +1256,10 @@ func templateQuotaReuseConnection(t *testing.T, s *Service, fault string) {
 		return
 	}
 	var marker, enabled int
-	if err := s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).
-		Scan(&marker); err != nil ||
-		marker != 1 {
+	if err := s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).Scan(&marker); err != nil || marker != 1 {
 		t.Fatal("physical SQLite connection replaced after COMMIT error", err)
 	}
-	if err := s.store.db.QueryRow(`PRAGMA foreign_keys`).
-		Scan(&enabled); err != nil ||
-		enabled != 1 {
+	if err := s.store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&enabled); err != nil || enabled != 1 {
 		t.Fatal("foreign keys disabled", err)
 	}
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -1430,35 +1267,22 @@ func templateQuotaReuseConnection(t *testing.T, s *Service, fault string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(
-		s.ctx,
-		`UPDATE handoff_connection_marker SET value=2`,
-	); err != nil {
+	if _, err = tx.ExecContext(s.ctx, `UPDATE handoff_connection_marker SET value=2`); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal("same-connection ordinary transaction failed", err)
 	}
-	if err = s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).
-		Scan(&marker); err != nil ||
-		marker != 2 {
+	if err = s.store.db.QueryRow(`SELECT value FROM handoff_connection_marker`).Scan(&marker); err != nil || marker != 2 {
 		t.Fatal(err)
 	}
-	if _, err = s.store.db.Exec(
-		`UPDATE handoff_connection_marker SET value=1`,
-	); err != nil {
+	if _, err = s.store.db.Exec(`UPDATE handoff_connection_marker SET value=1`); err != nil {
 		t.Fatal(err)
 	}
-	t.Log(
-		"deferred COMMIT failed; same physical SQLite connection queried and committed an ordinary transaction",
-	)
+	t.Log("deferred COMMIT failed; same physical SQLite connection queried and committed an ordinary transaction")
 }
 
-func templateQuotaSQLFault(
-	t *testing.T,
-	s *Service,
-	table, event, condition, fault string,
-) {
+func templateQuotaSQLFault(t *testing.T, s *Service, table, event, condition, fault string) {
 	t.Helper()
 	timing, body := "BEFORE", "SELECT RAISE(ABORT,'handoff fault');"
 	if fault == "ignore" {
@@ -1518,12 +1342,7 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 			table, event, condition = "sandboxes", "UPDATE", "COALESCE(json_extract(OLD.body,'$.vm_id'),'')!='' AND COALESCE(json_extract(NEW.body,'$.vm_id'),'')=''"
 		}
 		templateQuotaSQLFault(t, s, table, event, condition, fault)
-		o, err = s.Submit(
-			s.ctx,
-			p,
-			"handoff-fallback",
-			Command{Action: "claim", TemplateID: template.ID},
-		)
+		o, err = s.Submit(s.ctx, p, "handoff-fallback", Command{Action: "claim", TemplateID: template.ID})
 	case "known":
 		s, f, _, p = recoveryFixture(t)
 		e := &templateQuotaEngine{
@@ -1532,20 +1351,8 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 			afterCreate: func(api.Request, api.Operation) error { close(entered); return gate(s.ctx) },
 		}
 		s.opts.Engine = e
-		templateQuotaSQLFault(
-			t,
-			s,
-			"quota_resources",
-			"INSERT",
-			"NEW.kind='vm_disk'",
-			fault,
-		)
-		o, err = s.Submit(
-			s.ctx,
-			p,
-			"handoff-known",
-			templateQuotaBuild("handoff-known"),
-		)
+		templateQuotaSQLFault(t, s, "quota_resources", "INSERT", "NEW.kind='vm_disk'", fault)
+		o, err = s.Submit(s.ctx, p, "handoff-known", templateQuotaBuild("handoff-known"))
 	default:
 		s, f, p, template = templateQuotaGolden(t)
 		template = templateQuotaTarget(t, s, p, template, 1)
@@ -1563,40 +1370,24 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 			templateQuotaSQLFault(t, s, "warm", "DELETE", "1", fault)
 			before := templateQuotaState(t, s)
 			effects := f.count("clone")
-			_, err = s.Submit(
-				s.ctx,
-				p,
-				"handoff-selection",
-				Command{Action: "claim", TemplateID: template.ID},
-			)
+			_, err = s.Submit(s.ctx, p, "handoff-selection", Command{Action: "claim", TemplateID: template.ID})
 			if err == nil {
 				t.Fatal("selection fault missing")
 			}
 			if !bytes.Equal(before, templateQuotaState(t, s)) {
-				t.Fatal(
-					"selection fault lost warm row, D holder, slot, op or group",
-				)
+				t.Fatal("selection fault lost warm row, D holder, slot, op or group")
 			}
 			if f.count("clone") != effects {
 				t.Fatal("failed selection dispatched Engine")
 			}
-			if fault == "commit" &&
-				!strings.Contains(err.Error(), "operation admission commit") {
+			if fault == "commit" && !strings.Contains(err.Error(), "operation admission commit") {
 				t.Fatal("selection did not fail at actual Commit", err)
 			}
 			templateQuotaReuseConnection(t, s, fault)
-			if _, err = s.store.db.Exec(
-				`DROP TRIGGER handoff_fault`,
-			); err != nil {
+			if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
 				t.Fatal(err)
 			}
-			ledgerExecute(
-				t,
-				s,
-				p,
-				"handoff-selection",
-				Command{Action: "claim", TemplateID: template.ID},
-			)
+			ledgerExecute(t, s, p, "handoff-selection", Command{Action: "claim", TemplateID: template.ID})
 			ledgerMoney(t, s, p.TenantID, 1, 256)
 			return
 		}
@@ -1628,19 +1419,13 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 	if err == nil {
 		t.Fatal("handoff fault missing")
 	}
-	if fault == "commit" &&
-		!strings.Contains(
-			templateQuotaOperationDiagnostic(t, s, o.ID),
-			"FOREIGN KEY",
-		) {
+	if fault == "commit" && !strings.Contains(templateQuotaOperationDiagnostic(t, s, o.ID), "FOREIGN KEY") {
 		t.Fatal("handoff did not fail on deferred FK Commit", err)
 	}
 	t.Logf("handoff stage=%s fault=%s actual=%v", stage, fault, err)
 	templateQuotaReuseConnection(t, s, fault)
 	if !bytes.Equal(before, templateQuotaWithoutOperations(t, s)) {
-		t.Fatal(
-			"handoff failure partially published ledger, reference, metadata or destination",
-		)
+		t.Fatal("handoff failure partially published ledger, reference, metadata or destination")
 	}
 	if _, err = s.store.db.Exec(`DROP TRIGGER handoff_fault`); err != nil {
 		t.Fatal(err)
@@ -1655,11 +1440,7 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 			t.Fatal(e)
 		}
 		vm := r.Group.Identity.VM
-		started, e := api.Wait(
-			s.ctx,
-			f,
-			api.Request{Key: "known-external-start", Action: "start", VMID: vm},
-		)
+		started, e := api.Wait(s.ctx, f, api.Request{Key: "known-external-start", Action: "start", VMID: vm})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -1694,11 +1475,7 @@ func templateQuotaHandoffFault(t *testing.T, stage, fault string) {
 }
 
 // Failure oracles read private journal evidence, never tenant-facing messages.
-func templateQuotaOperationDiagnostic(
-	t *testing.T,
-	s *Service,
-	operation string,
-) string {
+func templateQuotaOperationDiagnostic(t *testing.T, s *Service, operation string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -1744,35 +1521,23 @@ type templateQuotaSelectionClient struct {
 	findHook func(string)
 }
 
-func (e *templateQuotaSelectionClient) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (e *templateQuotaSelectionClient) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	e.mu.Lock()
 	e.requests = append(e.requests, templateQuotaCopy(r))
 	unknown := e.unknown
 	e.mu.Unlock()
 	if r.Action == "delete" {
 		if r.ExpectedInstance == "" {
-			return api.Operation{}, api.Fail(
-				api.Invalid,
-				"strict empty predicate",
-			)
+			return api.Operation{}, api.Fail(api.Invalid, "strict empty predicate")
 		}
 		if unknown {
-			return api.Operation{}, api.Fail(
-				api.Unknown,
-				"delete transport unknown before acceptance",
-			)
+			return api.Operation{}, api.Fail(api.Unknown, "delete transport unknown before acceptance")
 		}
 	}
 	return e.Client.Submit(ctx, r)
 }
 
-func (e *templateQuotaSelectionClient) FindOperation(
-	ctx context.Context,
-	key string,
-) (api.Operation, error) {
+func (e *templateQuotaSelectionClient) FindOperation(ctx context.Context, key string) (api.Operation, error) {
 	e.mu.Lock()
 	e.finds = append(e.finds, key)
 	forged := templateQuotaCopy(e.forged)
@@ -1795,18 +1560,12 @@ func (e *templateQuotaSelectionClient) counts() (int, int) {
 
 func templateQuotaReadOnlyState(t *testing.T, opts Options) []byte {
 	t.Helper()
-	db, err := sql.Open(
-		"sqlite",
-		"file:"+filepath.Join(opts.StateDir, "sandboxd.db")+"?mode=ro",
-	)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(opts.StateDir, "sandboxd.db")+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	return templateQuotaState(
-		t,
-		&Service{ctx: context.Background(), store: &store{db: db}},
-	)
+	return templateQuotaState(t, &Service{ctx: context.Background(), store: &store{db: db}})
 }
 
 type rejectWarmAgent struct {
@@ -1815,21 +1574,14 @@ type rejectWarmAgent struct {
 	vm string
 }
 
-func (a *rejectWarmAgent) Activate(
-	ctx context.Context,
-	vm api.VM,
-	activation Activation,
-) error {
+func (a *rejectWarmAgent) Activate(ctx context.Context, vm api.VM, activation Activation) error {
 	if vm.ID == a.vm {
 		return errors.New("warm guest no longer responds")
 	}
 	return a.fakeAgent.Activate(ctx, vm, activation)
 }
 
-func warmFallbackFixture(
-	t *testing.T,
-	golden bool,
-) (*Service, *fakeEngine, Principal, Template) {
+func warmFallbackFixture(t *testing.T, golden bool) (*Service, *fakeEngine, Principal, Template) {
 	t.Helper()
 	engine := newFakeEngine()
 	template := Template{
@@ -1855,10 +1607,7 @@ func warmFallbackFixture(
 			context.Background(),
 			engine,
 			api.Request{
-				Key: stepKey(
-					Operation{ID: "fixture-warm"},
-					"fixture-create",
-				),
+				Key:    stepKey(Operation{ID: "fixture-warm"}, "fixture-create"),
 				Action: "create",
 				Config: &config,
 			},

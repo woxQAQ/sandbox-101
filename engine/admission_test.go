@@ -18,10 +18,7 @@ func TestReservationBeforePause(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.opts.SafetyBytes = free
-	if _, err = e.Submit(
-		context.Background(),
-		api.Request{Key: "full", Action: "snapshot", VMID: a.VMID},
-	); err == nil {
+	if _, err = e.Submit(context.Background(), api.Request{Key: "full", Action: "snapshot", VMID: a.VMID}); err == nil {
 		t.Fatal("insufficient storage admitted")
 	}
 	b.mu.Lock()
@@ -31,23 +28,14 @@ func TestReservationBeforePause(t *testing.T) {
 		t.Fatal("reservation rejected after pausing")
 	}
 	e.opts.SafetyBytes = 1
-	s := wait(
-		t,
-		e,
-		api.Request{Key: "budgeted", Action: "snapshot", VMID: a.VMID},
-	)
+	s := wait(t, e, api.Request{Key: "budgeted", Action: "snapshot", VMID: a.VMID})
 	var bytes int64
-	if err = e.db.QueryRow("SELECT bytes FROM reservations WHERE owner=?", s.SnapshotID).
-		Scan(&bytes); err != nil {
+	if err = e.db.QueryRow("SELECT bytes FROM reservations WHERE owner=?", s.SnapshotID).Scan(&bytes); err != nil {
 		t.Fatal(err)
 	}
 	shape := config().Shape
 	minimum := (2*shape.MemoryMiB + shape.DiskMiB + 160) << 20
 	if bytes < minimum {
-		t.Fatalf(
-			"reservation %d cannot cover two RAM copies, disk and bounded JSON %d",
-			bytes,
-			minimum,
-		)
+		t.Fatalf("reservation %d cannot cover two RAM copies, disk and bounded JSON %d", bytes, minimum)
 	}
 }

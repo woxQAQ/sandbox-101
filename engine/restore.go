@@ -12,10 +12,7 @@ import (
 
 func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	if o.Journal.RestoreBlocked {
-		return api.Fail(
-			api.ManualRecovery,
-			"restore materials blocked; explicit delete required",
-		)
+		return api.Fail(api.ManualRecovery, "restore materials blocked; explicit delete required")
 	}
 	var s snapshotRecord
 	var m Manifest
@@ -31,13 +28,9 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 	} else if o.Journal.Manifest != nil {
 		m = *o.Journal.Manifest
 	} else {
-		return api.Fail(
-			api.ManualRecovery,
-			"restore manifest missing after dependency transfer",
-		)
+		return api.Fail(api.ManualRecovery, "restore manifest missing after dependency transfer")
 	}
-	if m.Format != 1 || m.Backend != e.opts.Backend.Compatibility() ||
-		m.Architecture != runtime.GOARCH ||
+	if m.Format != 1 || m.Backend != e.opts.Backend.Compatibility() || m.Architecture != runtime.GOARCH ||
 		m.CPU != cpuIdentity() ||
 		m.MemoryMode != "CopyOnWrite" || m.PublicationMode != "IndependentInodes" {
 		return api.Fail(
@@ -45,12 +38,8 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 			"snapshot backend, CPU, format, COW or independent publication compatibility mismatch; legacy materials require manual recovery",
 		)
 	}
-	if !reflect.DeepEqual(v.VM.Config.Shape, m.Config.Shape) ||
-		v.VM.Config.Image != m.Config.Image {
-		return api.Fail(
-			api.Incompatible,
-			"target shape/image must match snapshot",
-		)
+	if !reflect.DeepEqual(v.VM.Config.Shape, m.Config.Shape) || v.VM.Config.Image != m.Config.Image {
+		return api.Fail(api.Incompatible, "target shape/image must match snapshot")
 	}
 	if err = e.checkImagePublication(v.Resource, m.Image); err != nil {
 		return err
@@ -98,12 +87,7 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		r := old
 		r.Instance = newID("run-")
 		r.RunDir = filepath.Join(r.Dir, "runs", r.Instance)
-		r.RestoreDir = filepath.Join(
-			r.Dir,
-			"versions",
-			o.Operation.ID,
-			"restore",
-		)
+		r.RestoreDir = filepath.Join(r.Dir, "versions", o.Operation.ID, "restore")
 		r.Disk = filepath.Join(r.Dir, "versions", o.Operation.ID, "disk.raw")
 		o.Journal.Old = &old
 		o.Journal.Resource = &r
@@ -130,24 +114,12 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		e.admission.Lock()
 		tx, x := e.db.Begin()
 		if x == nil {
-			_, x = tx.Exec(
-				"INSERT OR IGNORE INTO backing VALUES(?,?,?)",
-				v.VM.ID,
-				backing,
-				m.Files["ch/memory-ranges"],
-			)
+			_, x = tx.Exec("INSERT OR IGNORE INTO backing VALUES(?,?,?)", v.VM.ID, backing, m.Files["ch/memory-ranges"])
 			if x == nil {
-				_, x = tx.Exec(
-					"DELETE FROM leases WHERE operation=?",
-					o.Operation.ID,
-				)
+				_, x = tx.Exec("DELETE FROM leases WHERE operation=?", o.Operation.ID)
 			}
 			if x == nil {
-				_, x = tx.Exec(
-					"UPDATE operations SET body=? WHERE id=?",
-					encode(o),
-					o.Operation.ID,
-				)
+				_, x = tx.Exec("UPDATE operations SET body=? WHERE id=?", encode(o), o.Operation.ID)
 			}
 			if x == nil {
 				x = tx.Commit()
@@ -169,18 +141,14 @@ func (e *Engine) restore(o *opRecord, v *vmRecord) error {
 		return err
 	}
 	if obs.Alive && o.Operation.Step == "restore_resources_ready" {
-		return api.Fail(
-			api.ManualRecovery,
-			"restore candidate in use without launch intent",
-		)
+		return api.Fail(api.ManualRecovery, "restore candidate in use without launch intent")
 	}
 	// A live instance may already have modified its private disk after launch.
 	// Never compare those legitimate writes to the delivery digest or recopy it.
 	if err = e.verifyRestoreMaterials(
 		o,
 		m,
-		!obs.Alive &&
-			(o.Operation.Step == "restore_resources_ready" || o.Operation.Step == "restore_launch_intent"),
+		!obs.Alive && (o.Operation.Step == "restore_resources_ready" || o.Operation.Step == "restore_launch_intent"),
 	); err != nil {
 		return err
 	}

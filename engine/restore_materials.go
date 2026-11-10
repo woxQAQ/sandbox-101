@@ -54,11 +54,7 @@ var restoreNames = []string{
 }
 
 // All type, size and digest checks and syncing refer to this same no-follow fd.
-func inspectRestoreFile(
-	path, want string,
-	size int64,
-	sync bool,
-) (restoreFile, error) {
+func inspectRestoreFile(path, want string, size int64, sync bool) (restoreFile, error) {
 	parent, err := openCaptureDir(filepath.Dir(path))
 	if err != nil {
 		return restoreFile{}, err
@@ -79,12 +75,8 @@ func inspectRestoreFile(
 	if err != nil {
 		return restoreFile{}, err
 	}
-	if !st.Mode().IsRegular() || st.Size() <= 0 ||
-		size >= 0 && st.Size() != size {
-		return restoreFile{}, fmt.Errorf(
-			"candidate regular-file/size mismatch: %s",
-			path,
-		)
+	if !st.Mode().IsRegular() || st.Size() <= 0 || size >= 0 && st.Size() != size {
+		return restoreFile{}, fmt.Errorf("candidate regular-file/size mismatch: %s", path)
 	}
 	h := sha256.New()
 	if _, err = io.Copy(h, f); err != nil {
@@ -92,10 +84,7 @@ func inspectRestoreFile(
 	}
 	got := "sha256:" + hex.EncodeToString(h.Sum(nil))
 	if got != want {
-		return restoreFile{}, fmt.Errorf(
-			"candidate checksum mismatch: %s",
-			path,
-		)
+		return restoreFile{}, fmt.Errorf("candidate checksum mismatch: %s", path)
 	}
 	if sync {
 		if err = f.Sync(); err != nil {
@@ -116,22 +105,14 @@ func (e *Engine) checkRestoreResource(o *opRecord, r Resource) error {
 		return err
 	}
 	version := filepath.Join(r.Dir, "versions", o.Operation.ID)
-	if r.VMID != o.Operation.VMID ||
-		r.Disk != filepath.Join(version, "disk.raw") ||
+	if r.VMID != o.Operation.VMID || r.Disk != filepath.Join(version, "disk.raw") ||
 		r.RestoreDir != filepath.Join(version, "restore") {
-		return api.Fail(
-			api.ManualRecovery,
-			"restore candidate ownership mismatch",
-		)
+		return api.Fail(api.ManualRecovery, "restore candidate ownership mismatch")
 	}
 	return nil
 }
 
-func (e *Engine) prepareRestoreMaterials(
-	o *opRecord,
-	s snapshotRecord,
-	m Manifest,
-) error {
+func (e *Engine) prepareRestoreMaterials(o *opRecord, s snapshotRecord, m Manifest) error {
 	r := *o.Journal.Resource
 	if err := e.checkRestoreResource(o, r); err != nil {
 		return err
@@ -141,10 +122,7 @@ func (e *Engine) prepareRestoreMaterials(
 		return err
 	}
 	if obs.Alive {
-		return api.Fail(
-			api.ManualRecovery,
-			"unproved restore candidate already in use",
-		)
+		return api.Fail(api.ManualRecovery, "unproved restore candidate already in use")
 	}
 	// A prior incomplete attempt is retained, even if the cached bytes look intact.
 	// We need no overwrite/rebuild exception, including for uncertain VMM identity.
@@ -174,11 +152,7 @@ func (e *Engine) prepareRestoreMaterials(
 	}
 	defer func() { _ = versions.Close() }()
 	// Existing private version entries without a proof are diagnostic evidence.
-	if err = unix.Mkdirat(
-		int(versions.Fd()),
-		o.Operation.ID,
-		0o700,
-	); err != nil {
+	if err = unix.Mkdirat(int(versions.Fd()), o.Operation.ID, 0o700); err != nil {
 		return err
 	}
 	version, err := openCaptureDir(filepath.Dir(r.RestoreDir))
@@ -197,12 +171,7 @@ func (e *Engine) prepareRestoreMaterials(
 		if name == "disk.raw" {
 			key = name
 		}
-		file, x := inspectRestoreFile(
-			restoreSource(s.Dir, name),
-			m.Files[key],
-			-1,
-			false,
-		)
+		file, x := inspectRestoreFile(restoreSource(s.Dir, name), m.Files[key], -1, false)
 		if x != nil {
 			return x
 		}
@@ -250,12 +219,7 @@ func (e *Engine) prepareRestoreMaterials(
 		if err = e.saveOp(o, "restore_candidate_copied"); err != nil {
 			return err
 		}
-		if _, err = inspectRestoreFile(
-			tmp,
-			proof.Files[name].Source,
-			proof.Files[name].Size,
-			true,
-		); err != nil {
+		if _, err = inspectRestoreFile(tmp, proof.Files[name].Source, proof.Files[name].Size, true); err != nil {
 			return err
 		}
 		if err = os.Rename(tmp, dst); err != nil {
@@ -266,21 +230,12 @@ func (e *Engine) prepareRestoreMaterials(
 		}
 	}
 	for _, name := range restoreNames {
-		file, x := inspectRestoreFile(
-			restorePath(r, name),
-			proof.Files[name].Source,
-			proof.Files[name].Size,
-			true,
-		)
+		file, x := inspectRestoreFile(restorePath(r, name), proof.Files[name].Source, proof.Files[name].Size, true)
 		if x != nil {
 			return x
 		}
-		if name == "memory-ranges" &&
-			file.Identity != proof.Files[name].Identity {
-			return api.Fail(
-				api.ManualRecovery,
-				"candidate backing inode mismatch",
-			)
+		if name == "memory-ranges" && file.Identity != proof.Files[name].Identity {
+			return api.Fail(api.ManualRecovery, "candidate backing inode mismatch")
 		}
 		proof.Files[name] = file
 	}
@@ -296,11 +251,7 @@ func (e *Engine) prepareRestoreMaterials(
 	return e.saveOp(o, "restore_materials_complete")
 }
 
-func (e *Engine) verifyRestoreMaterials(
-	o *opRecord,
-	m Manifest,
-	disk bool,
-) error {
+func (e *Engine) verifyRestoreMaterials(o *opRecord, m Manifest, disk bool) error {
 	proof := o.Journal.RestoreMaterials
 	if proof == nil || !proof.Complete || o.Journal.Resource == nil ||
 		!reflect.DeepEqual(proof.Resource, *o.Journal.Resource) ||
@@ -325,10 +276,7 @@ func (e *Engine) verifyRestoreMaterials(
 			return err
 		}
 		if gcNode(st) != identity {
-			return api.Fail(
-				api.ManualRecovery,
-				"restore directory identity changed",
-			)
+			return api.Fail(api.ManualRecovery, "restore directory identity changed")
 		}
 	}
 	for _, name := range restoreNames {
@@ -337,30 +285,18 @@ func (e *Engine) verifyRestoreMaterials(
 		if name == "disk.raw" {
 			key = name
 		}
-		if file.Source != m.Files[key] || file.Candidate != file.Source ||
-			file.Size <= 0 {
-			return api.Fail(
-				api.Incompatible,
-				"restore fixed source proof mismatch",
-			)
+		if file.Source != m.Files[key] || file.Candidate != file.Source || file.Size <= 0 {
+			return api.Fail(api.Incompatible, "restore fixed source proof mismatch")
 		}
 		if name == "disk.raw" && !disk {
 			continue
 		}
-		got, err := inspectRestoreFile(
-			restorePath(r, name),
-			file.Source,
-			file.Size,
-			false,
-		)
+		got, err := inspectRestoreFile(restorePath(r, name), file.Source, file.Size, false)
 		if err != nil {
 			return err
 		}
 		if got.Identity != file.Identity {
-			return api.Fail(
-				api.ManualRecovery,
-				"restore artifact inode mismatch",
-			)
+			return api.Fail(api.ManualRecovery, "restore artifact inode mismatch")
 		}
 	}
 	return nil

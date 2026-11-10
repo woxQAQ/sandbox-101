@@ -68,8 +68,7 @@ func canonicalHost(host string) (string, error) {
 	}
 	numeric := true
 	for part := range strings.SplitSeq(host, ".") {
-		if len(part) == 0 || len(part) > 63 || part[0] == '-' ||
-			part[len(part)-1] == '-' {
+		if len(part) == 0 || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
 			return "", ErrDenied
 		}
 		for _, ch := range part {
@@ -156,13 +155,7 @@ var forbidden = prefixes(
 )
 
 var (
-	internal = prefixes(
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"100.64.0.0/10",
-		"fc00::/7",
-	)
+	internal = prefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7")
 	globalV6 = netip.MustParsePrefix("2000::/3")
 )
 
@@ -190,10 +183,7 @@ func (p compiledPolicy) checkIP(ip netip.Addr) error {
 	return nil
 }
 
-func (b *binding) resolve(
-	ctx context.Context,
-	host string,
-) ([]netip.Addr, error) {
+func (b *binding) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
 	if len(b.policy.hosts) != 0 {
 		if _, ok := b.policy.hosts[host]; !ok {
 			return nil, ErrDenied
@@ -221,10 +211,7 @@ func (b *binding) resolve(
 	return ips, nil
 }
 
-func (b *binding) dial(
-	ctx context.Context,
-	network, address string,
-) (net.Conn, error) {
+func (b *binding) dial(ctx context.Context, network, address string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil, ErrDenied
 	}
@@ -245,18 +232,11 @@ func (b *binding) dial(
 	}
 	for _, ip := range ips {
 		// The resolver is never consulted by the low-level dialer.
-		c, err := b.manager.opts.DialContext(
-			ctx,
-			network,
-			net.JoinHostPort(ip.Unmap().String(), port),
-		)
+		c, err := b.manager.opts.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
 		if err != nil {
 			continue
 		}
-		t, err := b.track(
-			&idleConn{Conn: c, timeout: b.manager.opts.IdleTimeout},
-			false,
-		)
+		t, err := b.track(&idleConn{Conn: c, timeout: b.manager.opts.IdleTimeout}, false)
 		if err != nil {
 			return nil, err
 		}

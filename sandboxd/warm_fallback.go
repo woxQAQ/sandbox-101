@@ -24,18 +24,14 @@ func warmSelectionDelete(r resourceRecovery, attempt uint64) api.Request {
 }
 
 func validateWarmDeleteReceipt(request api.Request, proof api.Operation) error {
-	if proof.ID == "" || proof.Key != request.Key ||
-		!reflect.DeepEqual(proof.Request, request) ||
+	if proof.ID == "" || proof.Key != request.Key || !reflect.DeepEqual(proof.Request, request) ||
 		proof.VMID != request.VMID ||
 		proof.SnapshotID != "" ||
 		proof.ResultInstance != "" ||
 		(proof.Status != "pending" && proof.Status != "running" && proof.Status != "succeeded" && proof.Status != "failed") ||
 		(proof.Status == "failed" && proof.Error == nil) ||
 		(proof.Status != "failed" && proof.Error != nil) {
-		return Fail(
-			ErrManualRecovery,
-			"warm delete receipt differs from its fixed generation request",
-		)
+		return Fail(ErrManualRecovery, "warm delete receipt differs from its fixed generation request")
 	}
 	return nil
 }
@@ -48,10 +44,7 @@ func (s *Service) activateWarm(o Operation, b *Sandbox) error {
 		Instance: b.Instance,
 	}
 	if target.Instance == "" {
-		return Fail(
-			ErrManualRecovery,
-			"warm selection lacks successful generation witness",
-		)
+		return Fail(ErrManualRecovery, "warm selection lacks successful generation witness")
 	}
 	o.origin = o.ID
 	o.ID += ":warm"
@@ -87,10 +80,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 	if !absent {
 		if v.ID != i.VM || v.Instance != i.Instance || !v.Verified ||
 			v.OperationID != "" || v.Config.Shape != i.Shape || v.Config.Image != r.Group.Template.Image {
-			return Fail(
-				ErrManualRecovery,
-				"rejected warm instance changed",
-			)
+			return Fail(ErrManualRecovery, "rejected warm instance changed")
 		}
 		ownership := s.lockResourceOwnership()
 		tx, e := s.store.db.BeginTx(s.ctx, nil)
@@ -132,19 +122,12 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			return e
 		}
 		if e == nil {
-			if err = validateWarmDeleteReceipt(
-				q.Deletion.Request,
-				proof,
-			); err != nil {
+			if err = validateWarmDeleteReceipt(q.Deletion.Request, proof); err != nil {
 				return err
 			}
-			if q.Deletion.Proof != nil &&
-				recoveryTerminal(q.Deletion.Proof.Status) &&
+			if q.Deletion.Proof != nil && recoveryTerminal(q.Deletion.Proof.Status) &&
 				!reflect.DeepEqual(*q.Deletion.Proof, proof) {
-				return Fail(
-					ErrManualRecovery,
-					"terminal warm delete receipt changed",
-				)
+				return Fail(ErrManualRecovery, "terminal warm delete receipt changed")
 			}
 			if proof.Status == "failed" {
 				ownership = s.lockResourceOwnership()
@@ -152,15 +135,8 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 				if e == nil {
 					latest, le := loadRecoveryTx(s.ctx, tx, r.ID)
 					e = le
-					if e == nil &&
-						!reflect.DeepEqual(
-							latest.Group.Selection.Deletion.Request,
-							proof.Request,
-						) {
-						e = Fail(
-							ErrManualRecovery,
-							"warm delete attempt changed during receipt lookup",
-						)
+					if e == nil && !reflect.DeepEqual(latest.Group.Selection.Deletion.Request, proof.Request) {
+						e = Fail(ErrManualRecovery, "warm delete attempt changed during receipt lookup")
 					}
 					if e == nil {
 						next := latest.Group.Selection
@@ -173,10 +149,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 						)
 						next.Attempt++
 						next.Deletion = allocationStep{
-							Request: warmSelectionDelete(
-								latest,
-								next.Attempt,
-							),
+							Request:    warmSelectionDelete(latest, next.Attempt),
 							Bound:      true,
 							Dispatched: true,
 						}
@@ -208,22 +181,12 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			if readErr != nil {
 				return readErr
 			}
-			if !reflect.DeepEqual(
-				latest.Group.Selection.Deletion.Request,
-				request,
-			) {
-				return Fail(
-					ErrManualRecovery,
-					"warm delete receipt has a different durable attempt",
-				)
+			if !reflect.DeepEqual(latest.Group.Selection.Deletion.Request, request) {
+				return Fail(ErrManualRecovery, "warm delete receipt has a different durable attempt")
 			}
 			stored := latest.Group.Selection.Deletion.Proof
-			if stored != nil && recoveryTerminal(stored.Status) &&
-				!reflect.DeepEqual(*stored, proof) {
-				return Fail(
-					ErrManualRecovery,
-					"terminal warm delete receipt changed",
-				)
+			if stored != nil && recoveryTerminal(stored.Status) && !reflect.DeepEqual(*stored, proof) {
+				return Fail(ErrManualRecovery, "terminal warm delete receipt changed")
 			}
 		}
 		if err != nil {
@@ -234,10 +197,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 			if err != nil {
 				return err
 			}
-			return Fail(
-				ErrManualRecovery,
-				"warm deletion did not prove absence",
-			)
+			return Fail(ErrManualRecovery, "warm deletion did not prove absence")
 		}
 	}
 	return s.transferWarmFallback(o, b, t)
@@ -245,11 +205,7 @@ func (s *Service) discardWarm(o Operation, b *Sandbox, t Template) error {
 
 // The old disk and replacement reservation change in one transaction. Quota
 // competitors never observe refunded storage between these responsibilities.
-func (s *Service) transferWarmFallback(
-	o Operation,
-	b *Sandbox,
-	t Template,
-) error {
+func (s *Service) transferWarmFallback(o Operation, b *Sandbox, t Template) error {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -275,16 +231,12 @@ func (s *Service) transferWarmFallback(
 		return err
 	}
 	i := q.Identity
-	if current.VMID != i.VM || current.TenantID != r.TenantID ||
-		current.Shape != i.Shape ||
+	if current.VMID != i.VM || current.TenantID != r.TenantID || current.Shape != i.Shape ||
 		current.Instance != i.Instance ||
 		i.Generation == nil ||
 		i.Generation.ResultInstance != i.Instance ||
 		i.Instance == "" {
-		return Fail(
-			ErrManualRecovery,
-			"fallback lost fixed selection identity",
-		)
+		return Fail(ErrManualRecovery, "fallback lost fixed selection identity")
 	}
 	if err = deleteQuotaRows(
 		s.ctx,
@@ -420,12 +372,8 @@ func (s *Service) resolveWarmSelection(o Operation, r *resourceRecovery) error {
 		if err != nil {
 			return err
 		}
-		if b.State != "terminated" || b.VMID != "" ||
-			b.TenantID != latest.TenantID {
-			return Fail(
-				ErrManualRecovery,
-				"completed warm cleanup lost its sandbox destination",
-			)
+		if b.State != "terminated" || b.VMID != "" || b.TenantID != latest.TenantID {
+			return Fail(ErrManualRecovery, "completed warm cleanup lost its sandbox destination")
 		}
 		if err = deleteQuotaRows(
 			s.ctx,
@@ -479,19 +427,16 @@ func (s *Service) releaseAllocation(b *Sandbox) (bool, error) {
 		return true, err
 	}
 	for _, a := range r.Allocations {
-		if a.Kind == "vm_disk" && a.Resolution.State == "active" &&
-			a.Resolution.Destination == "sandbox:"+b.ID &&
+		if a.Kind == "vm_disk" && a.Resolution.State == "active" && a.Resolution.Destination == "sandbox:"+b.ID &&
 			r.TenantID == b.TenantID &&
 			r.Group.Subject.ID == b.ID {
 			return false, nil
 		}
 	}
-	if r.Done && !hasUnresolvedAllocations(r) && b.State == "terminated" &&
-		b.VMID == "" {
+	if r.Done && !hasUnresolvedAllocations(r) && b.State == "terminated" && b.VMID == "" {
 		return false, nil
 	}
-	if r.Group.Selection == nil || r.Group.Selection.Stage == "active" ||
-		r.Group.Selection.Stage == "cleanup_done" {
+	if r.Group.Selection == nil || r.Group.Selection.Stage == "active" || r.Group.Selection.Stage == "cleanup_done" {
 		return false, nil
 	}
 	b.State = "terminated"
@@ -499,10 +444,7 @@ func (s *Service) releaseAllocation(b *Sandbox) (bool, error) {
 		return true, err
 	}
 	if r.Group.Selection.Stage == "fallback_reserved" {
-		return true, Fail(
-			ErrManualRecovery,
-			"replacement allocation still requires original receipt resolution",
-		)
+		return true, Fail(ErrManualRecovery, "replacement allocation still requires original receipt resolution")
 	}
 	o, err := s.store.operation(s.ctx, r.Source)
 	if err != nil {

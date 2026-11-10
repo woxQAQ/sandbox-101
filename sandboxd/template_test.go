@@ -43,15 +43,7 @@ func TestUntrustedExistingTemplateCannotCloneSnapshot(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"claim",
-		Command{Action: "claim", TemplateID: template.ID},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err := s.Execute(s.ctx, p, "claim", Command{Action: "claim", TemplateID: template.ID}); !isCode(err, ErrNotFound) {
 		t.Fatal("untrusted template admitted", err)
 	}
 	s.pools()
@@ -83,12 +75,7 @@ func TestUntrustedExistingTemplateCannotCloneSnapshot(t *testing.T) {
 func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 	s, f, _, p := fixture(t)
 	b := claimTest(t, s, p, "source", nil)
-	cp, err := s.Execute(
-		context.Background(),
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: b.Sandbox.ID},
-	)
+	cp, err := s.Execute(context.Background(), p, "checkpoint", Command{Action: "checkpoint", SandboxID: b.Sandbox.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,10 +102,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		bob,
 		"foreign",
 		Command{Action: "template_put", Template: &template},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatalf("foreign snapshot accepted: %v", err)
 	}
 	if _, err = s.Execute(
@@ -134,10 +118,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		Principal{TenantID: p.TenantID, SandboxID: b.Sandbox.ID},
 		"sandbox-import",
 		Command{Action: "template_put", Template: &template},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatal(err)
 	}
 	h := s.Handler()
@@ -156,8 +137,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 		return w
 	}
 	foreign, unknown := get(cp.Checkpoint.SnapshotID), get("unknown")
-	if foreign.Code != 404 || unknown.Code != 404 ||
-		foreign.Body.String() != unknown.Body.String() {
+	if foreign.Code != 404 || unknown.Code != 404 || foreign.Body.String() != unknown.Body.String() {
 		t.Fatalf(
 			"authorization responses differ: %d %s / %d %s",
 			foreign.Code,
@@ -195,10 +175,7 @@ func TestTemplateSnapshotTenantAuthorization(t *testing.T) {
 				SnapshotID: cp.Checkpoint.SnapshotID,
 			},
 		},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatal("root transferred ownership", err)
 	}
 	if f.count("clone") != 0 {
@@ -251,12 +228,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 	a.mu.Unlock()
 	var release sync.Once
 	t.Cleanup(func() { release.Do(func() { close(gate) }) })
-	first, err := s.Submit(
-		ctx,
-		p,
-		"first-build",
-		Command{Action: "template_build", Template: template()},
-	)
+	first, err := s.Submit(ctx, p, "first-build", Command{Action: "template_build", Template: template()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,12 +239,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 	}
 	// Bob's submission for the reserved name must look exactly like a
 	// submission for a name another tenant already published.
-	_, reservedErr := s.Submit(
-		ctx,
-		bob,
-		"bob-build",
-		Command{Action: "template_build", Template: template()},
-	)
+	_, reservedErr := s.Submit(ctx, bob, "bob-build", Command{Action: "template_build", Template: template()})
 	_, foreignErr := s.Submit(
 		ctx,
 		bob,
@@ -289,11 +256,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 	reserved, foreign := notFoundError(t, reservedErr),
 		notFoundError(t, foreignErr)
 	if reserved.Message != foreign.Message {
-		t.Fatalf(
-			"reserved and foreign responses differ: %q / %q",
-			reserved.Message,
-			foreign.Message,
-		)
+		t.Fatalf("reserved and foreign responses differ: %q / %q", reserved.Message, foreign.Message)
 	}
 	// The owning tenant cannot hold two in-flight publications either; a
 	// retry with the original key still returns the original operation.
@@ -305,12 +268,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 	); !isCode(err, ErrConflict) {
 		t.Fatalf("concurrent same-tenant build admitted: %v", err)
 	}
-	again, err := s.Submit(
-		ctx,
-		p,
-		"first-build",
-		Command{Action: "template_build", Template: template()},
-	)
+	again, err := s.Submit(ctx, p, "first-build", Command{Action: "template_build", Template: template()})
 	if err != nil || again.ID != first.ID {
 		t.Fatalf("same key did not return the original operation: %v", err)
 	}
@@ -327,8 +285,7 @@ func TestTemplateAdmissionOwnerReservedBeforePublication(t *testing.T) {
 	var owner, pointer string
 	if err = s.store.db.QueryRow(
 		"SELECT tenant_id,operation_id FROM template_intents WHERE template_id='gated'",
-	).Scan(&owner, &pointer); err != nil ||
-		owner != p.TenantID || pointer != first.ID {
+	).Scan(&owner, &pointer); err != nil || owner != p.TenantID || pointer != first.ID {
 		t.Fatal(owner, pointer, err)
 	}
 	if _, err = s.Submit(
@@ -395,20 +352,10 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 	f.mu.Lock()
 	f.failSnapshot = true
 	f.mu.Unlock()
-	if _, err := s.Execute(
-		ctx,
-		p,
-		"flaky-build",
-		build("flaky", "3"),
-	); !isCode(err, ErrExhausted) {
+	if _, err := s.Execute(ctx, p, "flaky-build", build("flaky", "3")); !isCode(err, ErrExhausted) {
 		t.Fatalf("expected the injected build failure: %v", err)
 	}
-	if _, err := s.Submit(
-		ctx,
-		bob,
-		"bob-take",
-		build("flaky", "3"),
-	); !isCode(err, ErrNotFound) {
+	if _, err := s.Submit(ctx, bob, "bob-take", build("flaky", "3")); !isCode(err, ErrNotFound) {
 		t.Fatalf("failure released the name to another tenant: %v", err)
 	}
 	listed, err := s.Templates(ctx, p)
@@ -427,15 +374,13 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry.Template == nil || retry.Template.State != "ready" ||
-		retry.Template.TenantID != p.TenantID {
+	if retry.Template == nil || retry.Template.State != "ready" || retry.Template.TenantID != p.TenantID {
 		t.Fatalf("owner retry lost the template: %+v", retry.Template)
 	}
 	var owner, pointer string
 	if err = s.store.db.QueryRow(
 		"SELECT tenant_id,operation_id FROM template_intents WHERE template_id='flaky'",
-	).Scan(&owner, &pointer); err != nil ||
-		owner != p.TenantID || pointer != retry.OperationID {
+	).Scan(&owner, &pointer); err != nil || owner != p.TenantID || pointer != retry.OperationID {
 		t.Fatal(owner, pointer, err)
 	}
 	// A crash mid-build preserves both the reservation and the resumable
@@ -483,12 +428,7 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("replayed build did not reach guest activation")
 	}
-	if _, err = reopened.Submit(
-		ctx,
-		bob,
-		"bob-restart-take",
-		build("durable", "4"),
-	); !isCode(err, ErrNotFound) {
+	if _, err = reopened.Submit(ctx, bob, "bob-restart-take", build("durable", "4")); !isCode(err, ErrNotFound) {
 		t.Fatalf("restart released the name to another tenant: %v", err)
 	}
 	rerelease.Do(func() { close(regate) })
@@ -503,8 +443,7 @@ func TestTemplateAdmissionRestartAndFailedBuild(t *testing.T) {
 	}
 	if err = reopened.store.db.QueryRow(
 		"SELECT tenant_id,operation_id FROM template_intents WHERE template_id='durable'",
-	).Scan(&owner, &pointer); err != nil ||
-		owner != p.TenantID || pointer != durable.ID {
+	).Scan(&owner, &pointer); err != nil || owner != p.TenantID || pointer != durable.ID {
 		t.Fatal(owner, pointer, err)
 	}
 }
@@ -563,15 +502,9 @@ func TestTemplateAdmissionPublicationFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provision, err := f.FindOperation(
-		ctx,
-		stepKey(Operation{ID: claimed.OperationID}, "provision"),
-	)
+	provision, err := f.FindOperation(ctx, stepKey(Operation{ID: claimed.OperationID}, "provision"))
 	if err != nil || provision.Request.SnapshotID != first {
-		t.Fatalf(
-			"claim during rebuild did not serve the published snapshot: %v",
-			err,
-		)
+		t.Fatalf("claim during rebuild did not serve the published snapshot: %v", err)
 	}
 	release.Do(func() { close(gate) })
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -609,15 +542,10 @@ func TestTemplateAdmissionPublicationFence(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Submit(ctx, p, "build-v3", build("6")); !isCode(
-		err,
-		ErrManualRecovery,
-	) {
+	if _, err = s.Submit(ctx, p, "build-v3", build("6")); !isCode(err, ErrManualRecovery) {
 		t.Fatalf("lost pointer admitted silently: %v", err)
 	}
-	if _, err = s.store.db.Exec(
-		"UPDATE template_intents SET operation_id='' WHERE template_id='rolling'",
-	); err != nil {
+	if _, err = s.store.db.Exec("UPDATE template_intents SET operation_id='' WHERE template_id='rolling'"); err != nil {
 		t.Fatal(err)
 	}
 	v3, err := s.Execute(ctx, p, "build-v3", build("6"))
@@ -680,19 +608,14 @@ func TestTemplateAdmissionPublishedOwnerConsistency(t *testing.T) {
 	for _, corruption := range []string{"missing-placeholder", "conflicting-owner"} {
 		t.Run(corruption, func(t *testing.T) {
 			s, f, _, p := fixture(t)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				5*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			published, err := s.store.template(ctx, "python")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if corruption == "missing-placeholder" {
-				_, err = s.store.db.Exec(
-					"DELETE FROM template_intents WHERE template_id='python'",
-				)
+				_, err = s.store.db.Exec("DELETE FROM template_intents WHERE template_id='python'")
 			} else {
 				published.TenantID = "bob"
 				_, err = s.store.db.Exec(
@@ -727,22 +650,13 @@ func TestTemplateAdmissionPublishedOwnerConsistency(t *testing.T) {
 						}},
 					)
 					if !isCode(err, caller.code) {
-						t.Fatalf(
-							"%s/%s: expected %s, got %v",
-							caller.name,
-							action,
-							caller.code,
-							err,
-						)
+						t.Fatalf("%s/%s: expected %s, got %v", caller.name, action, caller.code, err)
 					}
-					if caller.code == ErrNotFound &&
-						notFoundError(t, err).Message != "not found" {
+					if caller.code == ErrNotFound && notFoundError(t, err).Message != "not found" {
 						t.Fatal("foreign response disclosed owner details")
 					}
 					if !bytes.Equal(before, templateAdmissionState(t, s, f)) {
-						t.Fatal(
-							"rejected admission changed durable or engine state",
-						)
+						t.Fatal("rejected admission changed durable or engine state")
 					}
 				}
 			}
@@ -756,10 +670,7 @@ func TestTemplateAdmissionPointerProvenance(t *testing.T) {
 	} {
 		t.Run(corruption, func(t *testing.T) {
 			s, f, _, p := fixture(t)
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				5*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			old, err := s.store.byKey(ctx, p.TenantID, "template")
 			if err != nil {
@@ -773,20 +684,11 @@ func TestTemplateAdmissionPointerProvenance(t *testing.T) {
 					"UPDATE template_intents SET operation_id='op_missing' WHERE template_id='python'",
 				)
 			case "column-tenant":
-				_, err = s.store.db.Exec(
-					"UPDATE operations SET tenant='bob' WHERE id=?",
-					old.ID,
-				)
+				_, err = s.store.db.Exec("UPDATE operations SET tenant='bob' WHERE id=?", old.ID)
 			case "column-status":
-				_, err = s.store.db.Exec(
-					"UPDATE operations SET status='failed' WHERE id=?",
-					old.ID,
-				)
+				_, err = s.store.db.Exec("UPDATE operations SET status='failed' WHERE id=?", old.ID)
 			case "invalid-body":
-				_, err = s.store.db.Exec(
-					"UPDATE operations SET body='{' WHERE id=?",
-					old.ID,
-				)
+				_, err = s.store.db.Exec("UPDATE operations SET body='{' WHERE id=?", old.ID)
 			default:
 				switch corruption {
 				case "unknown-status":
@@ -835,21 +737,13 @@ func TestTemplateAdmissionPointerProvenance(t *testing.T) {
 					}},
 				)
 				if !isCode(err, caller.code) {
-					t.Fatalf(
-						"%s: expected %s, got %v",
-						caller.name,
-						caller.code,
-						err,
-					)
+					t.Fatalf("%s: expected %s, got %v", caller.name, caller.code, err)
 				}
-				if caller.code == ErrNotFound &&
-					notFoundError(t, err).Message != "not found" {
+				if caller.code == ErrNotFound && notFoundError(t, err).Message != "not found" {
 					t.Fatal("foreign response disclosed pointer details")
 				}
 				if !bytes.Equal(before, templateAdmissionState(t, s, f)) {
-					t.Fatal(
-						"rejected admission changed durable or engine state",
-					)
+					t.Fatal("rejected admission changed durable or engine state")
 				}
 			}
 		})
@@ -865,10 +759,7 @@ type snapshotQueryGate struct {
 	release chan struct{}
 }
 
-func (g *snapshotQueryGate) GetSnapshot(
-	ctx context.Context,
-	id string,
-) (api.Snapshot, error) {
+func (g *snapshotQueryGate) GetSnapshot(ctx context.Context, id string) (api.Snapshot, error) {
 	snap, err := g.Client.GetSnapshot(ctx, id)
 	close(g.entered)
 	select {
@@ -953,8 +844,7 @@ func TestTemplateAdmissionPublicationOwnershipGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err = s.store.template(ctx, "golden")
-	if err != nil || stored.TargetWarm != 1 ||
-		stored.SnapshotID != built.Template.SnapshotID {
+	if err != nil || stored.TargetWarm != 1 || stored.SnapshotID != built.Template.SnapshotID {
 		t.Fatal("publication did not finish after ownership was released")
 	}
 }
@@ -973,12 +863,7 @@ func TestTemplateAdmissionRootExplicitOwnerUpdate(t *testing.T) {
 		Shape: api.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64},
 	}}
 	for _, tenant := range []string{"", "bob"} {
-		_, err = s.Submit(
-			ctx,
-			Principal{Root: true, TenantID: tenant},
-			"root-wrong-target",
-			command,
-		)
+		_, err = s.Submit(ctx, Principal{Root: true, TenantID: tenant}, "root-wrong-target", command)
 		if !isCode(err, ErrNotFound) {
 			t.Fatalf("root with foreign target admitted: %v", err)
 		}
@@ -988,8 +873,7 @@ func TestTemplateAdmissionRootExplicitOwnerUpdate(t *testing.T) {
 	}
 	root := Principal{Root: true, TenantID: p.TenantID}
 	updated, err := s.Execute(ctx, root, "root-update", command)
-	if err != nil || updated.Template == nil ||
-		updated.Template.TenantID != p.TenantID {
+	if err != nil || updated.Template == nil || updated.Template.TenantID != p.TenantID {
 		t.Fatal("root could not update the explicitly selected owner", err)
 	}
 	again, err := s.Submit(ctx, root, "root-update", command)
@@ -1000,8 +884,7 @@ func TestTemplateAdmissionRootExplicitOwnerUpdate(t *testing.T) {
 	if err != nil || !bytes.Equal(encode(original), encode(retained)) {
 		t.Fatal("terminal pointer recycling changed the historical result")
 	}
-	if again.Command.Template == nil ||
-		again.Command.Template.TenantID != p.TenantID {
+	if again.Command.Template == nil || again.Command.Template.TenantID != p.TenantID {
 		t.Fatal("root update did not record the explicit owner")
 	}
 }
@@ -1041,12 +924,7 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 	f.mu.Lock()
 	f.failSnapshot = true
 	f.mu.Unlock()
-	if _, err = s.Execute(
-		ctx,
-		p,
-		"build-failed",
-		build("failed-name", "8"),
-	); !isCode(err, ErrExhausted) {
+	if _, err = s.Execute(ctx, p, "build-failed", build("failed-name", "8")); !isCode(err, ErrExhausted) {
 		t.Fatalf("expected the injected build failure: %v", err)
 	}
 	f.mu.Lock()
@@ -1068,10 +946,7 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 	if _, err = Open(opts); !isCode(err, ErrManualRecovery) {
 		t.Fatalf("restored state opened without review: %v", err)
 	}
-	if err = AcknowledgeStateRecovery(
-		restored,
-		"reviewed engine inventory and template ownership",
-	); err != nil {
+	if err = AcknowledgeStateRecovery(restored, "reviewed engine inventory and template ownership"); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(opts)
@@ -1080,23 +955,13 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 	}
 	t.Cleanup(func() { reopened.Close() })
 	for _, id := range []string{"backed", "failed-name"} {
-		if _, err = reopened.Submit(
-			ctx,
-			bob,
-			"bob-"+id,
-			build(id, "8"),
-		); !isCode(err, ErrNotFound) {
+		if _, err = reopened.Submit(ctx, bob, "bob-"+id, build(id, "8")); !isCode(err, ErrNotFound) {
 			t.Fatalf("restore released %s to another tenant: %v", id, err)
 		}
 	}
 	// The owner retries the failed publication and the ready version keeps
 	// serving the snapshot captured before the backup.
-	if _, err = reopened.Execute(
-		ctx,
-		p,
-		"retry-failed",
-		build("failed-name", "8"),
-	); err != nil {
+	if _, err = reopened.Execute(ctx, p, "retry-failed", build("failed-name", "8")); err != nil {
 		t.Fatal(err)
 	}
 	claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -1114,12 +979,8 @@ func TestTemplateAdmissionBackupPreservesOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provision, err := f.FindOperation(
-		ctx,
-		stepKey(Operation{ID: claimed.OperationID}, "provision"),
-	)
-	if err != nil ||
-		provision.Request.SnapshotID != ready.Template.SnapshotID {
+	provision, err := f.FindOperation(ctx, stepKey(Operation{ID: claimed.OperationID}, "provision"))
+	if err != nil || provision.Request.SnapshotID != ready.Template.SnapshotID {
 		t.Fatalf("restored template lost its snapshot: %v", err)
 	}
 }
@@ -1147,12 +1008,7 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 			hideStart: true,
 		}
 		s.opts.Engine = e
-		o, err := s.Submit(
-			s.ctx,
-			p,
-			"late-start",
-			templateQuotaBuild("late-start"),
-		)
+		o, err := s.Submit(s.ctx, p, "late-start", templateQuotaBuild("late-start"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1193,14 +1049,8 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 		ledgerMoney(t, s, p.TenantID, 0, 192)
 	})
 	t.Run("witnessless-external-generation", templateQuotaWitnessless)
-	t.Run(
-		"unknown-start-absence-retains-slot",
-		templateQuotaUnknownStartAbsence,
-	)
-	t.Run(
-		"retired-build-publication-reader",
-		templateQuotaBuildPublicationReader,
-	)
+	t.Run("unknown-start-absence-retains-slot", templateQuotaUnknownStartAbsence)
+	t.Run("retired-build-publication-reader", templateQuotaBuildPublicationReader)
 	t.Run("unknown-capture-absence", templateQuotaUnknownCapture)
 	for _, fault := range []string{"abort", "ignore", "commit"} {
 		t.Run(
@@ -1228,12 +1078,7 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 			var once sync.Once
 			release := func() { once.Do(func() { close(e.gate) }) }
 			defer release()
-			o, err := s.Submit(
-				s.ctx,
-				p,
-				"first",
-				templateQuotaBuild("build-one"),
-			)
+			o, err := s.Submit(s.ctx, p, "first", templateQuotaBuild("build-one"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1242,17 +1087,9 @@ func TestTemplateQuotaBuildAdmission(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("first build did not reach create")
 			}
-			_, err = s.Submit(
-				s.ctx,
-				p,
-				"second",
-				templateQuotaBuild("build-two"),
-			)
+			_, err = s.Submit(s.ctx, p, "second", templateQuotaBuild("build-two"))
 			if !isCode(err, ErrExhausted) {
-				t.Errorf(
-					"second distinct template must be refused before Engine: %v",
-					err,
-				)
+				t.Errorf("second distinct template must be refused before Engine: %v", err)
 			}
 			e.mu.Lock()
 			attempts := e.attempts["create"]
@@ -1298,12 +1135,7 @@ func templateQuotaNonterminalStart(t *testing.T) {
 		gateAction: "start",
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"nonterminal",
-		templateQuotaBuild("nonterminal"),
-	)
+	o, err := s.Submit(s.ctx, p, "nonterminal", templateQuotaBuild("nonterminal"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1369,12 +1201,7 @@ func templateQuotaAdmissionFault(t *testing.T, target, fault string) {
 		t.Fatal(err)
 	}
 	before := templateQuotaState(t, s)
-	_, err := s.Submit(
-		s.ctx,
-		p,
-		"faulted-build",
-		templateQuotaBuild("faulted-build"),
-	)
+	_, err := s.Submit(s.ctx, p, "faulted-build", templateQuotaBuild("faulted-build"))
 	if err == nil {
 		t.Fatal("admission fault missing")
 	}
@@ -1389,9 +1216,7 @@ func templateQuotaAdmissionFault(t *testing.T, target, fault string) {
 	if f.count("create") != 0 || f.count("start") != 0 {
 		t.Fatal("failed admission dispatched Engine")
 	}
-	if _, err = s.store.db.Exec(
-		`DROP TRIGGER admit_fault_trigger`,
-	); err != nil {
+	if _, err = s.store.db.Exec(`DROP TRIGGER admit_fault_trigger`); err != nil {
 		t.Fatal(err)
 	}
 	ledgerExecute(t, s, p, "faulted-build", templateQuotaBuild("faulted-build"))
@@ -1411,10 +1236,7 @@ func templateQuotaFailedBuild(
 	}
 	if beforeStart {
 		e.afterCreate = func(request api.Request, _ api.Operation) error {
-			o, err := s.store.operation(
-				s.ctx,
-				request.Config.Labels["operation_id"],
-			)
+			o, err := s.store.operation(s.ctx, request.Config.Labels["operation_id"])
 			if err != nil {
 				return err
 			}
@@ -1428,12 +1250,7 @@ func templateQuotaFailedBuild(
 		}
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"witnessless",
-		templateQuotaBuild("witnessless"),
-	)
+	o, err := s.Submit(s.ctx, p, "witnessless", templateQuotaBuild("witnessless"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1475,8 +1292,7 @@ func templateQuotaWitnessless(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r.Group.Gate == nil || r.Done || r.Group.Identity == nil ||
-				r.Group.Identity.Instance != "" {
+			if r.Group.Gate == nil || r.Done || r.Group.Identity == nil || r.Group.Identity.Instance != "" {
 				t.Fatalf("missing observation responsibility: %+v", r)
 			}
 			vmid := r.Group.Identity.VM
@@ -1531,11 +1347,7 @@ func templateQuotaWitnessless(t *testing.T) {
 				wantStarts = 0
 			}
 			if attempts != 0 || starts != wantStarts {
-				t.Fatalf(
-					"Service attempts delete=%d start=%d",
-					attempts,
-					starts,
-				)
+				t.Fatalf("Service attempts delete=%d start=%d", attempts, starts)
 			}
 			if _, err = api.Wait(
 				s.ctx,
@@ -1559,8 +1371,7 @@ func templateQuotaWitnessless(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !r.Done || r.Group.Gate != nil ||
-				r.Allocations[0].Resolution.State != "reclaimed" ||
+			if !r.Done || r.Group.Gate != nil || r.Allocations[0].Resolution.State != "reclaimed" ||
 				r.Allocations[0].Resolution.Destination != "vm-absent:"+vmid {
 				t.Fatal("absence destination was not committed")
 			}
@@ -1595,11 +1406,7 @@ func templateQuotaAbsenceFault(t *testing.T, fault string) {
 		t.Fatal(err)
 	}
 	v := r.Group.Identity.VM
-	started, err := api.Wait(
-		s.ctx,
-		f,
-		api.Request{Key: "external-fault-start", Action: "start", VMID: v},
-	)
+	started, err := api.Wait(s.ctx, f, api.Request{Key: "external-fault-start", Action: "start", VMID: v})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1648,34 +1455,24 @@ func templateQuotaAbsenceFault(t *testing.T, fault string) {
 	}
 	t.Logf("absence %s actual error: %v", fault, err)
 	if !bytes.Equal(before, templateQuotaState(t, s)) {
-		t.Fatal(
-			"absence fault changed durable responsibility or public metadata",
-		)
+		t.Fatal("absence fault changed durable responsibility or public metadata")
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 64)
 	var marker int
-	if err = s.store.db.QueryRowContext(s.ctx, `SELECT value FROM connection_marker`).
-		Scan(&marker); err != nil ||
-		marker != 1 {
+	if err = s.store.db.QueryRowContext(s.ctx, `SELECT value FROM connection_marker`).Scan(&marker); err != nil || marker != 1 {
 		t.Fatal("same connection unavailable", err)
 	}
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.ExecContext(
-		s.ctx,
-		`UPDATE connection_marker SET value=2`,
-	); err != nil {
+	if _, err = tx.ExecContext(s.ctx, `UPDATE connection_marker SET value=2`); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.store.db.ExecContext(
-		s.ctx,
-		`DROP TRIGGER absence_fault`,
-	); err != nil {
+	if _, err = s.store.db.ExecContext(s.ctx, `DROP TRIGGER absence_fault`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.recoverResources(); err != nil {
@@ -1702,12 +1499,7 @@ func templateQuotaBuildPublicationReader(t *testing.T) {
 		snapshotGate:    gate,
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"publication-reader",
-		templateQuotaBuild("publication-reader"),
-	)
+	o, err := s.Submit(s.ctx, p, "publication-reader", templateQuotaBuild("publication-reader"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1724,8 +1516,7 @@ func templateQuotaBuildPublicationReader(t *testing.T) {
 	sid := r.Allocations[1].Resolution.Proof.SnapshotID
 	var dependency int
 	if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?`, p.TenantID, sid, "operation:"+o.ID).
-		Scan(&dependency); err != nil ||
-		dependency != 1 {
+		Scan(&dependency); err != nil || dependency != 1 {
 		t.Fatal("VM retirement dropped the pending publication reader", err)
 	}
 	intents, err := s.resourceRecoveries()
@@ -1739,11 +1530,7 @@ func templateQuotaBuildPublicationReader(t *testing.T) {
 			}
 		}
 	}
-	if _, err = f.GetSnapshot(
-		s.ctx,
-		sid,
-	); err != nil ||
-		f.count("delete_snapshot") != 0 {
+	if _, err = f.GetSnapshot(s.ctx, sid); err != nil || f.count("delete_snapshot") != 0 {
 		t.Fatal("collector deleted a build product before publication", err)
 	}
 	release()
@@ -1764,12 +1551,7 @@ func templateQuotaUnknownStartAbsence(t *testing.T) {
 		hideStart: true,
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"unknown-start-absence",
-		templateQuotaBuild("unknown-start-absence"),
-	)
+	o, err := s.Submit(s.ctx, p, "unknown-start-absence", templateQuotaBuild("unknown-start-absence"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1809,8 +1591,7 @@ func templateQuotaUnknownStartAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Done || r.Group.Gate == nil ||
-		r.Allocations[0].Resolution.State != "reclaimed" ||
+	if r.Done || r.Group.Gate == nil || r.Allocations[0].Resolution.State != "reclaimed" ||
 		r.Group.Steps["build-start"].Proof != nil {
 		t.Fatal("V retirement masked the unresolved original start")
 	}
@@ -1847,12 +1628,7 @@ func templateQuotaUnknownCapture(t *testing.T) {
 		hideCapture: true,
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"unknown-capture",
-		templateQuotaBuild("unknown-capture"),
-	)
+	o, err := s.Submit(s.ctx, p, "unknown-capture", templateQuotaBuild("unknown-capture"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1907,13 +1683,7 @@ func templateQuotaUnknownCapture(t *testing.T) {
 func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 	s, _, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "checkpoint", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	for i := range 2 {
 		ledgerExecute(
 			t,
@@ -1921,32 +1691,18 @@ func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 			p,
 			fmt.Sprintf("put-%d", i),
 			Command{Action: "template_put", Template: &Template{
-				ID: fmt.Sprintf(
-					"retained-%d",
-					i,
-				),
+				ID:         fmt.Sprintf("retained-%d", i),
 				SnapshotID: cp.SnapshotID,
 				Shape:      b.Shape,
 			}},
 		)
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"delete-checkpoint",
-		Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
-	)
+	ledgerExecute(t, s, p, "delete-checkpoint", Command{Action: "delete_checkpoint", CheckpointID: cp.ID})
 	ledgerMoney(t, s, p.TenantID, 1, 256)
 	ledgerLimit(t, s, p, 2, 447)
 	before, _ := s.store.sandboxes(s.ctx)
-	_, err := s.Submit(
-		s.ctx,
-		p,
-		"new-capture",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	)
+	_, err := s.Submit(s.ctx, p, "new-capture", Command{Action: "checkpoint", SandboxID: b.ID})
 	if !isCode(err, ErrExhausted) {
 		t.Fatalf("retained template SID must still consume 192 MiB: %v", err)
 	}
@@ -1960,55 +1716,25 @@ func TestTemplateQuotaCheckpointReferenceHandoff(t *testing.T) {
 		Shape:      b.Shape,
 	}
 	bad.Shape.VCPUs++
-	if _, err = s.Submit(
-		s.ctx,
-		p,
-		"shape-mismatch",
-		Command{Action: "template_put", Template: &bad},
-	); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if _, err = s.Submit(s.ctx, p, "shape-mismatch", Command{Action: "template_put", Template: &bad}); !isCode(err, ErrConflict) {
 		t.Fatal("same cost accepted a different full shape", err)
 	}
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"release-template-source",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	ledgerExecute(t, s, p, "release-template-source", Command{Action: "release", SandboxID: b.ID})
 	ledgerMoney(t, s, p.TenantID, 0, 192)
 	s = ledgerRestart(t, s)
 	ledgerMoney(t, s, p.TenantID, 0, 192)
 	var holders int
 	if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id LIKE 'template:%'`, cp.SnapshotID).
-		Scan(&holders); err != nil ||
-		holders != 2 {
-		t.Fatal(
-			"shared template holders did not survive source deletion/restart",
-			err,
-		)
+		Scan(&holders); err != nil || holders != 2 {
+		t.Fatal("shared template holders did not survive source deletion/restart", err)
 	}
 }
 
 func templateQuotaPublicationFault(t *testing.T, fault string) {
 	s, _, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "publication-source", nil).Sandbox
-	old := ledgerExecute(
-		t,
-		s,
-		p,
-		"publication-old-cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
-	newCP := ledgerExecute(
-		t,
-		s,
-		p,
-		"publication-new-cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	old := ledgerExecute(t, s, p, "publication-old-cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
+	newCP := ledgerExecute(t, s, p, "publication-new-cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	command := Command{
 		Action: "template_put",
 		Template: &Template{
@@ -2181,10 +1907,7 @@ func templateQuotaSchema(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = st.db.Exec(
-				`UPDATE version SET version=?; DROP TABLE quota_resources`,
-				version,
-			); err != nil {
+			if _, err = st.db.Exec(`UPDATE version SET version=?; DROP TABLE quota_resources`, version); err != nil {
 				t.Fatal(err)
 			}
 			if err = st.close(); err != nil {
@@ -2211,8 +1934,7 @@ func templateQuotaSchema(t *testing.T) {
 			}
 			defer db.Close()
 			var actual, tables int
-			if err = db.QueryRow(`SELECT version FROM version`).
-				Scan(&actual); err != nil {
+			if err = db.QueryRow(`SELECT version FROM version`).Scan(&actual); err != nil {
 				t.Fatal(err)
 			}
 			if err = db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='quota_resources'`).
@@ -2227,10 +1949,7 @@ func templateQuotaSchema(t *testing.T) {
 }
 
 func TestTemplateQuotaReplacementAndRestart(t *testing.T) {
-	t.Run(
-		"old-warm-and-two-snapshot-fees",
-		TestQuotaLedgerWarmBackingKeepsSharedCharge,
-	)
+	t.Run("old-warm-and-two-snapshot-fees", TestQuotaLedgerWarmBackingKeepsSharedCharge)
 	for _, fault := range []string{"abort", "ignore", "commit"} {
 		t.Run(
 			"publication-"+fault,
@@ -2239,13 +1958,7 @@ func TestTemplateQuotaReplacementAndRestart(t *testing.T) {
 	}
 	s, _, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	c := Command{
 		Action: "template_put",
 		Template: &Template{
@@ -2294,15 +2007,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 		SnapshotID: cp.SnapshotID,
 		Shape:      b.Shape,
 	}
-	if _, err = s.Submit(
-		s.ctx,
-		bob,
-		"deny-owned-sid",
-		Command{Action: "template_put", Template: &owned},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err = s.Submit(s.ctx, bob, "deny-owned-sid", Command{Action: "template_put", Template: &owned}); !isCode(err, ErrNotFound) {
 		t.Fatal("root transferred Alice snapshot ownership", err)
 	}
 	if _, err = s.Submit(
@@ -2310,10 +2015,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 		Principal{TenantID: "bob"},
 		"ordinary-owned-sid",
 		Command{Action: "template_put", Template: &owned},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatal("published state authorized foreign snapshot", err)
 	}
 	created, err := api.Wait(
@@ -2362,13 +2064,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 		SnapshotID: captured.SnapshotID,
 		Shape:      b.Shape,
 	}
-	result := ledgerExecute(
-		t,
-		s,
-		bob,
-		"explicit-bob-import",
-		Command{Action: "template_put", Template: &external},
-	)
+	result := ledgerExecute(t, s, bob, "explicit-bob-import", Command{Action: "template_put", Template: &external})
 	if result.Template.TenantID != "bob" {
 		t.Fatal("payload tenant replaced selected resource owner")
 	}
@@ -2391,8 +2087,7 @@ func templateQuotaSelectedOwner(t *testing.T) {
 func templateQuotaBackupPoint(t *testing.T, point string) {
 	var s *Service
 	var f *recoveryTestEngine
-	if point == "selected" || point == "rejected" ||
-		point == "fallback-reserved" {
+	if point == "selected" || point == "rejected" || point == "fallback-reserved" {
 		service, engine, p, template := warmFallbackFixture(t, true)
 		s = service
 		switch point {
@@ -2400,12 +2095,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 			s.mu.Lock()
 			s.closing = true
 			s.mu.Unlock()
-			_, err := s.Submit(
-				s.ctx,
-				p,
-				"backup-selected",
-				Command{Action: "claim", TemplateID: template.ID},
-			)
+			_, err := s.Submit(s.ctx, p, "backup-selected", Command{Action: "claim", TemplateID: template.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2448,10 +2138,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 				p,
 				"backup-rejected",
 				Command{Action: "claim", TemplateID: template.ID},
-			); !isCode(
-				err,
-				ErrUnknown,
-			) {
+			); !isCode(err, ErrUnknown) {
 				t.Fatal("rejected selection unknown delete missing", err)
 			}
 			engine.mu.Lock()
@@ -2471,12 +2158,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 				gate:     make(chan struct{}),
 			}
 			s.opts.Engine = e
-			if _, err := s.Submit(
-				s.ctx,
-				p,
-				"backup-pending",
-				templateQuotaBuild("backup-pending"),
-			); err != nil {
+			if _, err := s.Submit(s.ctx, p, "backup-pending", templateQuotaBuild("backup-pending")); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -2491,25 +2173,11 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 				hideCapture: true,
 			}
 			s.opts.Engine = e
-			if _, err := s.Execute(
-				s.ctx,
-				p,
-				"backup-capture",
-				templateQuotaBuild("backup-capture"),
-			); !isCode(
-				err,
-				ErrUnknown,
-			) {
+			if _, err := s.Execute(s.ctx, p, "backup-capture", templateQuotaBuild("backup-capture")); !isCode(err, ErrUnknown) {
 				t.Fatal("unknown backup capture missing", err)
 			}
 		default:
-			built := ledgerExecute(
-				t,
-				s,
-				p,
-				"backup-build",
-				templateQuotaBuild("backup-warm"),
-			)
+			built := ledgerExecute(t, s, p, "backup-build", templateQuotaBuild("backup-warm"))
 			template := templateQuotaTarget(t, s, p, *built.Template, 1)
 			s.pools()
 			s.wg.Wait()
@@ -2534,8 +2202,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if wrapped, ok := opts.Engine.(*templateQuotaEngine); ok &&
-		wrapped.gate != nil {
+	if wrapped, ok := opts.Engine.(*templateQuotaEngine); ok && wrapped.gate != nil {
 		wrapped.mu.Lock()
 		wrapped.first = false
 		wrapped.entered = make(chan struct{})
@@ -2558,9 +2225,7 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 	view := &Service{store: st, ctx: context.Background()}
 	if !bytes.Equal(before, templateQuotaWithoutOperations(t, view)) {
 		_ = st.close()
-		t.Fatal(
-			"backup changed private group, cost, key, proof, holder or destination",
-		)
+		t.Fatal("backup changed private group, cost, key, proof, holder or destination")
 	}
 	if err = st.close(); err != nil {
 		t.Fatal(err)
@@ -2580,23 +2245,14 @@ func templateQuotaBackupPoint(t *testing.T, point string) {
 		Scan(&slots, &storage, &pending); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf(
-		"backup point=%s slots=%d storage=%d pending=%d",
-		point,
-		slots,
-		storage,
-		pending,
-	)
-	if point == "pending-build" &&
-		(slots != 1 || storage != 256 || pending != 2) {
+	t.Logf("backup point=%s slots=%d storage=%d pending=%d", point, slots, storage, pending)
+	if point == "pending-build" && (slots != 1 || storage != 256 || pending != 2) {
 		t.Fatal("unknown create responsibility was refunded")
 	}
-	if point == "fallback-reserved" &&
-		(slots != 1 || storage != 256 || pending != 1) {
+	if point == "fallback-reserved" && (slots != 1 || storage != 256 || pending != 1) {
 		t.Fatal("unknown replacement reservation did not survive Ack")
 	}
-	if point == "unknown-capture" &&
-		(slots != 1 || storage != 256 || pending != 1) {
+	if point == "unknown-capture" && (slots != 1 || storage != 256 || pending != 1) {
 		t.Fatal("unknown SID responsibility did not survive Ack")
 	}
 }
@@ -2671,11 +2327,7 @@ func TestTemplateQuotaBackupAndAuthorization(t *testing.T) {
 						step.Proof.Request.VMID = "foreign"
 						r.Group.Steps["build-start"] = step
 					}
-					_, err = s.store.db.Exec(
-						`UPDATE resource_recovery SET body=? WHERE id=?`,
-						encode(r),
-						r.ID,
-					)
+					_, err = s.store.db.Exec(`UPDATE resource_recovery SET body=? WHERE id=?`, encode(r), r.ID)
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -2709,13 +2361,7 @@ func TestTemplateQuotaBackupAndAuthorization(t *testing.T) {
 	t.Run("old-schema-before-ddl", templateQuotaSchema)
 	s, _, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	_, err := s.Submit(
 		s.ctx,
 		Principal{TenantID: "bob"},

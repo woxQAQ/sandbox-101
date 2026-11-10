@@ -39,11 +39,7 @@ func (b *gcTestBackend) Prepare(_ context.Context, r Resource) error {
 	return nil
 }
 
-func openGCTest(
-	t *testing.T,
-	fault func(string) error,
-	intervals ...time.Duration,
-) (*Engine, *gcTestBackend) {
+func openGCTest(t *testing.T, fault func(string) error, intervals ...time.Duration) (*Engine, *gcTestBackend) {
 	t.Helper()
 	b := &gcTestBackend{testBackend: newTestBackend()}
 	dir := t.TempDir()
@@ -92,10 +88,7 @@ func openGCTest(
 			t.Fatal(err)
 		}
 	}
-	if err = writeJSON(
-		filepath.Join(imageDir, "image.json"),
-		b.image,
-	); err != nil {
+	if err = writeJSON(filepath.Join(imageDir, "image.json"), b.image); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = e.db.Exec(
@@ -127,24 +120,13 @@ func gcPass(t *testing.T, e *Engine, opts GCOptions) GCReport {
 
 func gcSource(t *testing.T, e *Engine) (api.Operation, api.Operation) {
 	t.Helper()
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	s := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-	)
+	s := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID})
 	return vm, s
 }
 
-func gcStoppedRestore(
-	t *testing.T,
-	e *Engine,
-) (api.Operation, api.Operation, string) {
+func gcStoppedRestore(t *testing.T, e *Engine) (api.Operation, api.Operation, string) {
 	t.Helper()
 	vm, s := gcSource(t, e)
 	v, _ := e.loadVM(context.Background(), vm.VMID)
@@ -196,9 +178,7 @@ func TestGCDryRunPreservesMissingVersionOwnership(t *testing.T) {
 	lock := e.vmLock(vm.VMID)
 	lock.Lock()
 	lock.Unlock() //nolint:staticcheck // Wait for the operation worker before removing its resource directory.
-	if err := os.RemoveAll(
-		filepath.Dir(previous.Resource.RestoreDir),
-	); err != nil {
+	if err := os.RemoveAll(filepath.Dir(previous.Resource.RestoreDir)); err != nil {
 		t.Fatal(err)
 	}
 	counts := func() [3]int64 {
@@ -213,11 +193,7 @@ func TestGCDryRunPreservesMissingVersionOwnership(t *testing.T) {
 	before := counts()
 	gcPass(t, e, GCOptions{DryRun: true})
 	if after := counts(); after != before {
-		t.Fatalf(
-			"dry run changed backing/reservations/epoch: before=%v after=%v",
-			before,
-			after,
-		)
+		t.Fatalf("dry run changed backing/reservations/epoch: before=%v after=%v", before, after)
 	}
 }
 
@@ -232,9 +208,7 @@ func TestGCReclaimsRetiredVersionsBackingAndReservations(t *testing.T) {
 	oldVersion := filepath.Dir(before.Resource.RestoreDir)
 	var firstRestore opRecord
 	var b []byte
-	if err := e.db.QueryRow("SELECT body FROM operations WHERE key='restore'").
-		Scan(&b); err != nil ||
-		gcDecode(b, &firstRestore) != nil {
+	if err := e.db.QueryRow("SELECT body FROM operations WHERE key='restore'").Scan(&b); err != nil || gcDecode(b, &firstRestore) != nil {
 		t.Fatal("restore journal unavailable", err)
 	}
 	wait(
@@ -258,30 +232,21 @@ func TestGCReclaimsRetiredVersionsBackingAndReservations(t *testing.T) {
 	gcExists(t, oldVersion, false)
 	current, _ := e.loadVM(context.Background(), vm.VMID)
 	gcExists(t, current.Resource.Disk, true)
-	gcExists(
-		t,
-		filepath.Join(current.Resource.RestoreDir, "memory-ranges"),
-		true,
-	)
+	gcExists(t, filepath.Join(current.Resource.RestoreDir, "memory-ranges"), true)
 	var n int
 	if err := e.db.QueryRow("SELECT COUNT(*) FROM backing WHERE path=?", filepath.Join(before.Resource.RestoreDir, "memory-ranges")).
-		Scan(&n); err != nil ||
-		n != 0 {
+		Scan(&n); err != nil || n != 0 {
 		t.Fatalf("retired backing row retained: %d %v", n, err)
 	}
 	if err := e.db.QueryRow("SELECT COUNT(*) FROM reservations WHERE owner=?", vm.VMID+":"+firstRestore.Operation.ID).
-		Scan(&n); err != nil ||
-		n != 0 {
+		Scan(&n); err != nil || n != 0 {
 		t.Fatalf("retired reservation retained: %d %v", n, err)
 	}
 	r = gcPass(t, e, GCOptions{})
 	if len(r.Removed) != 0 {
 		t.Fatalf("repeated pass changed resources: %+v", r)
 	}
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "create", Action: "create", Config: config()})
 	if err != nil || op.ID != vm.ID || op.Status != "succeeded" {
 		t.Fatalf("idempotency record changed: %+v %v", op, err)
 	}
@@ -290,11 +255,7 @@ func TestGCReclaimsRetiredVersionsBackingAndReservations(t *testing.T) {
 func TestGCSourceSnapshotDeletionPreservesRunningCloneBacking(t *testing.T) {
 	e, _ := openGCTest(t, nil)
 	vm, s := gcSource(t, e)
-	child := wait(
-		t,
-		e,
-		api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID},
-	)
+	child := wait(t, e, api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID})
 	v, _ := e.loadVM(context.Background(), child.VMID)
 	backing := filepath.Join(v.Resource.RestoreDir, "memory-ranges")
 	f, err := os.Open(backing)
@@ -302,22 +263,12 @@ func TestGCSourceSnapshotDeletionPreservesRunningCloneBacking(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	m, err := unix.Mmap(
-		int(f.Fd()),
-		0,
-		len("ram-generation-1"),
-		unix.PROT_READ,
-		unix.MAP_PRIVATE,
-	)
+	m, err := unix.Mmap(int(f.Fd()), 0, len("ram-generation-1"), unix.PROT_READ, unix.MAP_PRIVATE)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unix.Munmap(m)
-	wait(
-		t,
-		e,
-		api.Request{Key: "delete-source", Action: "delete", VMID: vm.VMID},
-	)
+	wait(t, e, api.Request{Key: "delete-source", Action: "delete", VMID: vm.VMID})
 	wait(
 		t,
 		e,
@@ -375,24 +326,16 @@ func TestGCDefersPendingOperationLeaseAndSnapshotCapture(t *testing.T) {
 		runtime.Gosched()
 	}
 	var leases int
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE operation=?", op.ID).
-		Scan(&leases); err != nil ||
-		leases != 1 {
+	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE operation=?", op.ID).Scan(&leases); err != nil || leases != 1 {
 		t.Fatalf("lease removed: %d %v", leases, err)
 	}
 	sr, _ := e.loadSnapshot(context.Background(), s.SnapshotID)
 	gcExists(t, filepath.Join(sr.Dir, "ch/memory-ranges"), true)
 	// A missing root row is corruption, never evidence that the reader expired.
-	if _, err = e.db.Exec(
-		"DELETE FROM leases WHERE operation=?",
-		op.ID,
-	); err != nil {
+	if _, err = e.db.Exec("DELETE FROM leases WHERE operation=?", op.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil {
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); err == nil {
 		t.Fatal("missing lease root allowed sweep")
 	}
 }
@@ -406,56 +349,28 @@ func TestGCFailsClosedForCorruptOrUnknownRoots(t *testing.T) {
 			var err error
 			switch damage {
 			case "vm-json":
-				_, err = e.db.Exec(
-					"UPDATE vms SET body='{}' WHERE id=?",
-					vm.VMID,
-				)
+				_, err = e.db.Exec("UPDATE vms SET body='{}' WHERE id=?", vm.VMID)
 			case "missing-disk":
 				err = os.Remove(v.Resource.Disk)
 			case "snapshot-json":
-				_, err = e.db.Exec(
-					"UPDATE snapshots SET body='{}' WHERE id=?",
-					s.SnapshotID,
-				)
+				_, err = e.db.Exec("UPDATE snapshots SET body='{}' WHERE id=?", s.SnapshotID)
 			case "missing-image":
-				_, err = e.db.Exec(
-					"DELETE FROM meta WHERE key=?",
-					"image:"+v.VM.Config.Image,
-				)
+				_, err = e.db.Exec("DELETE FROM meta WHERE key=?", "image:"+v.VM.Config.Image)
 				if err == nil {
 					err = os.RemoveAll(v.Resource.ImageDir)
 				}
 			case "unknown-meta":
-				_, err = e.db.Exec(
-					"INSERT INTO meta VALUES('future-resource','{}')",
-				)
+				_, err = e.db.Exec("INSERT INTO meta VALUES('future-resource','{}')")
 			case "unknown-vm":
-				err = os.Mkdir(
-					filepath.Join(e.opts.StateDir, "vms", "unknown"),
-					0o700,
-				)
+				err = os.Mkdir(filepath.Join(e.opts.StateDir, "vms", "unknown"), 0o700)
 			case "unknown-version":
-				err = os.Mkdir(
-					filepath.Join(v.Resource.Dir, "versions", "unknown"),
-					0o700,
-				)
+				err = os.Mkdir(filepath.Join(v.Resource.Dir, "versions", "unknown"), 0o700)
 			case "symlink-version":
-				err = os.Symlink(
-					t.TempDir(),
-					filepath.Join(v.Resource.Dir, "versions", "unknown"),
-				)
+				err = os.Symlink(t.TempDir(), filepath.Join(v.Resource.Dir, "versions", "unknown"))
 			case "recovery":
-				err = os.WriteFile(
-					filepath.Join(e.opts.StateDir, "RECOVERY_REQUIRED"),
-					[]byte("{}"),
-					0o600,
-				)
+				err = os.WriteFile(filepath.Join(e.opts.StateDir, "RECOVERY_REQUIRED"), []byte("{}"), 0o600)
 			case "reviewed-recovery":
-				err = os.WriteFile(
-					filepath.Join(e.opts.StateDir, "RECOVERY_REVIEWED.json"),
-					[]byte("{}"),
-					0o600,
-				)
+				err = os.WriteFile(filepath.Join(e.opts.StateDir, "RECOVERY_REVIEWED.json"), []byte("{}"), 0o600)
 			case "head":
 				err = os.Remove(filepath.Join(e.opts.StateDir, "HEAD.json"))
 			case "unknown-backing":
@@ -468,18 +383,13 @@ func TestGCFailsClosedForCorruptOrUnknownRoots(t *testing.T) {
 			case "unknown-table":
 				_, err = e.db.Exec("CREATE TABLE future_resources(path TEXT)")
 			case "unknown-reservation":
-				_, err = e.db.Exec(
-					"INSERT INTO reservations VALUES('unknown',1,0,0)",
-				)
+				_, err = e.db.Exec("INSERT INTO reservations VALUES('unknown',1,0,0)")
 			case "incomplete-import":
 				digest := "sha256:" + strings.Repeat("b", 64)
 				path := filepath.Join(e.opts.StateDir, "imports", digest[7:])
 				err = os.Mkdir(path, 0o700)
 				if err == nil {
-					err = writeJSON(
-						filepath.Join(path, "intent.json"),
-						ImportOptions{Digest: digest},
-					)
+					err = writeJSON(filepath.Join(path, "intent.json"), ImportOptions{Digest: digest})
 				}
 			case "instance":
 				backend.mu.Lock()
@@ -505,36 +415,20 @@ func TestGCCaptureBoundaryIdentityAndDryRun(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		t.Run(fmt.Sprint(replace), func(t *testing.T) {
 			e, b := openGCTest(t, nil)
-			vm := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
-			wait(
-				t,
-				e,
-				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
-			)
+			vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+			wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
 			v, _ := e.loadVM(context.Background(), vm.VMID)
-			if err := os.Remove(
-				filepath.Join(v.Resource.ImageDir, "image.json"),
-			); err != nil {
+			if err := os.Remove(filepath.Join(v.Resource.ImageDir, "image.json")); err != nil {
 				t.Fatal(err)
 			}
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
-			)
+			op, err := e.Submit(context.Background(), api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
 				t.Fatal(final)
 			}
-			if err = writeJSON(
-				filepath.Join(v.Resource.ImageDir, "image.json"),
-				b.image,
-			); err != nil {
+			if err = writeJSON(filepath.Join(v.Resource.ImageDir, "image.json"), b.image); err != nil {
 				t.Fatal(err)
 			}
 			wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
@@ -556,8 +450,7 @@ func TestGCCaptureBoundaryIdentityAndDryRun(t *testing.T) {
 			}
 			gcPass(t, e, GCOptions{DryRun: true})
 			after, err := os.Stat(path)
-			if err != nil || gcNode(before) != gcNode(after) ||
-				!before.ModTime().Equal(after.ModTime()) {
+			if err != nil || gcNode(before) != gcNode(after) || !before.ModTime().Equal(after.ModTime()) {
 				t.Fatalf("dry run changed capture: %v", err)
 			}
 			r := gcPass(t, e, GCOptions{})
@@ -571,46 +464,30 @@ func TestGCCaptureBoundaryIdentityAndDryRun(t *testing.T) {
 
 func TestGCDeletesOwnedFailedCaptureButKeepsUnknownArtifact(t *testing.T) {
 	e, backend := openGCTest(t, nil)
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
 	backend.mu.Lock()
 	backend.states[""] = Observation{}
 	backend.mu.Unlock()
 	// Failing image metadata after capture leaves a terminal, resumed capture.
 	v, _ := e.loadVM(context.Background(), vm.VMID)
-	if err := os.Remove(
-		filepath.Join(v.Resource.ImageDir, "image.json"),
-	); err != nil {
+	if err := os.Remove(filepath.Join(v.Resource.ImageDir, "image.json")); err != nil {
 		t.Fatal(err)
 	}
-	o, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "failed-snapshot", Action: "snapshot", VMID: vm.VMID},
-	)
+	o, err := e.Submit(context.Background(), api.Request{Key: "failed-snapshot", Action: "snapshot", VMID: vm.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if op := awaitStatus(t, e, o.ID); op.Status != "failed" {
 		t.Fatal("snapshot did not fail", op)
 	}
-	if err = writeJSON(
-		filepath.Join(v.Resource.ImageDir, "image.json"),
-		backend.image,
-	); err != nil {
+	if err = writeJSON(filepath.Join(v.Resource.ImageDir, "image.json"), backend.image); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
 	capture := filepath.Join(v.Resource.Dir, "capture", o.ID)
 	unknown := filepath.Join(capture, "unknown")
-	if err = os.WriteFile(
-		unknown,
-		[]byte("operator evidence"),
-		0o600,
-	); err != nil {
+	if err = os.WriteFile(unknown, []byte("operator evidence"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := gcPass(t, e, GCOptions{})
@@ -655,10 +532,7 @@ func TestGCPreservesOpenAndMappedRetiredFiles(t *testing.T) {
 func TestGCAndImportGuardsDrainBeforeClose(t *testing.T) {
 	e, _ := openGCTest(t, nil)
 	e.artifacts.Lock()
-	if _, err := e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil {
+	if _, err := e.CollectGarbage(context.Background(), GCOptions{}); err == nil {
 		t.Fatal("collector bypassed import guard")
 	}
 	imported := make(chan error, 1)
@@ -697,18 +571,12 @@ func TestGCConcurrentSnapshotCloneDelete(t *testing.T) {
 	vm, s := gcSource(t, e)
 	gate := make(chan struct{})
 	backend.captureGate = gate
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "snapshot-blocked", Action: "snapshot", VMID: vm.VMID},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "snapshot-blocked", Action: "snapshot", VMID: vm.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	awaitStep(t, e, op.ID, "paused")
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil {
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); err == nil {
 		t.Fatal("GC crossed an active capture lifecycle lock")
 	}
 	close(gate)
@@ -721,10 +589,7 @@ func TestGCConcurrentSnapshotCloneDelete(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			child, err := api.Wait(
 				ctx,
@@ -769,12 +634,7 @@ func TestGCConcurrentSnapshotCloneDelete(t *testing.T) {
 
 func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	e, layout, layers, published := importFixture(t)
-	orphan := putOCILayer(
-		t,
-		layout,
-		[]tarEntry{fileEntry("orphan", "data")},
-		false,
-	)
+	orphan := putOCILayer(t, layout, []tarEntry{fileEntry("orphan", "data")}, false)
 	file, err := blob(layout, orphan.descriptor.Digest.String())
 	if err != nil {
 		t.Fatal(err)
@@ -793,16 +653,9 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	}
 	orphanPath := filepath.Join(
 		e.opts.StateDir,
-		filepath.Dir(
-			layerRelativePath(published.Builder, orphan.diff.String()),
-		),
+		filepath.Dir(layerRelativePath(published.Builder, orphan.diff.String())),
 	)
-	unknown := filepath.Join(
-		e.opts.StateDir,
-		"layer-cache",
-		published.Builder[7:],
-		".pending-unknown",
-	)
+	unknown := filepath.Join(e.opts.StateDir, "layer-cache", published.Builder[7:], ".pending-unknown")
 	if err = os.Mkdir(unknown, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -811,11 +664,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	r := gcPass(t, e, GCOptions{})
 	gcExists(t, orphanPath, false)
 	gcExists(t, unknown, true)
-	gcExists(
-		t,
-		filepath.Join(e.opts.StateDir, "imports", published.Digest[7:]),
-		false,
-	)
+	gcExists(t, filepath.Join(e.opts.StateDir, "imports", published.Digest[7:]), false)
 	if len(r.Retained) == 0 {
 		t.Fatal("unknown stage not reported")
 	}
@@ -863,10 +712,7 @@ func TestGCBackgroundAndCancellation(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf(
-				"background collection did not progress: %+v",
-				e.LastGCReport(),
-			)
+			t.Fatalf("background collection did not progress: %+v", e.LastGCReport())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -881,28 +727,16 @@ func TestGCBackgroundAndCancellation(t *testing.T) {
 
 func TestGCUnknownCacheOwnershipIsNeverDeletedByAge(t *testing.T) {
 	e, _ := openGCTest(t, nil)
-	parent := filepath.Join(
-		e.opts.StateDir,
-		"layer-cache",
-		strings.Repeat("b", 64),
-	)
+	parent := filepath.Join(e.opts.StateDir, "layer-cache", strings.Repeat("b", 64))
 	for _, name := range []string{strings.Repeat("c", 64), ".pending-unknown"} {
 		path := filepath.Join(parent, name)
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(
-			filepath.Join(path, "layer.erofs"),
-			[]byte("unproven"),
-			0o444,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(path, "layer.erofs"), []byte("unproven"), 0o444); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chtimes(
-			path,
-			time.Unix(0, 0),
-			time.Unix(0, 0),
-		); err != nil {
+		if err := os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -910,11 +744,7 @@ func TestGCUnknownCacheOwnershipIsNeverDeletedByAge(t *testing.T) {
 	if len(r.Removed) != 0 || len(r.Retained) != 2 {
 		t.Fatalf("unknown old cache was not retained: %+v", r)
 	}
-	gcExists(
-		t,
-		filepath.Join(parent, strings.Repeat("c", 64), "layer.erofs"),
-		true,
-	)
+	gcExists(t, filepath.Join(parent, strings.Repeat("c", 64), "layer.erofs"), true)
 }
 
 func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
@@ -927,20 +757,12 @@ func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
 	})
 	_, _, old := gcStoppedRestore(t, e)
 	interrupt = true
-	if _, err := e.CollectGarbage(
-		context.Background(),
-		GCOptions{MaxArtifacts: 1},
-	); !errors.Is(
-		err,
-		ErrInterrupted,
-	) {
+	if _, err := e.CollectGarbage(context.Background(), GCOptions{MaxArtifacts: 1}); !errors.Is(err, ErrInterrupted) {
 		t.Fatal("missing interruption", err)
 	}
 	gcExists(t, old, true)
 	var n int
-	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").
-		Scan(&n); err != nil ||
-		n != 1 {
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").Scan(&n); err != nil || n != 1 {
 		t.Fatal("missing durable deletion intent", n, err)
 	}
 	// Simulate the unlink succeeding just before daemon death; retry must finish
@@ -953,9 +775,7 @@ func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
 	if len(r.Removed) != 1 || r.Removed[0] != old {
 		t.Fatalf("deletion retry failed: %+v", r)
 	}
-	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").
-		Scan(&n); err != nil ||
-		n != 0 {
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").Scan(&n); err != nil || n != 0 {
 		t.Fatal("deletion journal retained", n, err)
 	}
 	// Never treat an inode replacement at an owned path as the original object.
@@ -963,31 +783,20 @@ func TestGCBoundedBatchAndDurableDeletionRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	interrupt = true
-	if _, err := e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); !errors.Is(
-		err,
-		ErrInterrupted,
-	) {
+	if _, err := e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}
 	moved := filepath.Join(t.TempDir(), "old-inode")
 	if err := os.Rename(old, moved); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(
-		old,
-		[]byte("unknown replacement"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(old, []byte("unknown replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	interrupt = false
 	r = gcPass(t, e, GCOptions{})
 	gcExists(t, old, true)
-	if len(r.Retained) == 0 ||
-		!strings.Contains(r.Retained[0].Reason, "inode") {
+	if len(r.Retained) == 0 || !strings.Contains(r.Retained[0].Reason, "inode") {
 		t.Fatalf("replacement not diagnosed: %+v", r)
 	}
 }
@@ -1017,10 +826,7 @@ func TestGCResolvesFailedRestoreDeleteRetry(t *testing.T) {
 	lock.Lock()
 	lock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
 	b.mu.Lock()
-	b.inspectError = api.Fail(
-		api.ManualRecovery,
-		"candidate ownership temporarily uncertain",
-	)
+	b.inspectError = api.Fail(api.ManualRecovery, "candidate ownership temporarily uncertain")
 	b.mu.Unlock()
 	request := api.Request{
 		Key:    "delete-uncertain",
@@ -1032,18 +838,13 @@ func TestGCResolvesFailedRestoreDeleteRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleteFailed := awaitStatus(t, e, deletion.ID)
-	if deleteFailed.Status != "failed" || deleteFailed.Error == nil ||
-		deleteFailed.Error.Code != api.ManualRecovery {
+	if deleteFailed.Status != "failed" || deleteFailed.Error == nil || deleteFailed.Error.Code != api.ManualRecovery {
 		t.Fatalf("unexpected failed delete: %+v", deleteFailed)
 	}
 	deleteOriginal := encode(deleteFailed)
 	lock.Lock()
 	lock.Unlock() //nolint:staticcheck // Wait for the operation worker to release the VM lock.
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil ||
-		!strings.Contains(err.Error(), deletion.ID) {
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); err == nil || !strings.Contains(err.Error(), deletion.ID) {
 		t.Fatalf("unresolved failed delete did not fence GC: %v", err)
 	}
 	b.mu.Lock()
@@ -1099,54 +900,27 @@ func TestGCResolvesFailedRestoreDeleteRetry(t *testing.T) {
 	}
 	mismatched := firstDelete
 	mismatched.Journal.BlockedRestoreID = otherClone.ID
-	if _, err = e.db.Exec(
-		"UPDATE operations SET body=? WHERE id=?",
-		encode(mismatched),
-		deletion.ID,
-	); err != nil {
+	if _, err = e.db.Exec("UPDATE operations SET body=? WHERE id=?", encode(mismatched), deletion.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil ||
-		!strings.Contains(err.Error(), deletion.ID) {
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); err == nil || !strings.Contains(err.Error(), deletion.ID) {
 		t.Fatalf("unrelated VM cleanup bypassed GC fence: %v", err)
 	}
-	if _, err = e.db.Exec(
-		"UPDATE operations SET body=? WHERE id=?",
-		encode(firstDelete),
-		deletion.ID,
-	); err != nil {
+	if _, err = e.db.Exec("UPDATE operations SET body=? WHERE id=?", encode(firstDelete), deletion.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	// An unrelated ManualRecovery failure remains a global GC fence.
 	armed.Store(false)
-	other := wait(
-		t,
-		e,
-		api.Request{Key: "other-create", Action: "create", Config: config()},
-	)
+	other := wait(t, e, api.Request{Key: "other-create", Action: "create", Config: config()})
 	b.mu.Lock()
-	b.inspectError = api.Fail(
-		api.ManualRecovery,
-		"unrelated instance identity uncertain",
-	)
+	b.inspectError = api.Fail(api.ManualRecovery, "unrelated instance identity uncertain")
 	b.mu.Unlock()
-	start, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "other-start", Action: "start", VMID: other.VMID},
-	)
+	start, err := e.Submit(context.Background(), api.Request{Key: "other-start", Action: "start", VMID: other.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := awaitStatus(
-		t,
-		e,
-		start.ID,
-	); got.Status != "failed" || got.Error == nil ||
-		got.Error.Code != api.ManualRecovery {
+	if got := awaitStatus(t, e, start.ID); got.Status != "failed" || got.Error == nil || got.Error.Code != api.ManualRecovery {
 		t.Fatalf("unrelated operation did not fail: %+v", got)
 	}
 	otherLock := e.vmLock(other.VMID)
@@ -1155,11 +929,7 @@ func TestGCResolvesFailedRestoreDeleteRetry(t *testing.T) {
 	b.mu.Lock()
 	b.inspectError = nil
 	b.mu.Unlock()
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); err == nil ||
-		!strings.Contains(err.Error(), start.ID) {
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); err == nil || !strings.Contains(err.Error(), start.ID) {
 		t.Fatalf("unrelated ManualRecovery bypassed GC fence: %v", err)
 	}
 }
@@ -1202,10 +972,7 @@ func TestGCRetainsBlockedRestoreMaterials(t *testing.T) {
 				report := gcPass(t, e, GCOptions{DryRun: dry})
 				for _, path := range append(report.Candidates, report.Removed...) {
 					if path == version || strings.HasPrefix(path, version+"/") {
-						t.Fatalf(
-							"blocked version became collectible: %+v",
-							report,
-						)
+						t.Fatalf("blocked version became collectible: %+v", report)
 					}
 				}
 				gcExists(t, version, true)

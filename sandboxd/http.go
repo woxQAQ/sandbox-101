@@ -36,11 +36,7 @@ func (s *Service) Handler() http.Handler {
 				return
 			}
 		}
-		writeJSON(
-			c.Writer,
-			405,
-			&Error{Code: ErrInvalid, Message: "method not allowed"},
-		)
+		writeJSON(c.Writer, 405, &Error{Code: ErrInvalid, Message: "method not allowed"})
 	})
 	router.Match(
 		[]string{http.MethodGet, http.MethodHead},
@@ -49,12 +45,7 @@ func (s *Service) Handler() http.Handler {
 			writeJSON(c.Writer, 200, map[string]string{"status": "ok"})
 		},
 	)
-	router.Match(
-		[]string{http.MethodGet, http.MethodHead},
-		"/metrics",
-		s.authenticate,
-		s.metrics,
-	)
+	router.Match([]string{http.MethodGet, http.MethodHead}, "/metrics", s.authenticate, s.metrics)
 	router.Any("/preview/*path", gin.WrapF(s.preview))
 	v1 := router.Group("/v1", s.authenticate)
 	v1.POST("/tenants", s.putTenant)
@@ -67,55 +58,30 @@ func (s *Service) Handler() http.Handler {
 		writeJSON(c.Writer, 200, map[string]bool{"draining": true})
 	})
 	v1.GET("/sandboxes", func(c *gin.Context) {
-		v, err := s.List(
-			c.Request.Context(),
-			c.MustGet("principal").(Principal),
-		)
+		v, err := s.List(c.Request.Context(), c.MustGet("principal").(Principal))
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/templates", func(c *gin.Context) {
-		v, err := s.Templates(
-			c.Request.Context(),
-			c.MustGet("principal").(Principal),
-		)
+		v, err := s.Templates(c.Request.Context(), c.MustGet("principal").(Principal))
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/checkpoints", func(c *gin.Context) {
-		v, err := s.Checkpoints(
-			c.Request.Context(),
-			c.MustGet("principal").(Principal),
-		)
+		v, err := s.Checkpoints(c.Request.Context(), c.MustGet("principal").(Principal))
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/sandboxes/:id", func(c *gin.Context) {
-		v, err := s.Get(
-			c.Request.Context(),
-			c.MustGet("principal").(Principal),
-			c.Param("id"),
-		)
+		v, err := s.Get(c.Request.Context(), c.MustGet("principal").(Principal), c.Param("id"))
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/operations/:id", func(c *gin.Context) {
-		v, err := s.Operation(
-			c.Request.Context(),
-			c.MustGet("principal").(Principal),
-			c.Param("id"),
-		)
+		v, err := s.Operation(c.Request.Context(), c.MustGet("principal").(Principal), c.Param("id"))
 		if err == nil {
-			v.Result, err = s.resultTokens(
-				c.MustGet("principal").(Principal),
-				v.Result,
-			)
+			v.Result, err = s.resultTokens(c.MustGet("principal").(Principal), v.Result)
 		}
 		respond(c.Writer, v, err)
 	})
 	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) {
-		s.relay(
-			c.Writer,
-			c.Request,
-			c.MustGet("principal").(Principal),
-			c.Param("id"),
-		)
+		s.relay(c.Writer, c.Request, c.MustGet("principal").(Principal), c.Param("id"))
 	})
 	v1.POST("/claim", func(c *gin.Context) {
 		s.mutate(c, "claim", "", "")
@@ -140,8 +106,7 @@ func (s *Service) Handler() http.Handler {
 
 func (s *Service) authenticate(c *gin.Context) {
 	p, err := s.principal(c.Request)
-	if err != nil && c.Request.Method == http.MethodGet &&
-		c.FullPath() == "/v1/operations/:id" &&
+	if err != nil && c.Request.Method == http.MethodGet && c.FullPath() == "/v1/operations/:id" &&
 		strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") {
 		p, err = s.authenticateToken(
 			c.Request.Context(),
@@ -173,12 +138,7 @@ func (s *Service) metrics(c *gin.Context) {
 	}
 	c.Header("Content-Type", "text/plain; version=0.0.4")
 	for _, state := range []string{"provisioning", "running", "pausing", "paused", "resuming", "failed", "terminated"} {
-		if _, err := fmt.Fprintf(
-			c.Writer,
-			"sandboxd_sandboxes{state=%q} %d\n",
-			state,
-			counts[state],
-		); err != nil {
+		if _, err := fmt.Fprintf(c.Writer, "sandboxd_sandboxes{state=%q} %d\n", state, counts[state]); err != nil {
 			return
 		}
 	}
@@ -258,10 +218,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 
-func (s *Service) mutate(
-	c *gin.Context,
-	action, sandboxID, checkpointID string,
-) {
+func (s *Service) mutate(c *gin.Context, action, sandboxID, checkpointID string) {
 	w, r := c.Writer, c.Request
 	p := c.MustGet("principal").(Principal)
 	var command Command
@@ -307,14 +264,8 @@ func respond(w http.ResponseWriter, v any, err error) {
 	writeJSON(w, 200, v)
 }
 
-func (s *Service) relay(
-	w http.ResponseWriter,
-	r *http.Request,
-	p Principal,
-	id string,
-) {
-	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") ||
-		!hasToken(r.Header.Get("Connection"), "upgrade") {
+func (s *Service) relay(w http.ResponseWriter, r *http.Request, p Principal, id string) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
 		writeJSON(
 			w,
 			426,
@@ -435,15 +386,10 @@ func relayBytes(a, b net.Conn) {
 	<-done
 }
 
-func (s *Service) enforceLease(
-	id string,
-	done <-chan struct{},
-	conns ...net.Conn,
-) {
+func (s *Service) enforceLease(id string, done <-chan struct{}, conns ...net.Conn) {
 	for {
 		b, err := getSandbox(s.ctx, s.store.db, id)
-		if err != nil || b.State != "running" ||
-			!time.Now().Before(b.Deadline) {
+		if err != nil || b.State != "running" || !time.Now().Before(b.Deadline) {
 			for _, c := range conns {
 				_ = c.Close()
 			}

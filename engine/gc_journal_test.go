@@ -23,36 +23,20 @@ func TestGCCaptureStagingPartialDeletionRestart(t *testing.T) {
 				}
 				return nil
 			})
-			vm := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
-			wait(
-				t,
-				e,
-				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
-			)
+			vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+			wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
 			v, _ := e.loadVM(context.Background(), vm.VMID)
-			if err := os.Remove(
-				filepath.Join(v.Resource.ImageDir, "image.json"),
-			); err != nil {
+			if err := os.Remove(filepath.Join(v.Resource.ImageDir, "image.json")); err != nil {
 				t.Fatal(err)
 			}
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
-			)
+			op, err := e.Submit(context.Background(), api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
 				t.Fatal(final)
 			}
-			if err = writeJSON(
-				filepath.Join(v.Resource.ImageDir, "image.json"),
-				b.image,
-			); err != nil {
+			if err = writeJSON(filepath.Join(v.Resource.ImageDir, "image.json"), b.image); err != nil {
 				t.Fatal(err)
 			}
 			wait(t, e, api.Request{Key: "stop", Action: "stop", VMID: vm.VMID})
@@ -61,13 +45,7 @@ func TestGCCaptureStagingPartialDeletionRestart(t *testing.T) {
 			lock.Lock()
 			interrupt = true
 			lock.Unlock()
-			if _, err = e.CollectGarbage(
-				context.Background(),
-				GCOptions{},
-			); !errors.Is(
-				err,
-				ErrInterrupted,
-			) {
+			if _, err = e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
 				t.Fatalf("missing partial deletion: %v", err)
 			}
 			path := filepath.Join(v.Resource.Dir, "capture", op.ID)
@@ -88,24 +66,12 @@ func TestGCCaptureStagingPartialDeletionRestart(t *testing.T) {
 				// Keep the original inode alive to prevent allocator reuse.
 				file := filepath.Join(path, "publication", "disk.raw")
 				if _, err = os.Stat(file); err != nil {
-					file = filepath.Join(
-						path,
-						"publication",
-						"ch",
-						"memory-ranges",
-					)
+					file = filepath.Join(path, "publication", "ch", "memory-ranges")
 				}
-				if err = os.Rename(
-					file,
-					filepath.Join(t.TempDir(), "retained"),
-				); err != nil {
+				if err = os.Rename(file, filepath.Join(t.TempDir(), "retained")); err != nil {
 					t.Fatal(err)
 				}
-				if err = os.WriteFile(
-					file,
-					[]byte("replacement"),
-					0o600,
-				); err != nil {
+				if err = os.WriteFile(file, []byte("replacement"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -136,13 +102,7 @@ func TestGCDeletionJournalRetiresAfterExplicitVMDeletion(t *testing.T) {
 	})
 	vm, _, _ := gcStoppedRestore(t, e)
 	interrupt = true
-	if _, err := e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); !errors.Is(
-		err,
-		ErrInterrupted,
-	) {
+	if _, err := e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
 		t.Fatal("missing deletion intent interruption", err)
 	}
 	interrupt = false
@@ -157,9 +117,7 @@ func TestGCDeletionJournalRetiresAfterExplicitVMDeletion(t *testing.T) {
 	)
 	gcPass(t, e, GCOptions{})
 	var n int
-	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").
-		Scan(&n); err != nil ||
-		n != 0 {
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM gc_deletions").Scan(&n); err != nil || n != 0 {
 		t.Fatal("completed explicit deletion left a GC journal", n, err)
 	}
 }
@@ -177,13 +135,7 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e.artifacts.Lock()
 	e.opts.Fault = interrupt
 	e.artifacts.Unlock()
-	if _, err := e.CollectGarbage(
-		context.Background(),
-		GCOptions{MaxArtifacts: 1},
-	); !errors.Is(
-		err,
-		ErrInterrupted,
-	) {
+	if _, err := e.CollectGarbage(context.Background(), GCOptions{MaxArtifacts: 1}); !errors.Is(err, ErrInterrupted) {
 		t.Fatal("import cleanup did not interrupt after unlink", err)
 	}
 	work := filepath.Join(e.opts.StateDir, "imports", image.Digest[7:])
@@ -217,12 +169,7 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e = reopen(e, nil)
 	gcPass(t, e, GCOptions{})
 	gcExists(t, work, false)
-	orphan := putOCILayer(
-		t,
-		layout,
-		[]tarEntry{fileEntry("orphan-restart", "data")},
-		false,
-	)
+	orphan := putOCILayer(t, layout, []tarEntry{fileEntry("orphan-restart", "data")}, false)
 	input, err := blob(layout, orphan.descriptor.Digest.String())
 	if err != nil {
 		t.Fatal(err)
@@ -240,17 +187,8 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	e = reopen(e, interrupt)
-	cache := filepath.Join(
-		e.opts.StateDir,
-		filepath.Dir(layerRelativePath(image.Builder, orphan.diff.String())),
-	)
-	if _, err = e.CollectGarbage(
-		context.Background(),
-		GCOptions{},
-	); !errors.Is(
-		err,
-		ErrInterrupted,
-	) {
+	cache := filepath.Join(e.opts.StateDir, filepath.Dir(layerRelativePath(image.Builder, orphan.diff.String())))
+	if _, err = e.CollectGarbage(context.Background(), GCOptions{}); !errors.Is(err, ErrInterrupted) {
 		t.Fatal("cache cleanup did not interrupt after unlink", err)
 	}
 	gcExists(t, filepath.Join(cache, "layer.erofs"), false)
@@ -258,10 +196,7 @@ func TestGCActualPartialImportAndCacheDeletionSurviveRestart(t *testing.T) {
 	e = reopen(e, nil)
 	gcPass(t, e, GCOptions{})
 	gcExists(t, cache, false)
-	if err = image.Verify(
-		filepath.Join(e.opts.StateDir, "images", image.Digest[7:]),
-		image.Digest,
-	); err != nil {
+	if err = image.Verify(filepath.Join(e.opts.StateDir, "images", image.Digest[7:]), image.Digest); err != nil {
 		t.Fatal("deletion replay broke the published image", err)
 	}
 }

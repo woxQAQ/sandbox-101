@@ -11,42 +11,23 @@ func TestPausedCheckpointRetainsCaptureWithoutWaking(t *testing.T) {
 	s, f, _, p := fixture(t)
 	r := claimTest(t, s, p, "claim", nil)
 	id := r.Sandbox.ID
-	paused, err := s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	)
+	paused, err := s.Execute(context.Background(), p, "pause", Command{Action: "pause", SandboxID: id})
 	if err != nil {
 		t.Fatal(err)
 	}
 	beforeClone, beforeCapture := f.count("clone"), f.count("snapshot")
-	cp, err := s.Execute(
-		context.Background(),
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: id},
-	)
+	cp, err := s.Execute(context.Background(), p, "checkpoint", Command{Action: "checkpoint", SandboxID: id})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp.Checkpoint.SnapshotID != paused.Sandbox.SnapshotID ||
-		f.count("clone") != beforeClone ||
+	if cp.Checkpoint.SnapshotID != paused.Sandbox.SnapshotID || f.count("clone") != beforeClone ||
 		f.count("snapshot") != beforeCapture {
 		t.Fatal("sleeping checkpoint woke or recaptured source")
 	}
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"release",
-		Command{Action: "release", SandboxID: id},
-	); err != nil {
+	if _, err = s.Execute(context.Background(), p, "release", Command{Action: "release", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.GetSnapshot(
-		context.Background(),
-		cp.Checkpoint.SnapshotID,
-	); err != nil {
+	if _, err = f.GetSnapshot(context.Background(), cp.Checkpoint.SnapshotID); err != nil {
 		t.Fatal("release removed checkpoint backing", err)
 	}
 	if _, err = s.Execute(
@@ -57,13 +38,7 @@ func TestPausedCheckpointRetainsCaptureWithoutWaking(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.GetSnapshot(
-		context.Background(),
-		cp.Checkpoint.SnapshotID,
-	); !isEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err = f.GetSnapshot(context.Background(), cp.Checkpoint.SnapshotID); !isEngineCode(err, api.NotFound) {
 		t.Fatal("last reference did not retire snapshot", err)
 	}
 }
@@ -72,12 +47,7 @@ func TestRollbackReplayDoesNotStopRestoredInstance(t *testing.T) {
 	s, f, _, p := fixture(t)
 	r := claimTest(t, s, p, "claim", nil)
 	id := r.Sandbox.ID
-	cp, err := s.Execute(
-		context.Background(),
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: id},
-	)
+	cp, err := s.Execute(context.Background(), p, "checkpoint", Command{Action: "checkpoint", SandboxID: id})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +78,7 @@ func TestRollbackReplayDoesNotStopRestoredInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replay.Instance != result.Sandbox.Instance || f.count("stop") != 1 ||
-		f.count("restore") != 1 {
+	if replay.Instance != result.Sandbox.Instance || f.count("stop") != 1 || f.count("restore") != 1 {
 		t.Fatal("recovery stopped or restored a second instance")
 	}
 	op, err = s.store.operation(context.Background(), op.ID)

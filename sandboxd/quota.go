@@ -26,34 +26,21 @@ type quotaRef struct{ Kind, ID string }
 // A destination needs the producer's exact responsibility type as well as its
 // identity. EXISTS keeps coexisting cleanup and active references from counting
 // the same resource twice.
-func requireQuotaResource(
-	ctx context.Context,
-	e executor,
-	r quotaResource,
-	ref quotaRef,
-) error {
+func requireQuotaResource(ctx context.Context, e executor, r quotaResource, ref quotaRef) error {
 	var count int
 	if err := e.QueryRowContext(ctx, `SELECT count(*) FROM quota_resources q WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.sandbox_slots=? AND q.storage_mib=? AND q.source_operation_id=? AND EXISTS(SELECT 1 FROM quota_refs f WHERE f.tenant_id=q.tenant_id AND f.kind=q.kind AND f.resource_key=q.resource_key AND f.holder_kind=? AND f.holder_id=?)`, r.Tenant, r.Kind, r.Key, r.Slots, r.Storage, r.Source, ref.Kind, ref.ID).
 		Scan(&count); err != nil {
 		return err
 	}
 	if count != 1 {
-		return Fail(
-			ErrManualRecovery,
-			"allocation lost its cost or typed destination reference",
-		)
+		return Fail(ErrManualRecovery, "allocation lost its cost or typed destination reference")
 	}
 	return nil
 }
 
 // Pending sandbox references move to cleanup with access revocation. Known
 // allocations already carry cleanup references until a destination is delivered.
-func groupAllocationRef(
-	ctx context.Context,
-	e executor,
-	r resourceRecovery,
-	pending bool,
-) (quotaRef, error) {
+func groupAllocationRef(ctx context.Context, e executor, r resourceRecovery, pending bool) (quotaRef, error) {
 	ref := quotaRef{Kind: "cleanup", ID: groupHolder(r)}
 	if !pending {
 		return ref, nil
@@ -80,10 +67,7 @@ func requireSQLWrite(result sql.Result, err error) error {
 		return err
 	}
 	if n != 1 {
-		return Fail(
-			ErrManualRecovery,
-			"required responsibility write did not affect one row",
-		)
+		return Fail(ErrManualRecovery, "required responsibility write did not affect one row")
 	}
 	return nil
 }
@@ -96,14 +80,8 @@ type allocationContext struct {
 	Sandbox        *Sandbox
 }
 
-func putQuotaResource(
-	ctx context.Context,
-	e executor,
-	r quotaResource,
-	ref quotaRef,
-) error {
-	if r.Tenant == "" || r.Key == "" || r.Source == "" || r.Slots < 0 ||
-		r.Storage < 0 {
+func putQuotaResource(ctx context.Context, e executor, r quotaResource, ref quotaRef) error {
+	if r.Tenant == "" || r.Key == "" || r.Source == "" || r.Slots < 0 || r.Storage < 0 {
 		return Fail(ErrManualRecovery, "incomplete quota responsibility")
 	}
 	if _, err := e.ExecContext(
@@ -124,20 +102,12 @@ func putQuotaResource(
 		return err
 	}
 	if slots != r.Slots || storage != r.Storage {
-		return Fail(
-			ErrManualRecovery,
-			"quota resource cost conflicts with its identity",
-		)
+		return Fail(ErrManualRecovery, "quota resource cost conflicts with its identity")
 	}
 	return putQuotaRef(ctx, e, r.Tenant, r.Kind, r.Key, ref)
 }
 
-func putQuotaRef(
-	ctx context.Context,
-	e executor,
-	tenant, kind, key string,
-	ref quotaRef,
-) error {
+func putQuotaRef(ctx context.Context, e executor, tenant, kind, key string, ref quotaRef) error {
 	_, err := e.ExecContext(
 		ctx,
 		`INSERT INTO quota_refs(tenant_id,kind,resource_key,holder_kind,holder_id) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING`,
@@ -159,13 +129,7 @@ func putQuotaRef(
 	return err
 }
 
-func reserveQuotaStep(
-	ctx context.Context,
-	e executor,
-	o Operation,
-	step, sandbox string,
-	storage int64,
-) error {
+func reserveQuotaStep(ctx context.Context, e executor, o Operation, step, sandbox string, storage int64) error {
 	return putQuotaResource(
 		ctx,
 		e,
@@ -180,14 +144,7 @@ func reserveQuotaStep(
 	)
 }
 
-func quotaSnapshot(
-	ctx context.Context,
-	e executor,
-	o Operation,
-	snapshot string,
-	shape api.Shape,
-	ref quotaRef,
-) error {
+func quotaSnapshot(ctx context.Context, e executor, o Operation, snapshot string, shape api.Shape, ref quotaRef) error {
 	if snapshot == "" {
 		return nil
 	}
@@ -210,12 +167,7 @@ func quotaSnapshot(
 
 // Catalog and warm holders protect an already billed snapshot identity. This
 // creates no template, build or warm admission charge; those policies are 013.
-func referenceQuotaSnapshot(
-	ctx context.Context,
-	e executor,
-	tenant, snapshot string,
-	ref quotaRef,
-) error {
+func referenceQuotaSnapshot(ctx context.Context, e executor, tenant, snapshot string, ref quotaRef) error {
 	_, err := e.ExecContext(
 		ctx,
 		`INSERT INTO quota_refs(tenant_id,kind,resource_key,holder_kind,holder_id) SELECT tenant_id,kind,resource_key,?,? FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? ON CONFLICT DO NOTHING`,
@@ -227,11 +179,7 @@ func referenceQuotaSnapshot(
 	return err
 }
 
-func protectQuotaSnapshotUsers(
-	ctx context.Context,
-	e executor,
-	tenant, snapshot string,
-) error {
+func protectQuotaSnapshotUsers(ctx context.Context, e executor, tenant, snapshot string) error {
 	if _, err := e.ExecContext(
 		ctx,
 		`INSERT INTO quota_refs(tenant_id,kind,resource_key,holder_kind,holder_id) SELECT ?, 'snapshot', ?, 'active_use', 'template:'||id FROM templates WHERE tenant=? AND json_extract(body,'$.snapshot_id')=? ON CONFLICT DO NOTHING`,
@@ -255,12 +203,7 @@ func protectQuotaSnapshotUsers(
 
 // quoteSnapshot reports only the incremental cost of a shared identity. It is
 // called inside admission's write transaction before any intent is published.
-func quoteSnapshot(
-	ctx context.Context,
-	e executor,
-	tenant, snapshot string,
-	shape api.Shape,
-) (int64, error) {
+func quoteSnapshot(ctx context.Context, e executor, tenant, snapshot string, shape api.Shape) (int64, error) {
 	if snapshot == "" {
 		return 0, nil
 	}
@@ -295,18 +238,12 @@ func quotaSlot(ctx context.Context, e executor, o Operation, b Sandbox) error {
 }
 
 // quotaAllocation supplies trusted billing inputs for a real subject.
-func (s *Service) quotaAllocation(
-	o Operation,
-	step string,
-) (allocationContext, string, bool, error) {
+func (s *Service) quotaAllocation(o Operation, step string) (allocationContext, string, bool, error) {
 	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
 		return allocationContext{}, "", true, err
 	} else if a != nil {
 		if a.ChargeTenantID != o.ChargeTenantID {
-			return allocationContext{}, "", true, Fail(
-				ErrManualRecovery,
-				"recovery charge owner mismatch",
-			)
+			return allocationContext{}, "", true, Fail(ErrManualRecovery, "recovery charge owner mismatch")
 		}
 		subject := a.Subject
 		if subject.Kind == "" {
@@ -366,10 +303,7 @@ func (s *Service) quotaAllocation(
 		return allocationContext{}, kind, true, err
 	}
 	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
-		return allocationContext{}, kind, true, Fail(
-			ErrManualRecovery,
-			"allocation has no trusted charge owner",
-		)
+		return allocationContext{}, kind, true, Fail(ErrManualRecovery, "allocation has no trusted charge owner")
 	}
 	return allocationContext{
 		Subject:        allocationSubject{Kind: "sandbox", ID: b.ID},
@@ -382,12 +316,7 @@ func (s *Service) quotaAllocation(
 
 // acceptQuotaReceipt atomically replaces an unknown allocation reservation
 // with its proven identity. Both failed and successful receipts may own bytes.
-func (s *Service) acceptQuotaReceipt(
-	o Operation,
-	step string,
-	request api.Request,
-	receipt api.Operation,
-) error {
+func (s *Service) acceptQuotaReceipt(o Operation, step string, request api.Request, receipt api.Operation) error {
 	a, err := s.quotaRecoveryAllocation(o, step)
 	if err != nil {
 		return err
@@ -406,16 +335,7 @@ func (s *Service) acceptQuotaReceipt(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err = s.acceptQuotaReceiptTx(
-		tx,
-		o,
-		step,
-		request,
-		receipt,
-		b,
-		kind,
-		a,
-	); err != nil {
+	if err = s.acceptQuotaReceiptTx(tx, o, step, request, receipt, b, kind, a); err != nil {
 		return err
 	}
 	if a != nil && recoveryTerminal(receipt.Status) && receipt.Key != "" {
@@ -484,12 +404,7 @@ func (s *Service) acceptQuotaReceiptTx(
 		Storage: storage,
 		Source:  o.ID,
 	}
-	if err = putQuotaResource(
-		s.ctx,
-		tx,
-		r,
-		quotaRef{Kind: "cleanup", ID: "step:" + stepKey(o, step)},
-	); err != nil {
+	if err = putQuotaResource(s.ctx, tx, r, quotaRef{Kind: "cleanup", ID: "step:" + stepKey(o, step)}); err != nil {
 		return err
 	}
 	if a != nil && kind == "snapshot" {
@@ -535,14 +450,7 @@ func (s *Service) acceptQuotaReceiptTx(
 			(recoveryTerminal(o.Status) && b.Sandbox.VMID != receipt.VMID) {
 			holder.Kind = "cleanup"
 		}
-		if err = putQuotaRef(
-			s.ctx,
-			tx,
-			r.Tenant,
-			kind,
-			key,
-			holder,
-		); err != nil {
+		if err = putQuotaRef(s.ctx, tx, r.Tenant, kind, key, holder); err != nil {
 			return err
 		}
 		// Engine restore hardlinks the memory backing. Retain that responsibility
@@ -587,10 +495,7 @@ func (s *Service) requireQuotaReservation(o Operation, step string) error {
 		if receipt != nil && recoveryTerminal(receipt.Status) {
 			return nil
 		}
-		return Fail(
-			ErrManualRecovery,
-			"allocation has no durable reservation or receipt",
-		)
+		return Fail(ErrManualRecovery, "allocation has no durable reservation or receipt")
 	}
 	if err != nil {
 		return err
@@ -651,12 +556,7 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 		if unresolved > 0 {
 			return nil
 		}
-		if err = deleteQuotaRows(
-			s.ctx,
-			tx,
-			`FROM quota_refs WHERE holder_id=?`,
-			"backing:"+key,
-		); err != nil {
+		if err = deleteQuotaRows(s.ctx, tx, `FROM quota_refs WHERE holder_id=?`, "backing:"+key); err != nil {
 			return err
 		}
 	}
@@ -682,15 +582,9 @@ func (s *Service) reclaimQuotaTx(tx *sql.Tx, kind, key string) error {
 
 // Reclamation requires every selected row to retire. A silent SQLite IGNORE
 // must roll back the destination transaction just like an explicit SQL error.
-func deleteQuotaRows(
-	ctx context.Context,
-	e executor,
-	selection string,
-	args ...any,
-) error {
+func deleteQuotaRows(ctx context.Context, e executor, selection string, args ...any) error {
 	var expected int64
-	if err := e.QueryRowContext(ctx, "SELECT count(*) "+selection, args...).
-		Scan(&expected); err != nil {
+	if err := e.QueryRowContext(ctx, "SELECT count(*) "+selection, args...).Scan(&expected); err != nil {
 		return err
 	}
 	result, err := e.ExecContext(ctx, "DELETE "+selection, args...)
@@ -702,10 +596,7 @@ func deleteQuotaRows(
 		return err
 	}
 	if rows != expected {
-		return Fail(
-			ErrManualRecovery,
-			"quota responsibility was not fully retired",
-		)
+		return Fail(ErrManualRecovery, "quota responsibility was not fully retired")
 	}
 	return nil
 }
@@ -761,25 +652,10 @@ func (s *Service) saveQuotaSandbox(b Sandbox) error {
 		if b.State == "terminated" {
 			ref.Kind = "cleanup"
 		}
-		if err = requireSnapshotOwner(
-			s.ctx,
-			tx,
-			b.SnapshotID,
-			b.TenantID,
-		); err != nil {
-			return Fail(
-				ErrManualRecovery,
-				"snapshot responsibility has no trusted provenance",
-			)
+		if err = requireSnapshotOwner(s.ctx, tx, b.SnapshotID, b.TenantID); err != nil {
+			return Fail(ErrManualRecovery, "snapshot responsibility has no trusted provenance")
 		}
-		if err = quotaSnapshot(
-			s.ctx,
-			tx,
-			o,
-			b.SnapshotID,
-			b.Shape,
-			ref,
-		); err != nil {
+		if err = quotaSnapshot(s.ctx, tx, o, b.SnapshotID, b.Shape, ref); err != nil {
 			return err
 		}
 	}
@@ -805,10 +681,7 @@ func (s *store) validateQuota(ctx context.Context) error {
 		return err
 	}
 	if bad != 0 {
-		return Fail(
-			ErrManualRecovery,
-			"quota ledger contains inconsistent responsibility",
-		)
+		return Fail(ErrManualRecovery, "quota ledger contains inconsistent responsibility")
 	}
 	return s.validateAllocationGroups(ctx)
 }
@@ -873,16 +746,10 @@ func (s *Service) finishQuotaOperation(o Operation) error {
 			keepDependencies = true
 			continue
 		}
-		if err = s.acceptQuotaReceipt(
-			o,
-			step.name,
-			proof.Request,
-			*proof,
-		); err != nil {
+		if err = s.acceptQuotaReceipt(o, step.name, proof.Request, *proof); err != nil {
 			return err
 		}
-		if (kind == "vm_disk" && proof.VMID == "") ||
-			(kind == "snapshot" && proof.SnapshotID == "") {
+		if (kind == "vm_disk" && proof.VMID == "") || (kind == "snapshot" && proof.SnapshotID == "") {
 			if _, err = s.store.db.ExecContext(
 				s.ctx,
 				`DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?`,
@@ -971,10 +838,7 @@ func (s *Service) admitQuotaRecovery(
 	storage int64,
 ) error {
 	if o.ChargeTenantID == "" || o.ChargeTenantID != b.TenantID {
-		return Fail(
-			ErrManualRecovery,
-			"recovery allocation has no trusted owner",
-		)
+		return Fail(ErrManualRecovery, "recovery allocation has no trusted owner")
 	}
 	request.Key = stepKey(o, step)
 	a := recoveryAllocation{
@@ -991,13 +855,9 @@ func (s *Service) admitQuotaRecovery(
 	index := len(r.Allocations)
 	for _, previous := range r.Allocations {
 		if previous.OperationID == o.ID && previous.Step == step {
-			if !bytes.Equal(encode(previous.Request), encode(request)) ||
-				previous.Shape != b.Shape ||
+			if !bytes.Equal(encode(previous.Request), encode(request)) || previous.Shape != b.Shape ||
 				previous.ChargeTenantID != o.ChargeTenantID {
-				return Fail(
-					ErrManualRecovery,
-					"recovery allocation intent changed",
-				)
+				return Fail(ErrManualRecovery, "recovery allocation intent changed")
 			}
 			return nil
 		}
@@ -1007,13 +867,7 @@ func (s *Service) admitQuotaRecovery(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err = s.quota(
-		s.ctx,
-		tx,
-		Principal{TenantID: b.TenantID},
-		0,
-		storage,
-	); err != nil {
+	if err = s.quota(s.ctx, tx, Principal{TenantID: b.TenantID}, 0, storage); err != nil {
 		return err
 	}
 	if err = reserveQuotaStep(s.ctx, tx, o, step, b.ID, storage); err != nil {
@@ -1037,12 +891,7 @@ func (s *Service) admitQuotaRecovery(
 	} else {
 		next.Allocations[index] = a
 	}
-	result, err := tx.ExecContext(
-		s.ctx,
-		"UPDATE resource_recovery SET body=? WHERE id=?",
-		encode(next),
-		r.ID,
-	)
+	result, err := tx.ExecContext(s.ctx, "UPDATE resource_recovery SET body=? WHERE id=?", encode(next), r.ID)
 	if err != nil {
 		return err
 	}
@@ -1051,10 +900,7 @@ func (s *Service) admitQuotaRecovery(
 		return err
 	}
 	if rows != 1 {
-		return Fail(
-			ErrManualRecovery,
-			"recovery allocation has no durable responsibility",
-		)
+		return Fail(ErrManualRecovery, "recovery allocation has no durable responsibility")
 	}
 	if err = tx.Commit(); err != nil {
 		return err

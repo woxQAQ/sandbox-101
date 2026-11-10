@@ -68,10 +68,7 @@ func TestInstanceConditionRejectsForeignCandidate(t *testing.T) {
 						v.Resource.Config.Shape.MemoryMiB++
 					case "unknown-identity":
 						f.b.mu.Lock()
-						f.b.inspectError = api.Fail(
-							api.ManualRecovery,
-							"candidate PID/starttime unknown",
-						)
+						f.b.inspectError = api.Fail(api.ManualRecovery, "candidate PID/starttime unknown")
 						f.b.mu.Unlock()
 					default:
 						o.Operation.Request.Action = damage[len("action-"):]
@@ -91,44 +88,27 @@ func TestInstanceConditionRejectsForeignCandidate(t *testing.T) {
 				final := awaitStatus(t, f.e, f.op.ID)
 				if final.Status != "failed" || final.Error == nil ||
 					(final.Error.Code != api.Conflict && final.Error.Code != api.ManualRecovery) {
-					t.Fatalf(
-						"foreign or unknown candidate accepted: %+v",
-						final,
-					)
+					t.Fatalf("foreign or unknown candidate accepted: %+v", final)
 				}
 				after, err := f.e.loadVM(context.Background(), f.op.VMID)
 				if err != nil || after.VM.Instance != before.VM.Instance ||
 					!reflect.DeepEqual(after.Resource, before.Resource) {
-					t.Fatalf(
-						"recovery replaced foreign resource: %+v %v",
-						after,
-						err,
-					)
+					t.Fatalf("recovery replaced foreign resource: %+v %v", after, err)
 				}
-				if damage == "operation-pointer" &&
-					after.VM.OperationID != "op-foreign" {
+				if damage == "operation-pointer" && after.VM.OperationID != "op-foreign" {
 					t.Fatal("recovery took another operation's ownership")
 				}
 				if damage == "unknown-identity" && after.VM.Verified {
 					t.Fatal("uncertain candidate marked verified")
 				}
 				if f.b.effects() != effects {
-					t.Fatalf(
-						"rejection changed instance effects: before=%+v after=%+v",
-						effects,
-						f.b.effects(),
-					)
+					t.Fatalf("rejection changed instance effects: before=%+v after=%+v", effects, f.b.effects())
 				}
 				f.b.mu.Lock()
 				// Startup may record default-off network on an absent test instance.
 				for id, obs := range states {
 					if f.b.states[id] != obs {
-						t.Errorf(
-							"rejection changed runtime instance %s: %+v -> %+v",
-							id,
-							obs,
-							f.b.states[id],
-						)
+						t.Errorf("rejection changed runtime instance %s: %+v -> %+v", id, obs, f.b.states[id])
 					}
 				}
 				if !f.b.states[candidate.Instance].Alive {
@@ -153,8 +133,7 @@ func TestInstanceConditionKeepsTerminalResult(t *testing.T) {
 				}
 				f.restart(t)
 				final := awaitStatus(t, f.e, f.op.ID)
-				if final.Status != status ||
-					!reflect.DeepEqual(final.Request, f.request) {
+				if final.Status != status || !reflect.DeepEqual(final.Request, f.request) {
 					t.Fatalf("unexpected original result: %+v", final)
 				}
 				original := string(encode(final))
@@ -164,61 +143,30 @@ func TestInstanceConditionKeepsTerminalResult(t *testing.T) {
 					for range 3 {
 						same, err := f.e.Submit(context.Background(), f.request)
 						if err != nil || string(encode(same)) != original {
-							t.Fatalf(
-								"terminal replay changed original response: %+v %v",
-								same,
-								err,
-							)
+							t.Fatalf("terminal replay changed original response: %+v %v", same, err)
 						}
 						changed := f.request
 						changed.ExpectedInstance = f.record.Journal.Resource.Instance
 						same, err = f.e.Submit(context.Background(), changed)
-						if err == nil || asAPI(err).Code != api.Conflict ||
-							string(encode(same)) != original {
-							t.Fatalf(
-								"same key accepted different parameters: %+v %v",
-								same,
-								err,
-							)
+						if err == nil || asAPI(err).Code != api.Conflict || string(encode(same)) != original {
+							t.Fatalf("same key accepted different parameters: %+v %v", same, err)
 						}
 						stale := f.request
 						stale.Key = "new-key-stale-instance"
-						if _, err = f.e.Submit(
-							context.Background(),
-							stale,
-						); err == nil ||
-							asAPI(err).Code != api.Conflict {
+						if _, err = f.e.Submit(context.Background(), stale); err == nil || asAPI(err).Code != api.Conflict {
 							t.Fatalf("admission accepted stale A: %v", err)
 						}
-						if _, err = f.e.FindOperation(
-							context.Background(),
-							stale.Key,
-						); err == nil ||
-							asAPI(err).Code != api.NotFound {
-							t.Fatalf(
-								"rejected admission persisted a new operation: %v",
-								err,
-							)
+						if _, err = f.e.FindOperation(context.Background(), stale.Key); err == nil || asAPI(err).Code != api.NotFound {
+							t.Fatalf("rejected admission persisted a new operation: %v", err)
 						}
-						found, err := f.e.FindOperation(
-							context.Background(),
-							f.request.Key,
-						)
+						found, err := f.e.FindOperation(context.Background(), f.request.Key)
 						if err != nil || string(encode(found)) != original {
-							t.Fatalf(
-								"original keyed result changed: %+v %v",
-								found,
-								err,
-							)
+							t.Fatalf("original keyed result changed: %+v %v", found, err)
 						}
 					}
 				}
 				if f.b.effects() != effects {
-					t.Fatalf(
-						"terminal replay changed instance effects: before=%+v after=%+v",
-						effects,
-						f.b.effects(),
-					)
+					t.Fatalf("terminal replay changed instance effects: before=%+v after=%+v", effects, f.b.effects())
 				}
 			})
 		}
@@ -249,9 +197,7 @@ func assertInstanceConditionRecovery(t *testing.T, action, boundary string) {
 		t.Fatal("operation did not allocate fresh candidate B")
 	}
 	var guestWrite []byte
-	if boundary == "launch_unrecorded" || boundary == "launched" ||
-		boundary == "booted" ||
-		boundary == "agent_ready" {
+	if boundary == "launch_unrecorded" || boundary == "launched" || boundary == "booted" || boundary == "agent_ready" {
 		guestWrite = []byte("candidate guest writes after launch")
 		if err := os.WriteFile(r.Disk, guestWrite, 0o600); err != nil {
 			t.Fatal(err)
@@ -259,14 +205,11 @@ func assertInstanceConditionRecovery(t *testing.T, action, boundary string) {
 	}
 	f.restart(t)
 	final := awaitStatus(t, f.e, f.op.ID)
-	if final.Status != "succeeded" || final.ID != f.op.ID ||
-		!reflect.DeepEqual(final.Request, f.request) {
+	if final.Status != "succeeded" || final.ID != f.op.ID || !reflect.DeepEqual(final.Request, f.request) {
 		t.Fatalf("conditional %s recovery failed: %+v", action, final)
 	}
 	v, err := f.e.loadVM(context.Background(), f.op.VMID)
-	if err != nil || v.VM.Instance != r.Instance ||
-		!reflect.DeepEqual(v.Resource, r) ||
-		v.VM.Phase != "running" ||
+	if err != nil || v.VM.Instance != r.Instance || !reflect.DeepEqual(v.Resource, r) || v.VM.Phase != "running" ||
 		!v.VM.AgentReady ||
 		!v.VM.Verified ||
 		v.VM.NetworkActual ||
@@ -279,9 +222,7 @@ func assertInstanceConditionRecovery(t *testing.T, action, boundary string) {
 	launches := f.b.launches
 	obs := f.b.states[r.Instance]
 	f.b.mu.Unlock()
-	if launches != 2 || !obs.Alive || v.VM.PID != obs.PID ||
-		v.VM.StartTime != obs.StartTime ||
-		obs.Network {
+	if launches != 2 || !obs.Alive || v.VM.PID != obs.PID || v.VM.StartTime != obs.StartTime || obs.Network {
 		t.Fatalf(
 			"candidate was relaunched or lost process identity: launches=%d vm=%+v observed=%+v",
 			launches,
@@ -296,15 +237,10 @@ func assertInstanceConditionRecovery(t *testing.T, action, boundary string) {
 		}
 	}
 	after, err := f.e.loadOp(context.Background(), f.op.ID)
-	if err != nil ||
-		!reflect.DeepEqual(
-			after.Journal.RestoreMaterials,
-			f.record.Journal.RestoreMaterials,
-		) {
+	if err != nil || !reflect.DeepEqual(after.Journal.RestoreMaterials, f.record.Journal.RestoreMaterials) {
 		t.Fatalf("restore delivery proof changed: %v", err)
 	}
-	if f.b.stops.Load() != 1 || f.b.removes.Load() != 0 ||
-		f.b.networkOn.Load() != 0 {
+	if f.b.stops.Load() != 1 || f.b.removes.Load() != 0 || f.b.networkOn.Load() != 0 {
 		t.Fatal("recovery stopped, deleted, or enabled network on an instance")
 	}
 }

@@ -33,9 +33,7 @@ func (g *gcGraph) catalog() error {
 			switch key {
 			case "identity", "epoch", "schema", "backup_point":
 			case "recovery_note":
-				err = fmt.Errorf(
-					"GC fenced by restored history; ownership requires manual review",
-				)
+				err = fmt.Errorf("GC fenced by restored history; ownership requires manual review")
 			default:
 				err = fmt.Errorf("GC unknown metadata root: %s", key)
 			}
@@ -54,11 +52,7 @@ func (g *gcGraph) catalog() error {
 	for digest, m := range g.images {
 		if err = g.verifyImage(
 			m,
-			filepath.Join(
-				g.e.opts.StateDir,
-				"images",
-				strings.TrimPrefix(digest, "sha256:"),
-			),
+			filepath.Join(g.e.opts.StateDir, "images", strings.TrimPrefix(digest, "sha256:")),
 		); err != nil {
 			return err
 		}
@@ -70,10 +64,7 @@ func (g *gcGraph) catalog() error {
 	}
 	for _, s := range g.snapshots {
 		if _, ok := g.images[s.Snapshot.Config.Image]; !ok {
-			return fmt.Errorf(
-				"GC snapshot image catalog root missing: %s",
-				s.Snapshot.ID,
-			)
+			return fmt.Errorf("GC snapshot image catalog root missing: %s", s.Snapshot.ID)
 		}
 	}
 	for _, o := range g.ops {
@@ -94,16 +85,8 @@ func (g *gcGraph) verifyImage(m ImageManifest, dir string) error {
 	if err := g.path(filepath.Join(dir, "image.json"), false); err != nil {
 		return err
 	}
-	if err := gcReadJSON(
-		filepath.Join(dir, "image.json"),
-		&disk,
-	); err != nil ||
-		!reflect.DeepEqual(m, disk) {
-		return fmt.Errorf(
-			"GC image manifest root missing/corrupt: %s: %v",
-			dir,
-			err,
-		)
+	if err := gcReadJSON(filepath.Join(dir, "image.json"), &disk); err != nil || !reflect.DeepEqual(m, disk) {
+		return fmt.Errorf("GC image manifest root missing/corrupt: %s: %v", dir, err)
 	}
 	required := []string{"kernel", "initramfs", "root.erofs"}
 	if m.Layout == LayeredEROFSLayout {
@@ -132,11 +115,7 @@ func (g *gcGraph) verifyImage(m ImageManifest, dir string) error {
 			if err := g.verifyCache(m.Builder, a.DiffID); err != nil {
 				return err
 			}
-			if err := g.immutable(
-				g.e.opts.StateDir,
-				a.Path,
-				a.SHA256,
-			); err != nil {
+			if err := g.immutable(g.e.opts.StateDir, a.Path, a.SHA256); err != nil {
 				return err
 			}
 			if err := g.immutable(
@@ -148,12 +127,7 @@ func (g *gcGraph) verifyImage(m ImageManifest, dir string) error {
 			}
 			layers = append(layers, filepath.Join(g.e.opts.StateDir, a.Path))
 		}
-		return verifyImageDeviceTable(
-			filepath.Join(dir, "fsmeta.erofs"),
-			layers,
-			m.DiffIDs,
-			m.sharedLayered(),
-		)
+		return verifyImageDeviceTable(filepath.Join(dir, "fsmeta.erofs"), layers, m.DiffIDs, m.sharedLayered())
 	}
 	return nil
 }
@@ -173,9 +147,7 @@ func (g *gcGraph) verifyCache(builder, diff string) error {
 	if err := gcReadJSON(filepath.Join(path, "layer.json"), &c); err != nil {
 		return err
 	}
-	if c.Format != 1 ||
-		(c.Profile != layerProfile && c.Profile != sharedLayerProfile) ||
-		c.Builder != builder ||
+	if c.Format != 1 || (c.Profile != layerProfile && c.Profile != sharedLayerProfile) || c.Builder != builder ||
 		c.DiffID != diff ||
 		c.Bytes < 0 ||
 		c.Entries < 0 {
@@ -186,32 +158,19 @@ func (g *gcGraph) verifyCache(builder, diff string) error {
 	}
 	st, err := os.Stat(filepath.Join(path, "layer.json"))
 	if err != nil || st.Mode().Perm()&0o222 != 0 {
-		return fmt.Errorf(
-			"GC cache ownership receipt is not immutable: %s",
-			path,
-		)
+		return fmt.Errorf("GC cache ownership receipt is not immutable: %s", path)
 	}
-	return g.immutable(
-		g.e.opts.StateDir,
-		filepath.Join(dir, "layer.erofs"),
-		c.SHA256,
-	)
+	return g.immutable(g.e.opts.StateDir, filepath.Join(dir, "layer.erofs"), c.SHA256)
 }
 
-func (g *gcGraph) importFiles(
-	path string,
-	opts ImportOptions,
-) (map[string]string, error) {
+func (g *gcGraph) importFiles(path string, opts ImportOptions) (map[string]string, error) {
 	m := g.images[opts.Digest]
 	materialization := opts.Materialization
 	if materialization == "" {
 		materialization = LayeredEROFSLayout
 	}
-	if materialization != m.Layout ||
-		!g.reservations["image:"+opts.Digest[7:]] {
-		return nil, fmt.Errorf(
-			"completed import ownership/reservation mismatch",
-		)
+	if materialization != m.Layout || !g.reservations["image:"+opts.Digest[7:]] {
+		return nil, fmt.Errorf("completed import ownership/reservation mismatch")
 	}
 	files := map[string]string{"intent.json": ""}
 	input := filepath.Join(path, "input", "blobs", "sha256")

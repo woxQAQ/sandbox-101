@@ -8,12 +8,7 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-func failedRecoveryOperation(
-	t *testing.T,
-	s *Service,
-	action string,
-	b *Sandbox,
-) Operation {
+func failedRecoveryOperation(t *testing.T, s *Service, action string, b *Sandbox) Operation {
 	t.Helper()
 	o := Operation{
 		ID:             newID("op_"),
@@ -31,14 +26,7 @@ func failedRecoveryOperation(
 	}
 	o.hash = s.store.sign(o.ID)
 	if action == "resume" {
-		if err := reserveQuotaStep(
-			s.ctx,
-			s.store.db,
-			o,
-			"resume-clone",
-			b.ID,
-			b.Shape.DiskMiB,
-		); err != nil {
+		if err := reserveQuotaStep(s.ctx, s.store.db, o, "resume-clone", b.ID, b.Shape.DiskMiB); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,12 +45,7 @@ func TestResumeCleanupFailureDoesNotReuseOldCapture(t *testing.T) {
 	b := *claimTest(t, s, p, "source", nil).Sandbox
 	execute := func(key, action string) {
 		t.Helper()
-		_, err := s.Execute(
-			context.Background(),
-			p,
-			key,
-			Command{Action: action, SandboxID: b.ID},
-		)
+		_, err := s.Execute(context.Background(), p, key, Command{Action: action, SandboxID: b.ID})
 		if err != nil && action != "resume" {
 			t.Fatal(err)
 		}
@@ -96,12 +79,7 @@ func TestResumeCleanupFailureDoesNotReuseOldCapture(t *testing.T) {
 func TestResumeHandoffIsAtomicAcrossRestart(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	before := recoverySandbox(t, s, b.ID)
@@ -110,12 +88,7 @@ func TestResumeHandoffIsAtomicAcrossRestart(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"resume-failed",
-		Command{Action: "resume", SandboxID: b.ID},
-	); err == nil {
+	if _, err := s.Execute(s.ctx, p, "resume-failed", Command{Action: "resume", SandboxID: b.ID}); err == nil {
 		t.Fatal("transaction failure hidden")
 	}
 	if got := recoverySandbox(t, s, b.ID); got.SnapshotID != before.SnapshotID {
@@ -143,30 +116,16 @@ func TestResumeHandoffIsAtomicAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reopened.Close() })
-	if got := recoverySandbox(
-		t,
-		reopened,
-		b.ID,
-	); got.SnapshotID != before.SnapshotID {
+	if got := recoverySandbox(t, reopened, b.ID); got.SnapshotID != before.SnapshotID {
 		t.Fatal(got)
 	}
 	f.control.Lock()
 	f.failSnapshotDeletes = 100
 	f.control.Unlock()
-	if _, err = reopened.Execute(
-		reopened.ctx,
-		p,
-		"resume",
-		Command{Action: "resume", SandboxID: b.ID},
-	); err != nil {
+	if _, err = reopened.Execute(reopened.ctx, p, "resume", Command{Action: "resume", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if got := recoverySandbox(
-		t,
-		reopened,
-		b.ID,
-	); got.State != "running" ||
-		got.SnapshotID != "" {
+	if got := recoverySandbox(t, reopened, b.ID); got.State != "running" || got.SnapshotID != "" {
 		t.Fatal(got)
 	}
 	opts = reopened.opts
@@ -185,9 +144,7 @@ func TestResumeHandoffIsAtomicAcrossRestart(t *testing.T) {
 	}
 	found := false
 	for _, r := range intents {
-		if r.Kind == "retired_snapshot" && r.Snapshot == before.SnapshotID &&
-			!r.Done &&
-			r.TenantID == p.TenantID &&
+		if r.Kind == "retired_snapshot" && r.Snapshot == before.SnapshotID && !r.Done && r.TenantID == p.TenantID &&
 			r.MemoryMiB == 128 {
 			found = true
 		}
@@ -218,10 +175,7 @@ func TestRecoverResourcesFailedProvisionCleanupRetriesDurably(t *testing.T) {
 		}
 	}
 	if retry.Attempt != 1 || retry.Done {
-		t.Fatalf(
-			"terminal delete failure did not persist a new attempt: %+v",
-			retry,
-		)
+		t.Fatalf("terminal delete failure did not persist a new attempt: %+v", retry)
 	}
 	opts := s.opts
 	opts.Initialize = false
@@ -240,13 +194,7 @@ func TestRecoverResourcesFailedProvisionCleanupRetriesDurably(t *testing.T) {
 	if b.State != "terminated" || b.VMID != "" || b.OperationID != "" {
 		t.Fatalf("provisioning cleanup did not converge: %+v", b)
 	}
-	if _, err = f.GetVM(
-		context.Background(),
-		vmid,
-	); !isEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err = f.GetVM(context.Background(), vmid); !isEngineCode(err, api.NotFound) {
 		t.Fatalf("failed provisioning VM remains: %v", err)
 	}
 	old, err := reopened.store.operation(context.Background(), source.ID)
@@ -273,9 +221,7 @@ func TestRecoverResourcesFailedHibernateRetainsVMBeforeCapture(t *testing.T) {
 	}
 }
 
-func TestRecoverResourcesHibernateDeleteRetryReusesPublishedCapture(
-	t *testing.T,
-) {
+func TestRecoverResourcesHibernateDeleteRetryReusesPublishedCapture(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "claim", nil).Sandbox
 	b.State = "pausing"
@@ -299,12 +245,8 @@ func TestRecoverResourcesHibernateDeleteRetryReusesPublishedCapture(
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
-	if b.State != "paused" || b.VMID != "" || b.SnapshotID != capture ||
-		f.count("snapshot") != 1 {
-		t.Fatalf(
-			"hibernate retry repeated capture or failed to converge: %+v",
-			b,
-		)
+	if b.State != "paused" || b.VMID != "" || b.SnapshotID != capture || f.count("snapshot") != 1 {
+		t.Fatalf("hibernate retry repeated capture or failed to converge: %+v", b)
 	}
 }
 
@@ -332,8 +274,7 @@ func TestRecoverResourcesCompletesHibernateAfterVMAlreadyDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
-	if b.State != "paused" || b.VMID != "" || b.PausedUntil.IsZero() ||
-		f.count("clone") != 0 {
+	if b.State != "paused" || b.VMID != "" || b.PausedUntil.IsZero() || f.count("clone") != 0 {
 		t.Fatalf("lost terminal hibernate commit was not recovered: %+v", b)
 	}
 }
@@ -341,23 +282,14 @@ func TestRecoverResourcesCompletesHibernateAfterVMAlreadyDeleted(t *testing.T) {
 func TestRecoverResourcesFailedResumeOnlyDeletesItsClone(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "claim", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
 	capture := b.SnapshotID
 	b.State = "resuming"
 	source := failedRecoveryOperation(t, s, "resume", &b)
-	clone, err := s.engine(
-		source,
-		"resume-clone",
-		api.Request{Action: "clone", SnapshotID: capture},
-	)
+	clone, err := s.engine(source, "resume-clone", api.Request{Action: "clone", SnapshotID: capture})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,8 +302,7 @@ func TestRecoverResourcesFailedResumeOnlyDeletesItsClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
-	if b.State != "paused" || b.VMID != "" || b.SnapshotID != capture ||
-		b.ResumeAttempt == 0 ||
+	if b.State != "paused" || b.VMID != "" || b.SnapshotID != capture || b.ResumeAttempt == 0 ||
 		f.count("clone") != before {
 		t.Fatalf("resume rollback failed: %+v", b)
 	}
@@ -380,17 +311,10 @@ func TestRecoverResourcesFailedResumeOnlyDeletesItsClone(t *testing.T) {
 	}
 }
 
-func TestRecoverResourcesRollbackPreservesUnprovenRunningInstance(
-	t *testing.T,
-) {
+func TestRecoverResourcesRollbackPreservesUnprovenRunningInstance(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "claim", nil).Sandbox
-	captured, err := s.Execute(
-		s.ctx,
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	)
+	captured, err := s.Execute(s.ctx, p, "checkpoint", Command{Action: "checkpoint", SandboxID: b.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,17 +330,10 @@ func TestRecoverResourcesRollbackPreservesUnprovenRunningInstance(
 	if err := s.recoverResources(); !isCode(err, ErrManualRecovery) {
 		t.Fatalf("unproven rollback should require recovery: %v", err)
 	}
-	if f.count("delete") != 0 || f.count("stop") != 0 ||
-		f.count("restore") != 0 ||
-		f.count("clone") != 0 {
+	if f.count("delete") != 0 || f.count("stop") != 0 || f.count("restore") != 0 || f.count("clone") != 0 {
 		t.Fatal("rollback target was destroyed or restarted without proof")
 	}
-	if got := recoverySandbox(
-		t,
-		s,
-		b.ID,
-	); got.State != "resuming" ||
-		got.VMID != b.VMID {
+	if got := recoverySandbox(t, s, b.ID); got.State != "resuming" || got.VMID != b.VMID {
 		t.Fatalf("unproven rollback changed ownership: %+v", got)
 	}
 }
@@ -424,12 +341,7 @@ func TestRecoverResourcesRollbackPreservesUnprovenRunningInstance(
 func TestRecoverResourcesUnknownResumeVMIsPreserved(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "claim", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
@@ -446,17 +358,13 @@ func TestRecoverResourcesUnknownResumeVMIsPreserved(t *testing.T) {
 	f.mu.Unlock()
 	before := f.count("delete")
 	if err := s.recoverResources(); !isCode(err, ErrManualRecovery) {
-		t.Fatalf(
-			"resume without clone receipt should preserve unknown VM: %v",
-			err,
-		)
+		t.Fatalf("resume without clone receipt should preserve unknown VM: %v", err)
 	}
 	if f.count("delete") != before {
 		t.Fatal("resume cleanup deleted an unproven VM")
 	}
 	got := recoverySandbox(t, s, b.ID)
-	if got.State != "resuming" || got.SnapshotID != b.SnapshotID ||
-		got.VMID != b.VMID {
+	if got.State != "resuming" || got.SnapshotID != b.SnapshotID || got.VMID != b.VMID {
 		t.Fatalf("unknown resume resource was discarded: %+v", got)
 	}
 }
@@ -519,13 +427,8 @@ func TestRecoverResourcesRollbackRetriesOnlyProvenStoppedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
-	if b.State != "running" || b.Instance == source.SourceInstance ||
-		f.count("stop") != 1 ||
-		f.count("restore") != 1 {
-		t.Fatalf(
-			"stopped rollback did not converge without repeating stop: %+v",
-			b,
-		)
+	if b.State != "running" || b.Instance == source.SourceInstance || f.count("stop") != 1 || f.count("restore") != 1 {
+		t.Fatalf("stopped rollback did not converge without repeating stop: %+v", b)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

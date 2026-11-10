@@ -27,8 +27,7 @@ func TestCaptureIsolationWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range strings.Split(string(status), "\n") {
-		if strings.HasPrefix(line, "CapEff:") ||
-			strings.HasPrefix(line, "CapPrm:") {
+		if strings.HasPrefix(line, "CapEff:") || strings.HasPrefix(line, "CapPrm:") {
 			if strings.Fields(line)[1] != "0000000000000000" {
 				t.Fatal("writer retained capabilities", line)
 			}
@@ -50,11 +49,7 @@ func TestCaptureIsolationWriter(t *testing.T) {
 		case "directory":
 			err = os.Mkdir(path, 0o700)
 		case "unknown":
-			err = os.WriteFile(
-				filepath.Join(filepath.Dir(path), "unexpected"),
-				nil,
-				0o600,
-			)
+			err = os.WriteFile(filepath.Join(filepath.Dir(path), "unexpected"), nil, 0o600)
 		case "oversized":
 			var f *os.File
 			f, err = os.Create(path)
@@ -72,26 +67,14 @@ func TestCaptureIsolationWriter(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(path, "ch")); err == nil {
 			t.Fatal("writer removed leaf directory entry")
 		}
-		if err := os.WriteFile(
-			filepath.Join(path, "intruder"),
-			nil,
-			0o600,
-		); err == nil {
+		if err := os.WriteFile(filepath.Join(path, "intruder"), nil, 0o600); err == nil {
 			t.Fatal("writer changed parent")
 		}
-		if err := os.WriteFile(
-			filepath.Join(path, "ch", "config.json"),
-			[]byte("writer"),
-			0o600,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(path, "ch", "config.json"), []byte("writer"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	case "retain":
-		f, err := os.OpenFile(
-			filepath.Join(path, "ch", "memory-ranges"),
-			os.O_RDWR,
-			0,
-		)
+		f, err := os.OpenFile(filepath.Join(path, "ch", "memory-ranges"), os.O_RDWR, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,19 +87,12 @@ func TestCaptureIsolationWriter(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err = os.WriteFile(
-			filepath.Join(
-				os.Getenv("CAPTURE_PUBLICATION_PATH"),
-				"ch",
-				"memory-ranges",
-			),
+			filepath.Join(os.Getenv("CAPTURE_PUBLICATION_PATH"), "ch", "memory-ranges"),
 			[]byte("bad"),
 			0o600,
 		); err == nil {
 			t.Fatal("writer changed publication")
-		} else if !errors.Is(
-			err,
-			syscall.EACCES,
-		) {
+		} else if !errors.Is(err, syscall.EACCES) {
 			t.Fatalf("expected publication permission denial, got %v", err)
 		}
 	default:
@@ -127,9 +103,7 @@ func TestCaptureIsolationWriter(t *testing.T) {
 func isolationFixture(t *testing.T) (Resource, *captureBoundary) {
 	t.Helper()
 	if os.Getenv("CAPTURE_ISOLATION_INSIDE") != "1" || os.Geteuid() != 0 {
-		t.Fatal(
-			"run make capture-isolation-e2e: mapped root and writer namespaces required",
-		)
+		t.Fatal("run make capture-isolation-e2e: mapped root and writer namespaces required")
 	}
 	mapping, err := os.ReadFile("/proc/self/uid_map")
 	if err != nil || len(strings.Fields(string(mapping))) < 6 {
@@ -156,10 +130,7 @@ func isolationFixture(t *testing.T) (Resource, *captureBoundary) {
 		t.Fatal(err)
 	}
 	backend := &CloudHypervisor{opts: CloudOptions{UID: 1, GID: 1}}
-	if err = backend.prepareCaptureWriter(
-		r,
-		filepath.Join(c.Path, "ch"),
-	); err != nil {
+	if err = backend.prepareCaptureWriter(r, filepath.Join(c.Path, "ch")); err != nil {
 		t.Fatal(err)
 	}
 	return r, c
@@ -179,16 +150,8 @@ func writerCommand(t *testing.T, c *captureBoundary, action string) *exec.Cmd {
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command(
-		binary,
-		"-test.run=^TestCaptureIsolationWriter$",
-		"-test.v",
-	)
-	cmd.Env = append(
-		os.Environ(),
-		"CAPTURE_WRITER_ACTION="+action,
-		"CAPTURE_WRITER_PATH="+c.Path,
-	)
+	cmd := exec.Command(binary, "-test.run=^TestCaptureIsolationWriter$", "-test.v")
+	cmd.Env = append(os.Environ(), "CAPTURE_WRITER_ACTION="+action, "CAPTURE_WRITER_PATH="+c.Path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{Uid: 1, Gid: 1, NoSetGroups: true},
 	}
@@ -206,15 +169,7 @@ func TestCaptureIsolationParentOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := st.Sys().(*syscall.Stat_t)
-		t.Logf(
-			"parent=%s uid=%d gid=%d mode=%04o dev=%d inode=%d",
-			path,
-			s.Uid,
-			s.Gid,
-			st.Mode().Perm(),
-			s.Dev,
-			s.Ino,
-		)
+		t.Logf("parent=%s uid=%d gid=%d mode=%04o dev=%d inode=%d", path, s.Uid, s.Gid, st.Mode().Perm(), s.Dev, s.Ino)
 		if s.Uid != 0 || st.Mode().Perm()&0o022 != 0 {
 			t.Fatalf("untrusted parent %s: %+v", path, s)
 		}
@@ -228,11 +183,7 @@ func TestCaptureIsolationRejectsEntryReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	sentinelData := filepath.Join(sentinel, "unchanged")
-	if err := os.WriteFile(
-		sentinelData,
-		[]byte("sentinel-content"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(sentinelData, []byte("sentinel-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.Stat(sentinel)
@@ -242,17 +193,11 @@ func TestCaptureIsolationRejectsEntryReplacement(t *testing.T) {
 	if err := os.Symlink(sentinel, filepath.Join(c.Path, "ch")); err != nil {
 		t.Fatal(err)
 	}
-	if err := delegateCapture(
-		r,
-		filepath.Join(c.Path, "ch"),
-		1,
-		1,
-	); err == nil {
+	if err := delegateCapture(r, filepath.Join(c.Path, "ch"), 1, 1); err == nil {
 		t.Fatal("followed replacement symlink")
 	}
 	after, _ := os.Stat(sentinel)
-	if gcNode(before) != gcNode(after) ||
-		after.Sys().(*syscall.Stat_t).Uid != 0 {
+	if gcNode(before) != gcNode(after) || after.Sys().(*syscall.Stat_t).Uid != 0 {
 		t.Fatal("sentinel metadata changed")
 	}
 	data, err := os.ReadFile(sentinelData)
@@ -280,10 +225,7 @@ func writeCaptureFixture(t *testing.T, c *captureBoundary) {
 func TestCaptureIsolationPublishedFilesAreIndependent(t *testing.T) {
 	_, c := isolationFixture(t)
 	writeCaptureFixture(t, c)
-	publication := filepath.Join(
-		filepath.Dir(filepath.Dir(c.Path)),
-		"published",
-	)
+	publication := filepath.Join(filepath.Dir(filepath.Dir(c.Path)), "published")
 	cmd := writerCommand(t, c, "retain")
 	cmd.Env = append(cmd.Env, "CAPTURE_PUBLICATION_PATH="+publication)
 	input, err := cmd.StdinPipe()
@@ -331,10 +273,7 @@ func TestCaptureIsolationPublishedFilesAreIndependent(t *testing.T) {
 	if err = syncTree(filepath.Join(c.Path, "publication")); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.Rename(
-		filepath.Join(c.Path, "publication"),
-		publication,
-	); err != nil {
+	if err = os.Rename(filepath.Join(c.Path, "publication"), publication); err != nil {
 		t.Fatal(err)
 	}
 	fmt.Fprintln(input, "mutate")

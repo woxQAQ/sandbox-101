@@ -80,23 +80,17 @@ func TestHTTPSAuditFailureBlocksDialAndRecoveryAllowsNextRequest(t *testing.T) {
 		return resp, readResponse(t, resp, err)
 	}
 	resp, body := send()
-	if resp.StatusCode != http.StatusServiceUnavailable ||
-		!strings.Contains(body, "audit unavailable") ||
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "audit unavailable") ||
 		strings.Contains(body, "host-explicit-secret") ||
 		strings.Contains(body, "journal") {
-		t.Fatalf(
-			"unexpected audit failure response: %d %q",
-			resp.StatusCode,
-			body,
-		)
+		t.Fatalf("unexpected audit failure response: %d %q", resp.StatusCode, body)
 	}
 	if dials.Load() != 0 || requests.Load() != 0 || persisted.Load() {
 		t.Fatal("failed audit allowed upstream access")
 	}
 	available.Store(true)
 	resp, body = send()
-	if resp.StatusCode != http.StatusOK || body != "ok" || dials.Load() != 1 ||
-		requests.Load() != 1 ||
+	if resp.StatusCode != http.StatusOK || body != "ok" || dials.Load() != 1 || requests.Load() != 1 ||
 		injections.Load() != 2 {
 		t.Fatalf(
 			"audit recovery failed: status=%d dials=%d requests=%d injections=%d",
@@ -129,8 +123,7 @@ func TestHTTPProxyAndHostValidation(t *testing.T) {
 		nil,
 	)
 	r, body := get(t, proxyClient(t, m, b), "http://example.com/hello")
-	if r.StatusCode != 200 || body != "upstream example.com" ||
-		dials.Load() != 1 {
+	if r.StatusCode != 200 || body != "upstream example.com" || dials.Load() != 1 {
 		t.Fatalf("status=%d body=%q dials=%d", r.StatusCode, body, dials.Load())
 	}
 	conn, err := net.Dial("unix", b.HTTPPath)
@@ -149,8 +142,7 @@ func TestHTTPProxyAndHostValidation(t *testing.T) {
 	// net/http uses the absolute request target as Host (RFC 9112). The
 	// conflicting wire Host must never influence the upstream authority.
 	body = readResponse(t, resp, nil)
-	if resp.StatusCode != 200 || body != "upstream example.com" ||
-		dials.Load() != 2 {
+	if resp.StatusCode != 200 || body != "upstream example.com" || dials.Load() != 2 {
 		t.Fatalf("upstream authority changed: %d %q", resp.StatusCode, body)
 	}
 }
@@ -193,11 +185,8 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 			})
 			defer badTLS.Close()
 			var remote *net.OpError
-			if err := badTLS.Handshake(); !errors.As(err, &remote) ||
-				remote.Op != "remote error" {
-				t.Error(
-					"proxy did not reject missing or mismatched SNI with a TLS alert",
-				)
+			if err := badTLS.Handshake(); !errors.As(err, &remote) || remote.Op != "remote error" {
+				t.Error("proxy did not reject missing or mismatched SNI with a TLS alert")
 			}
 		})
 	}
@@ -220,12 +209,8 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			body := readResponse(t, resp, nil)
-			if resp.StatusCode != http.StatusForbidden ||
-				body != "egress: request denied\n" {
-				t.Errorf(
-					"inner authority/protocol rejection: status=%d",
-					resp.StatusCode,
-				)
+			if resp.StatusCode != http.StatusForbidden || body != "egress: request denied\n" {
+				t.Errorf("inner authority/protocol rejection: status=%d", resp.StatusCode)
 			}
 		})
 	}

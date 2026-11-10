@@ -53,14 +53,7 @@ func Run(cmd *exec.Cmd) (string, error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(
-				output,
-			), fmt.Errorf(
-				"%q failed with error %q: %w",
-				command,
-				string(output),
-				err,
-			)
+		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
 	}
 
 	return string(output), nil
@@ -189,10 +182,7 @@ func GetNonEmptyLines(output string) []string {
 func GetProjectDir() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
-		return wd, fmt.Errorf(
-			"failed to get current working directory: %w",
-			err,
-		)
+		return wd, fmt.Errorf("failed to get current working directory: %w", err)
 	}
 	wd = strings.ReplaceAll(wd, "/test/e2e", "")
 	return wd, nil
@@ -211,10 +201,7 @@ func UncommentCode(filename, target, prefix string) error {
 
 	idx := strings.Index(strContent, target)
 	if idx < 0 {
-		return fmt.Errorf(
-			"unable to find the code %q to be uncommented",
-			target,
-		)
+		return fmt.Errorf("unable to find the code %q to be uncommented", target)
 	}
 
 	out := new(bytes.Buffer)
@@ -228,9 +215,7 @@ func UncommentCode(filename, target, prefix string) error {
 		return nil
 	}
 	for {
-		if _, err = out.WriteString(
-			strings.TrimPrefix(scanner.Text(), prefix),
-		); err != nil {
+		if _, err = out.WriteString(strings.TrimPrefix(scanner.Text(), prefix)); err != nil {
 			return fmt.Errorf("failed to write to output: %w", err)
 		}
 		// Avoid writing a newline in case the previous line was the last in target.

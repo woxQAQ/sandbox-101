@@ -63,11 +63,7 @@ func (s *Service) saveRecovery(r resourceRecovery) error {
 	defer func() { _ = tx.Rollback() }()
 	if r.Kind == "retired_snapshot" {
 		if r.Done {
-			_, err = tx.ExecContext(
-				s.ctx,
-				`DELETE FROM quota_refs WHERE holder_id=?`,
-				"recovery:"+r.ID,
-			)
+			_, err = tx.ExecContext(s.ctx, `DELETE FROM quota_refs WHERE holder_id=?`, "recovery:"+r.ID)
 		} else {
 			err = referenceQuotaSnapshot(
 				s.ctx,
@@ -94,10 +90,7 @@ func (s *Service) saveRecovery(r resourceRecovery) error {
 }
 
 func (s *Service) resourceRecoveries() ([]resourceRecovery, error) {
-	rows, err := s.store.db.QueryContext(
-		s.ctx,
-		"SELECT body FROM resource_recovery ORDER BY id",
-	)
+	rows, err := s.store.db.QueryContext(s.ctx, "SELECT body FROM resource_recovery ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -118,10 +111,7 @@ func (s *Service) resourceRecoveries() ([]resourceRecovery, error) {
 }
 
 func (s *Service) resourceOperations() ([]Operation, error) {
-	rows, err := s.store.db.QueryContext(
-		s.ctx,
-		"SELECT body,spec_hash FROM operations ORDER BY id",
-	)
+	rows, err := s.store.db.QueryContext(s.ctx, "SELECT body,spec_hash FROM operations ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -176,15 +166,9 @@ func (s *Service) recoverResources() (failure error) {
 	for _, group := range groupIntents {
 		if group.Kind == "allocation_group" {
 			groupSources[group.Source] = true
-			groupFailures = errors.Join(
-				groupFailures,
-				s.resolveAllocationGroup(group.ID),
-			)
+			groupFailures = errors.Join(groupFailures, s.resolveAllocationGroup(group.ID))
 		} else if group.Kind == "allocation_cleanup" && !group.Done {
-			groupFailures = errors.Join(
-				groupFailures,
-				s.consumeAllocationCleanup(group.ID),
-			)
+			groupFailures = errors.Join(groupFailures, s.consumeAllocationCleanup(group.ID))
 		}
 	}
 	vms, err := s.opts.Engine.ListVMs(s.ctx)
@@ -279,8 +263,7 @@ func (s *Service) recoverResources() (failure error) {
 			if step.action == "snapshot" {
 				r.Kind, r.VMID, r.Snapshot = "snapshot", "", engineOp.SnapshotID
 			}
-			if (r.Kind == "vm" && !vmIDs[r.VMID]) ||
-				(r.Kind == "snapshot" && !snapshotIDs[r.Snapshot]) {
+			if (r.Kind == "vm" && !vmIDs[r.VMID]) || (r.Kind == "snapshot" && !snapshotIDs[r.Snapshot]) {
 				continue
 			}
 			r.ID = r.Kind + ":" + o.ID + ":" + step.name + ":" + r.VMID + r.Snapshot
@@ -344,9 +327,7 @@ func recoveryAllocationSteps(o Operation) []resourceStep {
 	return nil
 }
 
-func recoveryTerminal(
-	status string,
-) bool {
+func recoveryTerminal(status string) bool {
 	return status == "succeeded" || status == "failed"
 }
 
@@ -374,10 +355,7 @@ func (s *Service) resourceReferences(
 	for _, t := range templates {
 		snaps[t.SnapshotID] = true
 	}
-	rows, err := s.store.db.QueryContext(
-		s.ctx,
-		"SELECT vm_id,snapshot_id FROM warm",
-	)
+	rows, err := s.store.db.QueryContext(s.ctx, "SELECT vm_id,snapshot_id FROM warm")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -420,9 +398,7 @@ func (s *Service) resourceReferences(
 	for _, o := range ops {
 		pending := !recoveryTerminal(o.Status)
 		cleanupContinuation := false
-		if pending && o.Command.Action == "release" &&
-			o.Command.SandboxID == excludeSandbox &&
-			excludeSandbox != "" {
+		if pending && o.Command.Action == "release" && o.Command.SandboxID == excludeSandbox && excludeSandbox != "" {
 			b := bySandbox[excludeSandbox]
 			if b.State == "terminated" && b.TenantID == o.ChargeTenantID {
 				binding, e := s.originalRelease(b)
@@ -513,22 +489,13 @@ func recoveryDependencySteps(o Operation) []string {
 	}
 	for _, id := range append([]string{o.Command.SandboxID}, o.IDs...) {
 		if id != "" {
-			steps = append(
-				steps,
-				"network-off:"+id,
-				"network-on:"+id,
-				"failed-delete:"+id,
-			)
+			steps = append(steps, "network-off:"+id, "network-on:"+id, "failed-delete:"+id)
 		}
 	}
 	return steps
 }
 
-func (s *Service) finishRecoveryAttempt(
-	r *resourceRecovery,
-	cause error,
-	steps ...string,
-) error {
+func (s *Service) finishRecoveryAttempt(r *resourceRecovery, cause error, steps ...string) error {
 	current, err := s.loadRecovery(r.ID)
 	if err != nil {
 		return err
@@ -557,10 +524,7 @@ func (s *Service) finishRecoveryAttempt(
 			return err
 		}
 		if hasUnresolvedAllocations(latest) {
-			return Fail(
-				ErrConflict,
-				"parent still owns undelivered allocations",
-			)
+			return Fail(ErrConflict, "parent still owns undelivered allocations")
 		}
 		latest.Done, latest.LastError = true, ""
 		if latest.Kind == "retired_snapshot" {
@@ -636,8 +600,7 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 	if err != nil {
 		return err
 	}
-	if proof == nil || !recoveryTerminal(proof.Status) ||
-		(r.Kind == "vm" && proof.VMID != r.VMID) ||
+	if proof == nil || !recoveryTerminal(proof.Status) || (r.Kind == "vm" && proof.VMID != r.VMID) ||
 		(r.Kind == "snapshot" && proof.SnapshotID != r.Snapshot) {
 		return nil
 	}
@@ -661,18 +624,10 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 			return e
 		}
 		if !v.Verified {
-			return Fail(
-				ErrManualRecovery,
-				"orphan VM %s is not verified",
-				v.ID,
-			)
+			return Fail(ErrManualRecovery, "orphan VM %s is not verified", v.ID)
 		}
 		if r.Instance != "" && r.Instance != v.Instance {
-			return Fail(
-				ErrManualRecovery,
-				"orphan VM %s changed instance",
-				v.ID,
-			)
+			return Fail(ErrManualRecovery, "orphan VM %s changed instance", v.ID)
 		}
 		r.Instance = v.Instance
 		req.ExpectedInstance = r.Instance
@@ -696,10 +651,7 @@ func (s *Service) recoverOrphanResource(r *resourceRecovery) error {
 	return s.finishRecoveryAttempt(r, err, "orphan-delete")
 }
 
-func (s *Service) findResourceStep(
-	o Operation,
-	step, action string,
-) (*api.Operation, error) {
+func (s *Service) findResourceStep(o Operation, step, action string) (*api.Operation, error) {
 	key := stepKey(o, step)
 	v, err := s.opts.Engine.FindOperation(s.ctx, key)
 	if isEngineCode(err, api.NotFound) {
@@ -708,14 +660,9 @@ func (s *Service) findResourceStep(
 	if err != nil {
 		return nil, err
 	}
-	if v.Key != key ||
-		(action != "" && action != "*" && v.Request.Action != action) ||
+	if v.Key != key || (action != "" && action != "*" && v.Request.Action != action) ||
 		(action == "" && v.Request.Action != "create" && v.Request.Action != "clone") {
-		return nil, Fail(
-			ErrManualRecovery,
-			"engine operation %s does not prove resource ownership",
-			key,
-		)
+		return nil, Fail(ErrManualRecovery, "engine operation %s does not prove resource ownership", key)
 	}
 	return &v, nil
 }
@@ -729,12 +676,7 @@ func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 	if err := validateWarmSelection(ctx, e, r); err != nil {
 		return err
 	}
-	result, err := e.ExecContext(
-		ctx,
-		`UPDATE resource_recovery SET body=? WHERE id=?`,
-		encode(r),
-		r.ID,
-	)
+	result, err := e.ExecContext(ctx, `UPDATE resource_recovery SET body=? WHERE id=?`, encode(r), r.ID)
 	if err != nil {
 		return err
 	}
@@ -743,10 +685,7 @@ func writeRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 		return err
 	}
 	if rows != 1 {
-		return Fail(
-			ErrManualRecovery,
-			"recovery responsibility was not persisted",
-		)
+		return Fail(ErrManualRecovery, "recovery responsibility was not persisted")
 	}
 	return nil
 }
@@ -755,15 +694,10 @@ func (s *Service) loadRecovery(id string) (resourceRecovery, error) {
 	return loadRecoveryTx(s.ctx, s.store.db, id)
 }
 
-func loadRecoveryTx(
-	ctx context.Context,
-	e executor,
-	id string,
-) (resourceRecovery, error) {
+func loadRecoveryTx(ctx context.Context, e executor, id string) (resourceRecovery, error) {
 	var raw []byte
 	var r resourceRecovery
-	err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, id).
-		Scan(&raw)
+	err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, id).Scan(&raw)
 	if err == nil {
 		err = json.Unmarshal(raw, &r)
 	}
@@ -783,15 +717,11 @@ func insertRecovery(ctx context.Context, e executor, r resourceRecovery) error {
 		return err
 	}
 	var actual []byte
-	if err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, r.ID).
-		Scan(&actual); err != nil {
+	if err := e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, r.ID).Scan(&actual); err != nil {
 		return err
 	}
 	if !bytes.Equal(actual, encode(r)) {
-		return Fail(
-			ErrManualRecovery,
-			"recovery identity conflicts with durable responsibility",
-		)
+		return Fail(ErrManualRecovery, "recovery identity conflicts with durable responsibility")
 	}
 	return nil
 }

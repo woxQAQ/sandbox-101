@@ -6,7 +6,7 @@ Start with the [documentation index](docs/README.md) for component contracts, de
 
 `engined` owns VMs, Cloud Hypervisor processes, namespaces, cgroups, images, disks and snapshots. `sandboxd` uses its Unix-socket API to provide templates, warm pools, tenant leases, hibernation, checkpoints, fork and raw guest connections. Each daemon owns an independent SQLite store and writer lock. A static Rust guest agent handles host administration, system readiness and unprivileged workload RPC on separate portals; a small Rust PID 1 mounts the EROFS/ext4/OverlayFS root and execs systemd.
 
-The production entrypoints use the real runtime. Unit tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM acceptance boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production acceptance runner exercises the privileged launcher, live adoption after daemon failure and the sandbox microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](docs/acceptance.md). Supply latency evidence before treating a design target as a measured result.
+The production entrypoints use the real runtime. Component tests inject explicit backends; transport integration launches the actual Rust Unix fixture. Standalone KVM integration boots the exact pinned Cloud Hypervisor with the static guest and genuine systemd, verifies both EROFS materializations inside the guest, exercises tree transfer, and restores COW clones and their snapshots. A separate production runner exercises the privileged launcher, live adoption after daemon failure and the sandbox microVM lifecycle through both actual daemons; its measured outcomes are recorded in [the acceptance record](docs/acceptance.md). Supply latency evidence before treating a design target as a measured result.
 
 ## Build and local verification
 
@@ -90,7 +90,7 @@ Supply `build/kernel` and its `build/kernel.config` using the built-in drivers i
 
 Default `layered-erofs-v1` imports share immutable per-diff-ID EROFS payloads and compose ordered fsmeta mappings through the pinned go-erofs library. The shared path preserves root metadata, cross-layer and forward hardlinks, implicit parents, duplicate replacements, whiteouts, xattrs, ACLs and capabilities. Explicit `--materialization=merged-oci-erofs-v1` retains a separate isolated umoci compatibility profile with self-contained image data. A published digest has a fixed materialization; requesting a different layout conflicts. Neither path silently treats corrupt data as a fallback opportunity.
 
-## Runtime acceptance
+## Runtime integration checks
 
 On an x86_64 Linux host with user-accessible KVM and user namespaces, supply the matching static VMM/kernel and complete guest userspace described in the [integration test inputs](scripts/README.md#vm-test-inputs), package the static guest as above, then run:
 

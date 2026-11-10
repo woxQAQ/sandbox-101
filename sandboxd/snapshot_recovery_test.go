@@ -14,12 +14,7 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
 	for _, action := range []string{"pause", "checkpoint", "resume"} {
-		if _, err := s.Execute(
-			s.ctx,
-			p,
-			action,
-			Command{Action: action, SandboxID: b.ID},
-		); err != nil {
+		if _, err := s.Execute(s.ctx, p, action, Command{Action: action, SandboxID: b.ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -42,13 +37,7 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 	if err = s.recoverResources(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.GetSnapshot(
-		s.ctx,
-		cp.SnapshotID,
-	); !isEngineCode(
-		err,
-		api.NotFound,
-	) {
+	if _, err = f.GetSnapshot(s.ctx, cp.SnapshotID); !isEngineCode(err, api.NotFound) {
 		t.Fatal("unreferenced capture retained", err)
 	}
 	// Historical records require a receipt; arbitrary identifiers are not adopted.
@@ -57,15 +46,7 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 	if err = saveSandbox(s.ctx, s.store.db, current); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Execute(
-		s.ctx,
-		p,
-		"unsafe-pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrManualRecovery,
-	) {
+	if _, err = s.Execute(s.ctx, p, "unsafe-pause", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrManualRecovery) {
 		t.Fatal("unproven historical capture accepted", err)
 	}
 }
@@ -73,23 +54,13 @@ func TestRetiredSnapshotCleanupHonorsLiveReferences(t *testing.T) {
 func TestRetiredSnapshotCleanupRetriesAfterRestart(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	f.control.Lock()
 	f.failSnapshotDeletes = 1
 	f.control.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"resume",
-		Command{Action: "resume", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "resume", Command{Action: "resume", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	intents, err := s.resourceRecoveries()
@@ -128,8 +99,7 @@ func TestRetiredSnapshotCleanupRetriesAfterRestart(t *testing.T) {
 	}
 	f.control.Lock()
 	for _, request := range f.requests {
-		if request.Action == "delete_snapshot" &&
-			request.SnapshotID == retired.Snapshot &&
+		if request.Action == "delete_snapshot" && request.SnapshotID == retired.Snapshot &&
 			!strings.Contains(request.Key, "recovery:"+retired.ID+":") {
 			f.control.Unlock()
 			t.Fatal("orphan collector bypassed retired deletion responsibility")
@@ -168,24 +138,14 @@ func TestRetiredSnapshotCleanupRetriesAfterRestart(t *testing.T) {
 func TestRetiredSnapshotCleanupDoesNotOverwriteNewPause(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	old := recoverySandbox(t, s, b.ID).SnapshotID
 	f.control.Lock()
 	f.failSnapshotDeletes = 1
 	f.control.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"resume",
-		Command{Action: "resume", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "resume", Command{Action: "resume", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	gate := make(chan struct{})
@@ -200,12 +160,7 @@ func TestRetiredSnapshotCleanupDoesNotOverwriteNewPause(t *testing.T) {
 	f.control.Unlock()
 	paused := make(chan error, 1)
 	go func() {
-		_, err := s.Execute(
-			s.ctx,
-			p,
-			"pause-new",
-			Command{Action: "pause", SandboxID: b.ID},
-		)
+		_, err := s.Execute(s.ctx, p, "pause-new", Command{Action: "pause", SandboxID: b.ID})
 		paused <- err
 	}()
 	select {
@@ -232,9 +187,7 @@ func TestRetiredSnapshotCleanupDoesNotOverwriteNewPause(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := recoverySandbox(t, s, b.ID)
-	if current.State != "paused" || current.SnapshotID == "" ||
-		current.SnapshotID == old ||
-		current.VMID != "" {
+	if current.State != "paused" || current.SnapshotID == "" || current.SnapshotID == old || current.VMID != "" {
 		t.Fatal("cleanup overwrote pause", current)
 	}
 }
@@ -259,30 +212,16 @@ func TestRetiredSnapshotCleanupKeepsQuotaUntilReclaimed(t *testing.T) {
 	f.control.Unlock()
 	for _, key := range []string{"one", "two"} {
 		for _, action := range []string{"pause", "resume"} {
-			if _, err := s.Execute(
-				s.ctx,
-				p,
-				key+action,
-				Command{Action: action, SandboxID: b.ID},
-			); err != nil {
+			if _, err := s.Execute(s.ctx, p, key+action, Command{Action: action, SandboxID: b.ID}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 	snapshots := f.count("snapshot")
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"over-quota",
-		Command{Action: "pause", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	if _, err := s.Execute(s.ctx, p, "over-quota", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrExhausted) {
 		t.Fatal("cleanup charge lost", err)
 	}
-	if f.count("snapshot") != snapshots ||
-		recoverySandbox(t, s, b.ID).State != "running" {
+	if f.count("snapshot") != snapshots || recoverySandbox(t, s, b.ID).State != "running" {
 		t.Fatal("quota rejected after side effect")
 	}
 	f.control.Lock()
@@ -291,12 +230,7 @@ func TestRetiredSnapshotCleanupKeepsQuotaUntilReclaimed(t *testing.T) {
 	if err := s.recoverResources(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"after-cleanup",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "after-cleanup", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -304,24 +238,14 @@ func TestRetiredSnapshotCleanupKeepsQuotaUntilReclaimed(t *testing.T) {
 func TestRetiredSnapshotHistoricalRunningCaptureAdmission(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	old := recoverySandbox(t, s, b.ID).SnapshotID
 	f.control.Lock()
 	f.failSnapshotDeletes = 100
 	f.control.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"resume",
-		Command{Action: "resume", SandboxID: b.ID},
-	); err != nil {
+	if _, err := s.Execute(s.ctx, p, "resume", Command{Action: "resume", SandboxID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	b = recoverySandbox(t, s, b.ID)
@@ -342,34 +266,17 @@ func TestRetiredSnapshotHistoricalRunningCaptureAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := f.count("snapshot")
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"unsafe-admission",
-		Command{Action: "pause", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	if _, err := s.Execute(s.ctx, p, "unsafe-admission", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrExhausted) {
 		t.Fatal("historical capture skipped reservation", err)
 	}
 	ready, err := s.DataReady(s.ctx, p, b.ID)
 	if err != nil || ready.SnapshotID != "" {
 		t.Fatal("trusted historical handoff failed", ready, err)
 	}
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"after-handoff",
-		Command{Action: "pause", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	if _, err := s.Execute(s.ctx, p, "after-handoff", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrExhausted) {
 		t.Fatal("handoff released charge", err)
 	}
-	if f.count("snapshot") != count ||
-		recoverySandbox(t, s, b.ID).State != "running" {
+	if f.count("snapshot") != count || recoverySandbox(t, s, b.ID).State != "running" {
 		t.Fatal("rejected capture changed running state")
 	}
 }
@@ -390,12 +297,7 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, action := range []string{"pause", "checkpoint", "resume"} {
-		if _, err := s.Execute(
-			s.ctx,
-			p,
-			action,
-			Command{Action: action, SandboxID: b.ID},
-		); err != nil {
+		if _, err := s.Execute(s.ctx, p, action, Command{Action: action, SandboxID: b.ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -424,12 +326,7 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 	t.Cleanup(func() { reopened.Close() })
 	// 64 active VM disk + 192 shared checkpoint/backing snapshot + 192 new
 	// pause capture = 448. Cleanup and backing refs do not duplicate the SID.
-	if _, err = reopened.Execute(
-		reopened.ctx,
-		p,
-		"boundary",
-		Command{Action: "pause", SandboxID: b.ID},
-	); err != nil {
+	if _, err = reopened.Execute(reopened.ctx, p, "boundary", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 		t.Fatal("shared charge duplicated", err)
 	}
 	f.control.Lock()
@@ -443,15 +340,7 @@ func TestRetiredSnapshotQuotaSurvivesRestartAndDeduplicates(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = reopened.Execute(
-		reopened.ctx,
-		p,
-		"over-boundary",
-		Command{Action: "pause", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	if _, err = reopened.Execute(reopened.ctx, p, "over-boundary", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrExhausted) {
 		t.Fatal("persistent charge missing", err)
 	}
 }
@@ -490,17 +379,13 @@ func TestSnapshotOwnershipSurvivesReplayAndRestart(t *testing.T) {
 			s.cancel()
 			s.wg.Wait()
 			step := map[string]string{"template_build": "build-snapshot", "pause": "hibernate-snapshot", "checkpoint": "checkpoint-capture", "fork": "fork-snapshot"}[action]
-			receipt, err := f.FindOperation(
-				context.Background(),
-				stepKey(o, step),
-			)
+			receipt, err := f.FindOperation(context.Background(), stepKey(o, step))
 			if err != nil {
 				t.Fatal(err)
 			}
 			var count int
 			if err = s.store.db.QueryRow("SELECT count(*) FROM snapshot_owners WHERE snapshot_id=?", receipt.SnapshotID).
-				Scan(&count); err != nil ||
-				count != 0 {
+				Scan(&count); err != nil || count != 0 {
 				t.Fatal("published before receipt handoff", count, err)
 			}
 			opts := s.opts
@@ -517,18 +402,12 @@ func TestSnapshotOwnershipSurvivesReplayAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { reopened.Close() })
-			if _, err = reopened.Wait(
-				context.Background(),
-				p,
-				o.ID,
-			); err != nil {
+			if _, err = reopened.Wait(context.Background(), p, o.ID); err != nil {
 				t.Fatal("replay failed", err)
 			}
 			var owner, source, kind string
 			if err = reopened.store.db.QueryRow("SELECT tenant_id,source_operation_id,source_kind FROM snapshot_owners WHERE snapshot_id=?", receipt.SnapshotID).
-				Scan(&owner, &source, &kind); err != nil ||
-				owner != p.TenantID ||
-				source != o.ID ||
+				Scan(&owner, &source, &kind); err != nil || owner != p.TenantID || source != o.ID ||
 				kind != "captured" {
 				t.Fatal(owner, source, kind, err)
 			}
@@ -539,8 +418,7 @@ func TestSnapshotOwnershipSurvivesReplayAndRestart(t *testing.T) {
 					"paused-checkpoint",
 					Command{Action: "checkpoint", SandboxID: b.ID},
 				)
-				if err != nil ||
-					reused.Checkpoint.SnapshotID != receipt.SnapshotID {
+				if err != nil || reused.Checkpoint.SnapshotID != receipt.SnapshotID {
 					t.Fatal("paused checkpoint did not reuse capture", err)
 				}
 			}
@@ -556,15 +434,11 @@ func TestSnapshotOwnershipSurvivesReplayAndRestart(t *testing.T) {
 						SnapshotID: receipt.SnapshotID,
 					},
 				},
-			); !isCode(
-				err,
-				ErrNotFound,
-			) {
+			); !isCode(err, ErrNotFound) {
 				t.Fatal("replay provenance reassigned", err)
 			}
 			if err = reopened.store.db.QueryRow("SELECT count(*) FROM snapshot_owners WHERE snapshot_id=?", receipt.SnapshotID).
-				Scan(&count); err != nil ||
-				count != 1 {
+				Scan(&count); err != nil || count != 1 {
 				t.Fatal("duplicate ownership", count, err)
 			}
 		})
@@ -584,12 +458,7 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 				f.snapshotEntered = entered
 				f.snapshotGate = gate
 				f.control.Unlock()
-				o, err := s.Submit(
-					s.ctx,
-					root,
-					"root-capture",
-					Command{Action: action, SandboxID: b.ID},
-				)
+				o, err := s.Submit(s.ctx, root, "root-capture", Command{Action: action, SandboxID: b.ID})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -604,19 +473,13 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 				if action == "pause" {
 					step = "hibernate-snapshot"
 				}
-				receipt, err := f.FindOperation(
-					context.Background(),
-					stepKey(o, step),
-				)
+				receipt, err := f.FindOperation(context.Background(), stepKey(o, step))
 				if err != nil {
 					t.Fatal(err)
 				}
 				if action == "pause" {
 					// Terminal client failure is compensated from its original capture receipt.
-					original, err := s.store.operation(
-						context.Background(),
-						o.ID,
-					)
+					original, err := s.store.operation(context.Background(), o.ID)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -625,11 +488,7 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 						Code:    ErrUnknown,
 						Message: "capture response lost",
 					}
-					if err = saveOp(
-						context.Background(),
-						s.store.db,
-						original,
-					); err != nil {
+					if err = saveOp(context.Background(), s.store.db, original); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -652,23 +511,14 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 						t.Fatal(err)
 					}
 				} else {
-					if _, err = reopened.Wait(
-						context.Background(),
-						root,
-						o.ID,
-					); err != nil {
+					if _, err = reopened.Wait(context.Background(), root, o.ID); err != nil {
 						t.Fatal(err)
 					}
 				}
 				var owner string
 				if err = reopened.store.db.QueryRow("SELECT tenant_id FROM snapshot_owners WHERE snapshot_id=?", receipt.SnapshotID).
-					Scan(&owner); err != nil ||
-					owner != alice.TenantID {
-					t.Fatalf(
-						"replayed root capture owner=%s err=%v",
-						owner,
-						err,
-					)
+					Scan(&owner); err != nil || owner != alice.TenantID {
+					t.Fatalf("replayed root capture owner=%s err=%v", owner, err)
 				}
 				if _, err = reopened.Execute(
 					reopened.ctx,
@@ -682,10 +532,7 @@ func TestRootCaptureReceiptReplayKeepsSourceTenant(t *testing.T) {
 							SnapshotID: receipt.SnapshotID,
 						},
 					},
-				); !isCode(
-					err,
-					ErrNotFound,
-				) {
+				); !isCode(err, ErrNotFound) {
 					t.Fatal("Bob imported replayed Alice capture", err)
 				}
 				if action == "pause" {
@@ -717,24 +564,11 @@ func TestRootSnapshotGrantSurvivesRestart(t *testing.T) {
 		Action:   "template_put",
 		Template: &Template{ID: "golden", Shape: shape, SnapshotID: "external"},
 	}
-	if _, err := s.Submit(
-		s.ctx,
-		p,
-		"tenant-import",
-		cmd,
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err := s.Submit(s.ctx, p, "tenant-import", cmd); !isCode(err, ErrNotFound) {
 		t.Fatal("tenant created grant", err)
 	}
 	unlock := s.lock("template:golden")
-	o, err := s.Submit(
-		s.ctx,
-		Principal{Root: true, TenantID: p.TenantID},
-		"root-import",
-		cmd,
-	)
+	o, err := s.Submit(s.ctx, Principal{Root: true, TenantID: p.TenantID}, "root-import", cmd)
 	if err != nil {
 		unlock()
 		t.Fatal(err)
@@ -770,9 +604,7 @@ func TestRootSnapshotGrantSurvivesRestart(t *testing.T) {
 	}
 	var kind, source string
 	if err = reopened.store.db.QueryRow("SELECT source_kind,source_operation_id FROM snapshot_owners WHERE snapshot_id='external'").
-		Scan(&kind, &source); err != nil ||
-		kind != "external_import" ||
-		source != o.ID {
+		Scan(&kind, &source); err != nil || kind != "external_import" || source != o.ID {
 		t.Fatal(kind, source, err)
 	}
 }

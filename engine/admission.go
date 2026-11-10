@@ -19,30 +19,19 @@ func checkConfig(c *api.Config) error {
 		return api.Fail(api.Invalid, "config required")
 	}
 	if !strings.HasPrefix(c.Image, "sha256:") || len(c.Image) != 71 {
-		return api.Fail(
-			api.Invalid,
-			"image must be an imported sha256 manifest digest",
-		)
+		return api.Fail(api.Invalid, "image must be an imported sha256 manifest digest")
 	}
 	if _, err := hex.DecodeString(c.Image[7:]); err != nil {
 		return api.Fail(api.Invalid, "invalid image digest")
 	}
 	s := c.Shape
-	if s.VCPUs < 1 || s.VCPUs > 255 || s.MemoryMiB < 128 ||
-		s.MemoryMiB > 1<<24 ||
-		s.DiskMiB < 64 ||
-		s.DiskMiB > 1<<30 {
+	if s.VCPUs < 1 || s.VCPUs > 255 || s.MemoryMiB < 128 || s.MemoryMiB > 1<<24 || s.DiskMiB < 64 || s.DiskMiB > 1<<30 {
 		return api.Fail(api.Invalid, "shape outside supported bounds")
 	}
 	return nil
 }
 
-func (e *Engine) reserve(
-	tx *sql.Tx,
-	owner string,
-	bytes, memory int64,
-	cpus int,
-) error {
+func (e *Engine) reserve(tx *sql.Tx, owner string, bytes, memory int64, cpus int) error {
 	var oldBytes, oldMemory int64
 	var oldCPUs int
 	err := tx.QueryRow("SELECT bytes,memory,cpus FROM reservations WHERE owner=?", owner).
@@ -50,8 +39,7 @@ func (e *Engine) reserve(
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err == nil && oldBytes >= bytes && oldMemory >= memory &&
-		oldCPUs >= cpus {
+	if err == nil && oldBytes >= bytes && oldMemory >= memory && oldCPUs >= cpus {
 		return nil
 	}
 	bytes = max(bytes, oldBytes)
@@ -67,8 +55,7 @@ func (e *Engine) reserve(
 	if err != nil {
 		return err
 	}
-	if free-held+oldBytes-bytes < e.opts.SafetyBytes ||
-		mem-oldMemory+memory > e.opts.MaxMemoryMiB ||
+	if free-held+oldBytes-bytes < e.opts.SafetyBytes || mem-oldMemory+memory > e.opts.MaxMemoryMiB ||
 		cpu-oldCPUs+cpus > e.opts.MaxVCPUs {
 		return api.Fail(
 			api.Exhausted,
@@ -94,15 +81,9 @@ func (e *Engine) reserve(
 	return err
 }
 
-func (e *Engine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (e *Engine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	if r.Key == "" || len(r.Key) > 256 {
-		return api.Operation{}, api.Fail(
-			api.Invalid,
-			"a unique key of 1..256 bytes is required",
-		)
+		return api.Operation{}, api.Fail(api.Invalid, "a unique key of 1..256 bytes is required")
 	}
 	b := encode(r)
 	sum := sha256.Sum256(b)
@@ -116,16 +97,10 @@ func (e *Engine) Submit(
 			return api.Operation{}, x
 		}
 		if cachedHash != hash {
-			return cached.Operation, api.Fail(
-				api.Conflict,
-				"key already belongs to different parameters",
-			)
+			return cached.Operation, api.Fail(api.Conflict, "key already belongs to different parameters")
 		}
 		return cached.Operation, nil
-	} else if !errors.Is(
-		x,
-		sql.ErrNoRows,
-	) {
+	} else if !errors.Is(x, sql.ErrNoRows) {
 		return api.Operation{}, x
 	}
 	// Lock ordering is VM then admission everywhere, including reconciliation.
@@ -148,18 +123,14 @@ func (e *Engine) Submit(
 	}
 	defer func() { _ = tx.Rollback() }()
 	var old, oldHash []byte
-	err = tx.QueryRowContext(ctx, "SELECT body,hash FROM operations WHERE key=?", r.Key).
-		Scan(&old, &oldHash)
+	err = tx.QueryRowContext(ctx, "SELECT body,hash FROM operations WHERE key=?", r.Key).Scan(&old, &oldHash)
 	if err == nil {
 		var o opRecord
 		if err = json.Unmarshal(old, &o); err != nil {
 			return api.Operation{}, err
 		}
 		if string(oldHash) != hash {
-			return o.Operation, api.Fail(
-				api.Conflict,
-				"key already belongs to different parameters",
-			)
+			return o.Operation, api.Fail(api.Conflict, "key already belongs to different parameters")
 		}
 		return o.Operation, nil
 	}
@@ -178,27 +149,17 @@ func (e *Engine) Submit(
 		"network",
 		"network_policy":
 	default:
-		return api.Operation{}, api.Fail(
-			api.Invalid,
-			"unsupported action %q",
-			r.Action,
-		)
+		return api.Operation{}, api.Fail(api.Invalid, "unsupported action %q", r.Action)
 	}
-	if r.Action != "create" && r.Action != "clone" &&
-		r.Action != "delete_snapshot" &&
-		r.VMID == "" {
+	if r.Action != "create" && r.Action != "clone" && r.Action != "delete_snapshot" && r.VMID == "" {
 		return api.Operation{}, api.Fail(api.Invalid, "vm_id required")
 	}
-	if (r.Action == "restore" || r.Action == "clone" || r.Action == "delete_snapshot") &&
-		r.SnapshotID == "" {
+	if (r.Action == "restore" || r.Action == "clone" || r.Action == "delete_snapshot") && r.SnapshotID == "" {
 		return api.Operation{}, api.Fail(api.Invalid, "snapshot_id required")
 	}
 	if r.Action == "network" || r.Action == "network_policy" {
 		if r.ExpectedInstance == "" {
-			return api.Operation{}, api.Fail(
-				api.Invalid,
-				"network changes require expected_instance",
-			)
+			return api.Operation{}, api.Fail(api.Invalid, "network changes require expected_instance")
 		}
 	}
 	if r.Action == "network_policy" {
@@ -206,10 +167,7 @@ func (e *Engine) Submit(
 			return api.Operation{}, err
 		}
 	} else if r.Policy != nil {
-		return api.Operation{}, api.Fail(
-			api.Invalid,
-			"policy is only accepted by network_policy",
-		)
+		return api.Operation{}, api.Fail(api.Invalid, "policy is only accepted by network_policy")
 	}
 	o := opRecord{
 		Operation: api.Operation{
@@ -226,21 +184,14 @@ func (e *Engine) Submit(
 	var v vmRecord
 	if r.Action == "create" || r.Action == "clone" {
 		if r.VMID != "" {
-			return api.Operation{}, api.Fail(
-				api.Invalid,
-				"engine allocates VM IDs",
-			)
+			return api.Operation{}, api.Fail(api.Invalid, "engine allocates VM IDs")
 		}
 		config := r.Config
 		if r.Action == "clone" {
 			var sb []byte
-			err = tx.QueryRow("SELECT body FROM snapshots WHERE id=?", r.SnapshotID).
-				Scan(&sb)
+			err = tx.QueryRow("SELECT body FROM snapshots WHERE id=?", r.SnapshotID).Scan(&sb)
 			if errors.Is(err, sql.ErrNoRows) {
-				return api.Operation{}, api.Fail(
-					api.NotFound,
-					"snapshot not found",
-				)
+				return api.Operation{}, api.Fail(api.NotFound, "snapshot not found")
 			}
 			if err != nil {
 				return api.Operation{}, err
@@ -277,10 +228,7 @@ func (e *Engine) Submit(
 			return api.Operation{}, err
 		}
 		if slot >= 32768 {
-			return api.Operation{}, api.Fail(
-				api.Exhausted,
-				"network address pool exhausted",
-			)
+			return api.Operation{}, api.Fail(api.Exhausted, "network address pool exhausted")
 		}
 		dir := filepath.Join(e.opts.StateDir, "vms", o.Operation.VMID)
 		v = vmRecord{
@@ -292,18 +240,10 @@ func (e *Engine) Submit(
 				OperationID: o.Operation.ID,
 			},
 			Resource: Resource{
-				VMID: o.Operation.VMID,
-				Dir:  dir,
-				Disk: filepath.Join(
-					dir,
-					"disks",
-					o.Operation.ID+".raw",
-				),
-				ImageDir: filepath.Join(
-					e.opts.StateDir,
-					"images",
-					config.Image[7:],
-				),
+				VMID:         o.Operation.VMID,
+				Dir:          dir,
+				Disk:         filepath.Join(dir, "disks", o.Operation.ID+".raw"),
+				ImageDir:     filepath.Join(e.opts.StateDir, "images", config.Image[7:]),
 				Config:       *config,
 				NetworkToken: newID("net-"),
 				Slot:         slot,
@@ -313,21 +253,10 @@ func (e *Engine) Submit(
 		if r.Action == "clone" {
 			bytes += config.Shape.MemoryMiB << 20
 		}
-		if err = e.reserve(
-			tx,
-			v.VM.ID,
-			bytes,
-			config.Shape.MemoryMiB+128,
-			config.Shape.VCPUs,
-		); err != nil {
+		if err = e.reserve(tx, v.VM.ID, bytes, config.Shape.MemoryMiB+128, config.Shape.VCPUs); err != nil {
 			return api.Operation{}, err
 		}
-		if _, err = tx.Exec(
-			"INSERT INTO vms VALUES(?,?,?)",
-			v.VM.ID,
-			slot,
-			encode(v),
-		); err != nil {
+		if _, err = tx.Exec("INSERT INTO vms VALUES(?,?,?)", v.VM.ID, slot, encode(v)); err != nil {
 			return api.Operation{}, err
 		}
 	} else if r.Action != "delete_snapshot" {
@@ -371,8 +300,7 @@ func (e *Engine) Submit(
 					return api.Operation{}, err
 				}
 			}
-			if r.Action != "delete" || prior.Operation.Status != "failed" ||
-				prior.Operation.VMID != r.VMID ||
+			if r.Action != "delete" || prior.Operation.Status != "failed" || prior.Operation.VMID != r.VMID ||
 				blocked.Operation.ID != blockedID ||
 				blocked.Operation.VMID != r.VMID ||
 				blocked.Operation.Status != "failed" ||
@@ -389,28 +317,19 @@ func (e *Engine) Submit(
 			o.Journal.BlockedRestoreID = blockedID
 		}
 		if r.ExpectedInstance != "" && r.ExpectedInstance != v.VM.Instance {
-			return api.Operation{}, api.Fail(
-				api.Conflict,
-				"running instance changed",
-			)
+			return api.Operation{}, api.Fail(api.Conflict, "running instance changed")
 		}
 		if r.Action == "delete" {
 			v.VM.Deleting = true
 		}
 		v.VM.OperationID = o.Operation.ID
-		if _, err = tx.Exec(
-			"UPDATE vms SET body=? WHERE id=?",
-			encode(v),
-			v.VM.ID,
-		); err != nil {
+		if _, err = tx.Exec("UPDATE vms SET body=? WHERE id=?", encode(v), v.VM.ID); err != nil {
 			return api.Operation{}, err
 		}
 	}
-	if r.Action == "clone" || r.Action == "restore" ||
-		r.Action == "delete_snapshot" {
+	if r.Action == "clone" || r.Action == "restore" || r.Action == "delete_snapshot" {
 		var sb []byte
-		err = tx.QueryRow("SELECT body FROM snapshots WHERE id=?", r.SnapshotID).
-			Scan(&sb)
+		err = tx.QueryRow("SELECT body FROM snapshots WHERE id=?", r.SnapshotID).Scan(&sb)
 		if errors.Is(err, sql.ErrNoRows) {
 			return api.Operation{}, api.Fail(api.NotFound, "snapshot not found")
 		}
@@ -423,25 +342,14 @@ func (e *Engine) Submit(
 		}
 		if r.Action == "delete_snapshot" {
 			s.Snapshot.Deleting = true
-			if _, err = tx.Exec(
-				"UPDATE snapshots SET body=? WHERE id=?",
-				encode(s),
-				s.Snapshot.ID,
-			); err != nil {
+			if _, err = tx.Exec("UPDATE snapshots SET body=? WHERE id=?", encode(s), s.Snapshot.ID); err != nil {
 				return api.Operation{}, err
 			}
 		} else {
 			if !s.Snapshot.Published || s.Snapshot.Deleting {
-				return api.Operation{}, api.Fail(
-					api.Conflict,
-					"snapshot unavailable or deleting",
-				)
+				return api.Operation{}, api.Fail(api.Conflict, "snapshot unavailable or deleting")
 			}
-			if _, err = tx.Exec(
-				"INSERT INTO leases VALUES(?,?)",
-				r.SnapshotID,
-				o.Operation.ID,
-			); err != nil {
+			if _, err = tx.Exec("INSERT INTO leases VALUES(?,?)", r.SnapshotID, o.Operation.ID); err != nil {
 				return api.Operation{}, err
 			}
 			o.Journal.Lease = true
@@ -449,11 +357,7 @@ func (e *Engine) Submit(
 	}
 	if r.Action == "snapshot" {
 		o.Operation.SnapshotID = newID("snap-")
-		dir := filepath.Join(
-			e.opts.StateDir,
-			"snapshots",
-			o.Operation.SnapshotID,
-		)
+		dir := filepath.Join(e.opts.StateDir, "snapshots", o.Operation.SnapshotID)
 		s := snapshotRecord{
 			Snapshot: api.Snapshot{
 				ID:         o.Operation.SnapshotID,
@@ -468,11 +372,7 @@ func (e *Engine) Submit(
 		if err = e.reserve(tx, s.Snapshot.ID, bytes, 0, 0); err != nil {
 			return api.Operation{}, err
 		}
-		if _, err = tx.Exec(
-			"INSERT INTO snapshots VALUES(?,?)",
-			s.Snapshot.ID,
-			encode(s),
-		); err != nil {
+		if _, err = tx.Exec("INSERT INTO snapshots VALUES(?,?)", s.Snapshot.ID, encode(s)); err != nil {
 			return api.Operation{}, err
 		}
 	}

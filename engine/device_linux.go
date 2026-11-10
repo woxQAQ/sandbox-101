@@ -17,9 +17,7 @@ import (
 // actual devices catches mode, group and ACL restrictions before VM allocation.
 func InternalDeviceCheck() error {
 	if os.Geteuid() == 0 || os.Getegid() == 0 {
-		return fmt.Errorf(
-			"device preflight requires the unprivileged VMM identity",
-		)
+		return fmt.Errorf("device preflight requires the unprivileged VMM identity")
 	}
 	for _, path := range []string{"/dev/kvm", "/dev/net/tun"} {
 		fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC, 0)
@@ -30,11 +28,7 @@ func InternalDeviceCheck() error {
 			version, ioctlErr := unix.IoctlRetInt(fd, 0xae00)
 			if ioctlErr != nil || version != 12 {
 				_ = unix.Close(fd)
-				return fmt.Errorf(
-					"KVM API unavailable: version %d, %v",
-					version,
-					ioctlErr,
-				)
+				return fmt.Errorf("KVM API unavailable: version %d, %v", version, ioctlErr)
 			}
 		}
 		if err := unix.Close(fd); err != nil {

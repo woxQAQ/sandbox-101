@@ -94,11 +94,7 @@ func regular(path string) error {
 // Its caller must keep the source stable until it returns. It deliberately does
 // not fsync: snapshot capture must resume the source before publication syncing.
 func copyFile(src, dst string, mode os.FileMode) error {
-	fd, e := unix.Open(
-		src,
-		unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC,
-		0,
-	)
+	fd, e := unix.Open(src, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if e != nil {
 		return e
 	}
@@ -131,8 +127,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 			if errors.Is(err, syscall.ENXIO) {
 				break
 			}
-			if errors.Is(err, syscall.EINVAL) ||
-				errors.Is(err, syscall.ENOTSUP) {
+			if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) {
 				data = pos
 			} else if err != nil {
 				return err
@@ -239,8 +234,7 @@ func hashTree(root string) (map[string]string, error) {
 
 func verifyFiles(root string, files map[string]string) error {
 	for rel, want := range files {
-		if filepath.IsAbs(rel) || rel == "." || strings.Contains(rel, "\\") ||
-			filepath.Clean(rel) != rel ||
+		if filepath.IsAbs(rel) || rel == "." || strings.Contains(rel, "\\") || filepath.Clean(rel) != rel ||
 			strings.HasPrefix(rel, "../") {
 			return fmt.Errorf("invalid artifact path")
 		}

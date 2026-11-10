@@ -38,11 +38,7 @@ func run() error {
 		if cfg.Backup == "" {
 			return errors.New("--backup new directory is required")
 		}
-		point, err := sandboxd.BackupState(
-			context.Background(),
-			cfg.StateDir,
-			cfg.Backup,
-		)
+		point, err := sandboxd.BackupState(context.Background(), cfg.StateDir, cfg.Backup)
 		if err != nil {
 			return err
 		}
@@ -84,10 +80,7 @@ func run() error {
 		egress.Options{
 			PrepareSocket: func(binding egress.Binding, path string, info os.FileInfo) error {
 				<-ready
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					3*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				return service.PrepareProxySocket(ctx, binding, path, info)
 			},
@@ -101,35 +94,23 @@ func run() error {
 			},
 			AuditRecord: func(event egress.AuditEvent) error {
 				<-ready
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					3*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				return service.Audit(ctx, event)
 			},
 			RecoverStaleSocket: func(binding egress.Binding, path string, info os.FileInfo) bool {
 				<-ready
-				ctx, cancel := context.WithTimeout(
-					context.Background(),
-					3*time.Second,
-				)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				b, err := service.Get(
-					ctx,
-					sandboxd.Principal{Root: true},
-					binding.SandboxID,
-				)
-				if err != nil || b.VMID == "" ||
-					b.TenantID != binding.TenantID {
+				b, err := service.Get(ctx, sandboxd.Principal{Root: true}, binding.SandboxID)
+				if err != nil || b.VMID == "" || b.TenantID != binding.TenantID {
 					return false
 				}
 				v, err := engine.GetVM(ctx, b.VMID)
 				if err != nil || !v.Verified || v.Instance == "" {
 					return false
 				}
-				return path == v.VSockPath+"_2049" ||
-					path == v.VSockPath+"_2050"
+				return path == v.VSockPath+"_2049" || path == v.VSockPath+"_2050"
 			},
 		},
 	)
@@ -164,11 +145,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	signals, cancel := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
+	signals, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -178,13 +155,7 @@ func run() error {
 			done <- server.Serve(ln)
 		}
 	}()
-	slog.Info(
-		"Sandbox service listening",
-		"address",
-		ln.Addr().String(),
-		"state",
-		filepath.Clean(cfg.StateDir),
-	)
+	slog.Info("Sandbox service listening", "address", ln.Addr().String(), "state", filepath.Clean(cfg.StateDir))
 	select {
 	case err = <-done:
 		if errors.Is(err, http.ErrServerClosed) {

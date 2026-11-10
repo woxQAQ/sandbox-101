@@ -1,5 +1,5 @@
-// Package config loads command configuration from local flags, environment and
-// an explicitly selected Viper configuration file.
+// Package config defines engine configuration and loads typed settings from
+// flags, environment and an explicitly selected Viper configuration file.
 package config
 
 import (
@@ -50,11 +50,7 @@ func Load(flags *pflag.FlagSet, prefix string, out any) error {
 				return fmt.Errorf("config %q: unknown key %q", path, key)
 			}
 			if value == nil {
-				return fmt.Errorf(
-					"config %q: key %q must not be null",
-					path,
-					key,
-				)
+				return fmt.Errorf("config %q: key %q must not be null", path, key)
 			}
 		}
 		if err := v.MergeConfigMap(values); err != nil {

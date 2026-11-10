@@ -34,28 +34,18 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, Fail(
-			ErrInvalid,
-			"state directory must be a directory, not a symlink",
-		)
+		return nil, Fail(ErrInvalid, "state directory must be a directory, not a symlink")
 	}
 	if err = os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(
-		filepath.Join(dir, "writer.lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
+	lock, err := os.OpenFile(filepath.Join(dir, "writer.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = lock.Close()
-		return nil, Fail(
-			ErrConflict,
-			"another sandboxd owns state directory",
-		)
+		return nil, Fail(ErrConflict, "another sandboxd owns state directory")
 	}
 	s := &store{lock: lock}
 	fail := func(e error) (*store, error) { return nil, errors.Join(e, s.close()) }
@@ -74,31 +64,17 @@ func openStore(dir string, initialize bool) (*store, error) {
 	fresh := os.IsNotExist(err)
 	if fresh {
 		if !initialize {
-			return fail(
-				Fail(
-					ErrManualRecovery,
-					"database missing; use --init only for a new installation",
-				),
-			)
+			return fail(Fail(ErrManualRecovery, "database missing; use --init only for a new installation"))
 		}
 		if _, e := os.Stat(filepath.Join(dir, "initialized")); e == nil {
-			return fail(
-				Fail(
-					ErrManualRecovery,
-					"database lost; preserve state and restore a consistent backup",
-				),
-			)
+			return fail(Fail(ErrManualRecovery, "database lost; preserve state and restore a consistent backup"))
 		}
 	} else if err != nil {
 		return fail(err)
 	} else if initialize {
-		return fail(
-			Fail(ErrConflict, "database already exists; omit --init"),
-		)
+		return fail(Fail(ErrConflict, "database already exists; omit --init"))
 	} else if !databaseInfo.Mode().IsRegular() {
-		return fail(
-			Fail(ErrManualRecovery, "database must be a regular file"),
-		)
+		return fail(Fail(ErrManualRecovery, "database must be a regular file"))
 	}
 	keyPath := filepath.Join(dir, "node.key")
 	key, err := os.ReadFile(keyPath)
@@ -111,9 +87,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 			return fail(err)
 		}
 	} else if err != nil {
-		return fail(
-			Fail(ErrManualRecovery, "node key missing or unreadable"),
-		)
+		return fail(Fail(ErrManualRecovery, "node key missing or unreadable"))
 	}
 	if len(key) != 32 {
 		return fail(Fail(ErrManualRecovery, "invalid node key"))
@@ -128,29 +102,16 @@ func openStore(dir string, initialize bool) (*store, error) {
 	}
 	s.db.SetMaxOpenConns(1)
 	var integrity string
-	if err = s.db.QueryRow("PRAGMA quick_check").
-		Scan(&integrity); err != nil ||
-		integrity != "ok" {
-		return fail(
-			Fail(
-				ErrManualRecovery,
-				"database integrity check failed: %v %s",
-				err,
-				integrity,
-			),
-		)
+	if err = s.db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
+		return fail(Fail(ErrManualRecovery, "database integrity check failed: %v %s", err, integrity))
 	}
 	if err = os.Chmod(path, 0o600); err != nil {
 		return fail(err)
 	}
 	if !fresh {
 		var version int
-		if err = s.db.QueryRow("SELECT version FROM version").
-			Scan(&version); err != nil ||
-			version != storeSchemaVersion {
-			return fail(
-				Fail(ErrIncompatible, "unsupported database schema"),
-			)
+		if err = s.db.QueryRow("SELECT version FROM version").Scan(&version); err != nil || version != storeSchemaVersion {
+			return fail(Fail(ErrIncompatible, "unsupported database schema"))
 		}
 	}
 	_, err = s.db.Exec(`
@@ -174,9 +135,7 @@ func openStore(dir string, initialize bool) (*store, error) {
 		return fail(err)
 	}
 	var version int
-	if err = s.db.QueryRow("SELECT version FROM version").
-		Scan(&version); err != nil ||
-		version != storeSchemaVersion {
+	if err = s.db.QueryRow("SELECT version FROM version").Scan(&version); err != nil || version != storeSchemaVersion {
 		return fail(Fail(ErrIncompatible, "unsupported database schema"))
 	}
 	if err = atomicFile(
@@ -256,8 +215,7 @@ func (s *store) audit(ctx context.Context, event any) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var prev string
-	err = tx.QueryRowContext(ctx, "SELECT hash FROM journal ORDER BY seq DESC LIMIT 1").
-		Scan(&prev)
+	err = tx.QueryRowContext(ctx, "SELECT hash FROM journal ORDER BY seq DESC LIMIT 1").Scan(&prev)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -278,10 +236,7 @@ func (s *store) audit(ctx context.Context, event any) error {
 }
 
 func (s *store) verifyJournal(ctx context.Context) error {
-	rows, err := s.db.QueryContext(
-		ctx,
-		"SELECT body,hash FROM journal ORDER BY seq",
-	)
+	rows, err := s.db.QueryContext(ctx, "SELECT body,hash FROM journal ORDER BY seq")
 	if err != nil {
 		return err
 	}
@@ -293,14 +248,8 @@ func (s *store) verifyJournal(ctx context.Context) error {
 		if err = rows.Scan(&b, &hash); err != nil {
 			return err
 		}
-		if !hmac.Equal(
-			[]byte(hash),
-			[]byte(s.sign("journal-v1", prev, string(b))),
-		) {
-			return Fail(
-				ErrManualRecovery,
-				"audit journal verification failed",
-			)
+		if !hmac.Equal([]byte(hash), []byte(s.sign("journal-v1", prev, string(b)))) {
+			return Fail(ErrManualRecovery, "audit journal verification failed")
 		}
 		prev = hash
 	}

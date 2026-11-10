@@ -12,12 +12,7 @@ func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
 	f.mu.Lock()
 	f.failSnapshot = true
 	f.mu.Unlock()
-	_, err := s.Execute(
-		context.Background(),
-		p,
-		"pause-fails",
-		Command{Action: "pause", SandboxID: id},
-	)
+	_, err := s.Execute(context.Background(), p, "pause-fails", Command{Action: "pause", SandboxID: id})
 	if !isCode(err, ErrExhausted) {
 		t.Fatalf("expected exhaustion: %v", err)
 	}
@@ -28,12 +23,7 @@ func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
 	f.mu.Lock()
 	f.failSnapshot = false
 	f.mu.Unlock()
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	); err != nil {
+	if _, err = s.Execute(context.Background(), p, "pause", Command{Action: "pause", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = s.Get(context.Background(), p, id)
@@ -41,12 +31,7 @@ func TestPauseFailurePreservesVMAndZeroWakeRelease(t *testing.T) {
 		t.Fatal("pause did not free VM")
 	}
 	before := f.count("clone")
-	if _, err = s.Execute(
-		context.Background(),
-		p,
-		"release",
-		Command{Action: "release", SandboxID: id},
-	); err != nil {
+	if _, err = s.Execute(context.Background(), p, "release", Command{Action: "release", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
 	if f.count("clone") != before || f.count("delete_snapshot") != 1 {

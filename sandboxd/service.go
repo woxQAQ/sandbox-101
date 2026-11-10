@@ -43,10 +43,7 @@ type Service struct {
 // Engine, Agent, and a root token are required.
 func Open(opts Options) (*Service, error) {
 	if opts.Engine == nil || opts.Agent == nil || opts.RootToken == "" {
-		return nil, Fail(
-			ErrInvalid,
-			"engine, agent and root token are required",
-		)
+		return nil, Fail(ErrInvalid, "engine, agent and root token are required")
 	}
 	if opts.MaxTTL <= 0 {
 		opts.MaxTTL = time.Hour
@@ -141,14 +138,7 @@ type Agent interface {
 
 // Egress installs and revokes host-side policy and secret bindings for sandboxes.
 type Egress interface {
-	Bind(
-		context.Context,
-		string,
-		string,
-		string,
-		egress.Policy,
-		map[string]egress.Secret,
-	) error
+	Bind(context.Context, string, string, string, egress.Policy, map[string]egress.Secret) error
 	Revoke(string) error
 	Close() error
 }

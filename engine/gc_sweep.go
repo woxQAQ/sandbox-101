@@ -20,10 +20,7 @@ func (g *gcGraph) idle(vm string) error {
 		if !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
 			o.Journal.Lease || o.Journal.RestoreBlocked && !o.Journal.RestoreCleaned ||
 			v.VM.OperationID == o.Operation.ID {
-			return fmt.Errorf(
-				"VM has pending or unresolved operation %s",
-				o.Operation.ID,
-			)
+			return fmt.Errorf("VM has pending or unresolved operation %s", o.Operation.ID)
 		}
 		for _, r := range []*Resource{o.Journal.Old, o.Journal.Resource} {
 			if r != nil {
@@ -39,17 +36,10 @@ func (g *gcGraph) idle(vm string) error {
 		seen[r.Instance] = true
 		obs, err := g.e.opts.Backend.Inspect(g.ctx, r)
 		if err != nil {
-			return fmt.Errorf(
-				"instance %s ownership uncertain: %w",
-				r.Instance,
-				err,
-			)
+			return fmt.Errorf("instance %s ownership uncertain: %w", r.Instance, err)
 		}
 		if obs.Alive {
-			return fmt.Errorf(
-				"instance %s still alive; retained until readers exit",
-				r.Instance,
-			)
+			return fmt.Errorf("instance %s still alive; retained until readers exit", r.Instance)
 		}
 	}
 	return nil
@@ -57,8 +47,7 @@ func (g *gcGraph) idle(vm string) error {
 
 func (g *gcGraph) reachable(path string) bool {
 	for root := range g.roots {
-		if path == root ||
-			strings.HasPrefix(root, path+string(filepath.Separator)) ||
+		if path == root || strings.HasPrefix(root, path+string(filepath.Separator)) ||
 			strings.HasPrefix(path, root+string(filepath.Separator)) {
 			return true
 		}
@@ -90,17 +79,11 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			paths, err = g.ownedFiles(path, files, dir)
 		}
 		if err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, err.Error()},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 			return nil
 		}
 		if err = gcLocalReaders(paths); err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, err.Error()},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 			return nil
 		}
 		report.Candidates = append(report.Candidates, path)
@@ -136,10 +119,7 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		rel, _ := filepath.Rel(g.e.opts.StateDir, path)
 		parts := strings.Split(rel, string(filepath.Separator))
 		if g.reachable(path) || g.layers[rel] {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, "deletion intent has a durable reader root"},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, "deletion intent has a durable reader root"})
 			continue
 		}
 		var retire func() error
@@ -163,35 +143,24 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 				}
 			}
 			if err := g.idle(parts[1]); err != nil {
-				report.Retained = append(
-					report.Retained,
-					GCIssue{path, err.Error()},
-				)
+				report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 				continue
 			}
 			if parts[2] != "capture" {
 				v, ok := g.versions[strings.TrimSuffix(path, ".pending")]
 				if !ok {
-					return fmt.Errorf(
-						"GC deletion lost version ownership: %s",
-						path,
-					)
+					return fmt.Errorf("GC deletion lost version ownership: %s", path)
 				}
 				retire = func() error { return g.retireVersion(v) }
 			} else {
 				o, ok := g.ops[parts[3]]
-				if !ok || o.Operation.VMID != parts[1] ||
-					o.Operation.Request.Action != "snapshot" ||
+				if !ok || o.Operation.VMID != parts[1] || o.Operation.Request.Action != "snapshot" ||
 					!terminal(o.Operation.Status) ||
 					o.Journal.ResumeRequired {
-					return fmt.Errorf(
-						"GC deletion lost capture ownership: %s",
-						path,
-					)
+					return fmt.Errorf("GC deletion lost capture ownership: %s", path)
 				}
 				boundary := o.Journal.CaptureBoundary
-				if boundary == nil || boundary.Path != path ||
-					d.Nodes["."] != boundary.Parent {
+				if boundary == nil || boundary.Path != path || d.Nodes["."] != boundary.Parent {
 					report.Retained = append(
 						report.Retained,
 						GCIssue{
@@ -201,8 +170,7 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 					)
 					continue
 				}
-				if stage, present := d.Nodes["publication"]; present &&
-					stage != boundary.Publication {
+				if stage, present := d.Nodes["publication"]; present && stage != boundary.Publication {
 					report.Retained = append(
 						report.Retained,
 						GCIssue{
@@ -214,8 +182,7 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 				}
 			}
 		case "imports":
-			if _, ok := g.images["sha256:"+parts[1]]; !ok ||
-				!g.reservations["image:"+parts[1]] {
+			if _, ok := g.images["sha256:"+parts[1]]; !ok || !g.reservations["image:"+parts[1]] {
 				return fmt.Errorf("GC deletion lost import ownership: %s", path)
 			}
 		case "layer-cache":
@@ -237,10 +204,7 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			continue // VM deletion owns its directory; never recreate lost authority.
 		}
 		if err := g.idle(v.resource.VMID); err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, err.Error()},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 			continue
 		}
 		files := map[string]string{
@@ -269,21 +233,14 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			return err
 		}
 		if !dir {
-			if err := apply(
-				path+".pending",
-				map[string]string{"": ""},
-				false,
-				nil,
-			); err != nil {
+			if err := apply(path+".pending", map[string]string{"": ""}, false, nil); err != nil {
 				return err
 			}
 		}
 	}
 	for _, id := range gcSortedKeys(g.ops) {
 		o := g.ops[id]
-		if o.Operation.Request.Action != "snapshot" ||
-			!terminal(o.Operation.Status) ||
-			o.Journal.ResumeRequired ||
+		if o.Operation.Request.Action != "snapshot" || !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
 			o.Journal.Resource == nil {
 			continue
 		}
@@ -302,32 +259,18 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			continue
 		}
 		st, statErr := os.Lstat(path)
-		if statErr != nil || o.Journal.CaptureBoundary.Path != path ||
-			gcNode(st) != o.Journal.CaptureBoundary.Parent {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, "capture parent identity changed"},
-			)
+		if statErr != nil || o.Journal.CaptureBoundary.Path != path || gcNode(st) != o.Journal.CaptureBoundary.Parent {
+			report.Retained = append(report.Retained, GCIssue{path, "capture parent identity changed"})
 			continue
 		}
-		if stage, x := os.Lstat(
-			filepath.Join(path, "publication"),
-		); x == nil &&
-			gcNode(stage) != o.Journal.CaptureBoundary.Publication {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, "publication staging identity changed"},
-			)
+		if stage, x := os.Lstat(filepath.Join(path, "publication")); x == nil && gcNode(stage) != o.Journal.CaptureBoundary.Publication {
+			report.Retained = append(report.Retained, GCIssue{path, "publication staging identity changed"})
 			continue
-		} else if x != nil &&
-			!os.IsNotExist(x) {
+		} else if x != nil && !os.IsNotExist(x) {
 			return x
 		}
 		if err := g.idle(o.Operation.VMID); err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, err.Error()},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 			continue
 		}
 		if err := apply(
@@ -352,10 +295,7 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 		opts := g.imports[path]
 		files, err := g.importFiles(path, opts)
 		if err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{path, err.Error()},
-			)
+			report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 			continue
 		}
 		if err = apply(path, files, true, nil); err != nil {
@@ -376,17 +316,11 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 	for _, builder := range builders {
 		parent := filepath.Join(cache, builder.Name())
 		if !builder.IsDir() {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{parent, "unknown cache owner"},
-			)
+			report.Retained = append(report.Retained, GCIssue{parent, "unknown cache owner"})
 			continue
 		}
 		if _, err = shaName("sha256:" + builder.Name()); err != nil {
-			report.Retained = append(
-				report.Retained,
-				GCIssue{parent, "unknown builder identity"},
-			)
+			report.Retained = append(report.Retained, GCIssue{parent, "unknown builder identity"})
 			continue
 		}
 		layers, err := os.ReadDir(parent)
@@ -399,22 +333,11 @@ func (g *gcGraph) sweep(report *GCReport, opts GCOptions) error {
 			if g.layers[rel] || resumed[path] {
 				continue
 			}
-			if err = g.verifyCache(
-				"sha256:"+builder.Name(),
-				"sha256:"+layer.Name(),
-			); err != nil {
-				report.Retained = append(
-					report.Retained,
-					GCIssue{path, err.Error()},
-				)
+			if err = g.verifyCache("sha256:"+builder.Name(), "sha256:"+layer.Name()); err != nil {
+				report.Retained = append(report.Retained, GCIssue{path, err.Error()})
 				continue
 			}
-			if err = apply(
-				path,
-				map[string]string{"layer.erofs": "", "layer.json": ""},
-				true,
-				nil,
-			); err != nil {
+			if err = apply(path, map[string]string{"layer.erofs": "", "layer.json": ""}, true, nil); err != nil {
 				return err
 			}
 		}

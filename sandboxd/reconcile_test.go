@@ -37,26 +37,18 @@ func TestRestartReactivatesProxyBeforeAdmissionWithoutRenewing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.Close()
-	after, err := restarted.DataReady(
-		context.Background(),
-		principal,
-		before.ID,
-	)
+	after, err := restarted.DataReady(context.Background(), principal, before.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !after.Deadline.Equal(before.Deadline) ||
-		after.Instance != before.Instance ||
-		after.Epoch != before.Epoch {
+	if !after.Deadline.Equal(before.Deadline) || after.Instance != before.Instance || after.Epoch != before.Epoch {
 		t.Fatal("proxy recovery changed the lease or identity")
 	}
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
 	activation := agent.activations[len(agent.activations)-1]
 	if activation.CAPEM != opts.CAPEM || activation.ResetIdentity {
-		t.Fatal(
-			"admission did not install the new CA while preserving identity",
-		)
+		t.Fatal("admission did not install the new CA while preserving identity")
 	}
 }
 
@@ -81,11 +73,7 @@ func TestAutomaticLeaseRenewalAndStaleExpiry(t *testing.T) {
 			}
 			b := *result.Sandbox
 			b.Deadline = time.Now().UTC().Add(2 * time.Second)
-			if err = saveSandbox(
-				context.Background(),
-				s.store.db,
-				b,
-			); err != nil {
+			if err = saveSandbox(context.Background(), s.store.db, b); err != nil {
 				t.Fatal(err)
 			}
 			ready, err := s.DataReady(context.Background(), principal, b.ID)
@@ -117,21 +105,10 @@ func TestAutomaticLeaseRenewalAndStaleExpiry(t *testing.T) {
 				t.Fatal("stale expiry deleted an active sandbox")
 			}
 			ready.Deadline = stale
-			if err = saveSandbox(
-				context.Background(),
-				s.store.db,
-				ready,
-			); err != nil {
+			if err = saveSandbox(context.Background(), s.store.db, ready); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.DataReady(
-				context.Background(),
-				principal,
-				b.ID,
-			); !isCode(
-				err,
-				ErrConflict,
-			) {
+			if _, err = s.DataReady(context.Background(), principal, b.ID); !isCode(err, ErrConflict) {
 				t.Fatalf("expired lease revived by activity: %v", err)
 			}
 			if _, err = s.Execute(

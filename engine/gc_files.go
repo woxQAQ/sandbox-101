@@ -55,15 +55,8 @@ func (g *gcGraph) inventory() error {
 					// Interrupted publications remain roots even before catalog
 					// admission; import is the only way to publish them.
 					var m ImageManifest
-					if err = gcReadJSON(
-						filepath.Join(p, "image.json"),
-						&m,
-					); err != nil ||
-						m.Digest != "sha256:"+entry.Name() {
-						return fmt.Errorf(
-							"GC unknown unpublished image root: %s",
-							p,
-						)
+					if err = gcReadJSON(filepath.Join(p, "image.json"), &m); err != nil || m.Digest != "sha256:"+entry.Name() {
+						return fmt.Errorf("GC unknown unpublished image root: %s", p)
 					}
 					if err = g.verifyImage(m, p); err != nil {
 						return err
@@ -73,28 +66,18 @@ func (g *gcGraph) inventory() error {
 				var opts ImportOptions
 				if _, pending := g.deletions[p]; pending {
 					if _, ok := g.images["sha256:"+entry.Name()]; !ok {
-						return fmt.Errorf(
-							"GC import deletion catalog root missing: %s",
-							p,
-						)
+						return fmt.Errorf("GC import deletion catalog root missing: %s", p)
 					}
 					continue
 				}
-				if err = gcReadJSON(
-					filepath.Join(p, "intent.json"),
-					&opts,
-				); err != nil ||
-					opts.Digest != "sha256:"+entry.Name() {
+				if err = gcReadJSON(filepath.Join(p, "intent.json"), &opts); err != nil || opts.Digest != "sha256:"+entry.Name() {
 					return fmt.Errorf("GC unknown import ownership: %s", p)
 				}
 				if _, err = shaName(opts.Digest); err != nil {
 					return err
 				}
 				if _, ok := g.images[opts.Digest]; !ok {
-					return fmt.Errorf(
-						"GC incomplete import retained as recovery root: %s",
-						p,
-					)
+					return fmt.Errorf("GC incomplete import retained as recovery root: %s", p)
 				}
 				g.imports[p] = opts
 			}
@@ -103,18 +86,14 @@ func (g *gcGraph) inventory() error {
 	for _, s := range g.snapshots {
 		found := false
 		for _, o := range g.ops {
-			if o.Operation.Request.Action == "snapshot" &&
-				o.Operation.SnapshotID == s.Snapshot.ID &&
+			if o.Operation.Request.Action == "snapshot" && o.Operation.SnapshotID == s.Snapshot.ID &&
 				o.Operation.VMID == s.Snapshot.SourceVMID {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf(
-				"GC snapshot operation ownership missing: %s",
-				s.Snapshot.ID,
-			)
+			return fmt.Errorf("GC snapshot operation ownership missing: %s", s.Snapshot.ID)
 		}
 	}
 	return nil
@@ -134,10 +113,7 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 			continue
 		case "versions", "disks", "capture", "runs":
 		default:
-			return fmt.Errorf(
-				"GC unknown VM resource: %s",
-				filepath.Join(v.Resource.Dir, entry.Name()),
-			)
+			return fmt.Errorf("GC unknown VM resource: %s", filepath.Join(v.Resource.Dir, entry.Name()))
 		}
 		p := filepath.Join(v.Resource.Dir, entry.Name())
 		if !entry.IsDir() {
@@ -157,15 +133,13 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 				_, known = g.versions[strings.TrimSuffix(path, ".pending")]
 			case "capture":
 				o, ok := g.ops[child.Name()]
-				known = ok && o.Operation.VMID == v.VM.ID &&
-					o.Operation.Request.Action == "snapshot" &&
+				known = ok && o.Operation.VMID == v.VM.ID && o.Operation.Request.Action == "snapshot" &&
 					o.Journal.Resource != nil
 			case "runs":
 				known = v.Resource.RunDir == path
 				for _, o := range g.ops {
 					for _, r := range []*Resource{o.Journal.Old, o.Journal.Resource} {
-						known = known ||
-							r != nil && r.VMID == v.VM.ID && r.RunDir == path
+						known = known || r != nil && r.VMID == v.VM.ID && r.RunDir == path
 					}
 				}
 			}
@@ -181,8 +155,7 @@ func (g *gcGraph) vmInventory(v vmRecord) error {
 func (g *gcGraph) path(path string, dir bool) error {
 	base := g.e.opts.StateDir
 	rel, err := filepath.Rel(base, path)
-	if err != nil || filepath.Clean(path) != path || rel == ".." ||
-		strings.HasPrefix(rel, "../") {
+	if err != nil || filepath.Clean(path) != path || rel == ".." || strings.HasPrefix(rel, "../") {
 		return fmt.Errorf("GC path outside state: %s", path)
 	}
 	current := base
@@ -213,8 +186,7 @@ func (g *gcGraph) path(path string, dir bool) error {
 }
 
 func (g *gcGraph) immutable(root, rel, want string) error {
-	if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || rel == "." ||
-		strings.HasPrefix(rel, "../") ||
+	if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || rel == "." || strings.HasPrefix(rel, "../") ||
 		strings.Contains(rel, "\\") {
 		return fmt.Errorf("GC unsafe artifact path")
 	}
@@ -265,11 +237,7 @@ func gcDigest(ctx context.Context, path string) (string, error) {
 // ownedFiles is an exact allowlist, not recursive deletion authority. A journal
 // proves its canonical version path; a verified receipt proves cache contents.
 // Unexpected names, symlinks, special files and mounts retain the entire object.
-func (g *gcGraph) ownedFiles(
-	path string,
-	allowed map[string]string,
-	dir bool,
-) ([]string, error) {
+func (g *gcGraph) ownedFiles(path string, allowed map[string]string, dir bool) ([]string, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return nil, nil // Retry after a crash between unlink and metadata retirement.
 	}
@@ -309,11 +277,7 @@ func (g *gcGraph) ownedFiles(
 			if want != "" {
 				got, err := gcDigest(g.ctx, p)
 				if err != nil || got != want {
-					return fmt.Errorf(
-						"artifact identity unconfirmed: %s: %v",
-						p,
-						err,
-					)
+					return fmt.Errorf("artifact identity unconfirmed: %s: %v", p, err)
 				}
 			}
 			paths = append(paths, p)
@@ -328,16 +292,7 @@ func (g *gcGraph) ownedFiles(
 	if err != nil {
 		return nil, err
 	}
-	unescape := strings.NewReplacer(
-		`\040`,
-		" ",
-		`\011`,
-		"\t",
-		`\012`,
-		"\n",
-		`\134`,
-		`\`,
-	)
+	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
 	for line := range strings.SplitSeq(string(mounts), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 5 {
@@ -373,8 +328,7 @@ func gcLocalReaders(paths []string) error {
 		// because a device/inode comparison cannot establish equivalence.
 		for _, path := range paths {
 			escaped := strings.ReplaceAll(path, "\n", `\012`)
-			if strings.HasSuffix(line, " "+escaped) ||
-				strings.HasSuffix(line, " "+escaped+" (deleted)") {
+			if strings.HasSuffix(line, " "+escaped) || strings.HasSuffix(line, " "+escaped+" (deleted)") {
 				return fmt.Errorf("artifact still mapped by engine process")
 			}
 		}
@@ -408,12 +362,7 @@ func gcLocalReaders(paths []string) error {
 			return err
 		}
 		s := st.Sys().(*syscall.Stat_t)
-		key := fmt.Sprintf(
-			"%x:%x:%d",
-			unix.Major(uint64(s.Dev)),
-			unix.Minor(uint64(s.Dev)),
-			s.Ino,
-		)
+		key := fmt.Sprintf("%x:%x:%d", unix.Major(uint64(s.Dev)), unix.Minor(uint64(s.Dev)), s.Ino)
 		if inodes[key] {
 			return fmt.Errorf("artifact still open by engine process")
 		}
@@ -457,10 +406,7 @@ func (g *gcGraph) removeFiles(path string, files []string, dir bool) error {
 					return err
 				}
 				if !d.IsDir() {
-					return fmt.Errorf(
-						"unexpected artifact appeared during GC: %s",
-						p,
-					)
+					return fmt.Errorf("unexpected artifact appeared during GC: %s", p)
 				}
 				dirs = append(dirs, p)
 				return nil

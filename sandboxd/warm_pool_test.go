@@ -29,18 +29,10 @@ func TestRefillBackoffSurvivesRestartAndSuccessResets(t *testing.T) {
 			t.Fatal(err)
 		}
 		delay := time.Second << min(n-1, 8)
-		if blocked, err := s.refillBackoff(
-			"python",
-			now.Add(delay-time.Nanosecond),
-		); err != nil ||
-			!blocked {
+		if blocked, err := s.refillBackoff("python", now.Add(delay-time.Nanosecond)); err != nil || !blocked {
 			t.Fatalf("failure %d lost its backoff: %v", n, err)
 		}
-		if blocked, err := s.refillBackoff(
-			"python",
-			now.Add(delay),
-		); err != nil ||
-			blocked {
+		if blocked, err := s.refillBackoff("python", now.Add(delay)); err != nil || blocked {
 			t.Fatalf("failure %d backoff never ended: %v", n, err)
 		}
 	}
@@ -52,11 +44,7 @@ func TestRefillBackoffSurvivesRestartAndSuccessResets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.Close()
-	if blocked, err := restarted.refillBackoff(
-		"python",
-		now.Add(time.Second),
-	); err != nil ||
-		!blocked {
+	if blocked, err := restarted.refillBackoff("python", now.Add(time.Second)); err != nil || !blocked {
 		t.Fatalf("restart reset the failure streak: %v", err)
 	}
 	o := Operation{
@@ -72,11 +60,7 @@ func TestRefillBackoffSurvivesRestartAndSuccessResets(t *testing.T) {
 	if err = saveOp(context.Background(), restarted.store.db, o); err != nil {
 		t.Fatal(err)
 	}
-	if blocked, err := restarted.refillBackoff(
-		"python",
-		now,
-	); err != nil ||
-		blocked {
+	if blocked, err := restarted.refillBackoff("python", now); err != nil || blocked {
 		t.Fatalf("successful refill did not reset the streak: %v", err)
 	}
 }
@@ -90,8 +74,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			s.pools()
 			s.wg.Wait()
 			var ready int
-			if err := s.store.db.QueryRow(`SELECT count(*) FROM warm`).
-				Scan(&ready); err != nil {
+			if err := s.store.db.QueryRow(`SELECT count(*) FROM warm`).Scan(&ready); err != nil {
 				t.Fatal(err)
 			}
 			if storage == 255 {
@@ -112,23 +95,15 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			}
 			ledgerMoney(t, s, p.TenantID, 0, 256)
 			var warm, source string
-			if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).
-				Scan(&warm); err != nil {
+			if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).Scan(&warm); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.store.db.QueryRow(`SELECT source_operation_id FROM quota_resources WHERE kind='vm_disk' AND resource_key=?`, warm).
 				Scan(&source); err != nil {
 				t.Fatal(err)
 			}
-			first := ledgerExecute(
-				t,
-				s,
-				p,
-				"warm-claim",
-				Command{Action: "claim", TemplateID: template.ID},
-			)
-			if first.Sandbox.VMID != warm ||
-				first.Sandbox.ProvisionSource != "warm" {
+			first := ledgerExecute(t, s, p, "warm-claim", Command{Action: "claim", TemplateID: template.ID})
+			if first.Sandbox.VMID != warm || first.Sandbox.ProvisionSource != "warm" {
 				t.Fatal("claim failed to transfer existing disk")
 			}
 			var pending int
@@ -147,18 +122,10 @@ func templateQuotaWarmMatrix(t *testing.T) {
 				t.Fatal("warm source provenance was overwritten")
 			}
 			before := f.count("clone")
-			second, err := s.Submit(
-				s.ctx,
-				p,
-				"second-claim",
-				Command{Action: "claim", TemplateID: template.ID},
-			)
+			second, err := s.Submit(s.ctx, p, "second-claim", Command{Action: "claim", TemplateID: template.ID})
 			if storage == 256 {
 				if !isCode(err, ErrExhausted) || f.count("clone") != before {
-					t.Fatal(
-						"second claim reused one V or allocated over budget",
-						err,
-					)
+					t.Fatal("second claim reused one V or allocated over budget", err)
 				}
 			} else {
 				if err != nil {
@@ -178,10 +145,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 	t.Run("missing-owner-row", func(t *testing.T) {
 		s, f, p, template := templateQuotaGolden(t)
 		templateQuotaTarget(t, s, p, template, 1)
-		if _, err := s.store.db.Exec(
-			`DELETE FROM tenants WHERE id=?`,
-			p.TenantID,
-		); err != nil {
+		if _, err := s.store.db.Exec(`DELETE FROM tenants WHERE id=?`, p.TenantID); err != nil {
 			t.Fatal(err)
 		}
 		s.pools()
@@ -197,13 +161,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			func(t *testing.T) {
 				s, _, p, template := templateQuotaGolden(t)
 				if direction[0] != 0 {
-					template = templateQuotaTarget(
-						t,
-						s,
-						p,
-						template,
-						direction[0],
-					)
+					template = templateQuotaTarget(t, s, p, template, direction[0])
 				}
 				changed := template
 				changed.TargetWarm = direction[1]
@@ -212,19 +170,10 @@ func templateQuotaWarmMatrix(t *testing.T) {
 					p,
 					"ordinary-change",
 					Command{Action: "template_put", Template: &changed},
-				); !isCode(
-					err,
-					ErrForbidden,
-				) {
+				); !isCode(err, ErrForbidden) {
 					t.Fatal("ordinary pool target mutation allowed", err)
 				}
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"ordinary-preserve",
-					Command{Action: "template_put", Template: &template},
-				)
+				ledgerExecute(t, s, p, "ordinary-preserve", Command{Action: "template_put", Template: &template})
 				templateQuotaTarget(t, s, p, template, direction[1])
 			},
 		)
@@ -243,8 +192,7 @@ func templateQuotaWarmMatrix(t *testing.T) {
 			s.pools()
 			s.wg.Wait()
 			for range 3 {
-				if err := s.recoverResources(); err != nil &&
-					!isCode(err, ErrManualRecovery) {
+				if err := s.recoverResources(); err != nil && !isCode(err, ErrManualRecovery) {
 					t.Fatal(err)
 				}
 				s.pools()
@@ -298,12 +246,7 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 		failStart: true,
 	}
 	s.opts.Engine = e
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"cold-replacement",
-		Command{Action: "claim", TemplateID: template.ID},
-	)
+	o, err := s.Submit(s.ctx, p, "cold-replacement", Command{Action: "claim", TemplateID: template.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,16 +263,14 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Group.Subject.Kind != "sandbox" || r.Group.Subject.ID != o.IDs[0] ||
-		r.Group.Gate == nil ||
+	if r.Group.Subject.Kind != "sandbox" || r.Group.Subject.ID != o.IDs[0] || r.Group.Gate == nil ||
 		r.Group.Identity == nil ||
 		r.Group.Identity.Instance != "" {
 		t.Fatal("replacement escaped real sandbox responsibility")
 	}
 	var builds int
 	if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_resources WHERE kind='build_slot'`).
-		Scan(&builds); err != nil ||
-		builds != 0 {
+		Scan(&builds); err != nil || builds != 0 {
 		t.Fatal("replacement manufactured a build subject", err)
 	}
 	e.mu.Lock()
@@ -340,15 +281,7 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 	}
 	state := r.Group.Identity.VM
 	original, _ := s.store.operation(s.ctx, o.ID)
-	if _, err = s.Execute(
-		s.ctx,
-		p,
-		"release-witnessless",
-		Command{Action: "release", SandboxID: o.IDs[0]},
-	); !isCode(
-		err,
-		ErrManualRecovery,
-	) {
+	if _, err = s.Execute(s.ctx, p, "release-witnessless", Command{Action: "release", SandboxID: o.IDs[0]}); !isCode(err, ErrManualRecovery) {
 		t.Fatal("release bypassed witnessless replacement", err)
 	}
 	started, err := api.Wait(
@@ -379,13 +312,7 @@ func templateQuotaReplacementWitnessless(t *testing.T) {
 		t.Fatal(err)
 	}
 	ledgerMoney(t, s, p.TenantID, 0, 0)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"release-after-replacement-retirement",
-		Command{Action: "release", SandboxID: o.IDs[0]},
-	)
+	ledgerExecute(t, s, p, "release-after-replacement-retirement", Command{Action: "release", SandboxID: o.IDs[0]})
 	current, _ := s.store.operation(s.ctx, o.ID)
 	if !bytes.Equal(encode(original), encode(current)) {
 		t.Fatal("cleanup changed failed replacement public bytes")
@@ -430,8 +357,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 		}
 		var dependencies int
 		if err = s.store.db.QueryRow(`SELECT count(*) FROM quota_refs WHERE holder_kind='engine_dependency' AND holder_id=?`, "operation:"+refill.ID).
-			Scan(&dependencies); err != nil ||
-			dependencies != 0 {
+			Scan(&dependencies); err != nil || dependencies != 0 {
 			t.Fatal("terminal no-VM clone stranded its source dependency", err)
 		}
 		ledgerMoney(t, s, p.TenantID, 0, 192)
@@ -488,13 +414,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 		if err = s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = f.GetSnapshot(
-			s.ctx,
-			old,
-		); !isEngineCode(
-			err,
-			api.NotFound,
-		) {
+		if _, err = f.GetSnapshot(s.ctx, old); !isEngineCode(err, api.NotFound) {
 			t.Fatal("obsolete source snapshot remained pinned", err)
 		}
 		ledgerMoney(t, s, p.TenantID, 0, 192)
@@ -517,8 +437,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 		s.pools()
 		s.wg.Wait()
 		var vm string
-		if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).
-			Scan(&vm); err != nil {
+		if err := s.store.db.QueryRow(`SELECT vm_id FROM warm`).Scan(&vm); err != nil {
 			t.Fatal(err)
 		}
 		original, err := f.GetVM(s.ctx, vm)
@@ -536,12 +455,7 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 			queryGate:    gate,
 		}
 		s.opts.Engine = e
-		o, err := s.Submit(
-			s.ctx,
-			p,
-			"selected-C",
-			Command{Action: "claim", TemplateID: template.ID},
-		)
+		o, err := s.Submit(s.ctx, p, "selected-C", Command{Action: "claim", TemplateID: template.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -625,34 +539,10 @@ func TestTemplateQuotaWarmPoolOwnership(t *testing.T) {
 					"fallback-lifecycle",
 					Command{Action: "claim", TemplateID: template.ID},
 				)
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"fallback-pause",
-					Command{Action: "pause", SandboxID: result.Sandbox.ID},
-				)
-				before := engine.count(
-					"create",
-				) + engine.count(
-					"clone",
-				) + engine.count(
-					"start",
-				)
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"fallback-zero-wake",
-					Command{Action: "release", SandboxID: result.Sandbox.ID},
-				)
-				if after := engine.count(
-					"create",
-				) + engine.count(
-					"clone",
-				) + engine.count(
-					"start",
-				); after != before {
+				ledgerExecute(t, s, p, "fallback-pause", Command{Action: "pause", SandboxID: result.Sandbox.ID})
+				before := engine.count("create") + engine.count("clone") + engine.count("start")
+				ledgerExecute(t, s, p, "fallback-zero-wake", Command{Action: "release", SandboxID: result.Sandbox.ID})
+				if after := engine.count("create") + engine.count("clone") + engine.count("start"); after != before {
 					t.Fatal("fallback release woke a paused VM")
 				}
 				storage := int64(0)

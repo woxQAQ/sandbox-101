@@ -7,9 +7,13 @@ import (
 	"github.com/woxQAQ/sandbox-engine/api"
 )
 
-// Backend performs host effects. Implementations must make effects repeatable or
-// inspectable under Resource.Instance; an uncertain identity must return an error.
-// The daemon never uses a simulation backend implicitly.
+// Backend is the engine's host-effects boundary, not just a hypervisor API.
+// It covers VMM control, isolated host resource preparation and inspection,
+// guest System readiness, capture, networking and owned-resource removal.
+// Implementations must make effects repeatable or inspectable under
+// Resource.Instance; an uncertain identity must return an error.
+// The production implementation is CloudHypervisor; tests inject explicit
+// substitutes. The daemon never uses a simulation backend implicitly.
 type Backend interface {
 	Compatibility() string
 	Check(context.Context, api.Config) error

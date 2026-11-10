@@ -19,9 +19,7 @@ import (
 
 const testMITMHeaderBytes = 1 << 20
 
-func mitmBoundsFixture(
-	t *testing.T,
-) (*Manager, Binding, *atomic.Int32, *atomic.Int32) {
+func mitmBoundsFixture(t *testing.T) (*Manager, Binding, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	up := httptest.NewTLSServer(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -76,10 +74,7 @@ func TestMITMHeaderBounds(t *testing.T) {
 			var request string
 			switch kind {
 			case "request_line":
-				request = "GET /" + strings.Repeat(
-					"x",
-					oversized,
-				) + " HTTP/1.1\r\nHost: example.com\r\n\r\n"
+				request = "GET /" + strings.Repeat("x", oversized) + " HTTP/1.1\r\nHost: example.com\r\n\r\n"
 			case "single_header":
 				request = "GET / HTTP/1.1\r\nHost: example.com\r\nX-Padding: " + strings.Repeat(
 					"x",
@@ -110,10 +105,7 @@ func TestMITMHeaderCompletionDeadline(t *testing.T) {
 	conn := mitmClient(t, m, b)
 	started := time.Now()
 	_ = conn.SetDeadline(started.Add(14 * time.Second))
-	if _, err := io.WriteString(
-		conn,
-		"GET / HTTP/1.1\r\nHost: example.com\r\nX-Slow: ",
-	); err != nil {
+	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\nX-Slow: "); err != nil {
 		t.Fatal(err)
 	}
 	readDone := make(chan error, 1)
@@ -130,34 +122,24 @@ func TestMITMHeaderCompletionDeadline(t *testing.T) {
 	defer limit.Stop()
 	defer func() {
 		if dials.Load() != 0 || injections.Load() != 0 {
-			t.Errorf(
-				"incomplete headers reached upstream: dials=%d injections=%d",
-				dials.Load(),
-				injections.Load(),
-			)
+			t.Errorf("incomplete headers reached upstream: dials=%d injections=%d", dials.Load(), injections.Load())
 		}
 	}()
 	for {
 		select {
 		case err := <-readDone:
 			if time.Since(started) < 9*time.Second {
-				t.Error(
-					"active header input was closed before the configured completion deadline",
-				)
+				t.Error("active header input was closed before the configured completion deadline")
 			}
 			var timeout net.Error
 			if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
-				t.Error(
-					"incomplete headers were not closed by the header deadline",
-				)
+				t.Error("incomplete headers were not closed by the header deadline")
 			}
 			return
 		case <-ticker.C:
 			_, _ = io.WriteString(conn, "x")
 		case <-limit.C:
-			t.Error(
-				"continuous header input extended the 10s completion deadline",
-			)
+			t.Error("continuous header input extended the 10s completion deadline")
 			_ = conn.Close()
 			<-readDone
 			return
@@ -185,8 +167,7 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 				_, _ = hash.Write(first)
 				close(firstBody)
 				n, err := io.Copy(hash, r.Body)
-				if err != nil || n+int64(len(first)) != int64(bodySize) ||
-					!bytes.Equal(hash.Sum(nil), wantHash[:]) {
+				if err != nil || n+int64(len(first)) != int64(bodySize) || !bytes.Equal(hash.Sum(nil), wantHash[:]) {
 					t.Error("large streaming body was truncated or changed")
 					return
 				}
@@ -231,10 +212,7 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 	reader := bufio.NewReader(conn)
 	for i := range 2 {
 		if i != 0 {
-			if _, err := io.WriteString(
-				conn,
-				"GET /reuse HTTP/1.1\r\nHost: example.com\r\n\r\n",
-			); err != nil {
+			if _, err := io.WriteString(conn, "GET /reuse HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -244,11 +222,7 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 		}
 		body := readResponse(t, resp, nil)
 		if resp.StatusCode != http.StatusOK || body != "ok" || resp.Close {
-			t.Fatalf(
-				"streaming/reuse response: status=%d close=%t",
-				resp.StatusCode,
-				resp.Close,
-			)
+			t.Fatalf("streaming/reuse response: status=%d close=%t", resp.StatusCode, resp.Close)
 		}
 	}
 	_, _ = io.WriteString(
@@ -260,20 +234,13 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 	)
 	expectMITMHeaderRejection(t, reader)
 	if requests.Load() != 2 || dials.Load() != 2 {
-		t.Errorf(
-			"reuse or per-request header boundary failed: requests=%d dials=%d",
-			requests.Load(),
-			dials.Load(),
-		)
+		t.Errorf("reuse or per-request header boundary failed: requests=%d dials=%d", requests.Load(), dials.Load())
 	}
 	// The same boundary also applies to the second request in a fresh tunnel.
 	_ = conn.Close()
 	waitMITMInboundClosed(t, m.bindings[b.SandboxID])
 	second := mitmClient(t, m, b)
-	if _, err := io.WriteString(
-		second,
-		"GET /first HTTP/1.1\r\nHost: example.com\r\n\r\n",
-	); err != nil {
+	if _, err := io.WriteString(second, "GET /first HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
 	reader = bufio.NewReader(second)
@@ -334,10 +301,7 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 							}
 							if r.Method == http.MethodPost {
 								var first [1]byte
-								if _, err := io.ReadFull(
-									r.Body,
-									first[:],
-								); err == nil {
+								if _, err := io.ReadFull(r.Body, first[:]); err == nil {
 									close(bodyStarted)
 								}
 								_, _ = io.Copy(io.Discard, r.Body)
@@ -365,10 +329,7 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 					raw := secure.NetConn().(*net.UnixConn)
 					switch stage {
 					case "header", "half_close_write":
-						_, _ = io.WriteString(
-							conn,
-							"GET / HTTP/1.1\r\nHost: example.com\r\nX-Pending: ",
-						)
+						_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\nX-Pending: ")
 						if stage == "half_close_write" {
 							if err := raw.CloseWrite(); err != nil {
 								t.Fatal(err)
@@ -386,39 +347,21 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 							t.Fatal("upstream did not start reading the body")
 						}
 					case "idle":
-						_, _ = io.WriteString(
-							conn,
-							"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n",
-						)
-						resp, err := http.ReadResponse(
-							bufio.NewReader(conn),
-							nil,
-						)
+						_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+						resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 						_ = readResponse(t, resp, err)
 					case "upstream_upgrade":
-						_, _ = io.WriteString(
-							conn,
-							"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n",
-						)
-						resp, err := http.ReadResponse(
-							bufio.NewReader(conn),
-							nil,
-						)
+						_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+						resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 						body := readResponse(t, resp, err)
-						if resp.StatusCode != http.StatusBadGateway ||
-							body != "egress: upstream unavailable\n" {
-							t.Error(
-								"unsolicited upstream Upgrade escaped the response hook",
-							)
+						if resp.StatusCode != http.StatusBadGateway || body != "egress: upstream unavailable\n" {
+							t.Error("unsolicited upstream Upgrade escaped the response hook")
 						}
 					case "half_close_read":
 						if err := raw.CloseRead(); err != nil {
 							t.Fatal(err)
 						}
-						_, _ = io.WriteString(
-							conn,
-							"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n",
-						)
+						_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
 						waitMITMInboundClosed(t, active)
 					}
 				}
@@ -436,16 +379,13 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 						t.Fatal(err)
 					}
 				case <-time.After(2 * time.Second):
-					t.Fatal(
-						"teardown did not wait for and finish the inner server",
-					)
+					t.Fatal("teardown did not wait for and finish the inner server")
 				}
 				if stage != "half_close_read" && stage != "half_close_write" {
 					_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 					_, err := conn.Read(make([]byte, 1))
 					var timeout net.Error
-					if err == nil ||
-						(errors.As(err, &timeout) && timeout.Timeout()) {
+					if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 						t.Fatal("parser connection survived teardown")
 					}
 				}

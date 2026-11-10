@@ -51,11 +51,7 @@ func (s *Service) refillBackoff(template string, now time.Time) (bool, error) {
 	return now.Before(latest.Add(delay)), nil
 }
 
-func (s *Service) poolOccupationTx(
-	ctx context.Context,
-	e executor,
-	t Template,
-) (int, error) {
+func (s *Service) poolOccupationTx(ctx context.Context, e executor, t Template) (int, error) {
 	var count int
 	err := e.QueryRowContext(ctx, `SELECT count(*) FROM resource_recovery r WHERE json_extract(r.body,'$.kind')='allocation_group' AND json_extract(r.body,'$.allocation_group.subject.kind')='warm' AND json_extract(r.body,'$.allocation_group.template.id')=? AND EXISTS(SELECT 1 FROM json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.resolution.state') IN ('unresolved','result_known','cleanup') OR (json_extract(a.value,'$.resolution.state')='active' AND json_extract(a.value,'$.resolution.destination') LIKE 'warm:%'))`, t.ID).
 		Scan(&count)
@@ -76,8 +72,7 @@ func (s *Service) admitRefill(t Template) (*Operation, error) {
 	if err != nil {
 		return nil, err
 	}
-	if current.State != "ready" || current.TenantID != t.TenantID ||
-		current.Shape != t.Shape ||
+	if current.State != "ready" || current.TenantID != t.TenantID || current.Shape != t.Shape ||
 		current.SnapshotID != t.SnapshotID {
 		return nil, nil
 	}
@@ -108,13 +103,7 @@ func (s *Service) admitRefill(t Template) (*Operation, error) {
 		CreatedAt: time.Now().UTC(),
 	}
 	o.hash = s.store.sign(o.ID)
-	if err = s.quota(
-		s.ctx,
-		tx,
-		Principal{TenantID: t.TenantID},
-		0,
-		t.Shape.DiskMiB,
-	); err != nil {
+	if err = s.quota(s.ctx, tx, Principal{TenantID: t.TenantID}, 0, t.Shape.DiskMiB); err != nil {
 		if !isCode(err, ErrExhausted) && !isCode(err, ErrNotFound) {
 			return nil, err
 		}
@@ -126,19 +115,10 @@ func (s *Service) admitRefill(t Template) (*Operation, error) {
 		}
 		return nil, tx.Commit()
 	}
-	if err = requireSnapshotOwner(
-		s.ctx,
-		tx,
-		t.SnapshotID,
-		t.TenantID,
-	); err != nil {
+	if err = requireSnapshotOwner(s.ctx, tx, t.SnapshotID, t.TenantID); err != nil {
 		return nil, err
 	}
-	r := newAllocationGroup(
-		o,
-		allocationSubject{Kind: "warm", ID: o.ID},
-		current,
-	)
+	r := newAllocationGroup(o, allocationSubject{Kind: "warm", ID: o.ID}, current)
 	if err = addGroupAllocation(
 		s.ctx,
 		tx,
@@ -181,12 +161,7 @@ func (s *Service) pools() {
 	}
 	for _, t := range templates {
 		if t.State != "ready" || t.SnapshotID == "" ||
-			requireSnapshotOwner(
-				s.ctx,
-				s.store.db,
-				t.SnapshotID,
-				t.TenantID,
-			) != nil {
+			requireSnapshotOwner(s.ctx, s.store.db, t.SnapshotID, t.TenantID) != nil {
 			continue
 		}
 		rows, e := s.store.db.QueryContext(
@@ -224,8 +199,7 @@ func (s *Service) pools() {
 			if lookup != nil && !isEngineCode(lookup, api.NotFound) {
 				continue
 			}
-			if lookup == nil && validAllocationIdentity(group, v) == nil &&
-				m.sid == t.SnapshotID &&
+			if lookup == nil && validAllocationIdentity(group, v) == nil && m.sid == t.SnapshotID &&
 				v.Phase == "running" &&
 				v.AgentReady &&
 				!v.NetworkActual &&
@@ -266,19 +240,10 @@ func (s *Service) pools() {
 
 func (s *Service) refill(o *Operation) error {
 	t := *o.Command.Template
-	if err := requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		t.SnapshotID,
-		o.ChargeTenantID,
-	); err != nil {
+	if err := requireSnapshotOwner(s.ctx, s.store.db, t.SnapshotID, o.ChargeTenantID); err != nil {
 		return err
 	}
-	proof, err := s.engine(
-		*o,
-		"warm-clone",
-		api.Request{Action: "clone", SnapshotID: t.SnapshotID},
-	)
+	proof, err := s.engine(*o, "warm-clone", api.Request{Action: "clone", SnapshotID: t.SnapshotID})
 	if err != nil {
 		return err
 	}
@@ -335,8 +300,7 @@ func (s *Service) refill(o *Operation) error {
 	if err != nil {
 		return err
 	}
-	if current.TenantID != t.TenantID || current.SnapshotID != t.SnapshotID ||
-		current.Shape != t.Shape ||
+	if current.TenantID != t.TenantID || current.SnapshotID != t.SnapshotID || current.Shape != t.Shape ||
 		current.State != "ready" ||
 		current.TargetWarm == 0 {
 		return Fail(ErrConflict, "warm publication was superseded")
@@ -356,12 +320,7 @@ func (s *Service) refill(o *Operation) error {
 	if err = validAllocationIdentity(group, currentVM); err != nil {
 		return err
 	}
-	if err = requireSnapshotOwner(
-		s.ctx,
-		tx,
-		t.SnapshotID,
-		t.TenantID,
-	); err != nil {
+	if err = requireSnapshotOwner(s.ctx, tx, t.SnapshotID, t.TenantID); err != nil {
 		return err
 	}
 	if err = putQuotaRef(

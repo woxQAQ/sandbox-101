@@ -12,12 +12,7 @@ func TestAutoResumeRetriesAfterActivationFailure(t *testing.T) {
 	s, f, a, p := fixture(t)
 	r := claimTest(t, s, p, "claim", nil)
 	id := r.Sandbox.ID
-	if _, err := s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	); err != nil {
+	if _, err := s.Execute(context.Background(), p, "pause", Command{Action: "pause", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
 	a.mu.Lock()
@@ -61,12 +56,7 @@ func TestReleaseClosesTrackedConnectionWithoutDeadlock(t *testing.T) {
 	s.track(r.Sandbox.ID, wrapped)
 	finished := make(chan error, 1)
 	go func() {
-		_, err := s.Execute(
-			context.Background(),
-			p,
-			"release",
-			Command{Action: "release", SandboxID: r.Sandbox.ID},
-		)
+		_, err := s.Execute(context.Background(), p, "release", Command{Action: "release", SandboxID: r.Sandbox.ID})
 		finished <- err
 	}()
 	select {
@@ -83,12 +73,7 @@ func TestConcurrentAutoResumeHasOneCloneAndPreservesIdentity(t *testing.T) {
 	s, f, a, p := fixture(t)
 	r := claimTest(t, s, p, "claim", nil)
 	id := r.Sandbox.ID
-	if _, err := s.Execute(
-		context.Background(),
-		p,
-		"pause",
-		Command{Action: "pause", SandboxID: id},
-	); err != nil {
+	if _, err := s.Execute(context.Background(), p, "pause", Command{Action: "pause", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
 	before := f.count("clone")

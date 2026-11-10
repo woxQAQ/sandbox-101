@@ -20,11 +20,7 @@ type tunnel struct {
 
 type tunnelContextKey struct{}
 
-func deniedResponse(
-	r *http.Request,
-	status int,
-	message string,
-) *http.Response {
+func deniedResponse(r *http.Request, status int, message string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
 		Status:     http.StatusText(status),
@@ -67,11 +63,7 @@ func (b *binding) startHTTP() {
 	proxy.KeepHeader = true
 	proxy.NonproxyHandler = http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			http.Error(
-				w,
-				"egress: absolute proxy URL required",
-				http.StatusBadRequest,
-			)
+			http.Error(w, "egress: absolute proxy URL required", http.StatusBadRequest)
 		},
 	)
 	proxy.ConnectDial = func(string, string) (net.Conn, error) { return nil, ErrDenied }
@@ -79,13 +71,8 @@ func (b *binding) startHTTP() {
 		HandleConnect(goproxy.FuncHttpsHandler(func(address string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			host, port, err := authority(address, "")
 			rh, rp, herr := authority(ctx.Req.Host, "")
-			if err != nil || herr != nil || rh != host || rp != port ||
-				b.resolveOnly(host) != nil {
-				ctx.Resp = deniedResponse(
-					ctx.Req,
-					http.StatusForbidden,
-					"egress: CONNECT denied\n",
-				)
+			if err != nil || herr != nil || rh != host || rp != port || b.resolveOnly(host) != nil {
+				ctx.Resp = deniedResponse(ctx.Req, http.StatusForbidden, "egress: CONNECT denied\n")
 				_ = b.audit("", "CONNECT", "deny", "destination")
 				return goproxy.RejectConnect, address
 			}
@@ -101,14 +88,9 @@ func (b *binding) startHTTP() {
 		DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			deny := func(reason string) (*http.Request, *http.Response) {
 				_ = b.audit("", safeMethod(r.Method), "deny", reason)
-				return r, deniedResponse(
-					r,
-					http.StatusForbidden,
-					"egress: request denied\n",
-				)
+				return r, deniedResponse(r, http.StatusForbidden, "egress: request denied\n")
 			}
-			if b.ctx.Err() != nil || r.URL == nil || r.URL.User != nil ||
-				r.URL.Fragment != "" ||
+			if b.ctx.Err() != nil || r.URL == nil || r.URL.User != nil || r.URL.Fragment != "" ||
 				r.Method == http.MethodConnect ||
 				r.Header.Get("Upgrade") != "" ||
 				len(r.Trailer) != 0 ||
@@ -144,11 +126,7 @@ func (b *binding) startHTTP() {
 			stripHopHeaders(r.Header)
 			r.Header.Set("Accept-Encoding", "identity")
 			if err := b.inject(r, host); err != nil {
-				return r, deniedResponse(
-					r,
-					http.StatusServiceUnavailable,
-					"egress: audit unavailable\n",
-				)
+				return r, deniedResponse(r, http.StatusServiceUnavailable, "egress: audit unavailable\n")
 			}
 			ctx.RoundTripper = goproxy.RoundTripperFunc(
 				func(req *http.Request, _ *goproxy.ProxyCtx) (*http.Response, error) {
@@ -160,17 +138,8 @@ func (b *binding) startHTTP() {
 					if err != nil {
 						stop()
 						cancel()
-						_ = b.audit(
-							host,
-							safeMethod(req.Method),
-							"deny",
-							"upstream",
-						)
-						return deniedResponse(
-							req,
-							http.StatusBadGateway,
-							"egress: upstream unavailable\n",
-						), nil
+						_ = b.audit(host, safeMethod(req.Method), "deny", "upstream")
+						return deniedResponse(req, http.StatusBadGateway, "egress: upstream unavailable\n"), nil
 					}
 					resp.Body = &cancelBody{
 						ReadCloser: resp.Body,
@@ -185,20 +154,11 @@ func (b *binding) startHTTP() {
 	proxy.OnResponse().
 		DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
 			if resp == nil {
-				return deniedResponse(
-					ctx.Req,
-					http.StatusBadGateway,
-					"egress: upstream unavailable\n",
-				)
+				return deniedResponse(ctx.Req, http.StatusBadGateway, "egress: upstream unavailable\n")
 			}
-			if resp.StatusCode == http.StatusSwitchingProtocols ||
-				resp.Header.Get("Upgrade") != "" {
+			if resp.StatusCode == http.StatusSwitchingProtocols || resp.Header.Get("Upgrade") != "" {
 				_ = resp.Body.Close()
-				return deniedResponse(
-					ctx.Req,
-					http.StatusBadGateway,
-					"egress: upstream unavailable\n",
-				)
+				return deniedResponse(ctx.Req, http.StatusBadGateway, "egress: upstream unavailable\n")
 			}
 			return b.scrubResponse(resp)
 		})

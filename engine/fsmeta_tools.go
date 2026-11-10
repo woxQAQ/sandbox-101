@@ -33,11 +33,7 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 	tools := map[string]string{"go-erofs": sharedEROFSVersion}
 	for _, tool := range []string{"bwrap", "mkfs.erofs", "fsck.erofs"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			return nil, api.Fail(
-				api.Incompatible,
-				"required OCI tool missing: %s",
-				tool,
-			)
+			return nil, api.Fail(api.Incompatible, "required OCI tool missing: %s", tool)
 		}
 		v, err := command(ctx, tool, "--version")
 		if err != nil {
@@ -45,28 +41,17 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 		}
 		tools[tool] = strings.TrimSpace(string(v))
 		if tool != "bwrap" && !supportedEROFSVersion(tools[tool]) {
-			return nil, api.Fail(
-				api.Incompatible,
-				"layered materializer requires erofs-utils >=1.9.4 and <2",
-			)
+			return nil, api.Fail(api.Incompatible, "layered materializer requires erofs-utils >=1.9.4 and <2")
 		}
 	}
-	if erofsVersion.FindString(
-		tools["mkfs.erofs"],
-	) != erofsVersion.FindString(
-		tools["fsck.erofs"],
-	) {
-		return nil, api.Fail(
-			api.Incompatible,
-			"mkfs.erofs and fsck.erofs versions must match",
-		)
+	if erofsVersion.FindString(tools["mkfs.erofs"]) != erofsVersion.FindString(tools["fsck.erofs"]) {
+		return nil, api.Fail(api.Incompatible, "mkfs.erofs and fsck.erofs versions must match")
 	}
 	return tools, nil
 }
 
 func supportedLayerMedia(media string) bool {
-	return media == v1.MediaTypeImageLayer ||
-		media == v1.MediaTypeImageLayerGzip ||
+	return media == v1.MediaTypeImageLayer || media == v1.MediaTypeImageLayerGzip ||
 		media == "application/vnd.docker.image.rootfs.diff.tar.gzip"
 }
 
@@ -75,13 +60,7 @@ type imageMount struct{ host, guest string }
 // All archive interpretation and filesystem extraction happen in a private
 // mount/user/network namespace. Only system tool roots and explicitly configured
 // runtime dependencies are exposed readonly. Image paths are never host cwd.
-func runImageTool(
-	ctx context.Context,
-	work string,
-	reads []imageMount,
-	tool string,
-	args ...string,
-) error {
+func runImageTool(ctx context.Context, work string, reads []imageMount, tool string, args ...string) error {
 	binary, err := exec.LookPath(tool)
 	if err != nil {
 		return err
@@ -100,23 +79,12 @@ func runImageTool(
 	return err
 }
 
-func imageToolSandbox(
-	work string,
-	reads []imageMount,
-	mapped bool,
-) ([]string, error) {
+func imageToolSandbox(work string, reads []imageMount, mapped bool) ([]string, error) {
 	bargs := []string{"--die-with-parent", "--new-session"}
 	if mapped {
 		// Keep the enclosing subordinate-ID mapping and its namespace-only
 		// capabilities, so native unpack/chown/xattrs and mkfs see identical IDs.
-		bargs = append(
-			bargs,
-			"--unshare-ipc",
-			"--unshare-pid",
-			"--unshare-net",
-			"--unshare-uts",
-			"--unshare-cgroup",
-		)
+		bargs = append(bargs, "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts", "--unshare-cgroup")
 		for _, capability := range []string{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID", "CAP_SETFCAP"} {
 			bargs = append(bargs, "--cap-add", capability)
 		}
@@ -148,19 +116,11 @@ func imageToolSandbox(
 	// manager. This is trusted process configuration, never an image input.
 	for _, dir := range filepath.SplitList(os.Getenv("SANDBOX_IMAGE_TOOL_ROOTS")) {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == "/" {
-			return nil, fmt.Errorf(
-				"invalid SANDBOX_IMAGE_TOOL_ROOTS directory: %q",
-				dir,
-			)
+			return nil, fmt.Errorf("invalid SANDBOX_IMAGE_TOOL_ROOTS directory: %q", dir)
 		}
 		for _, reserved := range []string{"/proc", "/dev", "/tmp", "/work", "/tools", "/input", "/merged"} {
-			if dir == reserved || strings.HasPrefix(dir, reserved+"/") ||
-				strings.HasPrefix(reserved, dir+"/") {
-				return nil, fmt.Errorf(
-					"tool root %q overlaps sandbox path %q",
-					dir,
-					reserved,
-				)
+			if dir == reserved || strings.HasPrefix(dir, reserved+"/") || strings.HasPrefix(reserved, dir+"/") {
+				return nil, fmt.Errorf("tool root %q overlaps sandbox path %q", dir, reserved)
 			}
 		}
 		info, err := os.Stat(dir)
@@ -205,26 +165,17 @@ func loadLayerCache(state, builder, diff string) (layerCache, error) {
 			return cached, err
 		}
 		if !st.IsDir() {
-			return cached, api.Fail(
-				api.Incompatible,
-				"layer cache traverses a symlink or nondirectory",
-			)
+			return cached, api.Fail(api.Incompatible, "layer cache traverses a symlink or nondirectory")
 		}
 	}
 	// An existing but incomplete cache is corruption, not a cache miss. Never
 	// replace evidence or silently regenerate bytes under a published identity.
 	bad := func() error {
-		return api.Fail(
-			api.Incompatible,
-			"missing/corrupt layer cache receipt or artifact: %s",
-			diff,
-		)
+		return api.Fail(api.Incompatible, "missing/corrupt layer cache receipt or artifact: %s", diff)
 	}
 	receipt := filepath.Join(dir, "layer.json")
-	if regular(receipt) != nil || readJSON(receipt, &cached) != nil ||
-		cached.Format != 1 ||
-		cached.Profile != layerProfile &&
-			cached.Profile != sharedLayerProfile ||
+	if regular(receipt) != nil || readJSON(receipt, &cached) != nil || cached.Format != 1 ||
+		cached.Profile != layerProfile && cached.Profile != sharedLayerProfile ||
 		cached.Builder != builder ||
 		cached.DiffID != diff ||
 		cached.Bytes < 0 ||
@@ -239,23 +190,14 @@ func loadLayerCache(state, builder, diff string) (layerCache, error) {
 	}
 	// Receipt permissions and each path component must be safe too.
 	hash, err := digestFile(receipt)
-	if err != nil ||
-		verifyImmutable(
-			state,
-			filepath.Join(filepath.Dir(rel), "layer.json"),
-			hash,
-		) != nil {
+	if err != nil || verifyImmutable(state, filepath.Join(filepath.Dir(rel), "layer.json"), hash) != nil {
 		return cached, bad()
 	}
 	return cached, nil
 }
 
 func (c layerCache) artifact(state string, index int) (ImageArtifact, error) {
-	receipt := filepath.Join(
-		state,
-		filepath.Dir(layerRelativePath(c.Builder, c.DiffID)),
-		"layer.json",
-	)
+	receipt := filepath.Join(state, filepath.Dir(layerRelativePath(c.Builder, c.DiffID)), "layer.json")
 	hash, err := digestFile(receipt)
 	return dataArtifact(c.Builder, c.DiffID, c.SHA256, hash, index), err
 }
@@ -296,27 +238,14 @@ func buildLayerCache(
 		"-U",
 		layerUUID(diff),
 	}
-	if media == v1.MediaTypeImageLayerGzip ||
-		media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
+	if media == v1.MediaTypeImageLayerGzip || media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
 		args = append(args, "--ungzip")
 	}
 	args = append(args, "/work/layer.erofs", "/input.tar")
-	if err = runImageTool(
-		ctx,
-		stage,
-		[]imageMount{{input, "/input.tar"}},
-		"mkfs.erofs",
-		args...); err != nil {
+	if err = runImageTool(ctx, stage, []imageMount{{input, "/input.tar"}}, "mkfs.erofs", args...); err != nil {
 		return cached, err
 	}
-	if err = runImageTool(
-		ctx,
-		stage,
-		nil,
-		"fsck.erofs",
-		"--extract",
-		"/work/layer.erofs",
-	); err != nil {
+	if err = runImageTool(ctx, stage, nil, "fsck.erofs", "--extract", "/work/layer.erofs"); err != nil {
 		return cached, err
 	}
 	cached.SHA256, err = digestFile(filepath.Join(stage, "layer.erofs"))
@@ -334,10 +263,7 @@ func buildLayerCache(
 	}
 	dest := filepath.Join(parent, diff[7:])
 	if _, err = os.Lstat(dest); !os.IsNotExist(err) {
-		return cached, api.Fail(
-			api.Incompatible,
-			"layer cache destination already exists",
-		)
+		return cached, api.Fail(api.Incompatible, "layer cache destination already exists")
 	}
 	if err = os.Rename(stage, dest); err != nil {
 		return cached, err
@@ -350,12 +276,7 @@ func buildLayerCache(
 	return loadLayerCache(state, builder, diff)
 }
 
-func materializeFsmeta(
-	ctx context.Context,
-	state, out string,
-	artifacts []ImageArtifact,
-	manifestDigest string,
-) error {
+func materializeFsmeta(ctx context.Context, state, out string, artifacts []ImageArtifact, manifestDigest string) error {
 	args := []string{
 		"--quiet",
 		"--workers=1",
@@ -381,29 +302,16 @@ func materializeFsmeta(
 	if err := runImageTool(ctx, out, reads, "mkfs.erofs", args...); err != nil {
 		return err
 	}
-	if err := verifyDeviceTable(
-		filepath.Join(out, "fsmeta.erofs"),
-		layers,
-		diffs,
-	); err != nil {
+	if err := verifyDeviceTable(filepath.Join(out, "fsmeta.erofs"), layers, diffs); err != nil {
 		return err
 	}
 	// Native fsck reads every merged file through its external block mapping.
 	// Extraction is temporary and isolated; it is not the published lower.
-	reads = append(
-		reads,
-		imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"},
-	)
+	reads = append(reads, imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"})
 	return extractImageBoot(ctx, out, reads, devices, "/fsmeta.erofs")
 }
 
-func extractImageBoot(
-	ctx context.Context,
-	out string,
-	reads []imageMount,
-	devices []string,
-	image string,
-) error {
+func extractImageBoot(ctx context.Context, out string, reads []imageMount, devices []string, image string) error {
 	check, err := os.MkdirTemp(filepath.Dir(out), "check-")
 	if err != nil {
 		return err
@@ -417,12 +325,7 @@ func extractImageBoot(
 		},
 		devices...)
 	args = append(args, image)
-	if err = runImageTool(
-		ctx,
-		check,
-		reads,
-		"fsck.erofs",
-		args...); err != nil {
+	if err = runImageTool(ctx, check, reads, "fsck.erofs", args...); err != nil {
 		return err
 	}
 	root, err := os.OpenRoot(filepath.Join(check, "tree"))
@@ -433,20 +336,13 @@ func extractImageBoot(
 	for _, required := range []string{"boot/vmlinux", "boot/initramfs", "usr/lib/systemd/systemd", "usr/local/libexec/sandbox-agent", "etc/systemd/system/sysinit.target.wants/sandbox-agent.service"} {
 		st, x := root.Stat(required)
 		if x != nil || !st.Mode().IsRegular() || st.Size() == 0 {
-			return api.Fail(
-				api.Incompatible,
-				"image boot contract missing %s",
-				required,
-			)
+			return api.Fail(api.Incompatible, "image boot contract missing %s", required)
 		}
 	}
 	for _, item := range []struct{ src, dst string }{{"boot/vmlinux", "kernel"}, {"boot/initramfs", "initramfs"}} {
 		st, x := root.Lstat(item.src)
 		if x != nil || !st.Mode().IsRegular() {
-			return api.Fail(
-				api.Incompatible,
-				"boot materials must be regular nonsymlink files",
-			)
+			return api.Fail(api.Incompatible, "boot materials must be regular nonsymlink files")
 		}
 		in, x := root.Open(item.src)
 		if x != nil {

@@ -11,10 +11,7 @@ import (
 )
 
 // Recovery billing never reconstructs shape or owner from mutable public state.
-func (s *Service) quotaRecoveryAllocation(
-	o Operation,
-	step string,
-) (*recoveryAllocation, error) {
+func (s *Service) quotaRecoveryAllocation(o Operation, step string) (*recoveryAllocation, error) {
 	var raw []byte
 	var matches int
 	err := s.store.db.QueryRowContext(s.ctx, `SELECT a.value,count(*) OVER() FROM resource_recovery r, json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.operation_id')=? AND json_extract(a.value,'$.step')=?`, o.ID, step).
@@ -26,10 +23,7 @@ func (s *Service) quotaRecoveryAllocation(
 		return nil, err
 	}
 	if matches != 1 {
-		return nil, Fail(
-			ErrManualRecovery,
-			"allocation step has multiple descriptors",
-		)
+		return nil, Fail(ErrManualRecovery, "allocation step has multiple descriptors")
 	}
 	var a recoveryAllocation
 	if err = json.Unmarshal(raw, &a); err != nil {
@@ -39,23 +33,17 @@ func (s *Service) quotaRecoveryAllocation(
 }
 
 func (a recoveryAllocation) validate(proof api.Operation) error {
-	if proof.Key != a.Request.Key ||
-		!bytes.Equal(encode(proof.Request), encode(a.Request)) ||
+	if proof.Key != a.Request.Key || !bytes.Equal(encode(proof.Request), encode(a.Request)) ||
 		(a.Request.Action == "restore" && proof.VMID != "" && proof.VMID != a.Request.VMID) ||
 		(a.Request.Action == "restore" && proof.Status == "succeeded" &&
 			(proof.VMID == "" || proof.VMID != a.Request.VMID || proof.ResultInstance == "")) {
-		return Fail(
-			ErrManualRecovery,
-			"recovery receipt does not match frozen allocation request",
-		)
+		return Fail(ErrManualRecovery, "recovery receipt does not match frozen allocation request")
 	}
 	return nil
 }
 
 // Receipt resolution grants lifecycle progress separately from parent completion.
-func (s *Service) reconcileRecoveryAllocations(
-	r *resourceRecovery,
-) (recoveryProgress, error) {
+func (s *Service) reconcileRecoveryAllocations(r *resourceRecovery) (recoveryProgress, error) {
 	current, err := s.loadRecovery(r.ID)
 	if err != nil {
 		return recoveryProgress{}, err
@@ -70,18 +58,10 @@ func (s *Service) reconcileRecoveryAllocations(
 		if a.Resolution.delivered() {
 			continue
 		}
-		if a.Resolution.State != "unresolved" &&
-			a.Resolution.State != "result_known" {
-			return recoveryProgress{}, Fail(
-				ErrManualRecovery,
-				"invalid allocation resolution",
-			)
+		if a.Resolution.State != "unresolved" && a.Resolution.State != "result_known" {
+			return recoveryProgress{}, Fail(ErrManualRecovery, "invalid allocation resolution")
 		}
-		proof, err := s.findResourceStep(
-			a.operation(),
-			a.Step,
-			a.Request.Action,
-		)
+		proof, err := s.findResourceStep(a.operation(), a.Step, a.Request.Action)
 		if err != nil {
 			return recoveryProgress{}, err
 		}
@@ -100,8 +80,7 @@ func (s *Service) reconcileRecoveryAllocations(
 			if e != nil && !isCode(e, ErrNotFound) {
 				return recoveryProgress{}, e
 			}
-			if e == nil &&
-				(b.OperationID == r.Source || strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")) &&
+			if e == nil && (b.OperationID == r.Source || strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")) &&
 				(b.State == "resuming" || b.State == "pausing") {
 				progress.AllowedParentDone = false
 				continue
@@ -113,10 +92,7 @@ func (s *Service) reconcileRecoveryAllocations(
 				return recoveryProgress{}, err
 			}
 			next := *r
-			next.Allocations = append(
-				[]recoveryAllocation(nil),
-				r.Allocations...,
-			)
+			next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
 			next.Allocations[i].Resolution = allocationResolution{
 				State:       "cancelled", //nolint:misspell // Preserve the durable Resolution state token.
 				Destination: "never-dispatched:" + a.Request.Key,
@@ -157,12 +133,7 @@ func (s *Service) reconcileRecoveryAllocations(
 			progress.AllowedParentDone = false
 			continue
 		}
-		if err = s.acceptQuotaReceipt(
-			a.operation(),
-			a.Step,
-			a.Request,
-			*proof,
-		); err != nil {
+		if err = s.acceptQuotaReceipt(a.operation(), a.Step, a.Request, *proof); err != nil {
 			return recoveryProgress{}, err
 		}
 		*r, err = s.loadRecovery(r.ID)
@@ -178,10 +149,7 @@ func (s *Service) reconcileRecoveryAllocations(
 			tx, err := s.store.db.BeginTx(s.ctx, nil)
 			if err == nil {
 				next := *r
-				next.Allocations = append(
-					[]recoveryAllocation(nil),
-					r.Allocations...,
-				)
+				next.Allocations = append([]recoveryAllocation(nil), r.Allocations...)
 				cleanup := resourceRecovery{
 					ID:         "snapshot:" + a.OperationID + ":" + a.Step + ":" + proof.SnapshotID,
 					Source:     r.Source,
@@ -191,14 +159,7 @@ func (s *Service) reconcileRecoveryAllocations(
 					TenantID:   a.ChargeTenantID,
 					Allocation: &a,
 				}
-				err = recordSnapshotOwner(
-					s.ctx,
-					tx,
-					proof.SnapshotID,
-					a.ChargeTenantID,
-					a.OperationID,
-					"captured",
-				)
+				err = recordSnapshotOwner(s.ctx, tx, proof.SnapshotID, a.ChargeTenantID, a.OperationID, "captured")
 				if err == nil {
 					_, err = tx.ExecContext(
 						s.ctx,
@@ -245,13 +206,7 @@ func (s *Service) reconcileRecoveryAllocations(
 			continue
 		}
 		if proof.VMID == "" && proof.SnapshotID == "" {
-			if err = s.deliverKnownAllocation(
-				r,
-				i,
-				"reclaimed",
-				"terminal-no-allocation:"+proof.ID,
-				"",
-			); err != nil {
+			if err = s.deliverKnownAllocation(r, i, "reclaimed", "terminal-no-allocation:"+proof.ID, ""); err != nil {
 				return recoveryProgress{}, err
 			}
 			continue
@@ -261,17 +216,10 @@ func (s *Service) reconcileRecoveryAllocations(
 			return recoveryProgress{}, err
 		}
 		v, err := s.opts.Engine.GetVM(s.ctx, proof.VMID)
-		if isEngineCode(err, api.NotFound) &&
-			(proof.Status == "failed" || proof.Status == "succeeded") &&
+		if isEngineCode(err, api.NotFound) && (proof.Status == "failed" || proof.Status == "succeeded") &&
 			b.TenantID == a.ChargeTenantID &&
 			(b.VMID == proof.VMID || b.VMID == "") {
-			if err = s.deliverKnownAllocation(
-				r,
-				i,
-				"reclaimed",
-				"vm-absent:"+proof.VMID,
-				proof.VMID,
-			); err != nil {
+			if err = s.deliverKnownAllocation(r, i, "reclaimed", "vm-absent:"+proof.VMID, proof.VMID); err != nil {
 				return recoveryProgress{}, err
 			}
 			continue
@@ -279,9 +227,7 @@ func (s *Service) reconcileRecoveryAllocations(
 		if err != nil {
 			return recoveryProgress{}, err
 		}
-		if b.TenantID != a.ChargeTenantID || b.VMID != proof.VMID ||
-			!v.Verified ||
-			v.OperationID != "" ||
+		if b.TenantID != a.ChargeTenantID || b.VMID != proof.VMID || !v.Verified || v.OperationID != "" ||
 			v.ID != proof.VMID {
 			return recoveryProgress{}, Fail(
 				ErrManualRecovery,
@@ -291,20 +237,10 @@ func (s *Service) reconcileRecoveryAllocations(
 		if proof.Status == "failed" {
 			// An accepted failure's VMID conservatively bills a disk version. It is
 			// handed to proven existing V responsibility, never to a guessed candidate.
-			if v.Instance == "" || v.Instance != a.Request.ExpectedInstance ||
-				b.Instance != v.Instance {
-				return recoveryProgress{}, Fail(
-					ErrManualRecovery,
-					"failed allocation has no proven existing VM holder",
-				)
+			if v.Instance == "" || v.Instance != a.Request.ExpectedInstance || b.Instance != v.Instance {
+				return recoveryProgress{}, Fail(ErrManualRecovery, "failed allocation has no proven existing VM holder")
 			}
-			if err = s.deliverKnownAllocation(
-				r,
-				i,
-				"cleanup",
-				"vm:"+v.ID,
-				v.ID,
-			); err != nil {
+			if err = s.deliverKnownAllocation(r, i, "cleanup", "vm:"+v.ID, v.ID); err != nil {
 				return recoveryProgress{}, err
 			}
 			continue
@@ -322,13 +258,9 @@ func (s *Service) reconcileRecoveryAllocations(
 			}
 			continue
 		}
-		owned := b.OperationID == r.Source ||
-			strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
+		owned := b.OperationID == r.Source || strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
 		if !owned || b.State != "resuming" {
-			return recoveryProgress{}, Fail(
-				ErrManualRecovery,
-				"result has no lawful lifecycle continuation",
-			)
+			return recoveryProgress{}, Fail(ErrManualRecovery, "result has no lawful lifecycle continuation")
 		}
 		progress.AllowedParentDone = false
 	}
@@ -337,11 +269,7 @@ func (s *Service) reconcileRecoveryAllocations(
 
 // Terminal receipt dependency retirement shares the destination transaction.
 // Existing-VM delivery retains every conservative D version until V is reclaimed.
-func (s *Service) deliverKnownAllocation(
-	r *resourceRecovery,
-	index int,
-	state, destination, vm string,
-) error {
+func (s *Service) deliverKnownAllocation(r *resourceRecovery, index int, state, destination, vm string) error {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -350,8 +278,7 @@ func (s *Service) deliverKnownAllocation(
 	}
 	defer func() { _ = tx.Rollback() }()
 	a := r.Allocations[index]
-	if a.Resolution.Proof == nil ||
-		!recoveryTerminal(a.Resolution.Proof.Status) {
+	if a.Resolution.Proof == nil || !recoveryTerminal(a.Resolution.Proof.Status) {
 		return Fail(ErrManualRecovery, "allocation is not terminal")
 	}
 	if vm != "" && state == "cleanup" {
@@ -364,17 +291,11 @@ func (s *Service) deliverKnownAllocation(
 		if err != nil {
 			return err
 		}
-		if holders == 0 || b.VMID != vm ||
-			b.Instance != a.Request.ExpectedInstance ||
-			b.TenantID != a.ChargeTenantID {
-			return Fail(
-				ErrManualRecovery,
-				"terminal allocation lost its VM destination",
-			)
+		if holders == 0 || b.VMID != vm || b.Instance != a.Request.ExpectedInstance || b.TenantID != a.ChargeTenantID {
+			return Fail(ErrManualRecovery, "terminal allocation lost its VM destination")
 		}
 	}
-	if vm != "" && state == "reclaimed" &&
-		a.Resolution.Proof.Status == "succeeded" {
+	if vm != "" && state == "reclaimed" && a.Resolution.Proof.Status == "succeeded" {
 		if err = s.validateAbsentRestoreTx(tx, *r, a, vm); err != nil {
 			return err
 		}
@@ -392,10 +313,7 @@ func (s *Service) deliverKnownAllocation(
 		return err
 	}
 	if pending != 0 {
-		return Fail(
-			ErrConflict,
-			"terminal allocation still has pending storage",
-		)
+		return Fail(ErrConflict, "terminal allocation still has pending storage")
 	}
 	if err = deleteQuotaRows(
 		s.ctx,
@@ -411,10 +329,7 @@ func (s *Service) deliverKnownAllocation(
 			return err
 		}
 		if b.TenantID != a.ChargeTenantID || (b.VMID != vm && b.VMID != "") {
-			return Fail(
-				ErrManualRecovery,
-				"absent allocation has another sandbox target",
-			)
+			return Fail(ErrManualRecovery, "absent allocation has another sandbox target")
 		}
 		if err = s.reclaimQuotaTx(tx, "vm_disk", vm); err != nil {
 			return err
@@ -425,10 +340,7 @@ func (s *Service) deliverKnownAllocation(
 			return err
 		}
 		if remaining > 0 {
-			return Fail(
-				ErrConflict,
-				"absent VM still has unresolved allocation dependencies",
-			)
+			return Fail(ErrConflict, "absent VM still has unresolved allocation dependencies")
 		}
 		if a.Resolution.Proof.Status == "succeeded" && b.VMID == vm {
 			b.VMID, b.Instance = "", ""
@@ -439,13 +351,9 @@ func (s *Service) deliverKnownAllocation(
 			if err != nil {
 				return err
 			}
-			if current.VMID != "" || current.Instance != "" ||
-				current.State != b.State ||
+			if current.VMID != "" || current.Instance != "" || current.State != b.State ||
 				current.TenantID != b.TenantID {
-				return Fail(
-					ErrManualRecovery,
-					"absent VM metadata was not retired",
-				)
+				return Fail(ErrManualRecovery, "absent VM metadata was not retired")
 			}
 		}
 	}
@@ -458,15 +366,9 @@ func (s *Service) deliverKnownAllocation(
 
 // The frozen restore intent and its immutable public source remain provenance
 // after a successful release clears V. Current metadata cannot supply a witness.
-func (s *Service) validateAbsentRestoreTx(
-	tx *sql.Tx,
-	r resourceRecovery,
-	a recoveryAllocation,
-	vm string,
-) error {
+func (s *Service) validateAbsentRestoreTx(tx *sql.Tx, r resourceRecovery, a recoveryAllocation, vm string) error {
 	proof := a.Resolution.Proof
-	if proof == nil || proof.Status != "succeeded" ||
-		proof.ID == "" || proof.ResultInstance == "" ||
+	if proof == nil || proof.Status != "succeeded" || proof.ID == "" || proof.ResultInstance == "" ||
 		a.Kind != "vm_disk" || a.Step != "rollback-restore" ||
 		a.Request.Action != "restore" || a.Request.VMID != vm ||
 		proof.VMID != vm || a.Request.ExpectedInstance == "" ||
@@ -474,17 +376,13 @@ func (s *Service) validateAbsentRestoreTx(
 		r.SandboxID != a.SandboxID ||
 		!strings.HasPrefix(a.OperationID, "recovery:"+r.ID+":") ||
 		a.Request.Key != stepKey(a.operation(), a.Step) {
-		return Fail(
-			ErrManualRecovery,
-			"absent restore has no exact successful history",
-		)
+		return Fail(ErrManualRecovery, "absent restore has no exact successful history")
 	}
 	if err := a.validate(*proof); err != nil {
 		return err
 	}
 	var raw []byte
-	if err := tx.QueryRowContext(s.ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
-		Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(s.ctx, `SELECT body FROM operations WHERE id=?`, r.Source).Scan(&raw); err != nil {
 		return err
 	}
 	var source Operation
@@ -506,10 +404,7 @@ func (s *Service) validateAbsentRestoreTx(
 		(b.VMID != vm && b.VMID != "") ||
 		(b.VMID == vm && b.Instance != a.Request.ExpectedInstance && b.Instance != proof.ResultInstance) ||
 		(b.VMID == "" && b.Instance != "") {
-		return Fail(
-			ErrManualRecovery,
-			"absent restore history belongs to another lifecycle",
-		)
+		return Fail(ErrManualRecovery, "absent restore history belongs to another lifecycle")
 	}
 	return nil
 }
@@ -595,8 +490,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 		return nil
 	}
 	for step, frozen := range r.Group.Steps {
-		if !frozen.Dispatched ||
-			(frozen.Proof != nil && recoveryTerminal(frozen.Proof.Status)) {
+		if !frozen.Dispatched || (frozen.Proof != nil && recoveryTerminal(frozen.Proof.Status)) {
 			continue
 		}
 		proof, e := s.opts.Engine.FindOperation(s.ctx, frozen.Request.Key)
@@ -614,8 +508,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 	if err != nil {
 		return err
 	}
-	if r.Group.Selection != nil &&
-		r.Group.Selection.Stage != "fallback_reserved" {
+	if r.Group.Selection != nil && r.Group.Selection.Stage != "fallback_reserved" {
 		return s.resolveWarmSelection(public, &r)
 	}
 	ownership := s.lockResourceOwnership()
@@ -640,13 +533,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 					a.Resolution.State = "cancelled"                               //nolint:misspell // Preserve the durable Resolution token.
 					a.Resolution.Destination = "never-dispatched:" + a.Request.Key //nolint:misspell
 				} else if a.Kind == "snapshot" && a.Resolution.Proof != nil && recoveryTerminal(a.Resolution.Proof.Status) && a.Resolution.Proof.SnapshotID != "" {
-					collector, e := snapshotCollector(
-						s.ctx,
-						tx,
-						r.TenantID,
-						a.Resolution.Proof.SnapshotID,
-						r.Source,
-					)
+					collector, e := snapshotCollector(s.ctx, tx, r.TenantID, a.Resolution.Proof.SnapshotID, r.Source)
 					err = e
 					if err == nil {
 						a.Resolution.State = "cleanup"
@@ -666,8 +553,7 @@ func (s *Service) resolveAllocationGroup(id string) error {
 				}
 			}
 		}
-		if err == nil && r.Group.Identity != nil &&
-			r.Group.Identity.Instance == "" {
+		if err == nil && r.Group.Identity != nil && r.Group.Identity.Instance == "" {
 			r.Group.Gate = &allocationRecoveryGate{
 				Reason: "generation_witness_missing",
 				Mode:   "observe_absence_only",
@@ -710,17 +596,11 @@ func (s *Service) resolveAllocationGroup(id string) error {
 				return e
 			}
 			if latest.Group.Identity != nil || !groupStepsTerminal(latest) {
-				return Fail(
-					ErrConflict,
-					"terminal allocation responsibility changed",
-				)
+				return Fail(ErrConflict, "terminal allocation responsibility changed")
 			}
 			for _, a := range latest.Allocations {
 				if !a.Resolution.delivered() {
-					return Fail(
-						ErrConflict,
-						"terminal allocation still has pending responsibility",
-					)
+					return Fail(ErrConflict, "terminal allocation still has pending responsibility")
 				}
 			}
 			r = latest

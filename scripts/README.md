@@ -8,6 +8,13 @@ install a toolchain or build Cloud Hypervisor or a kernel.
 
 ## VM test inputs
 
+`engine/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
+not the privileged launcher or daemon lifecycle. The separate `kernel_isolation`
+tests cover real host networking and cgroup enforcement without a VM; production
+checks exercise the launcher and both daemons. These are distinct evidence
+boundaries, not interchangeable levels of an acceptance test. Existing runner
+filenames and artifact-directory defaults retain their names.
+
 The standalone KVM test currently requires x86_64 Linux. Supply a dedicated,
 writable `KVM_MATERIALS_DIR` with these files:
 
@@ -92,6 +99,6 @@ needs native image tools and namespaces/mappings, but no VM:
 
 ```nu
 with-env {GOWORK: "off", SANDBOX_REQUIRE_EROFS_TESTS: "1"} {
-    go -C engine test -tags=kvm ./... -run '^TestAcceptanceRootfsOCI$' -count=1
+    go -C engine test -tags=kvm ./... -run '^TestKVMRootfsOCI$' -count=1
 }
 ```

@@ -35,13 +35,7 @@ func requireEROFS(t *testing.T) {
 	if _, err := exec.LookPath("dump.erofs"); err != nil {
 		fail(err)
 	}
-	if err := runImageTool(
-		context.Background(),
-		t.TempDir(),
-		nil,
-		"mkfs.erofs",
-		"--version",
-	); err != nil {
+	if err := runImageTool(context.Background(), t.TempDir(), nil, "mkfs.erofs", "--version"); err != nil {
 		fail(err)
 	}
 }
@@ -104,12 +98,7 @@ func tarEntries(t *testing.T, entries []tarEntry) []byte {
 	return b.Bytes()
 }
 
-func putOCIBlob(
-	t *testing.T,
-	layout string,
-	b []byte,
-	media string,
-) v1.Descriptor {
+func putOCIBlob(t *testing.T, layout string, b []byte, media string) v1.Descriptor {
 	t.Helper()
 	d := digest.FromBytes(b)
 	p := filepath.Join(layout, "blobs", "sha256", d.Encoded())
@@ -127,12 +116,7 @@ type ociLayerFixture struct {
 	diff       digest.Digest
 }
 
-func putOCILayer(
-	t *testing.T,
-	layout string,
-	entries []tarEntry,
-	compressed bool,
-) ociLayerFixture {
+func putOCILayer(t *testing.T, layout string, entries []tarEntry, compressed bool) ociLayerFixture {
 	t.Helper()
 	raw := tarEntries(t, entries)
 	data, media := raw, v1.MediaTypeImageLayer
@@ -153,11 +137,7 @@ func putOCILayer(
 	}
 }
 
-func putOCIManifest(
-	t *testing.T,
-	layout, variant string,
-	layers []ociLayerFixture,
-) string {
+func putOCIManifest(t *testing.T, layout, variant string, layers []ociLayerFixture) string {
 	t.Helper()
 	cfg := v1.Image{
 		Platform: v1.Platform{Architecture: runtime.GOARCH, OS: "linux"},
@@ -176,10 +156,7 @@ func putOCIManifest(
 	manifest.Config = putOCIBlob(t, layout, b, v1.MediaTypeImageConfig)
 	b, _ = json.Marshal(manifest)
 	desc := putOCIBlob(t, layout, b, v1.MediaTypeImageManifest)
-	if err := writeJSON(
-		filepath.Join(layout, "oci-layout"),
-		v1.ImageLayout{Version: "1.0.0"},
-	); err != nil {
+	if err := writeJSON(filepath.Join(layout, "oci-layout"), v1.ImageLayout{Version: "1.0.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(
@@ -196,39 +173,26 @@ func putOCIManifest(
 
 func bootLayerEntries() []tarEntry {
 	return []tarEntry{
-		dirEntry(
-			"boot",
-		),
+		dirEntry("boot"),
 		fileEntry("boot/vmlinux", "kernel-fixture"),
 		fileEntry("boot/initramfs", "initramfs-fixture"),
-		dirEntry(
-			"usr",
-		),
+		dirEntry("usr"),
 		dirEntry("usr/lib"),
 		dirEntry("usr/lib/systemd"),
 		fileEntry("usr/lib/systemd/systemd", "systemd-fixture"),
-		dirEntry(
-			"usr/local",
-		),
+		dirEntry("usr/local"),
 		dirEntry("usr/local/libexec"),
 		fileEntry("usr/local/libexec/sandbox-agent", "agent-fixture"),
-		dirEntry(
-			"etc",
-		),
+		dirEntry("etc"),
 		dirEntry("etc/systemd"),
 		dirEntry("etc/systemd/system"),
 		dirEntry("etc/systemd/system/sysinit.target.wants"),
-		fileEntry(
-			"etc/systemd/system/sysinit.target.wants/sandbox-agent.service",
-			"service-fixture",
-		),
+		fileEntry("etc/systemd/system/sysinit.target.wants/sandbox-agent.service", "service-fixture"),
 	}
 }
 
 //nolint:staticcheck // Exercise archive/tar's binary xattr encoding used by the OCI materializers.
-func importFixture(
-	t *testing.T,
-) (*Engine, string, []ociLayerFixture, ImageManifest) {
+func importFixture(t *testing.T) (*Engine, string, []ociLayerFixture, ImageManifest) {
 	t.Helper()
 	requireEROFS(t)
 	layout := t.TempDir()
@@ -297,12 +261,7 @@ func extractManifest(t *testing.T, e *Engine, m ImageManifest) string {
 		}
 	}
 	args = append(args, bindings[0].GuestPath)
-	if err = runImageTool(
-		context.Background(),
-		out,
-		reads,
-		"fsck.erofs",
-		args...); err != nil {
+	if err = runImageTool(context.Background(), out, reads, "fsck.erofs", args...); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(out, "tree")
@@ -324,23 +283,17 @@ func TestActualLayeredEROFSImportAndExtraction(t *testing.T) {
 	}
 	a, _ := os.Stat(filepath.Join(root, "shared.bin"))
 	b, _ := os.Stat(filepath.Join(root, "hard.bin"))
-	if a == nil || b == nil || !os.SameFile(a, b) || a.Mode().Perm() != 0o640 ||
-		a.ModTime().Unix() != 1700000000 ||
+	if a == nil || b == nil || !os.SameFile(a, b) || a.Mode().Perm() != 0o640 || a.ModTime().Unix() != 1700000000 ||
 		a.ModTime().Nanosecond() != 123456789 {
 		t.Fatalf("same-layer hardlink/metadata not retained: %v %v", a, b)
 	}
 	buf := make([]byte, 1024)
-	n, err := unix.Getxattr(
-		filepath.Join(root, "shared.bin"),
-		"user.fixture",
-		buf,
-	)
+	n, err := unix.Getxattr(filepath.Join(root, "shared.bin"), "user.fixture", buf)
 	if err != nil || string(buf[:n]) != "retained" {
 		t.Fatalf("xattr lost: %q %v", buf[:max(n, 0)], err)
 	}
 	meta := filepath.Join(e.opts.StateDir, m.Artifacts[0].Path)
-	info, err := exec.Command("dump.erofs", "--path=/shared.bin", meta).
-		CombinedOutput()
+	info, err := exec.Command("dump.erofs", "--path=/shared.bin", meta).CombinedOutput()
 	if err != nil || !strings.Contains(string(info), "Uid: 123   Gid: 456") ||
 		!strings.Contains(string(info), "Layout: 4") {
 		t.Fatalf("external chunk metadata/ownership: %s %v", info, err)
@@ -349,8 +302,7 @@ func TestActualLayeredEROFSImportAndExtraction(t *testing.T) {
 	if st.Size() >= a.Size() {
 		t.Fatal("fsmeta unexpectedly duplicates layer file data")
 	}
-	if serials, err := m.DataSerials(); err != nil ||
-		serials != "sandbox-data-0000,sandbox-data-0001" {
+	if serials, err := m.DataSerials(); err != nil || serials != "sandbox-data-0000,sandbox-data-0001" {
 		t.Fatalf("serial order: %q %v", serials, err)
 	}
 	if arg, err := m.DataKernelParameter(); err != nil ||
@@ -370,14 +322,7 @@ func TestActualLayerCacheReuseRebuildAndCorruption(t *testing.T) {
 	cache := filepath.Join(e.opts.StateDir, first.Artifacts[1].Path)
 	before, _ := os.Stat(cache)
 	for _, layer := range layers {
-		if err := os.Remove(
-			filepath.Join(
-				layout,
-				"blobs",
-				"sha256",
-				layer.descriptor.Digest.Encoded(),
-			),
-		); err != nil {
+		if err := os.Remove(filepath.Join(layout, "blobs", "sha256", layer.descriptor.Digest.Encoded())); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -396,16 +341,11 @@ func TestActualLayerCacheReuseRebuildAndCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := os.Stat(cache)
-	if !os.SameFile(before, after) ||
-		first.Artifacts[1] != second.Artifacts[1] {
+	if !os.SameFile(before, after) || first.Artifacts[1] != second.Artifacts[1] {
 		t.Fatal("layer bytes/inode not shared across manifests")
 	}
 	root := extractManifest(t, e, second)
-	if got, _ := os.ReadFile(
-		filepath.Join(root, "override"),
-	); string(
-		got,
-	) != "top" {
+	if got, _ := os.ReadFile(filepath.Join(root, "override")); string(got) != "top" {
 		t.Fatal("cache-only rebuild lost layer order")
 	}
 	if _, err = e.ImportOCI(
@@ -432,10 +372,7 @@ func TestActualLayerCacheReuseRebuildAndCorruption(t *testing.T) {
 		}
 	}
 	os.Chmod(cache, 0o444)
-	if err = first.Verify(
-		filepath.Join(e.opts.StateDir, "images", first.Digest[7:]),
-		first.Digest,
-	); err == nil {
+	if err = first.Verify(filepath.Join(e.opts.StateDir, "images", first.Digest[7:]), first.Digest); err == nil {
 		t.Fatal("cache corruption accepted by existing image")
 	}
 	if _, err = e.ImportOCI(
@@ -491,13 +428,7 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 	m.Layers[0], m.Layers[1] = m.Layers[1], m.Layers[0]
 	for i := range 2 {
 		a := original.Artifacts[2-i]
-		m.Artifacts[i+1] = dataArtifact(
-			m.Builder,
-			m.DiffIDs[i],
-			a.SHA256,
-			a.CacheSHA256,
-			i,
-		)
+		m.Artifacts[i+1] = dataArtifact(m.Builder, m.DiffIDs[i], a.SHA256, a.CacheSHA256, i)
 	}
 	if err := m.Verify(dir, original.Digest); err == nil {
 		t.Fatal("manifest reordered without rebuilding device_table accepted")
@@ -535,22 +466,13 @@ func TestActualLayerOrderAndBackendLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := extractManifest(t, e, m)
-	if got, _ := os.ReadFile(
-		filepath.Join(root, "override"),
-	); string(
-		got,
-	) != "base" {
+	if got, _ := os.ReadFile(filepath.Join(root, "override")); string(got) != "base" {
 		t.Fatal("reversing layers did not reverse override precedence")
 	}
-	if got, _ := os.ReadFile(
-		filepath.Join(root, "removed"),
-	); string(
-		got,
-	) != "remove me" {
+	if got, _ := os.ReadFile(filepath.Join(root, "removed")); string(got) != "remove me" {
 		t.Fatal("lower whiteout masked a newer upper file")
 	}
-	if m.Artifacts[1].Path != first.Artifacts[2].Path ||
-		m.Artifacts[2].Path != first.Artifacts[1].Path {
+	if m.Artifacts[1].Path != first.Artifacts[2].Path || m.Artifacts[2].Path != first.Artifacts[1].Path {
 		t.Fatal("device_table order does not track OCI order")
 	}
 	many := make([]ociLayerFixture, MaxImageDataDevices)
@@ -570,11 +492,8 @@ func TestActualLayerOrderAndBackendLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindings, err := m.ReadOnlyBindings(
-		filepath.Join(e.opts.StateDir, "images", image[7:]),
-	)
-	if err != nil || len(bindings) != 17 ||
-		bindings[16].Serial != "sandbox-data-0015" {
+	bindings, err := m.ReadOnlyBindings(filepath.Join(e.opts.StateDir, "images", image[7:]))
+	if err != nil || len(bindings) != 17 || bindings[16].Serial != "sandbox-data-0015" {
 		t.Fatalf("16-backend boundary: %d %v", len(bindings), err)
 	}
 	image = putOCIManifest(t, layout, "seventeen", append(many, layers[0]))
@@ -616,9 +535,7 @@ func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cacheDir := filepath.Dir(
-		filepath.Join(e.opts.StateDir, m.Artifacts[1].Path),
-	)
+	cacheDir := filepath.Dir(filepath.Join(e.opts.StateDir, m.Artifacts[1].Path))
 	if err := os.Rename(cacheDir, cacheDir+".saved"); err != nil {
 		t.Fatal(err)
 	}
@@ -698,11 +615,7 @@ func TestLegacyNativeLayeredSubsetRemainsFrozen(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			recorded, whiteouts := map[string]byte{}, map[string]bool{}
 			for _, entry := range entries {
-				if err := validateLayerEntry(
-					&entry.header,
-					recorded,
-					whiteouts,
-				); err != nil {
+				if err := validateLayerEntry(&entry.header, recorded, whiteouts); err != nil {
 					return
 				}
 			}

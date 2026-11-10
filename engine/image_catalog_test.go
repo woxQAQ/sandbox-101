@@ -40,11 +40,7 @@ func TestImagePublicationRejectsOrphansAndChangedMaterialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
-		if err = os.WriteFile(
-			filepath.Join(dir, name),
-			[]byte(name),
-			0o444,
-		); err != nil {
+		if err = os.WriteFile(filepath.Join(dir, name), []byte(name), 0o444); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,26 +58,14 @@ func TestImagePublicationRejectsOrphansAndChangedMaterialization(t *testing.T) {
 	if err = writeJSON(filepath.Join(dir, "image.json"), m); err != nil {
 		t.Fatal(err)
 	}
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "orphan", Action: "create", Config: cfg},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "orphan", Action: "create", Config: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := awaitStatus(
-		t,
-		e,
-		op.ID,
-	); got.Status != "failed" || got.Error == nil ||
-		got.Error.Code != api.Incompatible {
+	if got := awaitStatus(t, e, op.ID); got.Status != "failed" || got.Error == nil || got.Error.Code != api.Incompatible {
 		t.Fatalf("unpublished filesystem image accepted: %+v", got)
 	}
-	if _, err = e.db.Exec(
-		"INSERT INTO meta VALUES(?,?)",
-		"image:"+cfg.Image,
-		string(encode(m)),
-	); err != nil {
+	if _, err = e.db.Exec("INSERT INTO meta VALUES(?,?)", "image:"+cfg.Image, string(encode(m))); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, e, api.Request{Key: "published", Action: "create", Config: cfg})
@@ -90,29 +74,18 @@ func TestImagePublicationRejectsOrphansAndChangedMaterialization(t *testing.T) {
 	if err = writeJSON(filepath.Join(dir, "image.json"), changed); err != nil {
 		t.Fatal(err)
 	}
-	op, err = e.Submit(
-		context.Background(),
-		api.Request{Key: "changed", Action: "create", Config: cfg},
-	)
+	op, err = e.Submit(context.Background(), api.Request{Key: "changed", Action: "create", Config: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := awaitStatus(
-		t,
-		e,
-		op.ID,
-	); got.Status != "failed" || got.Error == nil ||
-		got.Error.Code != api.Incompatible {
+	if got := awaitStatus(t, e, op.ID); got.Status != "failed" || got.Error == nil || got.Error.Code != api.Incompatible {
 		t.Fatalf("changed image metadata accepted: %+v", got)
 	}
 	if err = writeJSON(filepath.Join(dir, "image.json"), m); err != nil {
 		t.Fatal(err)
 	}
 	captured, _ := json.Marshal(changed)
-	if err = e.checkImagePublication(
-		Resource{Config: *cfg, ImageDir: dir},
-		captured,
-	); err == nil {
+	if err = e.checkImagePublication(Resource{Config: *cfg, ImageDir: dir}, captured); err == nil {
 		t.Fatal("different captured image materialization accepted")
 	}
 }

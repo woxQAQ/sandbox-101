@@ -28,18 +28,14 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 	if err != nil || source.Status != "failed" {
 		return err
 	}
-	owned := b.OperationID == source.ID ||
-		strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
-	if r.Release != nil && b.State == "terminated" &&
-		b.TenantID == r.Release.Tenant &&
-		b.VMID == r.Release.VM &&
+	owned := b.OperationID == source.ID || strings.HasPrefix(b.OperationID, "recovery:"+r.ID+":")
+	if r.Release != nil && b.State == "terminated" && b.TenantID == r.Release.Tenant && b.VMID == r.Release.VM &&
 		b.Instance == r.Release.Instance {
 		owned = true
 	}
 	if !owned {
 		// Activation can commit running before retiring the old sleep snapshot.
-		if b.State == "running" && r.Instance != "" &&
-			b.Instance == r.Instance {
+		if b.State == "running" && r.Instance != "" && b.Instance == r.Instance {
 			o := r.operation()
 			snapshot := b.SnapshotID
 			err = s.finishResume(&o, &b)
@@ -81,23 +77,14 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 	switch b.State {
 	case "provisioning", "terminated":
 		cleanup := &o
-		if b.VMID != "" &&
-			(source.Command.Action == "fork" || source.Command.Action == "release") {
-			deletion, e := s.findResourceStep(
-				source,
-				releaseVMStep(b.ID),
-				"delete",
-			)
+		if b.VMID != "" && (source.Command.Action == "fork" || source.Command.Action == "release") {
+			deletion, e := s.findResourceStep(source, releaseVMStep(b.ID), "delete")
 			if e != nil {
 				return e
 			}
 			if deletion != nil {
-				if deletion.Request.VMID != b.VMID ||
-					deletion.Request.ExpectedInstance != b.Instance {
-					return Fail(
-						ErrManualRecovery,
-						"original release does not match the sandbox instance",
-					)
+				if deletion.Request.VMID != b.VMID || deletion.Request.ExpectedInstance != b.Instance {
+					return Fail(ErrManualRecovery, "original release does not match the sandbox instance")
 				}
 				if !recoveryTerminal(deletion.Status) {
 					return nil
@@ -105,10 +92,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 				if deletion.Status == "succeeded" {
 					_, e = s.opts.Engine.GetVM(s.ctx, b.VMID)
 					if e == nil {
-						return Fail(
-							ErrManualRecovery,
-							"successful deletion still has a live VM",
-						)
+						return Fail(ErrManualRecovery, "successful deletion still has a live VM")
 					}
 					if !isEngineCode(e, api.NotFound) {
 						return e
@@ -123,44 +107,24 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		}
 		// Release is compensating work; it never retries activation or guest exec.
 		err = s.release(cleanup, &b)
-		return s.finishRecoveryAttempt(
-			r,
-			err,
-			releaseVMStep(b.ID),
-			"retire-snapshot:"+b.SnapshotID,
-		)
+		return s.finishRecoveryAttempt(r, err, releaseVMStep(b.ID), "retire-snapshot:"+b.SnapshotID)
 	case "pausing":
 		if source.Command.Action != "pause" {
-			return Fail(
-				ErrManualRecovery,
-				"pausing sandbox has no pause intent",
-			)
+			return Fail(ErrManualRecovery, "pausing sandbox has no pause intent")
 		}
 		if b.SnapshotID == "" {
-			proof, e := s.findResourceStep(
-				source,
-				"hibernate-snapshot",
-				"snapshot",
-			)
+			proof, e := s.findResourceStep(source, "hibernate-snapshot", "snapshot")
 			if e != nil {
 				return e
 			}
 			if proof != nil && !recoveryTerminal(proof.Status) {
 				return nil
 			}
-			if proof != nil && proof.Status == "succeeded" &&
-				proof.Request.VMID == b.VMID &&
+			if proof != nil && proof.Status == "succeeded" && proof.Request.VMID == b.VMID &&
 				proof.Request.ExpectedInstance == b.Instance {
 				b.SnapshotID = proof.SnapshotID
 				ownership := s.lockResourceOwnership()
-				err = recordSnapshotOwner(
-					s.ctx,
-					s.store.db,
-					b.SnapshotID,
-					b.TenantID,
-					source.ID,
-					"captured",
-				)
+				err = recordSnapshotOwner(s.ctx, s.store.db, b.SnapshotID, b.TenantID, source.ID, "captured")
 				ownership()
 				if err != nil {
 					return err
@@ -187,13 +151,8 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 		if e != nil {
 			return e
 		}
-		if !v.Verified || (v.Phase != "running" && b.SnapshotID == "") ||
-			b.Instance == "" ||
-			v.Instance != b.Instance {
-			return Fail(
-				ErrManualRecovery,
-				"cannot prove the original hibernating VM instance",
-			)
+		if !v.Verified || (v.Phase != "running" && b.SnapshotID == "") || b.Instance == "" || v.Instance != b.Instance {
+			return Fail(ErrManualRecovery, "cannot prove the original hibernating VM instance")
 		}
 		if b.SnapshotID == "" {
 			if err = s.admitQuotaRecovery(
@@ -213,13 +172,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 			}
 		}
 		err = s.pause(&o, &b)
-		return s.finishRecoveryAttempt(
-			r,
-			err,
-			"pause-network",
-			"hibernate-snapshot",
-			"hibernate-delete",
-		)
+		return s.finishRecoveryAttempt(r, err, "pause-network", "hibernate-snapshot", "hibernate-delete")
 	case "resuming":
 		if source.Command.Action == "rollback" {
 			err = s.recoverRollback(r, source, &b)
@@ -235,10 +188,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 			)
 		}
 		if source.Command.Action != "resume" {
-			return Fail(
-				ErrManualRecovery,
-				"resuming sandbox has no resume or rollback intent",
-			)
+			return Fail(ErrManualRecovery, "resuming sandbox has no resume or rollback intent")
 		}
 		err = s.recoverFailedClone(r, source, &b, "resume-clone")
 		return s.finishRecoveryAttempt(r, err, "resume-cleanup")
@@ -247,12 +197,7 @@ func (s *Service) recoverSandboxResource(r *resourceRecovery) error {
 	}
 }
 
-func (s *Service) recoverFailedClone(
-	r *resourceRecovery,
-	source Operation,
-	b *Sandbox,
-	cloneStep string,
-) error {
+func (s *Service) recoverFailedClone(r *resourceRecovery, source Operation, b *Sandbox, cloneStep string) error {
 	if err := s.recoverySnapshotReady(b.SnapshotID); err != nil {
 		return err
 	}
@@ -264,10 +209,7 @@ func (s *Service) recoverFailedClone(
 		return Fail(ErrConflict, "resume clone is still running")
 	}
 	if b.VMID != "" && (proof == nil || proof.VMID != b.VMID) {
-		return Fail(
-			ErrManualRecovery,
-			"failed resume VM has no matching clone receipt",
-		)
+		return Fail(ErrManualRecovery, "failed resume VM has no matching clone receipt")
 	}
 	vmid := b.VMID
 	if proof != nil {
@@ -292,20 +234,14 @@ func (s *Service) recoverFailedClone(
 			return e
 		}
 		if isEngineCode(e, api.NotFound) {
-			if reclaimErr := s.reclaimQuota(
-				"vm_disk",
-				vmid,
-			); reclaimErr != nil {
+			if reclaimErr := s.reclaimQuota("vm_disk", vmid); reclaimErr != nil {
 				return reclaimErr
 			}
 		}
 		if e == nil {
 			if !v.Verified || (b.Instance != "" && b.Instance != v.Instance) ||
 				(r.Instance != "" && r.Instance != v.Instance) {
-				return Fail(
-					ErrManualRecovery,
-					"failed resume VM instance cannot be proven",
-				)
+				return Fail(ErrManualRecovery, "failed resume VM instance cannot be proven")
 			}
 			r.VMID, r.Instance = vmid, v.Instance
 			if err = s.saveRecovery(*r); err != nil {
@@ -333,11 +269,7 @@ func (s *Service) recoverFailedClone(
 // Rollback can have reused a VM ID. A resume-clone receipt never authorizes
 // deleting that target. Only retry restore on a proven, already stopped source;
 // an unproven running instance is left for explicit operator recovery.
-func (s *Service) recoverRollback(
-	r *resourceRecovery,
-	source Operation,
-	b *Sandbox,
-) error {
+func (s *Service) recoverRollback(r *resourceRecovery, source Operation, b *Sandbox) error {
 	if source.Step == "rollback_clone" {
 		// Rollback began asleep: retain its original sleep capture and discard
 		// only the clone made for the failed checkpoint activation.
@@ -350,35 +282,21 @@ func (s *Service) recoverRollback(
 		return err
 	}
 	if cp.SandboxID != b.ID || cp.TenantID != b.TenantID {
-		return Fail(
-			ErrManualRecovery,
-			"rollback checkpoint ownership does not match",
-		)
+		return Fail(ErrManualRecovery, "rollback checkpoint ownership does not match")
 	}
-	if err = requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		cp.SnapshotID,
-		cp.TenantID,
-	); err != nil {
+	if err = requireSnapshotOwner(s.ctx, s.store.db, cp.SnapshotID, cp.TenantID); err != nil {
 		return err
 	}
 	if err = s.recoverySnapshotReady(cp.SnapshotID); err != nil {
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return Fail(
-			ErrConflict,
-			"host credentials must be supplied before rollback recovery",
-		)
+		return Fail(ErrConflict, "host credentials must be supplied before rollback recovery")
 	}
 	o := r.operation()
 	o.Command, o.TenantID, o.ChargeTenantID = source.Command, source.TenantID, source.ChargeTenantID
 	if b.VMID == "" {
-		return Fail(
-			ErrManualRecovery,
-			"rollback target is missing; refusing an unproven replacement",
-		)
+		return Fail(ErrManualRecovery, "rollback target is missing; refusing an unproven replacement")
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
@@ -389,9 +307,7 @@ func (s *Service) recoverRollback(
 	}
 	target := ""
 	for _, a := range r.Allocations {
-		if a.Step == "rollback-restore" &&
-			a.Resolution.State == "result_known" &&
-			a.Resolution.Proof != nil {
+		if a.Step == "rollback-restore" && a.Resolution.State == "result_known" && a.Resolution.Proof != nil {
 			target = a.Resolution.Proof.ResultInstance
 			o.ID = a.OperationID
 		}
@@ -399,18 +315,14 @@ func (s *Service) recoverRollback(
 	if target != "" && v.Instance != target {
 		return Fail(ErrManualRecovery, "restore result instance changed")
 	}
-	if target == "" && v.Phase == "stopped" && source.SourceInstance != "" &&
-		v.Instance == source.SourceInstance {
+	if target == "" && v.Phase == "stopped" && source.SourceInstance != "" && v.Instance == source.SourceInstance {
 		stop, e := s.findResourceStep(source, "rollback-stop", "stop")
 		if e != nil {
 			return e
 		}
 		if stop == nil || stop.Status != "succeeded" || stop.VMID != v.ID ||
 			stop.Request.ExpectedInstance != v.Instance {
-			return Fail(
-				ErrManualRecovery,
-				"rollback stop receipt does not prove the stopped source",
-			)
+			return Fail(ErrManualRecovery, "rollback stop receipt does not prove the stopped source")
 		}
 		if err = s.admitQuotaRecovery(
 			r,
@@ -445,8 +357,7 @@ func (s *Service) recoverRollback(
 			return err
 		}
 		for _, a := range r.Allocations {
-			if a.OperationID == o.ID && a.Step == "rollback-restore" &&
-				a.Resolution.Proof != nil {
+			if a.OperationID == o.ID && a.Step == "rollback-restore" && a.Resolution.Proof != nil {
 				target = a.Resolution.Proof.ResultInstance
 			}
 		}
@@ -458,25 +369,17 @@ func (s *Service) recoverRollback(
 	if target == "" {
 		// Preserve ordinary public activation recovery's independent network proof;
 		// it does not mint a compensation allocation or a new generation.
-		activation, e := s.findResourceStep(
-			source,
-			"network-off:"+b.ID,
-			"network",
-		)
+		activation, e := s.findResourceStep(source, "network-off:"+b.ID, "network")
 		if e != nil {
 			return e
 		}
-		if activation == nil || activation.Status != "succeeded" ||
-			activation.VMID != v.ID ||
+		if activation == nil || activation.Status != "succeeded" || activation.VMID != v.ID ||
 			activation.Request.ExpectedInstance == "" ||
 			activation.Request.ExpectedInstance != v.Instance ||
 			!v.Verified ||
 			!v.AgentReady ||
 			v.Phase != "running" {
-			return Fail(
-				ErrManualRecovery,
-				"rollback running instance cannot be proven",
-			)
+			return Fail(ErrManualRecovery, "rollback running instance cannot be proven")
 		}
 		r.Instance = activation.Request.ExpectedInstance
 		if err = s.saveRecovery(*r); err != nil {
@@ -488,17 +391,11 @@ func (s *Service) recoverRollback(
 		return s.finishResume(&o, b)
 	}
 	if v.Instance != target || v.OperationID != "" {
-		return Fail(
-			ErrManualRecovery,
-			"rollback result has another instance or owner",
-		)
+		return Fail(ErrManualRecovery, "rollback result has another instance or owner")
 	}
 	r.Instance = target
 	if v.Phase != "running" || !v.AgentReady || !v.Verified {
-		return Fail(
-			ErrManualRecovery,
-			"rollback restore is not verified running",
-		)
+		return Fail(ErrManualRecovery, "rollback restore is not verified running")
 	}
 	if err = s.saveRecovery(*r); err != nil {
 		return err

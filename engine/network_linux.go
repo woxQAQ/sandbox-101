@@ -51,22 +51,7 @@ func command(ctx context.Context, name string, args ...string) ([]byte, error) {
 
 func netNames(r Resource) (ns, host, peer, mapped, hostIP, peerIP string) {
 	n := r.Slot * 2
-	return "sbe-" + r.NetworkToken, fmt.Sprintf(
-			"sb%05dh",
-			r.Slot,
-		), "uplink", fmt.Sprintf(
-			"10.200.%d.%d",
-			r.Slot/256,
-			r.Slot%256,
-		), fmt.Sprintf(
-			"10.201.%d.%d",
-			n/256,
-			n%256+1,
-		), fmt.Sprintf(
-			"10.201.%d.%d",
-			n/256,
-			n%256,
-		)
+	return "sbe-" + r.NetworkToken, fmt.Sprintf("sb%05dh", r.Slot), "uplink", fmt.Sprintf("10.200.%d.%d", r.Slot/256, r.Slot%256), fmt.Sprintf("10.201.%d.%d", n/256, n%256+1), fmt.Sprintf("10.201.%d.%d", n/256, n%256)
 }
 
 func netAlias(r Resource) string {
@@ -77,10 +62,7 @@ func netIP(ctx context.Context, ns string, args ...string) ([]byte, error) {
 	return command(ctx, "ip", append([]string{"-n", ns}, args...)...)
 }
 
-func (b *CloudHypervisor) networkPrepare(
-	ctx context.Context,
-	r Resource,
-) error {
+func (b *CloudHypervisor) networkPrepare(ctx context.Context, r Resource) error {
 	ns, host, peer, mapped, hostIP, peerIP := netNames(r)
 	receiptPath := filepath.Join(r.Dir, "network.json")
 	var receipt networkReceipt
@@ -102,31 +84,10 @@ func (b *CloudHypervisor) networkPrepare(
 	}
 	// Never delete a partially prepared namespace on error. The durable VM intent
 	// and named namespace remain a recovery anchor for explicit diagnosis.
-	if _, e := command(
-		ctx,
-		"ip",
-		"link",
-		"add",
-		host,
-		"type",
-		"veth",
-		"peer",
-		"name",
-		peer,
-		"netns",
-		ns,
-	); e != nil {
+	if _, e := command(ctx, "ip", "link", "add", host, "type", "veth", "peer", "name", peer, "netns", ns); e != nil {
 		return e
 	}
-	if _, e := command(
-		ctx,
-		"ip",
-		"link",
-		"set",
-		host,
-		"alias",
-		netAlias(r),
-	); e != nil {
+	if _, e := command(ctx, "ip", "link", "set", host, "alias", netAlias(r)); e != nil {
 		return e
 	}
 	for _, args := range [][]string{{"link", "set", peer, "alias", netAlias(r)}, {"tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(int(b.opts.UID))}, {"link", "set", "tap0", "alias", netAlias(r)}, {"link", "set", "tap0", "address", "02:00:00:00:00:01", "mtu", "1500"}, {"link", "set", peer, "mtu", "1500"}, {"addr", "add", "192.168.127.1/30", "dev", "tap0"}, {"addr", "add", peerIP + "/31", "dev", peer}, {"link", "set", "lo", "up"}} {
@@ -177,10 +138,7 @@ func (b *CloudHypervisor) networkPrepare(
 	return writeJSON(receiptPath, receipt)
 }
 
-func (b *CloudHypervisor) networkInspect(
-	ctx context.Context,
-	r Resource,
-) (bool, error) {
+func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool, error) {
 	ns, host, peer, _, _, _ := netNames(r)
 	var receipt networkReceipt
 	err := readJSON(filepath.Join(r.Dir, "network.json"), &receipt)
@@ -188,24 +146,15 @@ func (b *CloudHypervisor) networkInspect(
 		if _, x := os.Stat("/run/netns/" + ns); os.IsNotExist(x) {
 			return false, nil
 		}
-		return false, api.Fail(
-			api.ManualRecovery,
-			"network preparation incomplete; ownership receipt absent",
-		)
+		return false, api.Fail(api.ManualRecovery, "network preparation incomplete; ownership receipt absent")
 	}
 	if err != nil {
 		return false, err
 	}
 	var removing networkReceipt
-	if x := readJSON(
-		filepath.Join(r.Dir, "network-removing.json"),
-		&removing,
-	); x == nil {
+	if x := readJSON(filepath.Join(r.Dir, "network-removing.json"), &removing); x == nil {
 		if removing != receipt {
-			return false, api.Fail(
-				api.ManualRecovery,
-				"network cleanup receipt mismatch",
-			)
+			return false, api.Fail(api.ManualRecovery, "network cleanup receipt mismatch")
 		}
 		st, x := os.Stat("/run/netns/" + ns)
 		if os.IsNotExist(x) {
@@ -215,30 +164,18 @@ func (b *CloudHypervisor) networkInspect(
 			return false, x
 		}
 		if st.Sys().(*syscall.Stat_t).Ino != receipt.Inode {
-			return false, api.Fail(
-				api.ManualRecovery,
-				"namespace replaced during cleanup",
-			)
+			return false, api.Fail(api.ManualRecovery, "namespace replaced during cleanup")
 		}
 		return false, nil
-	} else if !os.IsNotExist(
-		x,
-	) {
+	} else if !os.IsNotExist(x) {
 		return false, x
 	}
 	st, err := os.Stat("/run/netns/" + ns)
 	if err != nil {
-		return false, api.Fail(
-			api.ManualRecovery,
-			"owned namespace missing; cannot prove host resources were cleaned",
-		)
+		return false, api.Fail(api.ManualRecovery, "owned namespace missing; cannot prove host resources were cleaned")
 	}
-	if receipt.Token != r.NetworkToken ||
-		receipt.Inode != st.Sys().(*syscall.Stat_t).Ino {
-		return false, api.Fail(
-			api.ManualRecovery,
-			"network namespace identity mismatch",
-		)
+	if receipt.Token != r.NetworkToken || receipt.Inode != st.Sys().(*syscall.Stat_t).Ino {
+		return false, api.Fail(api.ManualRecovery, "network namespace identity mismatch")
 	}
 	var links []linkInfo
 	out, err := command(ctx, "ip", "-j", "link", "show", "dev", host)
@@ -249,10 +186,7 @@ func (b *CloudHypervisor) networkInspect(
 		return false, err
 	}
 	if len(links) != 1 || links[0].Alias != netAlias(r) {
-		return false, api.Fail(
-			api.ManualRecovery,
-			"host veth ownership mismatch",
-		)
+		return false, api.Fail(api.ManualRecovery, "host veth ownership mismatch")
 	}
 	hostLink := links[0]
 	out, err = netIP(ctx, ns, "-j", "link", "show")
@@ -273,14 +207,9 @@ func (b *CloudHypervisor) networkInspect(
 			up = &links[i]
 		}
 	}
-	if tap == nil || up == nil || tap.Alias != netAlias(r) ||
-		up.Alias != netAlias(r) ||
-		hostLink.Peer != up.Index ||
+	if tap == nil || up == nil || tap.Alias != netAlias(r) || up.Alias != netAlias(r) || hostLink.Peer != up.Index ||
 		up.Peer != hostLink.Index {
-		return false, api.Fail(
-			api.ManualRecovery,
-			"TAP/veth identity or pairing mismatch",
-		)
+		return false, api.Fail(api.ManualRecovery, "TAP/veth identity or pairing mismatch")
 	}
 	isUp := func(l linkInfo) bool {
 		return slices.Contains(l.Flags, "UP")
@@ -292,10 +221,7 @@ func (b *CloudHypervisor) networkInspect(
 
 // ensureNetworkRoute accepts only an absent route or the route for the verified
 // namespace/link identity. Never replace an unrelated host route.
-func ensureNetworkRoute(
-	ctx context.Context,
-	ns, destination, gateway, device string,
-) error {
+func ensureNetworkRoute(ctx context.Context, ns, destination, gateway, device string) error {
 	run := func(args ...string) ([]byte, error) {
 		if ns != "" {
 			return netIP(ctx, ns, args...)
@@ -317,46 +243,21 @@ func ensureNetworkRoute(
 	}
 	if len(routes) != 0 {
 		if len(routes) != 1 ||
-			strings.TrimSuffix(
-				routes[0].Destination,
-				"/32",
-			) != strings.TrimSuffix(
-				destination,
-				"/32",
-			) ||
+			strings.TrimSuffix(routes[0].Destination, "/32") != strings.TrimSuffix(destination, "/32") ||
 			routes[0].Gateway != gateway ||
 			routes[0].Device != device ||
 			(routes[0].Type != "" && routes[0].Type != "unicast") {
-			return api.Fail(
-				api.ManualRecovery,
-				"network route ownership mismatch for %s",
-				destination,
-			)
+			return api.Fail(api.ManualRecovery, "network route ownership mismatch for %s", destination)
 		}
 		return nil
 	}
-	_, err = run(
-		"route",
-		"add",
-		destination,
-		"via",
-		gateway,
-		"dev",
-		device,
-		"onlink",
-	)
+	_, err = run("route", "add", destination, "via", gateway, "dev", device, "onlink")
 	return err
 }
 
-func (b *CloudHypervisor) Network(
-	ctx context.Context,
-	r Resource,
-	enable bool,
-) (result error) {
+func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) (result error) {
 	ns, host, peer, mapped, hostIP, peerIP := netNames(r)
-	if _, x := os.Stat(
-		filepath.Join(r.Dir, "network-removing.json"),
-	); x == nil {
+	if _, x := os.Stat(filepath.Join(r.Dir, "network-removing.json")); x == nil {
 		if enable {
 			return api.Fail(api.Conflict, "network cleanup in progress")
 		}
@@ -367,11 +268,7 @@ func (b *CloudHypervisor) Network(
 	if err != nil {
 		return err
 	}
-	if _, err = os.Stat(
-		filepath.Join(r.Dir, "network.json"),
-	); os.IsNotExist(
-		err,
-	) {
+	if _, err = os.Stat(filepath.Join(r.Dir, "network.json")); os.IsNotExist(err) {
 		if enable {
 			return api.Fail(api.Conflict, "network not prepared")
 		}
@@ -382,25 +279,15 @@ func (b *CloudHypervisor) Network(
 		// failure also closes links that were already active before this call.
 		defer func() {
 			if result != nil {
-				result = errors.Join(
-					result,
-					b.Network(context.WithoutCancel(ctx), r, false),
-				)
+				result = errors.Join(result, b.Network(context.WithoutCancel(ctx), r, false))
 			}
 		}()
 		if err = b.checkHostPolicy(ctx); err != nil {
 			return err
 		}
 		var installed networkPolicyReceipt
-		if err = readJSON(
-			filepath.Join(r.Dir, "network-policy.json"),
-			&installed,
-		); err != nil {
-			return api.Fail(
-				api.Conflict,
-				"direct policy receipt required: %v",
-				err,
-			)
+		if err = readJSON(filepath.Join(r.Dir, "network-policy.json"), &installed); err != nil {
+			return api.Fail(api.Conflict, "direct policy receipt required: %v", err)
 		}
 		if installed.Policy == nil {
 			return api.Fail(api.Conflict, "direct policy revoked")
@@ -445,22 +332,10 @@ func (b *CloudHypervisor) Network(
 		if _, err = command(ctx, "ip", "link", "set", host, "up"); err != nil {
 			return err
 		}
-		if err = ensureNetworkRoute(
-			ctx,
-			ns,
-			"default",
-			hostIP,
-			peer,
-		); err != nil {
+		if err = ensureNetworkRoute(ctx, ns, "default", hostIP, peer); err != nil {
 			return err
 		}
-		if err = ensureNetworkRoute(
-			ctx,
-			"",
-			mapped+"/32",
-			peerIP,
-			host,
-		); err != nil {
+		if err = ensureNetworkRoute(ctx, "", mapped+"/32", peerIP, host); err != nil {
 			return err
 		}
 		_, err = netIP(ctx, ns, "link", "set", "tap0", "up")
@@ -479,10 +354,7 @@ func (b *CloudHypervisor) Network(
 		if active, x := b.networkInspect(ctx, r); x != nil {
 			errs = append(errs, x)
 		} else if active {
-			errs = append(
-				errs,
-				api.Fail(api.Unknown, "interface shutdown unconfirmed"),
-			)
+			errs = append(errs, api.Fail(api.Unknown, "interface shutdown unconfirmed"))
 		}
 	}
 	return errors.Join(errs...)
@@ -492,13 +364,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 	var err error
 	ns, host, _, mapped, _, _ := netNames(r)
 	var receipt networkReceipt
-	if err := readJSON(
-		filepath.Join(r.Dir, "network.json"),
-		&receipt,
-	); errors.Is(
-		err,
-		os.ErrNotExist,
-	) {
+	if err := readJSON(filepath.Join(r.Dir, "network.json"), &receipt); errors.Is(err, os.ErrNotExist) {
 		_, err = b.networkInspect(ctx, r)
 		return err
 	} else if err != nil {
@@ -525,13 +391,9 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 	if saved != receipt {
 		return api.Fail(api.ManualRecovery, "cleanup ownership marker mismatch")
 	}
-	if st, err := os.Stat(
-		"/run/netns/" + ns,
-	); err == nil &&
-		st.Sys().(*syscall.Stat_t).Ino != receipt.Inode {
+	if st, err := os.Stat("/run/netns/" + ns); err == nil && st.Sys().(*syscall.Stat_t).Ino != receipt.Inode {
 		return api.Fail(api.ManualRecovery, "namespace replaced during cleanup")
-	} else if err != nil &&
-		!os.IsNotExist(err) {
+	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	out, err := command(ctx, "ip", "-j", "link", "show")
@@ -544,10 +406,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 	}
 	for _, link := range existing {
 		if link.Name == host && link.Alias != netAlias(r) {
-			return api.Fail(
-				api.ManualRecovery,
-				"reused veth name during cleanup",
-			)
+			return api.Fail(api.ManualRecovery, "reused veth name during cleanup")
 		}
 	}
 	for _, elem := range []struct{ set, value string }{{"active_ifaces", `"` + host + `"`}, {"active_ips", mapped}} {
@@ -583,27 +442,10 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 			}
 		}
 	}
-	if out, x := command(
-		ctx,
-		"ip",
-		"-j",
-		"route",
-		"show",
-		mapped+"/32",
-	); x != nil {
+	if out, x := command(ctx, "ip", "-j", "route", "show", mapped+"/32"); x != nil {
 		return x
-	} else if string(
-		out,
-	) != "[]\n" {
-		if _, err := command(
-			ctx,
-			"ip",
-			"route",
-			"del",
-			mapped+"/32",
-			"dev",
-			host,
-		); err != nil {
+	} else if string(out) != "[]\n" {
+		if _, err := command(ctx, "ip", "route", "del", mapped+"/32", "dev", host); err != nil {
 			return err
 		}
 	}
@@ -617,18 +459,9 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 		for _, l := range links {
 			if l.Name == host {
 				if l.Alias != netAlias(r) {
-					return api.Fail(
-						api.ManualRecovery,
-						"reused veth name during cleanup",
-					)
+					return api.Fail(api.ManualRecovery, "reused veth name during cleanup")
 				}
-				if _, err = command(
-					ctx,
-					"ip",
-					"link",
-					"del",
-					host,
-				); err != nil {
+				if _, err = command(ctx, "ip", "link", "del", host); err != nil {
 					return err
 				}
 			}
@@ -640,10 +473,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 			return err
 		}
 	}
-	if err = os.Remove(
-		filepath.Join(r.Dir, "network.json"),
-	); err != nil &&
-		!os.IsNotExist(err) {
+	if err = os.Remove(filepath.Join(r.Dir, "network.json")); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return syncDir(r.Dir)

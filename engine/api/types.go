@@ -27,11 +27,7 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
 
-func Fail(
-	c Code,
-	format string,
-	args ...any,
-) error {
+func Fail(c Code, format string, args ...any) error {
 	return &Error{c, fmt.Sprintf(format, args...)}
 }
 

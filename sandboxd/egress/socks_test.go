@@ -29,10 +29,7 @@ func TestSOCKS5TCPAndGuards(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("SOCKS status: %d", status)
 	}
-	_, _ = io.WriteString(
-		conn,
-		"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
-	)
+	_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if body := readResponse(t, resp, err); body != "socks upstream" {
 		t.Fatal(body)
@@ -90,12 +87,7 @@ func TestSOCKS5HalfClose(t *testing.T) {
 			_, _ = conn.Write(append([]byte("echo:"), data...))
 		}
 	}()
-	_, b := newTestManager(
-		t,
-		Options{DialContext: targetDialer(up.Addr().String(), nil)},
-		Policy{Mode: "relay"},
-		nil,
-	)
+	_, b := newTestManager(t, Options{DialContext: targetDialer(up.Addr().String(), nil)}, Policy{Mode: "relay"}, nil)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
 	defer conn.Close()
 	if status != 0 {

@@ -95,41 +95,19 @@ func (b *CloudHypervisor) Compatibility() string {
 func (b *CloudHypervisor) checkHostPolicy(ctx context.Context) error {
 	var p HostPolicy
 	if err := readJSON(b.opts.HostPolicy, &p); err != nil {
-		return api.Fail(
-			api.Incompatible,
-			"host policy receipt required: %v",
-			err,
-		)
+		return api.Fail(api.Incompatible, "host policy receipt required: %v", err)
 	}
 	if p.Version != 1 || !p.StorageQuota || !p.NetworkQuotas {
-		return api.Fail(
-			api.Incompatible,
-			"storage and network quota deployment acknowledgement missing",
-		)
+		return api.Fail(api.Incompatible, "storage and network quota deployment acknowledgement missing")
 	}
 	for _, set := range []string{"active_ifaces", "active_ips"} {
-		if _, err := command(
-			ctx,
-			"nft",
-			"list",
-			"set",
-			"inet",
-			"sandbox_engine",
-			set,
-		); err != nil {
-			return api.Fail(
-				api.Incompatible,
-				"host admission set missing: %v",
-				err,
-			)
+		if _, err := command(ctx, "nft", "list", "set", "inet", "sandbox_engine", set); err != nil {
+			return api.Fail(api.Incompatible, "host admission set missing: %v", err)
 		}
 	}
 	forwarding, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil || strings.TrimSpace(string(forwarding)) != "1" {
-		return api.Fail(
-			api.Incompatible,
-			"host IPv4 forwarding must be enabled",
-		)
+		return api.Fail(api.Incompatible, "host IPv4 forwarding must be enabled")
 	}
 	return nil
 }
@@ -139,37 +117,23 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 		return err
 	}
 	if os.Geteuid() != 0 {
-		return api.Fail(
-			api.Incompatible,
-			"real backend requires root for namespace/cgroup setup",
-		)
+		return api.Fail(api.Incompatible, "real backend requires root for namespace/cgroup setup")
 	}
 	for _, tool := range []string{"ip", "nft", "mkfs.ext4", "sysctl"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			return api.Fail(
-				api.Incompatible,
-				"required host tool missing: %s",
-				tool,
-			)
+			return api.Fail(api.Incompatible, "required host tool missing: %s", tool)
 		}
 	}
 	var receipt BuildReceipt
 	if err := readJSON(b.opts.BuildReceipt, &receipt); err != nil {
 		return api.Fail(api.Incompatible, "pinned CH build receipt: %v", err)
 	}
-	if receipt.Commit != cloudHypervisorCommit ||
-		receipt.Features != cloudBuildFeatures {
-		return api.Fail(
-			api.Incompatible,
-			"CH revision or build configuration is not pinned baseline",
-		)
+	if receipt.Commit != cloudHypervisorCommit || receipt.Features != cloudBuildFeatures {
+		return api.Fail(api.Incompatible, "CH revision or build configuration is not pinned baseline")
 	}
 	hash, err := digestFile(b.opts.Binary)
 	if err != nil || hash != receipt.SHA256 {
-		return api.Fail(
-			api.Incompatible,
-			"CH binary digest does not match trusted build receipt",
-		)
+		return api.Fail(api.Incompatible, "CH binary digest does not match trusted build receipt")
 	}
 	f, err := elf.Open(b.opts.Binary)
 	if err != nil {
@@ -178,10 +142,7 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 	libs, err := f.ImportedLibraries()
 	err = errors.Join(err, f.Close())
 	if err != nil || len(libs) != 0 {
-		return api.Fail(
-			api.Incompatible,
-			"CH must be statically linked for the restricted root",
-		)
+		return api.Fail(api.Incompatible, "CH must be statically linked for the restricted root")
 	}
 	for _, dev := range []string{"/dev/kvm", "/dev/net/tun"} {
 		fd, x := unix.Open(dev, unix.O_RDWR|unix.O_CLOEXEC, 0)
@@ -212,30 +173,17 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 	if err = unix.Close(fd); err != nil {
 		return err
 	}
-	controllers, err := os.ReadFile(
-		filepath.Join(b.opts.CgroupRoot, "cgroup.subtree_control"),
-	)
+	controllers, err := os.ReadFile(filepath.Join(b.opts.CgroupRoot, "cgroup.subtree_control"))
 	if err != nil {
-		return api.Fail(
-			api.Incompatible,
-			"delegated cgroup v2 root required: %v",
-			err,
-		)
+		return api.Fail(api.Incompatible, "delegated cgroup v2 root required: %v", err)
 	}
 	for _, need := range []string{"cpu", "memory", "io", "pids"} {
 		if !strings.Contains(string(controllers), need) {
-			return api.Fail(
-				api.Incompatible,
-				"cgroup controller %s not enabled",
-				need,
-			)
+			return api.Fail(api.Incompatible, "cgroup controller %s not enabled", need)
 		}
 	}
 	if b.opts.IOMax == "" || strings.ContainsAny(b.opts.IOMax, "\n\r") {
-		return api.Fail(
-			api.Incompatible,
-			"an explicit cgroup io.max device budget is required",
-		)
+		return api.Fail(api.Incompatible, "an explicit cgroup io.max device budget is required")
 	}
 	return b.checkHostPolicy(ctx)
 }

@@ -15,16 +15,9 @@ func TestSnapshotRejectsUntrustedArtifactsAndResumes(t *testing.T) {
 	b.captureDamage = "symlink"
 	e := openTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "capture", Action: "snapshot", VMID: vm.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +35,7 @@ func TestSnapshotRejectsUntrustedArtifactsAndResumes(t *testing.T) {
 	resumes := b.resumes
 	b.mu.Unlock()
 	if paused || resumes != 1 {
-		t.Fatalf(
-			"failed capture did not resume: paused=%v resumes=%d",
-			paused,
-			resumes,
-		)
+		t.Fatalf("failed capture did not resume: paused=%v resumes=%d", paused, resumes)
 	}
 }
 
@@ -66,20 +55,9 @@ func TestSnapshotCrashRejectsUnprovenPublication(t *testing.T) {
 				}
 				return nil
 			})
-			vm := wait(
-				t,
-				e,
-				api.Request{Key: "create", Action: "create", Config: config()},
-			)
-			wait(
-				t,
-				e,
-				api.Request{Key: "start", Action: "start", VMID: vm.VMID},
-			)
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-			)
+			vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+			wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
+			op, err := e.Submit(context.Background(), api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,10 +83,7 @@ func TestSnapshotCrashRejectsUnprovenPublication(t *testing.T) {
 				}
 			default:
 				stage := filepath.Join(path, "publication")
-				if err = os.Rename(
-					stage,
-					filepath.Join(t.TempDir(), "retained-publication"),
-				); err != nil {
+				if err = os.Rename(stage, filepath.Join(t.TempDir(), "retained-publication")); err != nil {
 					t.Fatal(err)
 				}
 				if err = os.Mkdir(stage, 0o700); err != nil {
@@ -121,12 +96,7 @@ func TestSnapshotCrashRejectsUnprovenPublication(t *testing.T) {
 			final := awaitStatus(t, e, op.ID)
 			s, err := e.GetSnapshot(context.Background(), op.SnapshotID)
 			if err != nil || final.Status != "failed" || s.Published {
-				t.Fatalf(
-					"unproven capture published: %+v %+v %v",
-					final,
-					s,
-					err,
-				)
+				t.Fatalf("unproven capture published: %+v %+v %v", final, s, err)
 			}
 			if _, err = os.Stat(path); err != nil {
 				t.Fatal("recovery destroyed diagnostic capture", err)
@@ -137,11 +107,7 @@ func TestSnapshotCrashRejectsUnprovenPublication(t *testing.T) {
 			launches := b.launches
 			b.mu.Unlock()
 			if paused || launches != 1 {
-				t.Fatalf(
-					"unsafe recovery: paused=%v launches=%d",
-					paused,
-					launches,
-				)
+				t.Fatalf("unsafe recovery: paused=%v launches=%d", paused, launches)
 			}
 		})
 	}
@@ -208,10 +174,7 @@ func TestSnapshotCrashRejectsLostOrDamagedMaterials(t *testing.T) {
 					capture := o.Journal.CaptureBoundary.Path
 					stage := filepath.Join(capture, "publication")
 					if step == "publish_intent" {
-						s, x := e.loadSnapshot(
-							context.Background(),
-							op.SnapshotID,
-						)
+						s, x := e.loadSnapshot(context.Background(), op.SnapshotID)
 						if x != nil {
 							t.Fatal(x)
 						}
@@ -257,10 +220,7 @@ func TestSnapshotCrashRejectsLostOrDamagedMaterials(t *testing.T) {
 					}
 					if damage == "lost" {
 						if _, err = os.Stat(path); !os.IsNotExist(err) {
-							t.Fatal(
-								"lost file rebuilt from current source",
-								err,
-							)
+							t.Fatal("lost file rebuilt from current source", err)
 						}
 					}
 					v, err := e.loadVM(context.Background(), vm.VMID)
@@ -271,8 +231,7 @@ func TestSnapshotCrashRejectsLostOrDamagedMaterials(t *testing.T) {
 					paused := b.states[v.Resource.Instance].Paused
 					launches, resumes, captures := b.launches, b.resumes, b.captures
 					b.mu.Unlock()
-					if paused || launches != 1 || resumes != 1 ||
-						captures != 1 {
+					if paused || launches != 1 || resumes != 1 || captures != 1 {
 						t.Fatalf(
 							"unsafe source recovery: paused=%v launches=%d resumes=%d captures=%d",
 							paused,
@@ -299,16 +258,9 @@ func TestSnapshotCrashBoundaries(t *testing.T) {
 				}
 				return nil
 			})
-			a := wait(
-				t,
-				e,
-				api.Request{Key: "c", Action: "create", Config: config()},
-			)
+			a := wait(t, e, api.Request{Key: "c", Action: "create", Config: config()})
 			wait(t, e, api.Request{Key: "s", Action: "start", VMID: a.VMID})
-			op, err := e.Submit(
-				context.Background(),
-				api.Request{Key: "capture", Action: "snapshot", VMID: a.VMID},
-			)
+			op, err := e.Submit(context.Background(), api.Request{Key: "capture", Action: "snapshot", VMID: a.VMID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -318,24 +270,14 @@ func TestSnapshotCrashBoundaries(t *testing.T) {
 			defer e.Close()
 			final := awaitStatus(t, e, op.ID)
 			snap, _ := e.GetSnapshot(context.Background(), op.SnapshotID)
-			if step == "pause_intent" || step == "paused" ||
-				step == "captured" ||
-				step == "source_resumed" ||
+			if step == "pause_intent" || step == "paused" || step == "captured" || step == "source_resumed" ||
 				step == "capture_copied" {
 				if final.Status != "failed" || snap.Published {
-					t.Fatalf(
-						"incomplete capture published %+v %+v",
-						final,
-						snap,
-					)
+					t.Fatalf("incomplete capture published %+v %+v", final, snap)
 				}
 			} else {
 				if final.Status != "succeeded" || !snap.Published {
-					t.Fatalf(
-						"completed capture not recovered %+v %+v",
-						final,
-						snap,
-					)
+					t.Fatalf("completed capture not recovered %+v %+v", final, snap)
 				}
 				s, err := e.loadSnapshot(context.Background(), op.SnapshotID)
 				if err != nil {
@@ -344,12 +286,7 @@ func TestSnapshotCrashBoundaries(t *testing.T) {
 				for file, want := range map[string]string{"disk.raw": "disk-generation-1", "ch/memory-ranges": "ram-generation-1"} {
 					data, err := os.ReadFile(filepath.Join(s.Dir, file))
 					if err != nil || string(data) != want {
-						t.Fatalf(
-							"replay changed captured generation: file=%s data=%q error=%v",
-							file,
-							data,
-							err,
-						)
+						t.Fatalf("replay changed captured generation: file=%s data=%q error=%v", file, data, err)
 					}
 				}
 			}

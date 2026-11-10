@@ -36,10 +36,7 @@ type fixtureEngine struct {
 	socket string
 }
 
-func (f *fixtureEngine) Submit(
-	_ context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (f *fixtureEngine) Submit(_ context.Context, r api.Request) (api.Operation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if o, ok := f.ops[r.Key]; ok {
@@ -79,10 +76,7 @@ func (f *fixtureEngine) Submit(
 	return o, nil
 }
 
-func (f *fixtureEngine) GetOperation(
-	_ context.Context,
-	id string,
-) (api.Operation, error) {
+func (f *fixtureEngine) GetOperation(_ context.Context, id string) (api.Operation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	o, ok := f.ops[id]
@@ -92,10 +86,7 @@ func (f *fixtureEngine) GetOperation(
 	return o, nil
 }
 
-func (f *fixtureEngine) FindOperation(
-	ctx context.Context,
-	id string,
-) (api.Operation, error) {
+func (f *fixtureEngine) FindOperation(ctx context.Context, id string) (api.Operation, error) {
 	return f.GetOperation(ctx, id)
 }
 
@@ -117,33 +108,21 @@ func (f *fixtureEngine) ListVMs(context.Context) ([]api.VM, error) {
 	return []api.VM{f.vm}, nil
 }
 
-func (f *fixtureEngine) GetSnapshot(
-	context.Context,
-	string,
-) (api.Snapshot, error) {
+func (f *fixtureEngine) GetSnapshot(context.Context, string) (api.Snapshot, error) {
 	return api.Snapshot{}, api.Fail(api.NotFound, "not found")
 }
 
-func (f *fixtureEngine) ListSnapshots(
-	context.Context,
-) ([]api.Snapshot, error) {
+func (f *fixtureEngine) ListSnapshots(context.Context) ([]api.Snapshot, error) {
 	return nil, nil
 }
 
 type fixtureAdmin struct{ agent.Client }
 
-func (*fixtureAdmin) Activate(
-	context.Context,
-	api.VM,
-	sandboxd.Activation,
-) error {
+func (*fixtureAdmin) Activate(context.Context, api.VM, sandboxd.Activation) error {
 	return nil
 }
 
-func (*fixtureAdmin) PrepareTemplate(
-	context.Context,
-	api.VM,
-) error {
+func (*fixtureAdmin) PrepareTemplate(context.Context, api.VM) error {
 	return nil
 }
 
@@ -163,15 +142,11 @@ func duplex(a, b net.Conn) {
 	<-done
 }
 
-func transportFixture(
-	t *testing.T,
-) (*sandboxd.Service, *sdk.Client, sandboxd.Principal, string) {
+func transportFixture(t *testing.T) (*sandboxd.Service, *sdk.Client, sandboxd.Principal, string) {
 	t.Helper()
 	binary := os.Getenv("SANDBOX_AGENT_FIXTURE")
 	if binary == "" {
-		t.Skip(
-			"run make integration to build and run the Rust transport fixture",
-		)
+		t.Skip("run make integration to build and run the Rust transport fixture")
 	}
 	dir := t.TempDir()
 	cmd := exec.Command(binary, dir)
@@ -304,10 +279,7 @@ func transportFixture(
 	}
 	server := httptest.NewServer(service.Handler())
 	t.Cleanup(server.Close)
-	return service, sdk.New(
-		server.URL,
-		result.Tokens[result.Sandbox.ID],
-	), p, result.Sandbox.ID
+	return service, sdk.New(server.URL, result.Tokens[result.Sandbox.ID]), p, result.Sandbox.ID
 }
 
 func TestRustAgentThroughSandboxRelay(t *testing.T) {
@@ -339,43 +311,21 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	} {
 		params, err := conn.Call(ctx, tc.method, tc.params, nil)
 		var rpcErr *sdk.RPCError
-		if !errors.As(err, &rpcErr) || rpcErr.Code != tc.code ||
-			params["error_code"] != tc.code ||
+		if !errors.As(err, &rpcErr) || rpcErr.Code != tc.code || params["error_code"] != tc.code ||
 			!strings.Contains(rpcErr.Message, "guest "+tc.method) ||
 			!strings.Contains(rpcErr.Message, "guest/agent/src/") {
-			t.Fatalf(
-				"%s structured failure: params=%v err=%#v",
-				tc.method,
-				params,
-				err,
-			)
+			t.Fatalf("%s structured failure: params=%v err=%#v", tc.method, params, err)
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	code, err := conn.Exec(
-		ctx,
-		"printf 'streamed-out'; printf 'streamed-err' >&2",
-		&stdout,
-		&stderr,
-	)
-	if err != nil || code != 0 || stdout.String() != "streamed-out" ||
-		stderr.String() != "streamed-err" {
-		t.Fatalf(
-			"exec: code=%d err=%v out=%q stderr=%q",
-			code,
-			err,
-			stdout.String(),
-			stderr.String(),
-		)
+	code, err := conn.Exec(ctx, "printf 'streamed-out'; printf 'streamed-err' >&2", &stdout, &stderr)
+	if err != nil || code != 0 || stdout.String() != "streamed-out" || stderr.String() != "streamed-err" {
+		t.Fatalf("exec: code=%d err=%v out=%q stderr=%q", code, err, stdout.String(), stderr.String())
 	}
 	// Streaming writes pass unchanged through sandboxd; only the guest interprets frames.
 	path := filepath.Join(t.TempDir(), "binary-file")
 	payload := bytes.Repeat([]byte{0, 1, 2, 0xff}, 50000)
-	first, _ := agent.Request(
-		"upload",
-		"fs_write",
-		map[string]any{"path": path},
-	)
+	first, _ := agent.Request("upload", "fs_write", map[string]any{"path": path})
 	first.Eof = false
 	if err = conn.Send(first); err != nil {
 		t.Fatal(err)
@@ -417,20 +367,10 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	if !bytes.Equal(payload, downloaded.Bytes()) {
 		t.Fatal("streaming file round trip corrupted bytes")
 	}
-	if _, err = conn.Call(
-		ctx,
-		"activate",
-		map[string]any{"sandbox_id": "attack"},
-		nil,
-	); err == nil {
+	if _, err = conn.Call(ctx, "activate", map[string]any{"sandbox_id": "attack"}, nil); err == nil {
 		t.Fatal("tenant relay exposed host administration")
 	}
-	if _, err = service.Execute(
-		ctx,
-		p,
-		"release",
-		sandboxd.Command{Action: "release", SandboxID: id},
-	); err != nil {
+	if _, err = service.Execute(ctx, p, "release", sandboxd.Command{Action: "release", SandboxID: id}); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -468,8 +408,7 @@ func TestRustKeyedExecReplayThroughSandboxRelay(t *testing.T) {
 				return err
 			},
 		)
-		if err != nil || result["result_state"] != "completed" ||
-			result["exit_code"] != float64(0) ||
+		if err != nil || result["result_state"] != "completed" || result["exit_code"] != float64(0) ||
 			result["replayed"] != (attempt > 0) ||
 			stdout.String() != "saved-out" ||
 			stderr.String() != "saved-err" {
@@ -494,29 +433,14 @@ func TestRustKeyedExecReplayThroughSandboxRelay(t *testing.T) {
 				nil,
 			)
 			var rpcErr *sdk.RPCError
-			if !errors.As(err, &rpcErr) || rpcErr.Code != "exec_key_conflict" ||
-				rpcErr.ResultState != "conflict" ||
+			if !errors.As(err, &rpcErr) || rpcErr.Code != "exec_key_conflict" || rpcErr.ResultState != "conflict" ||
 				conflict["result_state"] != "conflict" {
 				conn.Close()
-				t.Fatalf(
-					"structured conflict lost: params=%v err=%#v",
-					conflict,
-					err,
-				)
+				t.Fatalf("structured conflict lost: params=%v err=%#v", conflict, err)
 			}
-			if info, err := conn.Call(
-				ctx,
-				"info",
-				nil,
-				nil,
-			); err != nil ||
-				info["portal"] != "workload" {
+			if info, err := conn.Call(ctx, "info", nil, nil); err != nil || info["portal"] != "workload" {
 				conn.Close()
-				t.Fatalf(
-					"connection after terminal guest error: %v %v",
-					info,
-					err,
-				)
+				t.Fatalf("connection after terminal guest error: %v %v", info, err)
 			}
 		}
 		conn.Close()
@@ -549,17 +473,12 @@ func TestRustRawForwardHalfClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	request, _ := agent.Request(
-		"forward",
-		"port_forward",
-		map[string]any{"port": listener.Addr().(*net.TCPAddr).Port},
-	)
+	request, _ := agent.Request("forward", "port_forward", map[string]any{"port": listener.Addr().(*net.TCPAddr).Port})
 	if err = conn.Send(request); err != nil {
 		t.Fatal(err)
 	}
 	ready, err := conn.Receive()
-	if err != nil || ready.Error != "" || ready.Eof ||
-		ready.Params.AsMap()["ready"] != true {
+	if err != nil || ready.Error != "" || ready.Eof || ready.Params.AsMap()["ready"] != true {
 		t.Fatalf("forward readiness: %v %v", ready, err)
 	}
 	if _, err = conn.Write([]byte("opaque-stream")); err != nil {
@@ -578,8 +497,7 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	service, client, p, id := transportFixture(t)
 	upstream := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "" ||
-				r.Header.Get("Cookie") != "" {
+			if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
 				t.Error("preview forwarded platform credentials")
 			}
 			w.Header().Add("Referrer-Policy", "unsafe-url")
@@ -588,13 +506,7 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	)
 	defer upstream.Close()
 	port := upstream.Listener.Addr().(*net.TCPAddr).Port
-	cap, err := service.PreviewURL(
-		context.Background(),
-		p,
-		id,
-		port,
-		time.Minute,
-	)
+	cap, err := service.PreviewURL(context.Background(), p, id, port, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,10 +522,7 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	if resp.StatusCode != 200 || string(body) != "preview:/hello" {
 		t.Fatalf("preview: HTTP %d %q", resp.StatusCode, body)
 	}
-	if policies := resp.Header.Values(
-		"Referrer-Policy",
-	); len(policies) != 1 ||
-		policies[0] != "no-referrer" {
+	if policies := resp.Header.Values("Referrer-Policy"); len(policies) != 1 || policies[0] != "no-referrer" {
 		t.Fatalf("guest overrode Preview referrer protection: %v", policies)
 	}
 }

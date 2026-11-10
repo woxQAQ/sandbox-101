@@ -38,8 +38,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 		!reflect.DeepEqual(durable.Journal, next.Journal) {
 		return api.Fail(api.Conflict, "operation completion intent changed")
 	}
-	if cause != nil &&
-		(next.Operation.Request.Action == "restore" || next.Operation.Request.Action == "clone") &&
+	if cause != nil && (next.Operation.Request.Action == "restore" || next.Operation.Request.Action == "clone") &&
 		(next.Journal.Resource != nil || !next.Journal.Lease) {
 		// 010's failed-candidate fence precedes the public terminal receipt. Failure
 		// to persist it leaves both the caller and durable operation nonterminal.
@@ -58,8 +57,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var raw []byte
-	if err = tx.QueryRow("SELECT body FROM operations WHERE id=?", next.Operation.ID).
-		Scan(&raw); err != nil {
+	if err = tx.QueryRow("SELECT body FROM operations WHERE id=?", next.Operation.ID).Scan(&raw); err != nil {
 		return err
 	}
 	if err = json.Unmarshal(raw, &durable); err != nil {
@@ -76,20 +74,14 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 	}
 	if cause != nil {
 		if _, classified := errors.AsType[*api.Error](cause); !classified {
-			cause = fmt.Errorf(
-				"%s (%s): %w",
-				next.Operation.Request.Action,
-				next.Operation.Step,
-				cause,
-			)
+			cause = fmt.Errorf("%s (%s): %w", next.Operation.Request.Action, next.Operation.Step, cause)
 		}
 	}
 	generation := cause == nil &&
 		(next.Operation.Request.Action == "start" || next.Operation.Request.Action == "restore" || next.Operation.Request.Action == "clone")
 	next.Operation.ResultInstance = ""
 	if next.Operation.VMID != "" {
-		queryErr := tx.QueryRow("SELECT body FROM vms WHERE id=?", next.Operation.VMID).
-			Scan(&raw)
+		queryErr := tx.QueryRow("SELECT body FROM vms WHERE id=?", next.Operation.VMID).Scan(&raw)
 		if generation && queryErr != nil {
 			return queryErr
 		}
@@ -104,9 +96,7 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 			if generation {
 				r := next.Journal.Resource
 				req := next.Operation.Request
-				if r == nil || r.Instance == "" ||
-					r.VMID != v.VM.ID ||
-					next.Operation.VMID != v.VM.ID ||
+				if r == nil || r.Instance == "" || r.VMID != v.VM.ID || next.Operation.VMID != v.VM.ID ||
 					v.VM.OperationID != next.Operation.ID ||
 					v.VM.Instance != r.Instance ||
 					!reflect.DeepEqual(v.Resource, *r) ||
@@ -115,17 +105,12 @@ func (e *Engine) finish(o *opRecord, cause error) error {
 					!v.VM.AgentReady ||
 					(req.Action == "clone" && req.VMID != "") ||
 					(req.Action != "clone" && req.VMID != v.VM.ID) {
-					return api.Fail(
-						api.Conflict,
-						"generation completion lacks full owned candidate proof",
-					)
+					return api.Fail(api.Conflict, "generation completion lacks full owned candidate proof")
 				}
 				next.Operation.ResultInstance = r.Instance
 			}
 			if v.VM.OperationID == next.Operation.ID {
-				if !next.Journal.ResumeRequired &&
-					!next.Journal.RestoreBlocked &&
-					next.Journal.BlockedRestoreID == "" {
+				if !next.Journal.ResumeRequired && !next.Journal.RestoreBlocked && next.Journal.BlockedRestoreID == "" {
 					v.VM.OperationID = ""
 				}
 				if cause != nil {

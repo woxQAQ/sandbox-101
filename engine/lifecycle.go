@@ -22,10 +22,7 @@ func (e *Engine) observe(v *vmRecord) (Observation, error) {
 			return obs, e.failClosed(
 				e.ctx,
 				v,
-				api.Fail(
-					api.Conflict,
-					"interfaces active without durable network intent",
-				),
+				api.Fail(api.Conflict, "interfaces active without durable network intent"),
 			)
 		}
 		if err = e.verifyNetworkPolicy(e.ctx, v); err != nil {
@@ -75,11 +72,7 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 		v.VM.NetworkPolicy = nil
 		v.VM.NetworkPolicyInstance = ""
 		v.Resource.Instance = newID("run-")
-		v.Resource.RunDir = filepath.Join(
-			v.Resource.Dir,
-			"runs",
-			v.Resource.Instance,
-		)
+		v.Resource.RunDir = filepath.Join(v.Resource.Dir, "runs", v.Resource.Instance)
 		v.VM.Instance = v.Resource.Instance
 		v.VM.VSockPath = filepath.Join(v.Resource.RunDir, "io", "vsock")
 		v.VM.AgentReady = false
@@ -105,8 +98,7 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 		return err
 	}
 	if !obs.Alive {
-		if o.Operation.Step != "launch_intent" &&
-			o.Operation.Step != "restore_launch_intent" {
+		if o.Operation.Step != "launch_intent" && o.Operation.Step != "restore_launch_intent" {
 			return api.Fail(
 				api.Unknown,
 				"VMM exited during a previous attempt; use a new operation key after inspection",
@@ -141,13 +133,7 @@ func (e *Engine) start(o *opRecord, v *vmRecord, restore bool) error {
 				v.VM.AgentReady = false
 				_ = e.saveVM(*v)
 			}
-			return fmt.Errorf(
-				"agent handshake: %w (network=%v stop=%v inspect=%v)",
-				err,
-				netErr,
-				stopErr,
-				inspectErr,
-			)
+			return fmt.Errorf("agent handshake: %w (network=%v stop=%v inspect=%v)", err, netErr, stopErr, inspectErr)
 		}
 		_, _ = e.observe(v)
 		return err
@@ -241,10 +227,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		// or uncommitted policy reality always triggers interface shutdown.
 		if obs.Network {
 			if !v.VM.NetworkEnabled {
-				x = api.Fail(
-					api.Conflict,
-					"interfaces active without durable network intent",
-				)
+				x = api.Fail(api.Conflict, "interfaces active without durable network intent")
 			} else {
 				x = e.verifyNetworkPolicy(ctx, &v)
 			}
@@ -271,8 +254,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		}
 		if v.VM.OperationID != "" {
 			o, x := e.loadOp(ctx, v.VM.OperationID)
-			if x == nil && terminal(o.Operation.Status) &&
-				!o.Journal.RestoreBlocked &&
+			if x == nil && terminal(o.Operation.Status) && !o.Journal.RestoreBlocked &&
 				o.Journal.BlockedRestoreID == "" &&
 				o.Journal.ResumeRequired {
 				if !obs.Alive || !obs.Paused {
@@ -282,11 +264,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 				}
 				if x == nil {
 					o.Journal.ResumeRequired = false
-					_, _ = e.db.Exec(
-						"UPDATE operations SET body=? WHERE id=?",
-						encode(o),
-						o.Operation.ID,
-					)
+					_, _ = e.db.Exec("UPDATE operations SET body=? WHERE id=?", encode(o), o.Operation.ID)
 					v.VM.OperationID = ""
 				} else {
 					v.VM.BlockedReason = x.Error()

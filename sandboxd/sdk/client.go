@@ -38,11 +38,7 @@ func New(endpoint, token string) *Client {
 	}
 }
 
-func (c *Client) call(
-	ctx context.Context,
-	method, path, key string,
-	body, out any,
-) error {
+func (c *Client) call(ctx context.Context, method, path, key string, body, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -75,30 +71,15 @@ func (c *Client) call(
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (c *Client) Claim(
-	ctx context.Context,
-	key string,
-	cmd sandboxd.Command,
-) (sandboxd.Result, error) {
+func (c *Client) Claim(ctx context.Context, key string, cmd sandboxd.Command) (sandboxd.Result, error) {
 	var r sandboxd.Result
 	err := c.call(ctx, "POST", "/v1/claim", key, cmd, &r)
 	return r, err
 }
 
-func (c *Client) Change(
-	ctx context.Context,
-	id, key string,
-	cmd sandboxd.Command,
-) (sandboxd.Result, error) {
+func (c *Client) Change(ctx context.Context, id, key string, cmd sandboxd.Command) (sandboxd.Result, error) {
 	var r sandboxd.Result
-	err := c.call(
-		ctx,
-		"POST",
-		"/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(cmd.Action),
-		key,
-		cmd,
-		&r,
-	)
+	err := c.call(ctx, "POST", "/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(cmd.Action), key, cmd, &r)
 	return r, err
 }
 
@@ -114,19 +95,9 @@ func (c *Client) Get(ctx context.Context, id string) (sandboxd.Sandbox, error) {
 	return r, err
 }
 
-func (c *Client) DeleteCheckpoint(
-	ctx context.Context,
-	id, key string,
-) (sandboxd.Result, error) {
+func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (sandboxd.Result, error) {
 	var r sandboxd.Result
-	err := c.call(
-		ctx,
-		"DELETE",
-		"/v1/checkpoints/"+url.PathEscape(id),
-		key,
-		nil,
-		&r,
-	)
+	err := c.call(ctx, "DELETE", "/v1/checkpoints/"+url.PathEscape(id), key, nil, &r)
 	return r, err
 }
 
@@ -141,14 +112,7 @@ func (c *Client) PutTemplate(
 		action = "template_build"
 	}
 	var r sandboxd.Result
-	err := c.call(
-		ctx,
-		"POST",
-		"/v1/templates",
-		key,
-		sandboxd.Command{Action: action, Template: &t},
-		&r,
-	)
+	err := c.call(ctx, "POST", "/v1/templates", key, sandboxd.Command{Action: action, Template: &t}, &r)
 	return r, err
 }
 
@@ -230,11 +194,7 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		if config.ServerName == "" {
 			config.ServerName = u.Hostname()
 		}
-		conn, err = (&tls.Dialer{NetDialer: &net.Dialer{}, Config: config}).DialContext(
-			ctx,
-			"tcp",
-			address,
-		)
+		conn, err = (&tls.Dialer{NetDialer: &net.Dialer{}, Config: config}).DialContext(ctx, "tcp", address)
 	} else {
 		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	}
@@ -243,12 +203,7 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	u.Path = strings.TrimRight(
-		u.Path,
-		"/",
-	) + "/v1/sandboxes/" + url.PathEscape(
-		id,
-	) + "/connect"
+	u.Path = strings.TrimRight(u.Path, "/") + "/v1/sandboxes/" + url.PathEscape(id) + "/connect"
 	req := &http.Request{
 		Method: "GET",
 		URL:    u,
@@ -268,8 +223,7 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	if resp.StatusCode != 101 ||
-		!strings.EqualFold(resp.Header.Get("Upgrade"), "sandbox-v1") {
+	if resp.StatusCode != 101 || !strings.EqualFold(resp.Header.Get("Upgrade"), "sandbox-v1") {
 		defer func() { _ = resp.Body.Close() }()
 		defer func() { _ = conn.Close() }()
 		var e sandboxd.Error
@@ -347,11 +301,7 @@ func (c *Connection) Call(
 	}
 }
 
-func (c *Connection) Exec(
-	ctx context.Context,
-	command string,
-	stdout, stderr io.Writer,
-) (int, error) {
+func (c *Connection) Exec(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
 	p, err := c.Call(
 		ctx,
 		"exec",

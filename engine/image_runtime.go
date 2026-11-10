@@ -10,17 +10,11 @@ import (
 
 func runtimeImage(r Resource) (ImageManifest, []ImageBinding, error) {
 	var manifest ImageManifest
-	if err := readJSON(
-		filepath.Join(r.ImageDir, "image.json"),
-		&manifest,
-	); err != nil {
+	if err := readJSON(filepath.Join(r.ImageDir, "image.json"), &manifest); err != nil {
 		return manifest, nil, err
 	}
 	if manifest.Digest != r.Config.Image {
-		return manifest, nil, api.Fail(
-			api.Incompatible,
-			"runtime image digest differs from VM configuration",
-		)
+		return manifest, nil, api.Fail(api.Incompatible, "runtime image digest differs from VM configuration")
 	}
 	bindings, err := manifest.ReadOnlyBindings(r.ImageDir)
 	return manifest, bindings, err
@@ -75,23 +69,15 @@ func cloudDisks(bindings []ImageBinding) []cloudDisk {
 
 func validateSnapshotDisks(saved, expected []cloudDisk) error {
 	if len(saved) != len(expected) {
-		return api.Fail(
-			api.Incompatible,
-			"snapshot disk count differs from image materialization",
-		)
+		return api.Fail(api.Incompatible, "snapshot disk count differs from image materialization")
 	}
 	for i, disk := range saved {
 		want := expected[i]
-		if disk.ID != want.ID || disk.Path != want.Path ||
-			disk.Serial != want.Serial ||
+		if disk.ID != want.ID || disk.Path != want.Path || disk.Serial != want.Serial ||
 			disk.ReadOnly != want.ReadOnly ||
 			disk.ImageType != want.ImageType ||
 			disk.NumQueues != want.NumQueues {
-			return api.Fail(
-				api.Incompatible,
-				"snapshot disk %d differs from image materialization",
-				i,
-			)
+			return api.Fail(api.Incompatible, "snapshot disk %d differs from image materialization", i)
 		}
 	}
 	return nil
@@ -109,9 +95,7 @@ type ImageBinding struct {
 	DeviceID  int
 }
 
-func (m ImageManifest) ReadOnlyBindings(
-	imageDir string,
-) ([]ImageBinding, error) {
+func (m ImageManifest) ReadOnlyBindings(imageDir string) ([]ImageBinding, error) {
 	if err := m.Verify(imageDir, m.Digest); err != nil {
 		return nil, err
 	}
@@ -148,9 +132,7 @@ func (m ImageManifest) ReadOnlyBindings(
 // DataSerials is the ordered external-device list for initramfs device= options.
 // It validates the manifest structure; ReadOnlyBindings verifies the files too.
 func (m ImageManifest) DataSerials() (string, error) {
-	if m.Layout == "merged-erofs-v1" && m.Format == 1 &&
-		len(m.Artifacts) == 0 &&
-		m.Builder == "" {
+	if m.Layout == "merged-erofs-v1" && m.Format == 1 && len(m.Artifacts) == 0 && m.Builder == "" {
 		return "", nil
 	}
 	if m.Layout == MergedOCIEROFSLayout {

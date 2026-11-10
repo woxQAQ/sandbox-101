@@ -46,21 +46,12 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 		// This service root was created by this acceptance run, rather than
 		// inherited from the host/session. All owned harness processes are in
 		// its runner subgroup, leaving the new delegation root empty.
-		if procs := rootlessRead(
-			t,
-			filepath.Join(base, "cgroup.procs"),
-		); procs != "" {
+		if procs := rootlessRead(t, filepath.Join(base, "cgroup.procs")); procs != "" {
 			t.Fatalf("new transient service root is not empty: %s", procs)
 		}
-		rootlessWrite(
-			t,
-			filepath.Join(base, "cgroup.subtree_control"),
-			"+cpu +memory +pids +io",
-		)
+		rootlessWrite(t, filepath.Join(base, "cgroup.subtree_control"), "+cpu +memory +pids +io")
 	}
-	controllers := strings.Fields(
-		rootlessRead(t, filepath.Join(root, "cgroup.controllers")),
-	)
+	controllers := strings.Fields(rootlessRead(t, filepath.Join(root, "cgroup.controllers")))
 	diagnostic := fmt.Sprintf(
 		"delegated root: %s\nnew owned subgroup: %s\nparent controllers: %s\navailable controllers: %s\nparent subtree_control: %s\n",
 		base,
@@ -77,17 +68,10 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 			found = found || available == need
 		}
 		if !found {
-			t.Fatalf(
-				"controller %s is not delegated to new subgroup; existing cgroups remain untouched",
-				need,
-			)
+			t.Fatalf("controller %s is not delegated to new subgroup; existing cgroups remain untouched", need)
 		}
 	}
-	rootlessWrite(
-		t,
-		filepath.Join(root, "cgroup.subtree_control"),
-		"+cpu +memory +pids +io",
-	)
+	rootlessWrite(t, filepath.Join(root, "cgroup.subtree_control"), "+cpu +memory +pids +io")
 	r := Resource{
 		VMID:     "bounded",
 		Instance: "kernel-acceptance",
@@ -118,10 +102,7 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	if err := b.arm(r); err != nil {
 		t.Fatal(err)
 	}
-	if got := rootlessRead(
-		t,
-		filepath.Join(scope, "cpu.max"),
-	); got != "100000 100000" {
+	if got := rootlessRead(t, filepath.Join(scope, "cpu.max")); got != "100000 100000" {
 		t.Fatalf("production resume CPU quota: %s", got)
 	}
 	fmt.Fprintln(&applied, "armed cpu.max=100000 100000")
@@ -144,11 +125,7 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	err = probe.Run()
 	_ = fd.Close()
 	if !errors.Is(err, syscall.EAGAIN) {
-		t.Fatalf(
-			"pids.max=%s did not reject one additional owned child with EAGAIN: %v",
-			current,
-			err,
-		)
+		t.Fatalf("pids.max=%s did not reject one additional owned child with EAGAIN: %v", current, err)
 	}
 	if rootlessCgroupEvent(t, scope, "pids.events", "max") <= pidsBefore {
 		t.Fatal("pids controller rejection was not recorded")
@@ -190,13 +167,8 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	memory.release(t)
 	out, err := memory.wait()
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) ||
-		exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		t.Fatalf(
-			"32MiB memory.max did not kill bounded 48MiB page-touch worker: %v: %s",
-			err,
-			out,
-		)
+	if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("32MiB memory.max did not kill bounded 48MiB page-touch worker: %v: %s", err, out)
 	}
 	oomAfter := rootlessCgroupEvent(t, scope, "memory.events", "oom_kill")
 	if oomAfter <= oomBefore {
@@ -229,10 +201,7 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if procs := rootlessRead(
-		t,
-		filepath.Join(scope, "cgroup.procs"),
-	); procs != "" {
+	if procs := rootlessRead(t, filepath.Join(scope, "cgroup.procs")); procs != "" {
 		t.Fatalf("owned processes remain before cleanup: %s", procs)
 	}
 }
@@ -247,10 +216,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 	}
 	// Artifact storage must have an actual block backing. A tmpfs path cannot
 	// establish I/O throttling and will fail the accounting check below.
-	dir, err := os.MkdirTemp(
-		os.Getenv("SANDBOX_KERNEL_ISOLATION_ARTIFACTS"),
-		"io-load-",
-	)
+	dir, err := os.MkdirTemp(os.Getenv("SANDBOX_KERNEL_ISOLATION_ARTIFACTS"), "io-load-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,12 +226,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 		}
 	})
 	run := func(name string) (time.Duration, map[string]uint64) {
-		worker := rootlessCgroupProcess(
-			t,
-			scope,
-			"io",
-			"SANDBOX_KERNEL_IO_FILE="+filepath.Join(dir, name),
-		)
+		worker := rootlessCgroupProcess(t, scope, "io", "SANDBOX_KERNEL_IO_FILE="+filepath.Join(dir, name))
 		before := rootlessIOStats(t, scope)
 		start := time.Now()
 		worker.release(t)
@@ -291,11 +252,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 	}
 	sort.Strings(devices)
 	if len(devices) == 0 {
-		t.Fatalf(
-			"O_DIRECT write has no actual backing-device accounting for %d bytes: %v",
-			rootlessIOBytes,
-			baseBytes,
-		)
+		t.Fatalf("O_DIRECT write has no actual backing-device accounting for %d bytes: %v", rootlessIOBytes, baseBytes)
 	}
 	device := devices[0]
 	b.opts.IOMax = device + " wbps=1048576"
@@ -313,10 +270,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 		}
 	}
 	if !matched {
-		t.Fatalf(
-			"production io.max does not contain configured device budget: %q",
-			readback,
-		)
+		t.Fatalf("production io.max does not contain configured device budget: %q", readback)
 	}
 	limited, limitedBytes := run("limited")
 	evidence := fmt.Sprintf(
@@ -332,10 +286,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 	rootlessArtifact(t, "cgroup-io-enforcement.txt", []byte(evidence))
 	t.Log(evidence)
 	if limitedBytes[device] < rootlessIOBytes {
-		t.Fatalf(
-			"limited writes bypassed the selected accounted device: %v",
-			limitedBytes,
-		)
+		t.Fatalf("limited writes bypassed the selected accounted device: %v", limitedBytes)
 	}
 	// Four MiB at one MiB/s leaves room for the kernel's throttling slices,
 	// while requiring a substantial slowdown compared with the same load.
@@ -384,25 +335,16 @@ func rootlessDelegatedCgroup(t *testing.T) string {
 	// The runner may request one new transient user service with an owned runner
 	// subgroup. Its empty delegated service root is then the allocation parent.
 	if unit := os.Getenv("SANDBOX_KERNEL_ISOLATION_USER_UNIT"); unit != "" {
-		if !strings.HasPrefix(unit, "sandbox-kernel-acceptance-") ||
-			!strings.HasSuffix(unit, ".service") ||
+		if !strings.HasPrefix(unit, "sandbox-kernel-acceptance-") || !strings.HasSuffix(unit, ".service") ||
 			strings.ContainsAny(unit, "/\\") ||
 			filepath.Base(base) != "runner" ||
 			filepath.Base(filepath.Dir(base)) != unit {
-			t.Fatalf(
-				"refusing cgroup outside the runner's named transient user unit: %q at %s",
-				unit,
-				base,
-			)
+			t.Fatalf("refusing cgroup outside the runner's named transient user unit: %q at %s", unit, base)
 		}
 		base = filepath.Dir(base)
 	}
 	var fs unix.Statfs_t
-	if err := unix.Statfs(
-		base,
-		&fs,
-	); err != nil ||
-		fs.Type != unix.CGROUP2_SUPER_MAGIC {
+	if err := unix.Statfs(base, &fs); err != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
 		t.Fatalf("real cgroup v2 filesystem required: %v", err)
 	}
 	return base
@@ -431,11 +373,7 @@ type rootlessOwnedProcess struct {
 	cancel context.CancelFunc
 }
 
-func rootlessCgroupProcess(
-	t *testing.T,
-	scope, mode string,
-	env ...string,
-) *rootlessOwnedProcess {
+func rootlessCgroupProcess(t *testing.T, scope, mode string, env ...string) *rootlessOwnedProcess {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
@@ -447,12 +385,7 @@ func rootlessCgroupProcess(
 	}
 	defer fd.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 11*time.Second)
-	cmd := exec.CommandContext(
-		ctx,
-		exe,
-		"-test.run=^TestKernelIsolationRootlessCgroupWorker$",
-		"-test.timeout=10s",
-	)
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestKernelIsolationRootlessCgroupWorker$", "-test.timeout=10s")
 	cmd.Env = append(
 		os.Environ(),
 		rootlessChildEnv+"=cgroup-worker",
@@ -498,15 +431,9 @@ func rootlessCgroupProcess(
 		!strings.HasSuffix(strings.TrimSpace(ready), "/"+filepath.Base(scope)) {
 		t.Fatalf("child did not begin in owned cgroup: %q: %v", ready, err)
 	}
-	procs := strings.Fields(
-		rootlessRead(t, filepath.Join(scope, "cgroup.procs")),
-	)
+	procs := strings.Fields(rootlessRead(t, filepath.Join(scope, "cgroup.procs")))
 	if len(procs) != 1 || procs[0] != strconv.Itoa(cmd.Process.Pid) {
-		t.Fatalf(
-			"unexpected child membership in owned cgroup: %v; want PID %d",
-			procs,
-			cmd.Process.Pid,
-		)
+		t.Fatalf("unexpected child membership in owned cgroup: %v; want PID %d", procs, cmd.Process.Pid)
 	}
 	return owned
 }
@@ -540,10 +467,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 		return
 	case "cpu":
 		var start, now unix.Timespec
-		if err := unix.ClockGettime(
-			unix.CLOCK_PROCESS_CPUTIME_ID,
-			&start,
-		); err != nil {
+		if err := unix.ClockGettime(unix.CLOCK_PROCESS_CPUTIME_ID, &start); err != nil {
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(2 * time.Second)
@@ -552,10 +476,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 			for i := uint64(0); i < 4096; i++ {
 				sum += i * (sum | 1)
 			}
-			if err := unix.ClockGettime(
-				unix.CLOCK_PROCESS_CPUTIME_ID,
-				&now,
-			); err != nil {
+			if err := unix.ClockGettime(unix.CLOCK_PROCESS_CPUTIME_ID, &now); err != nil {
 				t.Fatal(err)
 			}
 			if now.Nano()-start.Nano() >= int64(25*time.Millisecond) {
@@ -569,9 +490,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 	case "io":
 		path := os.Getenv("SANDBOX_KERNEL_IO_FILE")
 		if !filepath.IsAbs(path) {
-			t.Fatal(
-				"bounded I/O fixture requires an absolute private file path",
-			)
+			t.Fatal("bounded I/O fixture requires an absolute private file path")
 		}
 		fd, err := unix.Open(
 			path,
@@ -582,13 +501,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 			t.Fatalf("open actual O_DIRECT fixture: %v", err)
 		}
 		defer unix.Close(fd)
-		pages, err := unix.Mmap(
-			-1,
-			0,
-			1<<20,
-			unix.PROT_READ|unix.PROT_WRITE,
-			unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-		)
+		pages, err := unix.Mmap(-1, 0, 1<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -607,13 +520,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 		}
 		fmt.Println("bounded direct I/O bytes", rootlessIOBytes)
 	case "memory":
-		pages, err := unix.Mmap(
-			-1,
-			0,
-			48<<20,
-			unix.PROT_READ|unix.PROT_WRITE,
-			unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-		)
+		pages, err := unix.Mmap(-1, 0, 48<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -11,9 +11,7 @@ import (
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
-func proxySocketFixture(
-	t *testing.T,
-) (*Service, *fakeEngine, egress.Binding, string, os.FileInfo) {
+func proxySocketFixture(t *testing.T) (*Service, *fakeEngine, egress.Binding, string, os.FileInfo) {
 	t.Helper()
 	s, engine, _, principal := fixture(t)
 	result := claimTest(t, s, principal, "claim", nil)
@@ -39,10 +37,7 @@ func proxySocketFixture(
 	engine.vms[vm.ID] = vm
 	engine.mu.Unlock()
 	path := base + "_2049"
-	listener, err := net.ListenUnix(
-		"unix",
-		&net.UnixAddr{Name: path, Net: "unix"},
-	)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +60,7 @@ func proxySocketFixture(
 
 func TestProxySocketGrantsOnlyVerifiedVMMIdentity(t *testing.T) {
 	s, _, binding, path, before := proxySocketFixture(t)
-	if err := s.PrepareProxySocket(
-		context.Background(),
-		binding,
-		path,
-		before,
-	); err != nil {
+	if err := s.PrepareProxySocket(context.Background(), binding, path, before); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.Lstat(path)
@@ -82,8 +72,7 @@ func TestProxySocketGrantsOnlyVerifiedVMMIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual, expected := after.Sys().(*syscall.Stat_t), peer.Sys().(*syscall.Stat_t)
-	if !os.SameFile(before, after) || after.Mode().Perm() != 0o600 ||
-		actual.Uid != expected.Uid ||
+	if !os.SameFile(before, after) || after.Mode().Perm() != 0o600 || actual.Uid != expected.Uid ||
 		actual.Gid != expected.Gid {
 		t.Fatal("ownership handoff changed the inode, mode, or VMM identity")
 	}
@@ -91,11 +80,7 @@ func TestProxySocketGrantsOnlyVerifiedVMMIdentity(t *testing.T) {
 
 func TestProxySocketPreservesReplacementAndRejectsUnverifiedVM(t *testing.T) {
 	s, engine, binding, path, before := proxySocketFixture(t)
-	b, err := s.Get(
-		context.Background(),
-		Principal{Root: true},
-		binding.SandboxID,
-	)
+	b, err := s.Get(context.Background(), Principal{Root: true}, binding.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,15 +89,7 @@ func TestProxySocketPreservesReplacementAndRejectsUnverifiedVM(t *testing.T) {
 	vm.Verified = false
 	engine.vms[vm.ID] = vm
 	engine.mu.Unlock()
-	if err = s.PrepareProxySocket(
-		context.Background(),
-		binding,
-		path,
-		before,
-	); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if err = s.PrepareProxySocket(context.Background(), binding, path, before); !isCode(err, ErrConflict) {
 		t.Fatal("unverified VM received proxy access", err)
 	}
 	engine.mu.Lock()
@@ -129,15 +106,7 @@ func TestProxySocketPreservesReplacementAndRejectsUnverifiedVM(t *testing.T) {
 	if err = os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.PrepareProxySocket(
-		context.Background(),
-		binding,
-		path,
-		before,
-	); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if err = s.PrepareProxySocket(context.Background(), binding, path, before); !isCode(err, ErrConflict) {
 		t.Fatal("replacement symlink was accepted", err)
 	}
 	info, err := os.Stat(target)

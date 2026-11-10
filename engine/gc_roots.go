@@ -74,10 +74,7 @@ func gcID(id, prefix string) bool {
 	return err == nil
 }
 
-func (g *gcGraph) records(
-	table string,
-	visit func(string, []byte) error,
-) error {
+func (g *gcGraph) records(table string, visit func(string, []byte) error) error {
 	rows, err := g.e.db.QueryContext(g.ctx, "SELECT id,body FROM "+table)
 	if err != nil {
 		return err
@@ -134,10 +131,7 @@ func (g *gcGraph) load() error {
 	}
 	// Check indexed status and idempotency columns too: GC must not turn malformed
 	// JSON defaults or a disagreeing SQL status into evidence of completion.
-	rows, err := g.e.db.QueryContext(
-		g.ctx,
-		"SELECT id,key,hash,status FROM operations",
-	)
+	rows, err := g.e.db.QueryContext(g.ctx, "SELECT id,key,hash,status FROM operations")
 	if err != nil {
 		return err
 	}
@@ -148,12 +142,8 @@ func (g *gcGraph) load() error {
 		}
 		o := g.ops[id]
 		sum := sha256.Sum256(encode(o.Operation.Request))
-		if key != o.Operation.Key || status != o.Operation.Status ||
-			hash != hex.EncodeToString(sum[:]) {
-			err = fmt.Errorf(
-				"GC operation index disagrees with journal: %s",
-				id,
-			)
+		if key != o.Operation.Key || status != o.Operation.Status || hash != hex.EncodeToString(sum[:]) {
+			err = fmt.Errorf("GC operation index disagrees with journal: %s", id)
 			break
 		}
 	}
@@ -203,9 +193,7 @@ func (g *gcGraph) load() error {
 	for id, o := range g.ops {
 		live := !terminal(o.Operation.Status) || o.Journal.ResumeRequired ||
 			o.Journal.Lease || o.Journal.RestoreBlocked && !o.Journal.RestoreCleaned || o.Journal.BlockedRestoreID != "" && g.vms[o.Operation.VMID].VM.ID != ""
-		if o.Operation.Error != nil &&
-			o.Operation.Error.Code == api.ManualRecovery &&
-			!o.Journal.RestoreCleaned &&
+		if o.Operation.Error != nil && o.Operation.Error.Code == api.ManualRecovery && !o.Journal.RestoreCleaned &&
 			!g.restoreDeleteCleaned(o) {
 			return fmt.Errorf("GC operation requires manual recovery: %s", id)
 		}
@@ -237,12 +225,8 @@ func (g *gcGraph) load() error {
 			}
 		}
 		if !terminal(o.Operation.Status) && o.Operation.VMID != "" {
-			if _, ok := g.vms[o.Operation.VMID]; !ok &&
-				o.Operation.Request.Action != "delete" {
-				return fmt.Errorf(
-					"GC pending operation VM root missing: %s",
-					id,
-				)
+			if _, ok := g.vms[o.Operation.VMID]; !ok && o.Operation.Request.Action != "delete" {
+				return fmt.Errorf("GC pending operation VM root missing: %s", id)
 			}
 		}
 		if o.Operation.Request.Action == "create" {
@@ -257,8 +241,7 @@ func (g *gcGraph) load() error {
 			o.Journal.Resource != nil {
 			r := *o.Journal.Resource
 			p := filepath.Join(r.Dir, "versions", id)
-			if r.Disk != filepath.Join(p, "disk.raw") ||
-				r.RestoreDir != filepath.Join(p, "restore") ||
+			if r.Disk != filepath.Join(p, "disk.raw") || r.RestoreDir != filepath.Join(p, "restore") ||
 				o.Journal.Manifest == nil {
 				return fmt.Errorf("GC version ownership mismatch: %s", id)
 			}
@@ -270,8 +253,7 @@ func (g *gcGraph) load() error {
 		if err := gcDecode(b, &s); err != nil {
 			return err
 		}
-		if !gcID(id, "snap-") || s.Snapshot.ID != id ||
-			s.Dir != filepath.Join(g.e.opts.StateDir, "snapshots", id) ||
+		if !gcID(id, "snap-") || s.Snapshot.ID != id || s.Dir != filepath.Join(g.e.opts.StateDir, "snapshots", id) ||
 			checkConfig(&s.Snapshot.Config) != nil {
 			return fmt.Errorf("invalid snapshot root")
 		}
@@ -282,14 +264,10 @@ func (g *gcGraph) load() error {
 			if err := gcDecode(s.Snapshot.Manifest, &m); err != nil {
 				return err
 			}
-			if err := gcReadJSON(
-				filepath.Join(s.Dir, "manifest.json"),
-				&disk,
-			); err != nil {
+			if err := gcReadJSON(filepath.Join(s.Dir, "manifest.json"), &disk); err != nil {
 				return err
 			}
-			if !bytes.Equal(encode(m), encode(disk)) ||
-				!reflect.DeepEqual(m.Config, s.Snapshot.Config) {
+			if !bytes.Equal(encode(m), encode(disk)) || !reflect.DeepEqual(m.Config, s.Snapshot.Config) {
 				return fmt.Errorf("snapshot manifest root mismatch")
 			}
 			if err := g.manifest(m); err != nil {
@@ -340,8 +318,7 @@ func (g *gcGraph) load() error {
 // restoreDeleteCleaned derives internal responsibility from the original
 // restore's cleanup transaction. Historical failed delete responses stay fixed.
 func (g *gcGraph) restoreDeleteCleaned(o opRecord) bool {
-	if o.Operation.Request.Action != "delete" ||
-		o.Operation.Status != "failed" ||
+	if o.Operation.Request.Action != "delete" || o.Operation.Status != "failed" ||
 		o.Operation.Request.VMID != o.Operation.VMID ||
 		o.Operation.VMID == "" {
 		return false
@@ -363,11 +340,7 @@ func (g *gcGraph) restoreDeleteCleaned(o opRecord) bool {
 	resource, receipt := original.Journal.Resource, original.Journal.RestoreDeletion
 	return resource != nil && resource.VMID == o.Operation.VMID &&
 		receipt != nil && receipt.Format == 1 && receipt.Dir &&
-		receipt.Path == filepath.Join(
-			g.e.opts.StateDir,
-			"vms",
-			o.Operation.VMID,
-		)
+		receipt.Path == filepath.Join(g.e.opts.StateDir, "vms", o.Operation.VMID)
 }
 
 func (g *gcGraph) rootResource(r Resource) {
@@ -379,22 +352,16 @@ func (g *gcGraph) rootResource(r Resource) {
 }
 
 func (g *gcGraph) resource(r Resource) error {
-	if !gcID(r.VMID, "vm-") ||
-		r.Dir != filepath.Join(g.e.opts.StateDir, "vms", r.VMID) ||
+	if !gcID(r.VMID, "vm-") || r.Dir != filepath.Join(g.e.opts.StateDir, "vms", r.VMID) ||
 		checkConfig(&r.Config) != nil ||
-		r.ImageDir != filepath.Join(
-			g.e.opts.StateDir,
-			"images",
-			r.Config.Image[7:],
-		) {
+		r.ImageDir != filepath.Join(g.e.opts.StateDir, "images", r.Config.Image[7:]) {
 		return fmt.Errorf("GC invalid resource ownership")
 	}
 	if !gcID(r.NetworkToken, "net-") || r.Slot < 1 || r.Slot >= 32768 {
 		return fmt.Errorf("GC invalid network ownership")
 	}
 	if r.Instance == "" && r.RunDir != "" ||
-		r.Instance != "" &&
-			(!gcID(r.Instance, "run-") || r.RunDir != filepath.Join(r.Dir, "runs", r.Instance)) {
+		r.Instance != "" && (!gcID(r.Instance, "run-") || r.RunDir != filepath.Join(r.Dir, "runs", r.Instance)) {
 		return fmt.Errorf("GC invalid running instance path")
 	}
 	rel, err := filepath.Rel(r.Dir, r.Disk)
@@ -403,16 +370,14 @@ func (g *gcGraph) resource(r Resource) error {
 		((len(parts) != 2 || parts[0] != "disks" || !strings.HasSuffix(parts[1], ".raw") || !gcID(strings.TrimSuffix(parts[1], ".raw"), "op-")) && (len(parts) != 3 || parts[0] != "versions" || !gcID(parts[1], "op-") || parts[2] != "disk.raw")) {
 		return fmt.Errorf("GC invalid disk version path")
 	}
-	if r.RestoreDir != "" &&
-		r.RestoreDir != filepath.Join(filepath.Dir(r.Disk), "restore") {
+	if r.RestoreDir != "" && r.RestoreDir != filepath.Join(filepath.Dir(r.Disk), "restore") {
 		return fmt.Errorf("GC invalid backing path")
 	}
 	return nil
 }
 
 func (g *gcGraph) manifest(m Manifest) error {
-	if m.Format != 1 || m.MemoryMode != "CopyOnWrite" ||
-		checkConfig(&m.Config) != nil {
+	if m.Format != 1 || m.MemoryMode != "CopyOnWrite" || checkConfig(&m.Config) != nil {
 		return fmt.Errorf("GC unknown snapshot manifest")
 	}
 	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
@@ -421,8 +386,7 @@ func (g *gcGraph) manifest(m Manifest) error {
 		}
 	}
 	for rel, hash := range m.Files {
-		if filepath.IsAbs(rel) || filepath.Clean(rel) != rel ||
-			strings.HasPrefix(rel, "../") ||
+		if filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") ||
 			strings.Contains(rel, "\\") {
 			return fmt.Errorf("GC invalid manifest path")
 		}
@@ -478,10 +442,7 @@ func gcSortedKeys[V any](m map[string]V) []string {
 }
 
 func (g *gcGraph) relations() error {
-	rows, err := g.e.db.QueryContext(
-		g.ctx,
-		"SELECT snapshot,operation FROM leases",
-	)
+	rows, err := g.e.db.QueryContext(g.ctx, "SELECT snapshot,operation FROM leases")
 	if err != nil {
 		return err
 	}
@@ -491,13 +452,9 @@ func (g *gcGraph) relations() error {
 			break
 		}
 		o, ok := g.ops[operation]
-		if _, exists := g.snapshots[snapshot]; !ok || !exists ||
-			!o.Journal.Lease ||
+		if _, exists := g.snapshots[snapshot]; !ok || !exists || !o.Journal.Lease ||
 			o.Operation.Request.SnapshotID != snapshot {
-			err = fmt.Errorf(
-				"GC lease root missing or inconsistent: %s",
-				operation,
-			)
+			err = fmt.Errorf("GC lease root missing or inconsistent: %s", operation)
 			break
 		}
 		g.roots[g.snapshots[snapshot].Dir] = true
@@ -515,8 +472,7 @@ func (g *gcGraph) relations() error {
 		if o.Journal.Lease {
 			var snapshot string
 			if err = g.e.db.QueryRowContext(g.ctx, "SELECT snapshot FROM leases WHERE operation=?", id).
-				Scan(&snapshot); err != nil ||
-				snapshot != o.Operation.Request.SnapshotID {
+				Scan(&snapshot); err != nil || snapshot != o.Operation.Request.SnapshotID {
 				return fmt.Errorf("GC journal lease root missing: %s", id)
 			}
 		}
@@ -552,13 +508,9 @@ func (g *gcGraph) relations() error {
 			path := filepath.Join(r.RestoreDir, "memory-ranges")
 			// Before handoff the source lease protects a candidate whose backing
 			// registration does not exist yet. Every current VM backing must exist.
-			if v, ok := g.vms[r.VMID]; ok &&
-				v.Resource.RestoreDir == r.RestoreDir {
+			if v, ok := g.vms[r.VMID]; ok && v.Resource.RestoreDir == r.RestoreDir {
 				if g.backing[path] == "" {
-					return fmt.Errorf(
-						"GC current VM backing root missing: %s",
-						path,
-					)
+					return fmt.Errorf("GC current VM backing root missing: %s", path)
 				}
 				if err = g.path(path, false); err != nil {
 					return err

@@ -13,10 +13,7 @@ import (
 // Ready rows retain the version originally published by their refill. A
 // rolling template replacement does not rewrite that frozen owner or shape.
 func validateReadyWarmRows(ctx context.Context, e *sql.DB) error {
-	rows, err := e.QueryContext(
-		ctx,
-		`SELECT vm_id,template_id,snapshot_id FROM warm`,
-	)
+	rows, err := e.QueryContext(ctx, `SELECT vm_id,template_id,snapshot_id FROM warm`)
 	if err != nil {
 		return err
 	}
@@ -24,11 +21,7 @@ func validateReadyWarmRows(ctx context.Context, e *sql.DB) error {
 	var inventory []ready
 	for rows.Next() {
 		var item ready
-		if err = rows.Scan(
-			&item.vm,
-			&item.template,
-			&item.snapshot,
-		); err != nil {
+		if err = rows.Scan(&item.vm, &item.template, &item.snapshot); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -38,24 +31,14 @@ func validateReadyWarmRows(ctx context.Context, e *sql.DB) error {
 		return err
 	}
 	for _, item := range inventory {
-		if err = validateReadyWarmRow(
-			ctx,
-			e,
-			item.vm,
-			item.template,
-			item.snapshot,
-		); err != nil {
+		if err = validateReadyWarmRow(ctx, e, item.vm, item.template, item.snapshot); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateReadyWarmRow(
-	ctx context.Context,
-	e executor,
-	vm, template, snapshot string,
-) error {
+func validateReadyWarmRow(ctx context.Context, e executor, vm, template, snapshot string) error {
 	bad := func() error { return Fail(ErrManualRecovery, "ready warm lost its frozen cost, source or holder") }
 	var count int
 	var raw []byte
@@ -64,8 +47,7 @@ func validateReadyWarmRow(
 		return err
 	}
 	var r resourceRecovery
-	if count != 1 || json.Unmarshal(raw, &r) != nil || r.Group == nil ||
-		r.Group.Identity == nil {
+	if count != 1 || json.Unmarshal(raw, &r) != nil || r.Group == nil || r.Group.Identity == nil {
 		return bad()
 	}
 	g, i := r.Group, r.Group.Identity
@@ -84,13 +66,11 @@ func validateReadyWarmRow(
 	if err := validateAllocationProvenance(r); err != nil {
 		return err
 	}
-	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
-		Scan(&raw); err != nil {
+	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).Scan(&raw); err != nil {
 		return errors.Join(bad(), err)
 	}
 	var refill Operation
-	if json.Unmarshal(raw, &refill) != nil || refill.ID != r.Source ||
-		refill.Command.Action != "refill" ||
+	if json.Unmarshal(raw, &refill) != nil || refill.ID != r.Source || refill.Command.Action != "refill" ||
 		refill.Command.TemplateID != template ||
 		refill.ChargeTenantID != r.TenantID {
 		return bad()
@@ -98,10 +78,7 @@ func validateReadyWarmRow(
 	a := r.Allocations[0]
 	step, ok := g.Steps[a.Step]
 	if !ok || !step.Bound || !step.Dispatched || step.Proof == nil ||
-		!reflect.DeepEqual(
-			*step.Proof,
-			i.Receipt,
-		) || !reflect.DeepEqual(a.Request, i.Receipt.Request) ||
+		!reflect.DeepEqual(*step.Proof, i.Receipt) || !reflect.DeepEqual(a.Request, i.Receipt.Request) ||
 		a.OperationID != r.Source || a.TenantID != refill.TenantID || a.ChargeTenantID != r.TenantID || a.Shape != i.Shape ||
 		a.Subject != g.Subject || a.Kind != "vm_disk" || !a.RequestBound ||
 		a.Request.Key != stepKey(a.operation(), a.Step) ||
@@ -132,11 +109,7 @@ func validateReadyWarmRow(
 	return nil
 }
 
-func (s *Service) selectWarmTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	t Template,
-) (*resourceRecovery, error) {
+func (s *Service) selectWarmTx(ctx context.Context, tx *sql.Tx, t Template) (*resourceRecovery, error) {
 	var vm string
 	err := tx.QueryRowContext(ctx, `SELECT vm_id FROM warm WHERE template_id=? AND snapshot_id=? ORDER BY created_at,vm_id LIMIT 1`, t.ID, t.SnapshotID).
 		Scan(&vm)
@@ -153,10 +126,7 @@ func (s *Service) selectWarmTx(
 	err = tx.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE json_extract(body,'$.kind')='allocation_group' AND json_extract(body,'$.allocation_group.subject.kind')='warm' AND json_extract(body,'$.allocation_group.identity.vm')=?`, vm).
 		Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, Fail(
-			ErrManualRecovery,
-			"ready warm VM has no durable provenance",
-		)
+		return nil, Fail(ErrManualRecovery, "ready warm VM has no durable provenance")
 	}
 	if err != nil {
 		return nil, err
@@ -166,9 +136,7 @@ func (s *Service) selectWarmTx(
 		return nil, err
 	}
 	g := r.Group
-	if g == nil || g.Identity == nil || g.Gate != nil ||
-		r.TenantID != t.TenantID ||
-		g.Template.ID != t.ID ||
+	if g == nil || g.Identity == nil || g.Gate != nil || r.TenantID != t.TenantID || g.Template.ID != t.ID ||
 		g.Template.SnapshotID != t.SnapshotID ||
 		g.Template.Shape != t.Shape ||
 		g.Identity.Instance == "" ||
@@ -179,10 +147,7 @@ func (s *Service) selectWarmTx(
 		len(r.Allocations) != 1 ||
 		r.Allocations[0].Resolution.State != "active" ||
 		r.Allocations[0].Resolution.Destination != "warm:"+vm {
-		return nil, Fail(
-			ErrManualRecovery,
-			"ready warm provenance does not match template",
-		)
+		return nil, Fail(ErrManualRecovery, "ready warm provenance does not match template")
 	}
 	var cost int64
 	if err = tx.QueryRowContext(ctx, `SELECT storage_mib FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=?`, t.TenantID, vm).
@@ -190,10 +155,7 @@ func (s *Service) selectWarmTx(
 		return nil, err
 	}
 	if cost != t.Shape.DiskMiB {
-		return nil, Fail(
-			ErrManualRecovery,
-			"ready warm disk cost mismatch",
-		)
+		return nil, Fail(ErrManualRecovery, "ready warm disk cost mismatch")
 	}
 	var refs int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, t.TenantID, vm, "warm:"+vm).
@@ -201,10 +163,7 @@ func (s *Service) selectWarmTx(
 		return nil, err
 	}
 	if refs != 1 {
-		return nil, Fail(
-			ErrManualRecovery,
-			"ready warm disk holder is missing",
-		)
+		return nil, Fail(ErrManualRecovery, "ready warm disk holder is missing")
 	}
 	if t.SnapshotID != "" {
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, t.TenantID, t.SnapshotID, "backing:"+vm).
@@ -212,10 +171,7 @@ func (s *Service) selectWarmTx(
 			return nil, err
 		}
 		if refs != 1 {
-			return nil, Fail(
-				ErrManualRecovery,
-				"ready warm backing holder is missing",
-			)
+			return nil, Fail(ErrManualRecovery, "ready warm backing holder is missing")
 		}
 	}
 	return &r, nil
@@ -277,12 +233,7 @@ func (s *Service) claimWarmTx(
 	return insertRecovery(ctx, tx, r)
 }
 
-func (s *Service) commitSelectionActiveTx(
-	tx *sql.Tx,
-	o Operation,
-	b Sandbox,
-	target *activationTarget,
-) error {
+func (s *Service) commitSelectionActiveTx(tx *sql.Tx, o Operation, b Sandbox, target *activationTarget) error {
 	r, err := loadRecoveryTx(s.ctx, tx, "allocation:"+target.Origin)
 	if err != nil {
 		return err
@@ -292,8 +243,7 @@ func (s *Service) commitSelectionActiveTx(
 	if err != nil {
 		return err
 	}
-	if selection == nil || selection.Stage != "selected" ||
-		current.State != "provisioning" ||
+	if selection == nil || selection.Stage != "selected" || current.State != "provisioning" ||
 		current.OperationID != target.Origin ||
 		current.VMID != target.VM ||
 		current.Instance != target.Instance ||
@@ -309,10 +259,7 @@ func (s *Service) commitSelectionActiveTx(
 		return err
 	}
 	if holders != 1 {
-		return Fail(
-			ErrManualRecovery,
-			"selection active destination lost its disk holder",
-		)
+		return Fail(ErrManualRecovery, "selection active destination lost its disk holder")
 	}
 	if r.Group.Template.SnapshotID != "" {
 		if err = tx.QueryRowContext(s.ctx, `SELECT count(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?`, r.TenantID, r.Group.Template.SnapshotID, "backing:"+identity.VM).
@@ -320,10 +267,7 @@ func (s *Service) commitSelectionActiveTx(
 			return err
 		}
 		if holders != 1 {
-			return Fail(
-				ErrManualRecovery,
-				"selection active destination lost its backing",
-			)
+			return Fail(ErrManualRecovery, "selection active destination lost its backing")
 		}
 	}
 	selection.Stage = "active"
@@ -336,23 +280,14 @@ func (s *Service) commitSelectionActiveTx(
 
 // The active selection is a historical transfer to the real sandbox. Later
 // pause/release operations may change its VM, without reviving the old reader.
-func retireSelectionReaderTx(
-	ctx context.Context,
-	e executor,
-	r resourceRecovery,
-) error {
+func retireSelectionReaderTx(ctx context.Context, e executor, r resourceRecovery) error {
 	if err := validateWarmSelection(ctx, e, r); err != nil {
 		return err
 	}
-	if r.Group == nil || r.Group.Selection == nil ||
-		r.Group.Selection.Stage != "active" ||
-		!r.Done ||
+	if r.Group == nil || r.Group.Selection == nil || r.Group.Selection.Stage != "active" || !r.Done ||
 		!groupStepsTerminal(r) ||
 		hasUnresolvedAllocations(r) {
-		return Fail(
-			ErrManualRecovery,
-			"selection has no completed active destination",
-		)
+		return Fail(ErrManualRecovery, "selection has no completed active destination")
 	}
 	if r.Group.Template.SnapshotID == "" {
 		return nil
@@ -379,16 +314,9 @@ type warmSelection struct {
 // validateWarmSelection follows the original refill, even after the claim has
 // delivered a different replacement generation. Only frozen receipts authorize
 // cleanup; current Engine state never repairs a persisted request.
-func validateWarmSelection(
-	ctx context.Context,
-	e executor,
-	r resourceRecovery,
-) error {
+func validateWarmSelection(ctx context.Context, e executor, r resourceRecovery) error {
 	bad := func() error {
-		return Fail(
-			ErrManualRecovery,
-			"warm selection differs from its frozen responsibility",
-		)
+		return Fail(ErrManualRecovery, "warm selection differs from its frozen responsibility")
 	}
 	if r.Kind != "allocation_group" {
 		return nil
@@ -420,8 +348,7 @@ func validateWarmSelection(
 		return nil
 	}
 	g, q := r.Group, r.Group.Selection
-	if r.Kind != "allocation_group" || r.ID != "allocation:"+r.Source ||
-		r.Source == "" ||
+	if r.Kind != "allocation_group" || r.ID != "allocation:"+r.Source || r.Source == "" ||
 		g.Subject.Kind != "sandbox" ||
 		g.Subject.ID == "" ||
 		r.SandboxID != g.Subject.ID ||
@@ -436,21 +363,18 @@ func validateWarmSelection(
 	if err != nil {
 		return errors.Join(bad(), err)
 	}
-	if b.TenantID != r.TenantID || b.Shape != g.Template.Shape ||
-		b.TemplateID != g.Template.ID {
+	if b.TenantID != r.TenantID || b.Shape != g.Template.Shape || b.TemplateID != g.Template.ID {
 		return bad()
 	}
 	var raw []byte
-	if err = e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, q.Refill).
-		Scan(&raw); err != nil {
+	if err = e.QueryRowContext(ctx, `SELECT body FROM resource_recovery WHERE id=?`, q.Refill).Scan(&raw); err != nil {
 		return errors.Join(bad(), err)
 	}
 	var origin resourceRecovery
 	if err = json.Unmarshal(raw, &origin); err != nil {
 		return errors.Join(bad(), err)
 	}
-	if origin.Kind != "allocation_group" || origin.Source == "" ||
-		origin.ID != "allocation:"+origin.Source ||
+	if origin.Kind != "allocation_group" || origin.Source == "" || origin.ID != "allocation:"+origin.Source ||
 		q.Refill != origin.ID ||
 		origin.TenantID != r.TenantID ||
 		origin.Group == nil ||
@@ -470,25 +394,21 @@ func validateWarmSelection(
 	if err = validateGroupSource(ctx, e, origin); err != nil {
 		return errors.Join(bad(), err)
 	}
-	if err = e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, origin.Source).
-		Scan(&raw); err != nil {
+	if err = e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, origin.Source).Scan(&raw); err != nil {
 		return errors.Join(bad(), err)
 	}
 	var refill Operation
 	if err = json.Unmarshal(raw, &refill); err != nil {
 		return errors.Join(bad(), err)
 	}
-	if refill.Command.Action != "refill" ||
-		refill.Command.TemplateID != g.Template.ID {
+	if refill.Command.Action != "refill" || refill.Command.TemplateID != g.Template.ID {
 		return bad()
 	}
 	if err = validateAllocationProvenance(origin); err != nil {
 		return err
 	}
 	i, a := q.Identity, origin.Allocations[0]
-	if i.Owner != r.TenantID || i.Shape != g.Template.Shape ||
-		i.Source != origin.Source ||
-		i.Instance == "" ||
+	if i.Owner != r.TenantID || i.Shape != g.Template.Shape || i.Source != origin.Source || i.Instance == "" ||
 		i.Generation == nil ||
 		i.Generation.VMID != i.VM ||
 		i.Generation.Status != "succeeded" ||
@@ -513,9 +433,7 @@ func validateWarmSelection(
 		return bad()
 	}
 	for name, step := range origin.Group.Steps {
-		if !step.Bound || !step.Dispatched ||
-			step.Request.Key != stepKey(refill, name) ||
-			step.Proof == nil ||
+		if !step.Bound || !step.Dispatched || step.Request.Key != stepKey(refill, name) || step.Proof == nil ||
 			step.Proof.ID == "" ||
 			step.Proof.Key != step.Request.Key ||
 			step.Proof.Status != "succeeded" ||
@@ -533,13 +451,11 @@ func validateWarmSelection(
 			Action:     "clone",
 			SnapshotID: g.Template.SnapshotID,
 		}
-		if g.Template.SnapshotID == "" || len(origin.Group.Steps) != 1 ||
-			!reflect.DeepEqual(a.Request, expected) ||
+		if g.Template.SnapshotID == "" || len(origin.Group.Steps) != 1 || !reflect.DeepEqual(a.Request, expected) ||
 			!reflect.DeepEqual(i.Receipt, *i.Generation) {
 			return bad()
 		}
-	} else if len(origin.Group.Steps) != 2 ||
-		i.Receipt.Request.Config == nil ||
+	} else if len(origin.Group.Steps) != 2 || i.Receipt.Request.Config == nil ||
 		i.Receipt.Request.Config.Image != g.Template.Image ||
 		!reflect.DeepEqual(
 			i.Receipt.Request,
@@ -549,10 +465,7 @@ func validateWarmSelection(
 				Config: i.Receipt.Request.Config,
 			},
 		) ||
-		!reflect.DeepEqual(
-			i.Generation.Request,
-			api.Request{Key: i.Generation.Key, Action: "start", VMID: i.VM},
-		) ||
+		!reflect.DeepEqual(i.Generation.Request, api.Request{Key: i.Generation.Key, Action: "start", VMID: i.VM}) ||
 		g.Template.SnapshotID != "" {
 		return bad()
 	}
@@ -561,9 +474,7 @@ func validateWarmSelection(
 	}
 	switch q.Stage {
 	case "selected", "active":
-		if r.Done != (q.Stage == "active") ||
-			!reflect.DeepEqual(q.Deletion, allocationStep{}) ||
-			q.Attempt != 0 {
+		if r.Done != (q.Stage == "active") || !reflect.DeepEqual(q.Deletion, allocationStep{}) || q.Attempt != 0 {
 			return bad()
 		}
 	case "rejected":
@@ -584,18 +495,11 @@ func validateWarmSelection(
 		}
 		return nil
 	}
-	if !q.Deletion.Dispatched ||
-		!reflect.DeepEqual(
-			q.Deletion.Request,
-			warmSelectionDelete(r, q.Attempt),
-		) {
+	if !q.Deletion.Dispatched || !reflect.DeepEqual(q.Deletion.Request, warmSelectionDelete(r, q.Attempt)) {
 		return bad()
 	}
 	if q.Deletion.Proof != nil {
-		if err = validateWarmDeleteReceipt(
-			q.Deletion.Request,
-			*q.Deletion.Proof,
-		); err != nil {
+		if err = validateWarmDeleteReceipt(q.Deletion.Request, *q.Deletion.Proof); err != nil {
 			return err
 		}
 	}
@@ -618,21 +522,13 @@ func validateWarmSelection(
 
 // A stage records a transfer, not its authority. Validate the destination from
 // the original claim and its frozen version, including after later lifecycles.
-func validateWarmSelectionDestination(
-	ctx context.Context,
-	e executor,
-	r resourceRecovery,
-	b Sandbox,
-) error {
+func validateWarmSelectionDestination(ctx context.Context, e executor, r resourceRecovery, b Sandbox) error {
 	g, q := r.Group, r.Group.Selection
 	if q.Stage != "fallback_reserved" && q.Stage != "cleanup_done" {
 		return nil
 	}
 	bad := func() error {
-		return Fail(
-			ErrManualRecovery,
-			"warm selection has no qualified durable destination",
-		)
+		return Fail(ErrManualRecovery, "warm selection has no qualified durable destination")
 	}
 	count := func(query string, args ...any) (int, error) {
 		var n int
@@ -686,9 +582,7 @@ func validateWarmSelectionDestination(
 		}
 	}
 	if q.Stage == "cleanup_done" {
-		if b.State != "terminated" || b.VMID != "" || b.Instance != "" ||
-			len(r.Allocations) != 0 ||
-			g.Identity != nil {
+		if b.State != "terminated" || b.VMID != "" || b.Instance != "" || len(r.Allocations) != 0 || g.Identity != nil {
 			return bad()
 		}
 		if r.Done {
@@ -710,8 +604,7 @@ func validateWarmSelectionDestination(
 		return bad()
 	}
 	var raw []byte
-	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).
-		Scan(&raw); err != nil {
+	if err := e.QueryRowContext(ctx, `SELECT body FROM operations WHERE id=?`, r.Source).Scan(&raw); err != nil {
 		return err
 	}
 	var claim Operation
@@ -739,8 +632,7 @@ func validateWarmSelectionDestination(
 		}
 	}
 	step, ok := g.Steps["provision"]
-	if !ok || a.OperationID != r.Source || a.TenantID != claim.TenantID ||
-		a.ChargeTenantID != r.TenantID ||
+	if !ok || a.OperationID != r.Source || a.TenantID != claim.TenantID || a.ChargeTenantID != r.TenantID ||
 		a.SandboxID != b.ID ||
 		a.Subject != g.Subject ||
 		a.Shape != g.Template.Shape ||
@@ -755,8 +647,7 @@ func validateWarmSelectionDestination(
 	}
 	if step.Proof != nil {
 		p := step.Proof
-		if p.ID == "" || p.Key != request.Key ||
-			!reflect.DeepEqual(p.Request, request) ||
+		if p.ID == "" || p.Key != request.Key || !reflect.DeepEqual(p.Request, request) ||
 			(p.Status != "pending" && p.Status != "running" && p.Status != "failed" && p.Status != "succeeded") ||
 			(p.Status == "failed") != (p.Error != nil) {
 			return bad()
@@ -771,9 +662,7 @@ func validateWarmSelectionDestination(
 		if err := validateAllocationProvenance(r); err != nil {
 			return err
 		}
-		if step.Proof == nil ||
-			!reflect.DeepEqual(g.Identity.Receipt, *step.Proof) ||
-			g.Identity.VM == q.Identity.VM {
+		if step.Proof == nil || !reflect.DeepEqual(g.Identity.Receipt, *step.Proof) || g.Identity.VM == q.Identity.VM {
 			return bad()
 		}
 	}
@@ -795,11 +684,7 @@ func validateWarmSelectionDestination(
 		if g.Identity == nil || pending != 0 {
 			return bad()
 		}
-		return charged(
-			"vm_disk",
-			g.Identity.VM,
-			quotaRef{Kind: "cleanup", ID: groupHolder(r)},
-		)
+		return charged("vm_disk", g.Identity.VM, quotaRef{Kind: "cleanup", ID: groupHolder(r)})
 	}
 	switch a.Resolution.State {
 	case "unresolved", "result_known":
@@ -810,13 +695,11 @@ func validateWarmSelectionDestination(
 		if r.Done || a.Resolution.Destination != "" {
 			return bad()
 		}
-		if a.Resolution.State == "result_known" &&
-			(proof == nil || g.Identity == nil) {
+		if a.Resolution.State == "result_known" && (proof == nil || g.Identity == nil) {
 			return bad()
 		}
 		if g.Identity == nil {
-			if a.Resolution.State != "unresolved" || proof != nil ||
-				(step.Proof != nil && step.Proof.VMID != "") ||
+			if a.Resolution.State != "unresolved" || proof != nil || (step.Proof != nil && step.Proof.VMID != "") ||
 				pending != 1 {
 				return bad()
 			}
@@ -831,8 +714,7 @@ func validateWarmSelectionDestination(
 		if !r.Done || (b.OperationID == r.Source && b.State != "running") {
 			return bad()
 		}
-		if a.Resolution.Destination != "sandbox:"+b.ID || proof == nil ||
-			proof.Status != "succeeded" ||
+		if a.Resolution.Destination != "sandbox:"+b.ID || proof == nil || proof.Status != "succeeded" ||
 			g.Identity == nil ||
 			g.Identity.Generation == nil ||
 			g.Identity.Instance == "" ||
@@ -883,32 +765,24 @@ func validateWarmSelectionDestination(
 		if err := json.Unmarshal(raw, &collector); err != nil {
 			return err
 		}
-		if collector.Kind != "allocation_cleanup" ||
-			collector.Source != r.Source ||
-			collector.TenantID != r.TenantID ||
+		if collector.Kind != "allocation_cleanup" || collector.Source != r.Source || collector.TenantID != r.TenantID ||
 			collector.Done {
 			return bad()
 		}
 		if err := validateAllocationDeletion(collector, r); err != nil {
 			return err
 		}
-		return charged(
-			"vm_disk",
-			g.Identity.VM,
-			quotaRef{Kind: "cleanup", ID: "recovery:" + collector.ID},
-		)
+		return charged("vm_disk", g.Identity.VM, quotaRef{Kind: "cleanup", ID: "recovery:" + collector.ID})
 	case "reclaimed":
 		if proof == nil || pending != 0 {
 			return bad()
 		}
 		if proof.VMID == "" {
-			if a.Resolution.Destination != "terminal-no-allocation:"+proof.ID ||
-				g.Identity != nil {
+			if a.Resolution.Destination != "terminal-no-allocation:"+proof.ID || g.Identity != nil {
 				return bad()
 			}
 		} else {
-			if g.Identity == nil ||
-				a.Resolution.Destination != "vm-absent:"+proof.VMID {
+			if g.Identity == nil || a.Resolution.Destination != "vm-absent:"+proof.VMID {
 				return bad()
 			}
 			if err := absent(proof.VMID); err != nil {
@@ -917,9 +791,7 @@ func validateWarmSelectionDestination(
 		}
 		return nil
 	case "cancelled": //nolint:misspell // Preserve the durable Resolution token.
-		if a.Resolution.Destination != "never-dispatched:"+request.Key ||
-			step.Dispatched ||
-			step.Proof != nil ||
+		if a.Resolution.Destination != "never-dispatched:"+request.Key || step.Dispatched || step.Proof != nil ||
 			proof != nil ||
 			g.Identity != nil ||
 			pending != 0 {

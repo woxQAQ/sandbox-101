@@ -223,8 +223,7 @@ func (m *Manager) Bind(
 	}
 	switch p.mode {
 	case "relay":
-		if !filepath.IsAbs(vsockPath) ||
-			filepath.Clean(vsockPath) != vsockPath {
+		if !filepath.IsAbs(vsockPath) || filepath.Clean(vsockPath) != vsockPath {
 			cancel()
 			return errors.New("egress: absolute clean vsock path required")
 		}
@@ -313,10 +312,7 @@ func (b *binding) close() error {
 		b.mu.Unlock()
 		for _, ln := range b.listeners {
 			if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				b.closeErr = errors.Join(
-					b.closeErr,
-					errors.New("egress: proxy socket teardown failed"),
-				)
+				b.closeErr = errors.Join(b.closeErr, errors.New("egress: proxy socket teardown failed"))
 			}
 		}
 		if b.server != nil {
@@ -334,10 +330,7 @@ func (b *binding) close() error {
 	// for another Revoke; closing streams is once-only, removing host rules is retryable.
 	if b.cleanup != nil {
 		if err := b.cleanup(); err != nil {
-			return errors.Join(
-				b.closeErr,
-				errors.New("egress: direct host policy teardown failed"),
-			)
+			return errors.Join(b.closeErr, errors.New("egress: direct host policy teardown failed"))
 		}
 		b.cleanup = nil
 	}
@@ -496,10 +489,7 @@ func (l guardedListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		t, err := l.b.track(
-			&idleConn{Conn: c, timeout: l.b.manager.opts.IdleTimeout},
-			true,
-		)
+		t, err := l.b.track(&idleConn{Conn: c, timeout: l.b.manager.opts.IdleTimeout}, true)
 		if err == nil {
 			return t, nil
 		}

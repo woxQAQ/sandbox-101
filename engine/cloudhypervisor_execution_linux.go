@@ -34,10 +34,7 @@ func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 		return err
 	}
 	var image ImageManifest
-	if err := readJSON(
-		filepath.Join(r.ImageDir, "image.json"),
-		&image,
-	); err != nil {
+	if err := readJSON(filepath.Join(r.ImageDir, "image.json"), &image); err != nil {
 		return api.Fail(api.Incompatible, "image not imported: %v", err)
 	}
 	if err := image.Verify(r.ImageDir, r.Config.Image); err != nil {
@@ -60,15 +57,7 @@ func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 		if x != nil {
 			return x
 		}
-		if _, x = command(
-			ctx,
-			"mkfs.ext4",
-			"-q",
-			"-F",
-			"-L",
-			"sandbox-upper",
-			tmp,
-		); x != nil {
+		if _, x = command(ctx, "mkfs.ext4", "-q", "-F", "-L", "sandbox-upper", tmp); x != nil {
 			return x
 		}
 		if x = syncTree(filepath.Dir(r.Disk)); x != nil {
@@ -84,11 +73,7 @@ func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 	return b.networkPrepare(ctx, r)
 }
 
-func (b *CloudHypervisor) Boot(
-	ctx context.Context,
-	r Resource,
-	restore bool,
-) error {
+func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) error {
 	obs, err := b.Inspect(ctx, r)
 	if err != nil {
 		return err
@@ -114,10 +99,7 @@ func (b *CloudHypervisor) Boot(
 	defer func() { _ = tap.Close() }()
 	if restore {
 		if obs.Configured {
-			return api.Fail(
-				api.ManualRecovery,
-				"partially loaded restore state requires inspection before retry",
-			)
+			return api.Fail(api.ManualRecovery, "partially loaded restore state requires inspection before retry")
 		}
 		if err = b.validateCOW(r); err != nil {
 			return err
@@ -135,14 +117,7 @@ func (b *CloudHypervisor) Boot(
 				},
 			},
 		}
-		if _, err = b.api(
-			ctx,
-			r,
-			"PUT",
-			"vm.restore",
-			body,
-			[]int{int(tap.Fd())},
-		); err != nil {
+		if _, err = b.api(ctx, r, "PUT", "vm.restore", body, []int{int(tap.Fd())}); err != nil {
 			return err
 		}
 		if err = b.verifyCOWMappings(r); err != nil {
@@ -209,11 +184,7 @@ func (b *CloudHypervisor) Boot(
 // vm.create deliberately discards SCM_RIGHTS in the pinned CH API. Cold-add the
 // TAP before boot through vm.add-net, which accepts descriptors. Omitting mtu
 // avoids SIOCSIFMTU in the unprivileged VMM; the engine configured it beforehand.
-func (b *CloudHypervisor) ensureColdNetwork(
-	ctx context.Context,
-	r Resource,
-	tap *os.File,
-) error {
+func (b *CloudHypervisor) ensureColdNetwork(ctx context.Context, r Resource, tap *os.File) error {
 	data, err := b.api(ctx, r, "GET", "vm.info", nil, nil)
 	if err != nil {
 		return err
@@ -233,14 +204,10 @@ func (b *CloudHypervisor) ensureColdNetwork(
 	if len(info.Config.Net) != 0 {
 		// A daemon may have died after CH committed vm.add-net. Preserve the
 		// already held queue rather than attaching a duplicate on replay.
-		if len(info.Config.Net) != 1 || info.Config.Net[0].ID != "net0" ||
-			info.Config.Net[0].Tap != "" ||
+		if len(info.Config.Net) != 1 || info.Config.Net[0].ID != "net0" || info.Config.Net[0].Tap != "" ||
 			len(info.Config.Net[0].FDs) != 1 ||
 			info.Config.Net[0].FDs[0] < 0 {
-			return api.Fail(
-				api.ManualRecovery,
-				"configured cold network has no verified TAP descriptor",
-			)
+			return api.Fail(api.ManualRecovery, "configured cold network has no verified TAP descriptor")
 		}
 		return nil
 	}
@@ -259,21 +226,12 @@ func (b *CloudHypervisor) ensureColdNetwork(
 
 func (b *CloudHypervisor) validateCOW(r Resource) error {
 	var cfg map[string]json.RawMessage
-	if err := readJSON(
-		filepath.Join(r.RestoreDir, "config.json"),
-		&cfg,
-	); err != nil {
+	if err := readJSON(filepath.Join(r.RestoreDir, "config.json"), &cfg); err != nil {
 		return err
 	}
 	for _, k := range []string{"devices", "user_devices", "vdpa", "balloon", "pvmemcontrol", "memory_zones", "platform", "landlock_rules"} {
-		if v := cfg[k]; len(v) > 0 && string(v) != "null" &&
-			string(v) != "[]" &&
-			string(v) != "false" {
-			return api.Fail(
-				api.Incompatible,
-				"unapproved COW device/configuration %s",
-				k,
-			)
+		if v := cfg[k]; len(v) > 0 && string(v) != "null" && string(v) != "[]" && string(v) != "false" {
+			return api.Fail(api.Incompatible, "unapproved COW device/configuration %s", k)
 		}
 	}
 	var mem struct {
@@ -288,16 +246,11 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 	if err := json.Unmarshal(cfg["memory"], &mem); err != nil {
 		return err
 	}
-	if mem.Size != r.Config.Shape.MemoryMiB<<20 || mem.Shared ||
-		mem.Hugepages ||
-		mem.Mergeable ||
+	if mem.Size != r.Config.Shape.MemoryMiB<<20 || mem.Shared || mem.Hugepages || mem.Mergeable ||
 		mem.HotplugSize != 0 ||
 		mem.File != "" ||
 		(len(mem.Zones) > 0 && string(mem.Zones) != "null" && string(mem.Zones) != "[]") {
-		return api.Fail(
-			api.Incompatible,
-			"COW requires static private RAM without zones",
-		)
+		return api.Fail(api.Incompatible, "COW requires static private RAM without zones")
 	}
 	// Only snapshots of this exact engine layout are accepted. Configuration
 	// checks supplement the published manifest's checksums and compatibility ID.
@@ -317,10 +270,7 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 		return err
 	}
 	if st.Size() < mem.Size || st.Size()%int64(os.Getpagesize()) != 0 {
-		return api.Fail(
-			api.Incompatible,
-			"unaligned or truncated COW memory file",
-		)
+		return api.Fail(api.Incompatible, "unaligned or truncated COW memory file")
 	}
 	return validateCOWTopology(r.RestoreDir, uint64(mem.Size))
 }
@@ -340,15 +290,10 @@ func (b *CloudHypervisor) prepareCaptureWriter(r Resource, dst string) error {
 	return delegateCapture(r, dst, int(b.opts.UID), int(b.opts.GID))
 }
 
-func (b *CloudHypervisor) Capture(
-	ctx context.Context,
-	r Resource,
-	dst string,
-) error {
+func (b *CloudHypervisor) Capture(ctx context.Context, r Resource, dst string) error {
 	rel, err := filepath.Rel(filepath.Join(r.Dir, "capture"), dst)
 	parts := strings.Split(rel, string(filepath.Separator))
-	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") ||
-		parts[1] != "ch" {
+	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") || parts[1] != "ch" {
 		return api.Fail(api.Invalid, "capture outside prepared CH leaf")
 	}
 	leaf, err := openCaptureDir(dst)
@@ -361,12 +306,8 @@ func (b *CloudHypervisor) Capture(
 		return err
 	}
 	owner := st.Sys().(*syscall.Stat_t)
-	if owner.Uid != b.opts.UID || owner.Gid != b.opts.GID ||
-		st.Mode().Perm() != 0o700 {
-		return api.Fail(
-			api.Incompatible,
-			"capture writer leaf was not prepared",
-		)
+	if owner.Uid != b.opts.UID || owner.Gid != b.opts.GID || st.Mode().Perm() != 0o700 {
+		return api.Fail(api.Incompatible, "capture writer leaf was not prepared")
 	}
 	_, err = b.api(
 		ctx,
@@ -390,11 +331,7 @@ func (b *CloudHypervisor) api(
 ) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(
-		ctx,
-		"unix",
-		filepath.Join(r.RunDir, "io", "api.sock"),
-	)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(r.RunDir, "io", "api.sock"))
 	if err != nil {
 		return nil, err
 	}
@@ -415,11 +352,7 @@ func (b *CloudHypervisor) api(
 		len(body),
 	)
 	if len(fds) > 0 {
-		n, _, x := conn.(*net.UnixConn).WriteMsgUnix(
-			[]byte(header),
-			unix.UnixRights(fds...),
-			nil,
-		)
+		n, _, x := conn.(*net.UnixConn).WriteMsgUnix([]byte(header), unix.UnixRights(fds...), nil)
 		if x != nil {
 			return nil, x
 		}
@@ -455,15 +388,6 @@ func (b *CloudHypervisor) api(
 	return out, nil
 }
 
-func (b *CloudHypervisor) Agent(
-	ctx context.Context,
-	r Resource,
-	restore bool,
-) error {
-	return systemAgent(
-		ctx,
-		filepath.Join(r.RunDir, "io", "vsock"),
-		r.Instance,
-		restore,
-	)
+func (b *CloudHypervisor) Agent(ctx context.Context, r Resource, restore bool) error {
+	return systemAgent(ctx, filepath.Join(r.RunDir, "io", "vsock"), r.Instance, restore)
 }

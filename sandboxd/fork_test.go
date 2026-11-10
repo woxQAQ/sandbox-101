@@ -12,13 +12,7 @@ import (
 
 func TestForkWithoutEnvironmentClearsSourceValues(t *testing.T) {
 	s, _, a, p := fixture(t)
-	r := claimTest(
-		t,
-		s,
-		p,
-		"claim",
-		map[string]EnvVar{"SOURCE_ONLY": {Value: "old"}},
-	)
+	r := claimTest(t, s, p, "claim", map[string]EnvVar{"SOURCE_ONLY": {Value: "old"}})
 	branches, err := s.Execute(
 		context.Background(),
 		p,
@@ -44,11 +38,7 @@ type forkFailureAgent struct {
 	gate    chan struct{}
 }
 
-func (a *forkFailureAgent) Activate(
-	ctx context.Context,
-	vm api.VM,
-	activation Activation,
-) error {
+func (a *forkFailureAgent) Activate(ctx context.Context, vm api.VM, activation Activation) error {
 	a.mu.Lock()
 	a.arrived++
 	n := a.arrived
@@ -71,12 +61,7 @@ func TestForkRollbackDeletesEveryBranch(t *testing.T) {
 	s, f, a, p := recoveryFixture(t)
 	source := claimTest(t, s, p, "source", nil)
 	s.opts.Agent = &forkFailureAgent{fakeAgent: a, gate: make(chan struct{})}
-	o, err := s.Submit(
-		context.Background(),
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(context.Background(), p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +104,7 @@ func TestForkRollbackRecoveryAfterDeleteFailure(t *testing.T) {
 	source := claimTest(t, s, p, "source", nil)
 	s.opts.Agent = &forkFailureAgent{fakeAgent: a, gate: make(chan struct{})}
 	f.failDeletes = 1
-	o, err := s.Submit(
-		context.Background(),
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(context.Background(), p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,12 +157,7 @@ func TestForkRollbackPreservesUnknownInstance(t *testing.T) {
 	source := claimTest(t, s, p, "source", nil)
 	s.opts.Agent = &forkFailureAgent{fakeAgent: a, gate: make(chan struct{})}
 	f.failDeletes = 1
-	o, err := s.Submit(
-		context.Background(),
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(context.Background(), p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,12 +193,7 @@ func TestForkRollbackLostDeleteResponseConvergesAfterRestart(t *testing.T) {
 	f.control.Lock()
 	f.dropDeleteResponses = 1
 	f.control.Unlock()
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(s.ctx, p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +203,7 @@ func TestForkRollbackLostDeleteResponseConvergesAfterRestart(t *testing.T) {
 	var deletion api.Operation
 	f.mu.Lock()
 	for _, candidate := range f.ops {
-		if candidate.Request.Action == "delete" &&
-			candidate.Status == "running" {
+		if candidate.Request.Action == "delete" && candidate.Status == "running" {
 			deletion = candidate
 		}
 	}
@@ -281,12 +250,9 @@ func TestForkRollbackLostDeleteResponseConvergesAfterRestart(t *testing.T) {
 	}
 	f.control.Lock()
 	for _, request := range f.requests {
-		if request.Action == "delete" && request.VMID == deletion.VMID &&
-			request.Key != deletion.Key {
+		if request.Action == "delete" && request.VMID == deletion.VMID && request.Key != deletion.Key {
 			f.control.Unlock()
-			t.Fatal(
-				"successful or unresolved deletion was replaced with a new key",
-			)
+			t.Fatal("successful or unresolved deletion was replaced with a new key")
 		}
 	}
 	f.control.Unlock()
@@ -306,12 +272,7 @@ func TestForkRollbackUnacceptedDeleteReusesOriginalKey(t *testing.T) {
 	f.control.Lock()
 	f.dropDeleteBeforeAccept = 1
 	f.control.Unlock()
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(s.ctx, p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,12 +319,7 @@ func TestForkRollbackUnknownInstanceSurvivesMaintenance(t *testing.T) {
 	f.control.Lock()
 	f.failNetwork = true
 	f.control.Unlock()
-	o, err := s.Submit(
-		s.ctx,
-		p,
-		"fork",
-		Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3},
-	)
+	o, err := s.Submit(s.ctx, p, "fork", Command{Action: "fork", SandboxID: source.Sandbox.ID, Count: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,15 +351,7 @@ func TestForkRollbackUnknownInstanceSurvivesMaintenance(t *testing.T) {
 		if _, err = f.GetVM(s.ctx, b.VMID); err != nil {
 			t.Fatal("unproven VM disappeared", err)
 		}
-		if _, err = s.Execute(
-			s.ctx,
-			p,
-			"explicit-release:"+id,
-			Command{Action: "release", SandboxID: id},
-		); !isCode(
-			err,
-			ErrManualRecovery,
-		) {
+		if _, err = s.Execute(s.ctx, p, "explicit-release:"+id, Command{Action: "release", SandboxID: id}); !isCode(err, ErrManualRecovery) {
 			t.Fatal("shared release accepted unproven instance", err)
 		}
 	}
@@ -421,13 +369,7 @@ func TestForkRollbackUnknownInstanceSurvivesMaintenance(t *testing.T) {
 
 func TestForkIdentityAndEnvironmentIsolation(t *testing.T) {
 	s, _, a, p := fixture(t)
-	source := claimTest(
-		t,
-		s,
-		p,
-		"claim",
-		map[string]EnvVar{"OLD": {Value: "source-only"}},
-	)
+	source := claimTest(t, s, p, "claim", map[string]EnvVar{"OLD": {Value: "source-only"}})
 	r, err := s.Execute(
 		context.Background(),
 		p,
@@ -450,8 +392,7 @@ func TestForkIdentityAndEnvironmentIsolation(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, act := range a.activations[len(a.activations)-2:] {
-		if !act.ResetIdentity || act.Env["OLD"] != "" ||
-			act.Env["NEW"] != "branch" {
+		if !act.ResetIdentity || act.Env["OLD"] != "" || act.Env["NEW"] != "branch" {
 			t.Fatal("fork leaked source environment or identity")
 		}
 	}

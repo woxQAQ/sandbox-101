@@ -19,15 +19,8 @@ func TestStartupAdoptsLiveInstanceWithoutRelaunch(t *testing.T) {
 		}
 		return nil
 	})
-	a := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
-	o, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "start", Action: "start", VMID: a.VMID},
-	)
+	a := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
+	o, err := e.Submit(context.Background(), api.Request{Key: "start", Action: "start", VMID: a.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +46,7 @@ func TestAgentFailureStopsColdBoot(t *testing.T) {
 	e := openTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
 	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "s", Action: "start", VMID: a.VMID},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "s", Action: "start", VMID: a.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +77,7 @@ func TestUnknownIdentityNeverStopsOrDeletes(t *testing.T) {
 	if v.Verified || v.BlockedReason == "" {
 		t.Fatal("unknown identity treated as confirmed")
 	}
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "delete", Action: "delete", VMID: a.VMID},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "delete", Action: "delete", VMID: a.VMID})
 	if err != nil {
 		t.Fatal(err)
 	}

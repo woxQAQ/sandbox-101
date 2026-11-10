@@ -87,10 +87,7 @@ func productionGuestTCP(
 	}
 	var owned []string
 	defer func() {
-		cleanup, cancel := context.WithTimeout(
-			context.Background(),
-			time.Minute,
-		)
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		for _, id := range owned {
 			if _, err := client.Change(
@@ -158,24 +155,17 @@ func productionGuestTCP(
 			}
 			return
 		}
-		if !vm.NetworkActual || !vm.NetworkEnabled ||
-			vm.NetworkPolicyInstance != vm.Instance {
-			t.Fatalf(
-				"allowed TCP has no verified current direct policy: %+v",
-				vm,
-			)
+		if !vm.NetworkActual || !vm.NetworkEnabled || vm.NetworkPolicyInstance != vm.Instance {
+			t.Fatalf("allowed TCP has no verified current direct policy: %+v", vm)
 		}
 		select {
 		case event := <-observed:
-			if event.Stage != stage ||
-				!strings.HasPrefix(event.RemoteIP, "10.200.") {
+			if event.Stage != stage || !strings.HasPrefix(event.RemoteIP, "10.200.") {
 				t.Fatalf("TCP did not cross owned SNAT: %+v", event)
 			}
 			proof = append(proof, event)
 		case <-time.After(time.Second):
-			t.Fatal(
-				"guest reported TCP success without a real listener observation",
-			)
+			t.Fatal("guest reported TCP success without a real listener observation")
 		}
 	}
 	direct := claim("direct", "direct")
@@ -183,38 +173,19 @@ func productionGuestTCP(
 	probe(direct, "denied-cidr", denied, false)
 	none := claim("none", "none")
 	probe(none, "none-policy", allowed, false)
-	if _, err := client.Change(
-		ctx,
-		none.ID,
-		"tcp-release-none",
-		sandboxd.Command{Action: "release"},
-	); err != nil {
+	if _, err := client.Change(ctx, none.ID, "tcp-release-none", sandboxd.Command{Action: "release"}); err != nil {
 		t.Fatal(err)
 	}
 	owned = owned[:1]
-	forked, err := client.Change(
-		ctx,
-		direct.ID,
-		"tcp-fork",
-		sandboxd.Command{Action: "fork", Count: 1},
-	)
+	forked, err := client.Change(ctx, direct.ID, "tcp-fork", sandboxd.Command{Action: "fork", Count: 1})
 	if err != nil || len(forked.Sandboxes) != 1 {
-		t.Fatalf(
-			"capture/fork for real TCP rebind: %+v: %v",
-			forked.Sandboxes,
-			err,
-		)
+		t.Fatalf("capture/fork for real TCP rebind: %+v: %v", forked.Sandboxes, err)
 	}
 	branch := forked.Sandboxes[0]
 	owned = append(owned, branch.ID)
 	probe(branch, "fork", allowed, true)
 	probe(branch, "fork-denied", denied, false)
-	if _, err := client.Change(
-		ctx,
-		direct.ID,
-		"tcp-pause",
-		sandboxd.Command{Action: "pause"},
-	); err != nil {
+	if _, err := client.Change(ctx, direct.ID, "tcp-pause", sandboxd.Command{Action: "pause"}); err != nil {
 		t.Fatal(err)
 	}
 	// Connecting performs the actual sandbox auto-resume and instance rebind.

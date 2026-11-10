@@ -37,10 +37,7 @@ func (e *Engine) restoreVMFence(v *vmRecord) error {
 			continue
 		}
 		if blocked != nil {
-			err = api.Fail(
-				api.ManualRecovery,
-				"multiple unresolved restore fences",
-			)
+			err = api.Fail(api.ManualRecovery, "multiple unresolved restore fences")
 			break
 		}
 		blocked = &record
@@ -75,14 +72,9 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 	if err != nil {
 		return err
 	}
-	if blocked.Operation.Status != "failed" ||
-		blocked.Operation.VMID != v.VM.ID ||
-		!blocked.Journal.RestoreBlocked ||
+	if blocked.Operation.Status != "failed" || blocked.Operation.VMID != v.VM.ID || !blocked.Journal.RestoreBlocked ||
 		blocked.Journal.RestoreCleaned {
-		return api.Fail(
-			api.ManualRecovery,
-			"blocked restore delete ownership mismatch",
-		)
+		return api.Fail(api.ManualRecovery, "blocked restore delete ownership mismatch")
 	}
 	g := gcGraph{
 		e:        e,
@@ -106,10 +98,7 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 				continue
 			}
 			if r.VMID != v.VM.ID {
-				return api.Fail(
-					api.ManualRecovery,
-					"delete journal VM mismatch",
-				)
+				return api.Fail(api.ManualRecovery, "delete journal VM mismatch")
 			}
 			if err := g.resource(*r); err != nil {
 				return err
@@ -150,10 +139,7 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 			return x
 		}
 		if obs.Alive {
-			return api.Fail(
-				api.ManualRecovery,
-				"restore deletion cannot confirm instance shutdown",
-			)
+			return api.Fail(api.ManualRecovery, "restore deletion cannot confirm instance shutdown")
 		}
 	}
 	for _, r := range instances {
@@ -167,10 +153,7 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 			return x
 		}
 		if obs.Alive || obs.Network {
-			return api.Fail(
-				api.ManualRecovery,
-				"restore deletion cannot confirm instance/device shutdown",
-			)
+			return api.Fail(api.ManualRecovery, "restore deletion cannot confirm instance/device shutdown")
 		}
 	}
 	for _, r := range instances {
@@ -214,10 +197,7 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 	}
 	receipt := blocked.Journal.RestoreDeletion
 	if receipt.Format != 1 || !receipt.Dir || receipt.Path != v.Resource.Dir {
-		return api.Fail(
-			api.ManualRecovery,
-			"blocked restore deletion receipt ownership mismatch",
-		)
+		return api.Fail(api.ManualRecovery, "blocked restore deletion receipt ownership mismatch")
 	}
 	files, err = g.resumeFiles(*receipt)
 	if err != nil {
@@ -244,26 +224,15 @@ func (e *Engine) deleteBlockedRestore(o *opRecord, v *vmRecord) error {
 			return err
 		}
 	}
-	if _, err = tx.Exec(
-		"DELETE FROM reservations WHERE owner=? OR owner LIKE ?",
-		v.VM.ID,
-		v.VM.ID+":%",
-	); err != nil {
+	if _, err = tx.Exec("DELETE FROM reservations WHERE owner=? OR owner LIKE ?", v.VM.ID, v.VM.ID+":%"); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(
-		"DELETE FROM leases WHERE operation=?",
-		blocked.Operation.ID,
-	); err != nil {
+	if _, err = tx.Exec("DELETE FROM leases WHERE operation=?", blocked.Operation.ID); err != nil {
 		return err
 	}
 	blocked.Journal.Lease = false
 	blocked.Journal.RestoreCleaned = true
-	if _, err = tx.Exec(
-		"UPDATE operations SET body=? WHERE id=?",
-		encode(blocked),
-		blocked.Operation.ID,
-	); err != nil {
+	if _, err = tx.Exec("UPDATE operations SET body=? WHERE id=?", encode(blocked), blocked.Operation.ID); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -332,25 +301,13 @@ func (g *gcGraph) blockedRestoreFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	unescape := strings.NewReplacer(
-		`\040`,
-		" ",
-		`\011`,
-		"\t",
-		`\012`,
-		"\n",
-		`\134`,
-		`\`,
-	)
+	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
 	for line := range strings.SplitSeq(string(mounts), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 5 {
 			mount := unescape.Replace(fields[4])
 			if mount == root || strings.HasPrefix(mount, root+"/") {
-				return nil, fmt.Errorf(
-					"mounted blocked restore retained: %s",
-					mount,
-				)
+				return nil, fmt.Errorf("mounted blocked restore retained: %s", mount)
 			}
 		}
 	}
@@ -367,10 +324,7 @@ func (g *gcGraph) blockedRestoreFiles(root string) ([]string, error) {
 			rel, _ := filepath.Rel(root, path)
 			if entry.IsDir() {
 				if !dirs[rel] {
-					return fmt.Errorf(
-						"unknown blocked restore directory: %s",
-						path,
-					)
+					return fmt.Errorf("unknown blocked restore directory: %s", path)
 				}
 				return nil
 			}

@@ -21,37 +21,22 @@ func TestRestoreCandidateInterruptedCopy(t *testing.T) {
 				t.Fatalf("incomplete proof accepted: %+v", final)
 			}
 			record, err := e.loadOp(context.Background(), op.ID)
-			if err != nil || !record.Journal.Lease ||
-				!record.Journal.RestoreBlocked {
-				t.Fatalf(
-					"incomplete candidate lost protection: %+v %v",
-					record.Journal,
-					err,
-				)
+			if err != nil || !record.Journal.Lease || !record.Journal.RestoreBlocked {
+				t.Fatalf("incomplete candidate lost protection: %+v %v", record.Journal, err)
 			}
 		})
 	}
 	for _, name := range []string{"config.json", "state.json", "disk.raw"} {
 		for _, damage := range []string{"truncate", "rewrite", "remove"} {
 			t.Run(name+"/"+damage, func(t *testing.T) {
-				dir, b, op, record, source := restoreCandidateFixture(
-					t,
-					"restore_prepare_intent",
-				)
+				dir, b, op, record, source := restoreCandidateFixture(t, "restore_prepare_intent")
 				r := *record.Journal.Resource
 				if err := os.MkdirAll(r.RestoreDir, 0o700); err != nil {
 					t.Fatal(err)
 				}
 				// Explicitly construct an interrupted destination, independent of reflink support.
 				for _, file := range []string{"config.json", "state.json", "disk.raw"} {
-					src, dst := filepath.Join(
-						source.Dir,
-						"ch",
-						file,
-					), filepath.Join(
-						r.RestoreDir,
-						file,
-					)
+					src, dst := filepath.Join(source.Dir, "ch", file), filepath.Join(r.RestoreDir, file)
 					if file == "disk.raw" {
 						src, dst = filepath.Join(source.Dir, file), r.Disk
 					}
@@ -69,26 +54,14 @@ func TestRestoreCandidateInterruptedCopy(t *testing.T) {
 				final := awaitStatus(t, e, op.ID)
 				if final.Status == "succeeded" {
 					for _, file := range []string{"config.json", "state.json", "disk.raw"} {
-						src, dst := filepath.Join(
-							source.Dir,
-							"ch",
-							file,
-						), filepath.Join(
-							r.RestoreDir,
-							file,
-						)
+						src, dst := filepath.Join(source.Dir, "ch", file), filepath.Join(r.RestoreDir, file)
 						if file == "disk.raw" {
 							src, dst = filepath.Join(source.Dir, file), r.Disk
 						}
 						want, x := digestFile(src)
 						got, y := digestFile(dst)
 						if x != nil || y != nil || want != got {
-							t.Fatalf(
-								"damaged candidate handed off: %s (%v %v)",
-								file,
-								x,
-								y,
-							)
+							t.Fatalf("damaged candidate handed off: %s (%v %v)", file, x, y)
 						}
 					}
 				}
@@ -102,10 +75,7 @@ func TestRestoreCandidateDamageBeforeHandoff(t *testing.T) {
 		for _, name := range []string{"config.json", "state.json", "disk.raw"} {
 			for _, damage := range []string{"truncate", "rewrite", "remove"} {
 				t.Run(boundary+"/"+name+"/"+damage, func(t *testing.T) {
-					dir, b, op, record, _ := restoreCandidateFixture(
-						t,
-						boundary,
-					)
+					dir, b, op, record, _ := restoreCandidateFixture(t, boundary)
 					r := *record.Journal.Resource
 					path := filepath.Join(r.RestoreDir, name)
 					if name == "disk.raw" {
@@ -114,24 +84,13 @@ func TestRestoreCandidateDamageBeforeHandoff(t *testing.T) {
 					damageRestoreCandidate(t, path, damage)
 					e := openTest(t, dir, b, false, nil)
 					defer e.Close()
-					if final := awaitStatus(
-						t,
-						e,
-						op.ID,
-					); final.Status != "failed" {
+					if final := awaitStatus(t, e, op.ID); final.Status != "failed" {
 						t.Fatalf("proved candidate damage accepted: %+v", final)
 					}
 					after, err := e.loadOp(context.Background(), op.ID)
 					if err != nil || !after.Journal.RestoreBlocked ||
-						!bytes.Equal(
-							encode(record.Journal.RestoreMaterials),
-							encode(after.Journal.RestoreMaterials),
-						) {
-						t.Fatalf(
-							"proof re-certified or fence missing: %+v %v",
-							after.Journal,
-							err,
-						)
+						!bytes.Equal(encode(record.Journal.RestoreMaterials), encode(after.Journal.RestoreMaterials)) {
+						t.Fatalf("proof re-certified or fence missing: %+v %v", after.Journal, err)
 					}
 				})
 			}
@@ -140,10 +99,7 @@ func TestRestoreCandidateDamageBeforeHandoff(t *testing.T) {
 }
 
 func TestRestoreCandidateHandoffSurvivesSourceDeletion(t *testing.T) {
-	dir, b, op, record, _ := restoreCandidateFixture(
-		t,
-		"restore_resources_ready",
-	)
+	dir, b, op, record, _ := restoreCandidateFixture(t, "restore_resources_ready")
 	e := openTest(t, dir, b, false, func(step string) error {
 		if step == "restore_resources_ready" {
 			return ErrInterrupted
@@ -168,11 +124,7 @@ func TestRestoreCandidateHandoffSurvivesSourceDeletion(t *testing.T) {
 		t.Fatalf("handoff depends on source: %+v", final)
 	}
 	after, err := e.loadOp(context.Background(), op.ID)
-	if err != nil ||
-		!bytes.Equal(
-			encode(record.Journal.RestoreMaterials),
-			encode(after.Journal.RestoreMaterials),
-		) {
+	if err != nil || !bytes.Equal(encode(record.Journal.RestoreMaterials), encode(after.Journal.RestoreMaterials)) {
 		t.Fatalf("handoff proof changed: %v", err)
 	}
 }
@@ -228,11 +180,7 @@ func TestRestoreCandidateRunningDiskIsNotRebuilt(t *testing.T) {
 				lock := e.vmLock(op.VMID)
 				lock.Lock()
 				record.Journal.RestoreMaterials = nil
-				if _, err := e.db.Exec(
-					"UPDATE operations SET body=? WHERE id=?",
-					encode(record),
-					op.ID,
-				); err != nil {
+				if _, err := e.db.Exec("UPDATE operations SET body=? WHERE id=?", encode(record), op.ID); err != nil {
 					t.Fatal(err)
 				}
 				lock.Unlock()
@@ -258,8 +206,7 @@ func TestRestoreCandidateRunningDiskIsNotRebuilt(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if scenario == "unknown-before-proof" ||
-				scenario == "unknown-after-proof" {
+			if scenario == "unknown-before-proof" || scenario == "unknown-after-proof" {
 				b.mu.Lock()
 				b.inspectError = errors.New("unknown candidate identity")
 				b.mu.Unlock()

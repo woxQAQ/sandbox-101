@@ -37,10 +37,7 @@ import (
 // Missing production prerequisites fail the test; no backend/agent is mocked.
 func TestProductionMicroVMAcceptance(t *testing.T) {
 	for _, ns := range []string{"user", "net", "mnt"} {
-		parent := productionRequired(
-			t,
-			"SANDBOX_PRODUCTION_PARENT_"+strings.ToUpper(ns),
-		)
+		parent := productionRequired(t, "SANDBOX_PRODUCTION_PARENT_"+strings.ToUpper(ns))
 		current, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil || current == parent {
 			t.Fatalf(
@@ -53,9 +50,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		}
 	}
 	if os.Geteuid() != 0 {
-		t.Fatal(
-			"namespace root is required for the unchanged production launcher",
-		)
+		t.Fatal("namespace root is required for the unchanged production launcher")
 	}
 	artifacts := productionRequired(t, "SANDBOX_PRODUCTION_ARTIFACTS")
 	materials := productionRequired(t, "SANDBOX_PRODUCTION_MATERIALS")
@@ -74,11 +69,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			),
 		),
 	)
-	t.Logf(
-		"explicit production guest shape: memory=%dMiB; unchanged VMM memory.max=%dMiB",
-		memoryMiB,
-		memoryMiB+128,
-	)
+	t.Logf("explicit production guest shape: memory=%dMiB; unchanged VMM memory.max=%dMiB", memoryMiB, memoryMiB+128)
 	ctx, cancel := context.WithTimeout(context.Background(), 17*time.Minute)
 	defer cancel()
 	// Keep the runtime socket paths below sockaddr_un's 108-byte limit, including
@@ -90,12 +81,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"engined", "sandboxd"} {
-		productionCopy(
-			t,
-			filepath.Join(artifacts, name),
-			"/run/p/bin/"+name,
-			0o755,
-		)
+		productionCopy(t, filepath.Join(artifacts, name), "/run/p/bin/"+name, 0o755)
 	}
 	if err := unix.Mount(
 		"tmpfs",
@@ -144,11 +130,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 					[]byte("1"),
 					0o600,
 				); err != nil {
-					t.Errorf(
-						"kill only owned VMM scope %s: %v",
-						entry.Name(),
-						err,
-					)
+					t.Errorf("kill only owned VMM scope %s: %v", entry.Name(), err)
 				}
 			}
 		}
@@ -175,11 +157,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		}
 		productionArtifact(t, artifacts, "harness-"+name+".txt", data)
 	}
-	deviceCheck := exec.CommandContext(
-		ctx,
-		"/run/p/bin/engined",
-		"--internal-device-check",
-	)
+	deviceCheck := exec.CommandContext(ctx, "/run/p/bin/engined", "--internal-device-check")
 	deviceCheck.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid:    65534,
@@ -201,22 +179,14 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		),
 	)
 	if deviceErr != nil {
-		t.Fatalf(
-			"production dropped-identity KVM/TUN check: %v: %s",
-			deviceErr,
-			deviceOutput,
-		)
+		t.Fatalf("production dropped-identity KVM/TUN check: %v: %s", deviceErr, deviceOutput)
 	}
-	t.Log(
-		"production device check passed after UID/GID65534 and empty supplementary groups",
-	)
+	t.Log("production device check passed after UID/GID65534 and empty supplementary groups")
 	productionArtifact(
 		t,
 		artifacts,
 		"host-policy.json",
-		[]byte(
-			"{\"version\":1,\"storage_quota\":true,\"network_quotas\":true}\n",
-		),
+		[]byte("{\"version\":1,\"storage_quota\":true,\"network_quotas\":true}\n"),
 	)
 	// The private tmpfs has real byte/inode ceilings. The outer fresh netns has
 	// zero external interfaces, bounded nft admission sets and forwarding DROP.
@@ -249,11 +219,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(
-		raw,
-		&index,
-	); err != nil ||
-		len(index.Manifests) != 1 {
+	if err := json.Unmarshal(raw, &index); err != nil || len(index.Manifests) != 1 {
 		t.Fatalf("exactly one OCI manifest required: %v", err)
 	}
 	image := index.Manifests[0].Digest
@@ -298,12 +264,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		"--max-vcpus=8",
 	}
 	productionRetainConsoles(t, artifacts, cgroup)
-	engined := productionStart(
-		t,
-		artifacts,
-		"engined-1",
-		"/run/p/bin/engined",
-		engineArgs...)
+	engined := productionStart(t, artifacts, "engined-1", "/run/p/bin/engined", engineArgs...)
 	t.Cleanup(func() { engined.stop(t) })
 	ec := engineclient.New("/run/p/engine.sock")
 	defer ec.Close()
@@ -403,10 +364,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() {
-			cleanup, stop := context.WithTimeout(
-				context.Background(),
-				time.Minute,
-			)
+			cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 			defer stop()
 			if _, err := client.Change(
 				cleanup,
@@ -418,18 +376,11 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			}
 		}()
 		before, err := ec.GetVM(ctx, claim.Sandbox.VMID)
-		if err != nil || !before.Verified || !before.AgentReady ||
-			before.PID <= 0 {
+		if err != nil || !before.Verified || !before.AgentReady || before.PID <= 0 {
 			t.Fatalf("production VMM not verified/ready: %+v: %v", before, err)
 		}
 		productionVMMProof(t, artifacts, "before", before)
-		identity := productionExec(
-			t,
-			ctx,
-			client,
-			claim.Sandbox.ID,
-			"cat /etc/machine-id",
-		)
+		identity := productionExec(t, ctx, client, claim.Sandbox.ID, "cat /etc/machine-id")
 		conn, err := client.Connect(ctx, claim.Sandbox.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -456,12 +407,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		if err := syscall.Kill(before.PID, 0); err != nil {
 			t.Fatalf("VMM died with daemons: %v", err)
 		}
-		engined = productionStart(
-			t,
-			artifacts,
-			"engined-2",
-			"/run/p/bin/engined",
-			engineArgs...)
+		engined = productionStart(t, artifacts, "engined-2", "/run/p/bin/engined", engineArgs...)
 		productionWait(
 			t,
 			ctx,
@@ -469,42 +415,21 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			func(attempt context.Context) error { _, err := ec.ListVMs(attempt); return err },
 		)
 		after, err := ec.GetVM(ctx, before.ID)
-		if err != nil || !after.Verified || !after.AgentReady ||
-			after.PID != before.PID ||
+		if err != nil || !after.Verified || !after.AgentReady || after.PID != before.PID ||
 			after.StartTime != before.StartTime ||
 			after.Instance != before.Instance {
-			t.Fatalf(
-				"daemon restart did not adopt the exact live VMM: before=%+v after=%+v: %v",
-				before,
-				after,
-				err,
-			)
+			t.Fatalf("daemon restart did not adopt the exact live VMM: before=%+v after=%+v: %v", before, after, err)
 		}
 		productionVMMProof(t, artifacts, "after", after)
-		sandboxdProcess = productionStart(
-			t,
-			artifacts,
-			"sandboxd-2",
-			"/run/p/bin/sandboxd",
-			sandboxdArgs...)
+		sandboxdProcess = productionStart(t, artifacts, "sandboxd-2", "/run/p/bin/sandboxd", sandboxdArgs...)
 		productionWait(
 			t,
 			ctx,
 			sandboxdProcess,
 			func(attempt context.Context) error { _, err := client.List(attempt); return err },
 		)
-		if actual := productionExec(
-			t,
-			ctx,
-			client,
-			claim.Sandbox.ID,
-			"cat /etc/machine-id",
-		); actual != identity {
-			t.Fatalf(
-				"daemon restart changed guest identity: before=%q after=%q",
-				identity,
-				actual,
-			)
+		if actual := productionExec(t, ctx, client, claim.Sandbox.ID, "cat /etc/machine-id"); actual != identity {
+			t.Fatalf("daemon restart changed guest identity: before=%q after=%q", identity, actual)
 		}
 		conn, err = client.Connect(ctx, claim.Sandbox.ID)
 		if err != nil {
@@ -522,11 +447,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 			func(frame *pb.Frame) error { _, err := stdout.Write(frame.Data); return err },
 		)
 		if err != nil || stdout.String() != "alive" {
-			t.Fatalf(
-				"daemon adoption lost the live guest shell: %q: %v",
-				stdout.String(),
-				err,
-			)
+			t.Fatalf("daemon adoption lost the live guest shell: %q: %v", stdout.String(), err)
 		}
 		t.Logf(
 			"SIGKILLed both daemons; adopted PID=%d start=%d instance=%s with unchanged machine-id and live shell state",
@@ -536,9 +457,7 @@ func TestProductionMicroVMAcceptance(t *testing.T) {
 		)
 	})
 	if t.Failed() {
-		t.Fatal(
-			"production launch/adoption failed; full lifecycle remains unproven",
-		)
+		t.Fatal("production launch/adoption failed; full lifecycle remains unproven")
 	}
 	if t.Run("TestMicroVMLifecycle", TestMicroVMLifecycle) {
 		if t.Run("golden-and-warm-provisioning", func(t *testing.T) {
@@ -621,35 +540,17 @@ func productionProvisioningTiers(
 		},
 		Warmup: "printf prepared > /workspace/production-warmup; sync",
 	}
-	built, err := client.PutTemplate(
-		ctx,
-		"production-tier-build",
-		template,
-		true,
-	)
-	if err != nil || built.Template == nil || built.Template.SnapshotID == "" ||
-		built.Template.State != "ready" {
-		t.Fatalf(
-			"real template_build/prepare_template failed: %+v: %v",
-			built.Template,
-			err,
-		)
+	built, err := client.PutTemplate(ctx, "production-tier-build", template, true)
+	if err != nil || built.Template == nil || built.Template.SnapshotID == "" || built.Template.State != "ready" {
+		t.Fatalf("real template_build/prepare_template failed: %+v: %v", built.Template, err)
 	}
 	template = *built.Template
 	var owned []string
 	defer func() {
-		cleanup, cancel := context.WithTimeout(
-			context.Background(),
-			time.Minute,
-		)
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		template.TargetWarm = 0
-		if _, err := client.PutTemplate(
-			cleanup,
-			"production-tier-disable-refill",
-			template,
-			false,
-		); err != nil {
+		if _, err := client.PutTemplate(cleanup, "production-tier-disable-refill", template, false); err != nil {
 			t.Errorf("disable owned warm pool: %v", err)
 		}
 		for _, id := range owned {
@@ -681,10 +582,7 @@ func productionProvisioningTiers(
 	}
 	owned = append(owned, golden.Sandbox.ID)
 	if golden.Sandbox.ProvisionSource != "golden" {
-		t.Fatalf(
-			"expected real golden clone claim, got %q",
-			golden.Sandbox.ProvisionSource,
-		)
+		t.Fatalf("expected real golden clone claim, got %q", golden.Sandbox.ProvisionSource)
 	}
 	if got := productionExec(
 		t,
@@ -695,13 +593,7 @@ func productionProvisioningTiers(
 	); got != "prepared:golden" {
 		t.Fatalf("golden clone lost warmup/activation: %q", got)
 	}
-	goldenIdentity := productionExec(
-		t,
-		ctx,
-		client,
-		golden.Sandbox.ID,
-		"cat /etc/machine-id",
-	)
+	goldenIdentity := productionExec(t, ctx, client, golden.Sandbox.ID, "cat /etc/machine-id")
 	if _, err := client.Change(
 		ctx,
 		golden.Sandbox.ID,
@@ -712,20 +604,12 @@ func productionProvisioningTiers(
 	}
 	owned = nil
 	template.TargetWarm = 1
-	if _, err := client.PutTemplate(
-		ctx,
-		"production-tier-enable-refill",
-		template,
-		false,
-	); err != nil {
+	if _, err := client.PutTemplate(ctx, "production-tier-enable-refill", template, false); err != nil {
 		t.Fatal(err)
 	}
 	// Observe the actual committed ready-pool row read-only; do not infer warm
 	// readiness from a sleep or from an unclaimed but still loading VMM.
-	db, err := sql.Open(
-		"sqlite",
-		"file:/run/p/sandboxd/sandboxd.db?mode=ro&_pragma=busy_timeout(1000)",
-	)
+	db, err := sql.Open("sqlite", "file:/run/p/sandboxd/sandboxd.db?mode=ro&_pragma=busy_timeout(1000)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,8 +618,7 @@ func productionProvisioningTiers(
 	defer cancel()
 	var warmID string
 	for {
-		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM warm WHERE template_id=?", template.ID).
-			Scan(&warmID)
+		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM warm WHERE template_id=?", template.ID).Scan(&warmID)
 		if err == nil {
 			break
 		}
@@ -744,22 +627,13 @@ func productionProvisioningTiers(
 		}
 		select {
 		case <-poolCtx.Done():
-			t.Fatalf(
-				"target_warm=1 never published a ready pool VM: %v",
-				poolCtx.Err(),
-			)
+			t.Fatalf("target_warm=1 never published a ready pool VM: %v", poolCtx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 	before, err := ec.GetVM(ctx, warmID)
-	if err != nil || !before.Verified || !before.AgentReady ||
-		before.NetworkActual ||
-		before.NetworkEnabled {
-		t.Fatalf(
-			"ready pool VMM is not verified/ready/blocked: %+v: %v",
-			before,
-			err,
-		)
+	if err != nil || !before.Verified || !before.AgentReady || before.NetworkActual || before.NetworkEnabled {
+		t.Fatalf("ready pool VMM is not verified/ready/blocked: %+v: %v", before, err)
 	}
 	warm, err := client.Claim(
 		ctx,
@@ -779,9 +653,7 @@ func productionProvisioningTiers(
 	}
 	owned = append(owned, warm.Sandbox.ID)
 	after, err := ec.GetVM(ctx, warm.Sandbox.VMID)
-	if err != nil || warm.Sandbox.ProvisionSource != "warm" ||
-		warm.Sandbox.VMID != warmID ||
-		after.PID != before.PID ||
+	if err != nil || warm.Sandbox.ProvisionSource != "warm" || warm.Sandbox.VMID != warmID || after.PID != before.PID ||
 		after.StartTime != before.StartTime ||
 		after.Instance != before.Instance {
 		t.Fatalf(
@@ -799,23 +671,11 @@ func productionProvisioningTiers(
 		warm.Sandbox.ID,
 		"cat /workspace/production-warmup; printf ':%s' \"$PROVISIONING_TIER\"",
 	); got != "prepared:warm" {
-		t.Fatalf(
-			"warm claim lost template data or activation environment: %q",
-			got,
-		)
+		t.Fatalf("warm claim lost template data or activation environment: %q", got)
 	}
-	warmIdentity := productionExec(
-		t,
-		ctx,
-		client,
-		warm.Sandbox.ID,
-		"cat /etc/machine-id",
-	)
-	if len(strings.TrimSpace(warmIdentity)) != 32 ||
-		warmIdentity == goldenIdentity {
-		t.Fatal(
-			"golden and warm claims did not receive independent guest identities",
-		)
+	warmIdentity := productionExec(t, ctx, client, warm.Sandbox.ID, "cat /etc/machine-id")
+	if len(strings.TrimSpace(warmIdentity)) != 32 || warmIdentity == goldenIdentity {
+		t.Fatal("golden and warm claims did not receive independent guest identities")
 	}
 	productionVMMProof(t, artifacts, "warm", after)
 	proof, err := json.MarshalIndent(
@@ -864,16 +724,8 @@ func productionRetainConsoles(t *testing.T, artifacts, cgroup string) {
 					data, err := io.ReadAll(file)
 					file.Close()
 					if err == nil {
-						name := filepath.Base(
-							filepath.Dir(filepath.Dir(filepath.Dir(path))),
-						) + "-" + filepath.Base(
-							filepath.Dir(path),
-						)
-						_ = os.WriteFile(
-							filepath.Join(artifacts, name+"-console.log"),
-							data,
-							0o600,
-						)
+						name := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) + "-" + filepath.Base(filepath.Dir(path))
+						_ = os.WriteFile(filepath.Join(artifacts, name+"-console.log"), data, 0o600)
 					}
 				}
 				return
@@ -884,19 +736,13 @@ func productionRetainConsoles(t *testing.T, artifacts, cgroup string) {
 						watched[entry.Name()] = true
 						scopes = append(
 							scopes,
-							productionRetainScopeMemory(
-								artifacts,
-								filepath.Join(cgroup, entry.Name()),
-								stop,
-							),
+							productionRetainScopeMemory(artifacts, filepath.Join(cgroup, entry.Name()), stop),
 						)
 					}
 				}
 				// Retain through the backing mount: a FUSE open would create a
 				// .fuse_hidden entry on unlink and interfere with real VM removal.
-				paths, _ := filepath.Glob(
-					"/run/p/backing/vms/*/runs/*/console.log",
-				)
+				paths, _ := filepath.Glob("/run/p/backing/vms/*/runs/*/console.log")
 				for _, path := range paths {
 					if logs[path] != nil {
 						continue
@@ -913,10 +759,7 @@ func productionRetainConsoles(t *testing.T, artifacts, cgroup string) {
 
 // memory.events supports POLLPRI notifications. Retain the last readable counters
 // before sandboxd compensation removes the owned scope, including an OOM kill.
-func productionRetainScopeMemory(
-	artifacts, scope string,
-	stop <-chan struct{},
-) <-chan struct{} {
+func productionRetainScopeMemory(artifacts, scope string, stop <-chan struct{}) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -929,14 +772,7 @@ func productionRetainScopeMemory(
 		defer func() {
 			data, err := json.MarshalIndent(proof, "", "  ")
 			if err == nil {
-				_ = os.WriteFile(
-					filepath.Join(
-						artifacts,
-						filepath.Base(scope)+"-memory.json",
-					),
-					data,
-					0o600,
-				)
+				_ = os.WriteFile(filepath.Join(artifacts, filepath.Base(scope)+"-memory.json"), data, 0o600)
 			}
 		}()
 		for {
@@ -949,9 +785,7 @@ func productionRetainScopeMemory(
 			}
 			proof["memory.events"] = string(data)
 			for _, name := range []string{"memory.max", "memory.current", "memory.peak", "memory.stat"} {
-				if data, err := os.ReadFile(
-					filepath.Join(scope, name),
-				); err == nil {
+				if data, err := os.ReadFile(filepath.Join(scope, name)); err == nil {
 					proof[name] = string(data)
 				}
 			}
@@ -975,21 +809,14 @@ func productionRequired(t *testing.T, name string) string {
 	t.Helper()
 	value := os.Getenv(name)
 	if value == "" {
-		t.Fatalf(
-			"%s is required; use scripts/run-production-acceptance.sh",
-			name,
-		)
+		t.Fatalf("%s is required; use scripts/run-production-acceptance.sh", name)
 	}
 	return value
 }
 
 func productionArtifact(t *testing.T, directory, name string, data []byte) {
 	t.Helper()
-	if err := os.WriteFile(
-		filepath.Join(directory, name),
-		data,
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, name), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1018,17 +845,9 @@ type productionProcess struct {
 	stopped bool
 }
 
-func productionStart(
-	t *testing.T,
-	artifacts, name, binary string,
-	args ...string,
-) *productionProcess {
+func productionStart(t *testing.T, artifacts, name, binary string, args ...string) *productionProcess {
 	t.Helper()
-	log, err := os.OpenFile(
-		filepath.Join(artifacts, name+".log"),
-		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
-		0o600,
-	)
+	log, err := os.OpenFile(filepath.Join(artifacts, name+".log"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1059,12 +878,7 @@ func (p *productionProcess) stop(t *testing.T) {
 	}
 }
 
-func productionWait(
-	t *testing.T,
-	ctx context.Context,
-	process *productionProcess,
-	ready func(context.Context) error,
-) {
+func productionWait(t *testing.T, ctx context.Context, process *productionProcess, ready func(context.Context) error) {
 	t.Helper()
 	deadline := time.NewTimer(20 * time.Second)
 	defer deadline.Stop()
@@ -1079,11 +893,7 @@ func productionWait(
 		select {
 		case err := <-process.done:
 			process.stopped = true
-			t.Fatalf(
-				"real daemon exited before readiness: %v (last readiness error: %v)",
-				err,
-				last,
-			)
+			t.Fatalf("real daemon exited before readiness: %v (last readiness error: %v)", err, last)
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		case <-deadline.C:
@@ -1093,12 +903,7 @@ func productionWait(
 	}
 }
 
-func productionExec(
-	t *testing.T,
-	ctx context.Context,
-	client *sdk.Client,
-	id, command string,
-) string {
+func productionExec(t *testing.T, ctx context.Context, client *sdk.Client, id, command string) string {
 	t.Helper()
 	conn, err := client.Connect(ctx, id)
 	if err != nil {
@@ -1108,12 +913,7 @@ func productionExec(
 	var stdout, stderr bytes.Buffer
 	code, err := conn.Exec(ctx, command, &stdout, &stderr)
 	if err != nil || code != 0 {
-		t.Fatalf(
-			"real guest exec: %v code=%d stderr=%s",
-			err,
-			code,
-			stderr.String(),
-		)
+		t.Fatalf("real guest exec: %v code=%d stderr=%s", err, code, stderr.String())
 	}
 	return stdout.String()
 }
@@ -1161,29 +961,14 @@ func productionVMMProof(t *testing.T, artifacts, stage string, vm api.VM) {
 		}
 		actual, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/%s", vm.PID, name))
 		if err != nil || actual == parent {
-			t.Fatalf(
-				"VMM %s namespace was not isolated: harness=%s VMM=%s: %v",
-				name,
-				parent,
-				actual,
-				err,
-			)
+			t.Fatalf("VMM %s namespace was not isolated: harness=%s VMM=%s: %v", name, parent, actual, err)
 		}
 		fmt.Fprintf(&namespaces, "%s harness=%s VMM=%s\n", name, parent, actual)
 	}
-	productionArtifact(
-		t,
-		artifacts,
-		"vmm-"+stage+"-namespaces.txt",
-		[]byte(namespaces.String()),
-	)
+	productionArtifact(t, artifacts, "vmm-"+stage+"-namespaces.txt", []byte(namespaces.String()))
 	root := fmt.Sprintf("/proc/%d/root", vm.PID)
 	for _, forbidden := range []string{".oldroot", "home", "nix/store", "etc/shadow"} {
-		if _, err := os.Lstat(
-			filepath.Join(root, forbidden),
-		); !os.IsNotExist(
-			err,
-		) {
+		if _, err := os.Lstat(filepath.Join(root, forbidden)); !os.IsNotExist(err) {
 			t.Fatalf("pivot_root leaked %s: %v", forbidden, err)
 		}
 	}

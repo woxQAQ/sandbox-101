@@ -144,10 +144,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		procs, x := os.ReadFile(filepath.Join(b.scope(r), "cgroup.procs"))
 		if x == nil && len(strings.TrimSpace(string(procs))) > 0 {
-			return p, false, api.Fail(
-				api.ManualRecovery,
-				"process exists in scope without identity receipt",
-			)
+			return p, false, api.Fail(api.ManualRecovery, "process exists in scope without identity receipt")
 		}
 		if x != nil && !os.IsNotExist(x) {
 			return p, false, x
@@ -158,10 +155,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if p.Instance != r.Instance {
-		return p, false, api.Fail(
-			api.ManualRecovery,
-			"process receipt belongs to another instance",
-		)
+		return p, false, api.Fail(api.ManualRecovery, "process receipt belongs to another instance")
 	}
 	if p.BootID != bootID() {
 		return p, false, nil
@@ -174,10 +168,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if start != p.StartTime {
-		return p, false, api.Fail(
-			api.ManualRecovery,
-			"PID reused: refusing to adopt or signal",
-		)
+		return p, false, api.Fail(api.ManualRecovery, "PID reused: refusing to adopt or signal")
 	}
 	if state == 'Z' || state == 'X' {
 		return p, false, nil
@@ -191,20 +182,14 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if !os.SameFile(src, actual) {
-		return p, false, api.Fail(
-			api.ManualRecovery,
-			"VMM executable identity mismatch or launcher did not finish",
-		)
+		return p, false, api.Fail(api.ManualRecovery, "VMM executable identity mismatch or launcher did not finish")
 	}
 	cgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", p.PID))
 	if err != nil {
 		return p, false, err
 	}
 	if !strings.Contains(string(cgroup), "/"+filepath.Base(b.scope(r))+"\n") {
-		return p, false, api.Fail(
-			api.ManualRecovery,
-			"VMM cgroup identity mismatch",
-		)
+		return p, false, api.Fail(api.ManualRecovery, "VMM cgroup identity mismatch")
 	}
 	if err = b.watch(p.PID); err != nil {
 		return p, false, err
@@ -212,29 +197,19 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 	return p, true, nil
 }
 
-func (b *CloudHypervisor) Inspect(
-	ctx context.Context,
-	r Resource,
-) (Observation, error) {
+func (b *CloudHypervisor) Inspect(ctx context.Context, r Resource) (Observation, error) {
 	entries, x := os.ReadDir(b.opts.CgroupRoot)
 	if x != nil && !os.IsNotExist(x) {
 		return Observation{}, x
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), r.VMID+"-") &&
-			entry.Name() != filepath.Base(b.scope(r)) {
-			procs, x := os.ReadFile(
-				filepath.Join(b.opts.CgroupRoot, entry.Name(), "cgroup.procs"),
-			)
+		if strings.HasPrefix(entry.Name(), r.VMID+"-") && entry.Name() != filepath.Base(b.scope(r)) {
+			procs, x := os.ReadFile(filepath.Join(b.opts.CgroupRoot, entry.Name(), "cgroup.procs"))
 			if x != nil {
 				return Observation{}, x
 			}
 			if strings.TrimSpace(string(procs)) != "" {
-				return Observation{}, api.Fail(
-					api.ManualRecovery,
-					"unrecorded live instance scope %s",
-					entry.Name(),
-				)
+				return Observation{}, api.Fail(api.ManualRecovery, "unrecorded live instance scope %s", entry.Name())
 			}
 		}
 	}
@@ -258,11 +233,7 @@ func (b *CloudHypervisor) Inspect(
 		if errors.As(err, &status) && status.Status == 404 {
 			return obs, nil
 		}
-		return obs, api.Fail(
-			api.ManualRecovery,
-			"live VMM API unreachable: %v",
-			err,
-		)
+		return obs, api.Fail(api.ManualRecovery, "live VMM API unreachable: %v", err)
 	}
 	obs.Configured = true
 	var info struct {
@@ -286,10 +257,7 @@ func (b *CloudHypervisor) setupScope(r Resource, loading bool) error {
 		cpu = "max 100000"
 	}
 	values := map[string]string{
-		"memory.max": strconv.FormatInt(
-			(r.Config.Shape.MemoryMiB+128)<<20,
-			10,
-		),
+		"memory.max":      strconv.FormatInt((r.Config.Shape.MemoryMiB+128)<<20, 10),
 		"memory.swap.max": "0",
 		"pids.max":        "256",
 		"cpu.max":         cpu,
@@ -298,11 +266,7 @@ func (b *CloudHypervisor) setupScope(r Resource, loading bool) error {
 		"io.max":          b.opts.IOMax,
 	}
 	for name, value := range values {
-		if err := os.WriteFile(
-			filepath.Join(path, name),
-			[]byte(value),
-			0o600,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(path, name), []byte(value), 0o600); err != nil {
 			return api.Fail(api.Incompatible, "cgroup %s: %v", name, err)
 		}
 	}
@@ -317,11 +281,7 @@ func (b *CloudHypervisor) arm(r Resource) error {
 	)
 }
 
-func (b *CloudHypervisor) Launch(
-	ctx context.Context,
-	r Resource,
-	restore bool,
-) error {
+func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) error {
 	if _, err := os.Lstat(filepath.Join(r.RunDir, "process.json")); err == nil {
 		return api.Fail(
 			api.Unknown,
@@ -339,11 +299,7 @@ func (b *CloudHypervisor) Launch(
 	if err := os.MkdirAll(filepath.Join(r.RunDir, "io"), 0o700); err != nil {
 		return err
 	}
-	if err := os.Chown(
-		filepath.Join(r.RunDir, "io"),
-		int(b.opts.UID),
-		int(b.opts.GID),
-	); err != nil {
+	if err := os.Chown(filepath.Join(r.RunDir, "io"), int(b.opts.UID), int(b.opts.GID)); err != nil {
 		return err
 	}
 	for _, path := range []string{r.Disk} {
@@ -375,11 +331,7 @@ func (b *CloudHypervisor) Launch(
 		return err
 	}
 	defer func() { _ = scope.Close() }()
-	log, err := os.OpenFile(
-		filepath.Join(r.RunDir, "console.log"),
-		os.O_CREATE|os.O_APPEND|os.O_WRONLY,
-		0o600,
-	)
+	log, err := os.OpenFile(filepath.Join(r.RunDir, "console.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -396,11 +348,7 @@ func (b *CloudHypervisor) Launch(
 		Pdeathsig:   0,
 	}
 	if err = cmd.Start(); err != nil {
-		return api.Fail(
-			api.Incompatible,
-			"isolated CLONE_INTO_CGROUP launcher failed: %v",
-			err,
-		)
+		return api.Fail(api.Incompatible, "isolated CLONE_INTO_CGROUP launcher failed: %v", err)
 	}
 	// Wait only reaps this process. It neither forwards signals nor supervises it.
 	go func() { _ = cmd.Wait() }()
@@ -413,10 +361,7 @@ func (b *CloudHypervisor) Launch(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return api.Fail(
-				api.ManualRecovery,
-				"launcher did not publish a usable API; preserve scope and console.log",
-			)
+			return api.Fail(api.ManualRecovery, "launcher did not publish a usable API; preserve scope and console.log")
 		case <-tick.C:
 			if _, alive, x := b.process(r); x == nil && alive {
 				if _, x = b.api(ctx, r, "GET", "vmm.ping", nil, nil); x == nil {
@@ -448,13 +393,7 @@ func (b *CloudHypervisor) Stop(ctx context.Context, r Resource) error {
 		return api.Fail(api.ManualRecovery, "process changed before signal")
 	}
 	// SIGKILL via pidfd has no PID-reuse race and also works for namespace PID 1.
-	if err = unix.PidfdSendSignal(
-		fd,
-		unix.SIGKILL,
-		nil,
-		0,
-	); err != nil &&
-		!errors.Is(err, unix.ESRCH) {
+	if err = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 		return err
 	}
 	poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
@@ -502,10 +441,7 @@ func (b *CloudHypervisor) Remove(ctx context.Context, r Resource) error {
 				return x
 			}
 			if len(strings.TrimSpace(string(procs))) > 0 {
-				return api.Fail(
-					api.ManualRecovery,
-					"historical VMM scope still populated",
-				)
+				return api.Fail(api.ManualRecovery, "historical VMM scope still populated")
 			}
 			if x = os.Remove(p); x != nil {
 				return x

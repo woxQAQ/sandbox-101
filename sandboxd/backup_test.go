@@ -14,12 +14,7 @@ import (
 func TestSnapshotOwnershipBackupRoundTrip(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	source := claimTest(t, s, p, "source", nil)
-	cp, err := s.Execute(
-		s.ctx,
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: source.Sandbox.ID},
-	)
+	cp, err := s.Execute(s.ctx, p, "checkpoint", Command{Action: "checkpoint", SandboxID: source.Sandbox.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,10 +49,7 @@ func TestSnapshotOwnershipBackupRoundTrip(t *testing.T) {
 	if _, err = RestoreStateBackup(restored, destination); err != nil {
 		t.Fatal(err)
 	}
-	if err = AcknowledgeStateRecovery(
-		restored,
-		"Reviewed test engine inventory and ownership receipts",
-	); err != nil {
+	if err = AcknowledgeStateRecovery(restored, "Reviewed test engine inventory and ownership receipts"); err != nil {
 		t.Fatal(err)
 	}
 	opts := s.opts
@@ -103,10 +95,7 @@ func TestSnapshotOwnershipBackupRoundTrip(t *testing.T) {
 				SnapshotID: cp.Checkpoint.SnapshotID,
 			},
 		},
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	); !isCode(err, ErrNotFound) {
 		t.Fatal("foreign capture accepted", err)
 	}
 }
@@ -117,9 +106,7 @@ func TestLegacySnapshotOwnershipStateRequiresReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.db.Exec(
-		"UPDATE version SET version=1; DROP TABLE snapshot_owners",
-	); err != nil {
+	if _, err = st.db.Exec("UPDATE version SET version=1; DROP TABLE snapshot_owners"); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.close(); err != nil {
@@ -133,10 +120,7 @@ func TestLegacySnapshotOwnershipStateRequiresReview(t *testing.T) {
 			Agent:     &fakeAgent{},
 			RootToken: "root-secret",
 		},
-	); !isCode(
-		err,
-		ErrIncompatible,
-	) {
+	); !isCode(err, ErrIncompatible) {
 		t.Fatal("legacy state accepted", err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(dir, "sandboxd.db"))
@@ -145,29 +129,20 @@ func TestLegacySnapshotOwnershipStateRequiresReview(t *testing.T) {
 	}
 	defer db.Close()
 	var version, owners int
-	if err = db.QueryRow("SELECT version FROM version").
-		Scan(&version); err != nil {
+	if err = db.QueryRow("SELECT version FROM version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='snapshot_owners'").
-		Scan(&owners); err != nil {
+	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='snapshot_owners'").Scan(&owners); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 || owners != 0 || f.count("delete") != 0 ||
-		f.count("delete_snapshot") != 0 {
+	if version != 1 || owners != 0 || f.count("delete") != 0 || f.count("delete_snapshot") != 0 {
 		t.Fatal("legacy state mutated", version, owners)
 	}
 }
 
 func TestSandboxdBackupRestorationRequiresReview(t *testing.T) {
 	s, _, _, p := fixture(t)
-	r := claimTest(
-		t,
-		s,
-		p,
-		"claim",
-		map[string]EnvVar{"VISIBLE": {Value: "preserved"}},
-	)
+	r := claimTest(t, s, p, "claim", map[string]EnvVar{"VISIBLE": {Value: "preserved"}})
 	destination := filepath.Join(t.TempDir(), "backup")
 	point, err := s.Backup(context.Background(), destination)
 	if err != nil {
@@ -248,10 +223,7 @@ func TestBackupPreservesConfigurationFence(t *testing.T) {
 	if _, err = RestoreStateBackup(restored, destination); err != nil {
 		t.Fatal(err)
 	}
-	if err = AcknowledgeStateRecovery(
-		restored,
-		"Reviewed test engine inventory and ownership receipts",
-	); err != nil {
+	if err = AcknowledgeStateRecovery(restored, "Reviewed test engine inventory and ownership receipts"); err != nil {
 		t.Fatal(err)
 	}
 	opts := s.opts
@@ -267,10 +239,7 @@ func TestBackupPreservesConfigurationFence(t *testing.T) {
 	requireFence(t, reopened, r.Sandbox.ID, res.OperationID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err = reopened.DataReady(ctx, p, r.Sandbox.ID); !isCode(
-		err,
-		ErrConflict,
-	) {
+	if _, err = reopened.DataReady(ctx, p, r.Sandbox.ID); !isCode(err, ErrConflict) {
 		t.Fatalf("restored fence admitted to data: %v", err)
 	}
 	agent.mu.Lock()
@@ -294,9 +263,7 @@ func TestLegacySchemaTwoRequiresReviewBeforeDDL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.db.Exec(
-		"UPDATE version SET version=2; DROP TABLE configuration_fences",
-	); err != nil {
+	if _, err = st.db.Exec("UPDATE version SET version=2; DROP TABLE configuration_fences"); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.close(); err != nil {
@@ -311,8 +278,7 @@ func TestLegacySchemaTwoRequiresReviewBeforeDDL(t *testing.T) {
 	}
 	defer db.Close()
 	var version, fences int
-	if err = db.QueryRow("SELECT version FROM version").
-		Scan(&version); err != nil {
+	if err = db.QueryRow("SELECT version FROM version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='configuration_fences'").

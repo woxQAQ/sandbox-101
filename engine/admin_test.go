@@ -14,25 +14,15 @@ func TestRestoreBackupRefusesSQLiteSidecars(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, name)
-			if err := os.WriteFile(
-				path,
-				[]byte("retained evidence"),
-				0o600,
-			); err != nil {
+			if err := os.WriteFile(path, []byte("retained evidence"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			err := RestoreBackup(dir, filepath.Join(dir, "absent-backup"))
 			a, ok := err.(*api.Error)
 			if !ok || a.Code != api.Conflict {
-				t.Fatalf(
-					"expected sidecar conflict before inspecting backup, got %v",
-					err,
-				)
+				t.Fatalf("expected sidecar conflict before inspecting backup, got %v", err)
 			}
-			if data, err := os.ReadFile(
-				path,
-			); err != nil ||
-				string(data) != "retained evidence" {
+			if data, err := os.ReadFile(path); err != nil || string(data) != "retained evidence" {
 				t.Fatalf("sidecar changed: %q %v", data, err)
 			}
 		})
@@ -54,10 +44,7 @@ func TestBackupRecoveryRequiresExplicitReview(t *testing.T) {
 	}
 	e.Close()
 	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err = os.Remove(
-			filepath.Join(dir, "metadata.db") + suffix,
-		); err != nil &&
-			!os.IsNotExist(err) {
+		if err = os.Remove(filepath.Join(dir, "metadata.db") + suffix); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
 	}
@@ -68,10 +55,7 @@ func TestBackupRecoveryRequiresExplicitReview(t *testing.T) {
 		other.Close()
 		t.Fatal("restored backup automatically trusted")
 	}
-	if err = AcknowledgeRecovery(
-		dir,
-		"reviewed running scopes and retained files",
-	); err != nil {
+	if err = AcknowledgeRecovery(dir, "reviewed running scopes and retained files"); err != nil {
 		t.Fatal(err)
 	}
 	e = openTest(t, dir, b, false, nil)

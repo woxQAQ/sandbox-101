@@ -27,10 +27,7 @@ func microVMMemoryMiB(t *testing.T) int64 {
 	if value := os.Getenv("SANDBOX_E2E_MEMORY_MIB"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed < 128 || parsed > 1<<24 {
-			t.Fatalf(
-				"SANDBOX_E2E_MEMORY_MIB must be a valid production shape (128..16777216): %q",
-				value,
-			)
+			t.Fatalf("SANDBOX_E2E_MEMORY_MIB must be a valid production shape (128..16777216): %q", value)
 		}
 		memory = parsed
 	}
@@ -40,15 +37,7 @@ func microVMMemoryMiB(t *testing.T) int64 {
 // Run only against an isolated, provisioned host with the exact CH/kernel/image
 // contract. Missing setup fails explicitly; a skipped test is not VM validation.
 func TestMicroVMLifecycle(t *testing.T) {
-	endpoint, tokenPath, image, socket := os.Getenv(
-		"SANDBOX_E2E_ENDPOINT",
-	), os.Getenv(
-		"SANDBOX_E2E_TOKEN_FILE",
-	), os.Getenv(
-		"SANDBOX_E2E_IMAGE_DIGEST",
-	), os.Getenv(
-		"SANDBOX_E2E_ENGINE_SOCKET",
-	)
+	endpoint, tokenPath, image, socket := os.Getenv("SANDBOX_E2E_ENDPOINT"), os.Getenv("SANDBOX_E2E_TOKEN_FILE"), os.Getenv("SANDBOX_E2E_IMAGE_DIGEST"), os.Getenv("SANDBOX_E2E_ENGINE_SOCKET")
 	if endpoint == "" || tokenPath == "" || image == "" || socket == "" {
 		t.Fatal(
 			"set SANDBOX_E2E_ENDPOINT, SANDBOX_E2E_TOKEN_FILE, SANDBOX_E2E_IMAGE_DIGEST and SANDBOX_E2E_ENGINE_SOCKET for an isolated privileged host",
@@ -146,12 +135,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Close()
-	checkpoint, err := client.Change(
-		ctx,
-		source.ID,
-		prefix+"-checkpoint",
-		sandboxd.Command{Action: "checkpoint"},
-	)
+	checkpoint, err := client.Change(ctx, source.ID, prefix+"-checkpoint", sandboxd.Command{Action: "checkpoint"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,12 +175,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 			t.Fatal("branch environment was not replaced")
 		}
 	}
-	paused, err := client.Change(
-		ctx,
-		source.ID,
-		prefix+"-pause",
-		sandboxd.Command{Action: "pause"},
-	)
+	paused, err := client.Change(ctx, source.ID, prefix+"-pause", sandboxd.Command{Action: "pause"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,10 +206,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if identity := run(
-		source.ID,
-		"cat /etc/machine-id",
-	); identity != originalIdentity {
+	if identity := run(source.ID, "cat /etc/machine-id"); identity != originalIdentity {
 		t.Fatal("auto-resume changed guest identity")
 	}
 	conn, err = client.Connect(ctx, source.ID)
@@ -267,12 +243,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 	if run(source.ID, "cat /etc/machine-id") != originalIdentity {
 		t.Fatal("rollback changed guest identity")
 	}
-	if _, err = client.Change(
-		ctx,
-		source.ID,
-		prefix+"-pause-again",
-		sandboxd.Command{Action: "pause"},
-	); err != nil {
+	if _, err = client.Change(ctx, source.ID, prefix+"-pause-again", sandboxd.Command{Action: "pause"}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := engine.ListVMs(ctx)

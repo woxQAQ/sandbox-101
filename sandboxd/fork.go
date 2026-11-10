@@ -53,22 +53,14 @@ func (s *Service) fork(o *Operation) error {
 				o.SnapshotID = snap.SnapshotID
 				o.OwnedSnapshot = true
 			default:
-				return s.rollbackFork(
-					o,
-					Fail(ErrConflict, "source is not forkable"),
-				)
+				return s.rollbackFork(o, Fail(ErrConflict, "source is not forkable"))
 			}
 		}
 		if err := s.saveOperationReference(*o); err != nil {
 			return err
 		}
 	}
-	if err := requireSnapshotOwner(
-		s.ctx,
-		s.store.db,
-		o.SnapshotID,
-		o.ChargeTenantID,
-	); err != nil {
+	if err := requireSnapshotOwner(s.ctx, s.store.db, o.SnapshotID, o.ChargeTenantID); err != nil {
 		return s.rollbackFork(o, err)
 	}
 	type branchResult struct {
@@ -88,11 +80,7 @@ func (s *Service) fork(o *Operation) error {
 			}
 			if err == nil && b.State != "running" {
 				if b.VMID == "" {
-					vm, e := s.engine(
-						*o,
-						"fork-clone:"+id,
-						api.Request{Action: "clone", SnapshotID: o.SnapshotID},
-					)
+					vm, e := s.engine(*o, "fork-clone:"+id, api.Request{Action: "clone", SnapshotID: o.SnapshotID})
 					b.VMID = vm.VMID
 					if saveErr := s.saveSandboxReference(b); saveErr != nil {
 						err = saveErr

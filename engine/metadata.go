@@ -64,8 +64,7 @@ func encode(v any) []byte {
 func (e *Engine) loadVM(ctx context.Context, id string) (vmRecord, error) {
 	var v vmRecord
 	var b []byte
-	err := e.db.QueryRowContext(ctx, "SELECT body FROM vms WHERE id=?", id).
-		Scan(&b)
+	err := e.db.QueryRowContext(ctx, "SELECT body FROM vms WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, api.Fail(api.NotFound, "VM %s not found", id)
 	}
@@ -83,8 +82,7 @@ func (e *Engine) saveVM(v vmRecord) error {
 func (e *Engine) loadOp(ctx context.Context, id string) (opRecord, error) {
 	var o opRecord
 	var b []byte
-	err := e.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE id=?", id).
-		Scan(&b)
+	err := e.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, api.Fail(api.NotFound, "operation %s not found", id)
 	}
@@ -109,14 +107,10 @@ func (e *Engine) saveOp(o *opRecord, step string) error {
 	return err
 }
 
-func (e *Engine) loadSnapshot(
-	ctx context.Context,
-	id string,
-) (snapshotRecord, error) {
+func (e *Engine) loadSnapshot(ctx context.Context, id string) (snapshotRecord, error) {
 	var s snapshotRecord
 	var b []byte
-	err := e.db.QueryRowContext(ctx, "SELECT body FROM snapshots WHERE id=?", id).
-		Scan(&b)
+	err := e.db.QueryRowContext(ctx, "SELECT body FROM snapshots WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, api.Fail(api.NotFound, "snapshot %s not found", id)
 	}
@@ -127,11 +121,7 @@ func (e *Engine) loadSnapshot(
 }
 
 func (e *Engine) saveSnapshot(s snapshotRecord) error {
-	_, err := e.db.Exec(
-		"UPDATE snapshots SET body=? WHERE id=?",
-		encode(s),
-		s.Snapshot.ID,
-	)
+	_, err := e.db.Exec("UPDATE snapshots SET body=? WHERE id=?", encode(s), s.Snapshot.ID)
 	return err
 }
 

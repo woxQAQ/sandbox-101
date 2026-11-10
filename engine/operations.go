@@ -40,10 +40,7 @@ func (e *Engine) execute(id string) {
 			} else if want := o.Operation.Request.ExpectedInstance; want != "" && want != v.VM.Instance && !ownsInstanceCandidate(o, v) {
 				err = api.Fail(api.Conflict, "running instance changed")
 			} else if action := o.Operation.Request.Action; (action == "network" || action == "network_policy") && (o.Operation.Request.ExpectedInstance == "" || v.Resource.Instance != v.VM.Instance) {
-				err = api.Fail(
-					api.Conflict,
-					"network operation lacks a matching resource instance",
-				)
+				err = api.Fail(api.Conflict, "network operation lacks a matching resource instance")
 			} else {
 				err = e.perform(&o, &v)
 			}
@@ -51,8 +48,7 @@ func (e *Engine) execute(id string) {
 			// The cleanup transaction can commit before the delete response does.
 			// Only the original restore's durable cleanup receipt proves success.
 			blocked, x := e.loadOp(e.ctx, o.Journal.BlockedRestoreID)
-			if x == nil && blocked.Operation.VMID == o.Operation.VMID &&
-				blocked.Operation.Status == "failed" &&
+			if x == nil && blocked.Operation.VMID == o.Operation.VMID && blocked.Operation.Status == "failed" &&
 				blocked.Journal.RestoreBlocked &&
 				blocked.Journal.RestoreCleaned &&
 				!blocked.Journal.Lease {
@@ -75,8 +71,7 @@ func ownsInstanceCandidate(o opRecord, v vmRecord) bool {
 		return false
 	}
 	r := o.Journal.Resource
-	return r != nil && r.Instance != "" &&
-		v.VM.OperationID == o.Operation.ID &&
+	return r != nil && r.Instance != "" && v.VM.OperationID == o.Operation.ID &&
 		o.Operation.VMID == v.VM.ID && o.Operation.Request.VMID == v.VM.ID &&
 		r.VMID == v.VM.ID && v.VM.Instance == r.Instance &&
 		reflect.DeepEqual(v.Resource, *r)
@@ -134,10 +129,7 @@ func (e *Engine) perform(o *opRecord, v *vmRecord) error {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if _, err = tx.Exec(
-			"DELETE FROM backing WHERE vm=?",
-			v.VM.ID,
-		); err != nil {
+		if _, err = tx.Exec("DELETE FROM backing WHERE vm=?", v.VM.ID); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(

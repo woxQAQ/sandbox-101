@@ -41,12 +41,7 @@ func TestSandboxTokenCanPollOwnLeaseOperationsHTTP(t *testing.T) {
 		}
 		own := get("/v1/operations/"+o.ID, token)
 		if own.Code != 200 {
-			t.Fatalf(
-				"%s polling failed: %d %s",
-				action,
-				own.Code,
-				own.Body.String(),
-			)
+			t.Fatalf("%s polling failed: %d %s", action, own.Code, own.Body.String())
 		}
 		var got Operation
 		if err = json.Unmarshal(own.Body.Bytes(), &got); err != nil {
@@ -57,27 +52,17 @@ func TestSandboxTokenCanPollOwnLeaseOperationsHTTP(t *testing.T) {
 		}
 		foreign := get("/v1/operations/"+o.ID, other.Tokens[other.Sandbox.ID])
 		missing := get("/v1/operations/missing", token)
-		if foreign.Code != 404 || missing.Code != 404 ||
-			foreign.Body.String() != missing.Body.String() {
+		if foreign.Code != 404 || missing.Code != 404 || foreign.Body.String() != missing.Body.String() {
 			t.Fatal("foreign lease operation disclosed")
 		}
 	}
 	if got := get("/v1/sandboxes/"+sp.SandboxID, token); got.Code != 404 {
 		t.Fatal("terminated credential accessed sandbox", got.Code)
 	}
-	if got := get(
-		"/v1/operations/"+source.OperationID,
-		token,
-	); got.Code != 404 {
+	if got := get("/v1/operations/"+source.OperationID, token); got.Code != 404 {
 		t.Fatal("terminated credential read claim", got.Code)
 	}
-	if _, err = s.Authenticate(
-		context.Background(),
-		token,
-	); !isCode(
-		err,
-		ErrNotFound,
-	) {
+	if _, err = s.Authenticate(context.Background(), token); !isCode(err, ErrNotFound) {
 		t.Fatal("ordinary authentication allowed terminated credential", err)
 	}
 }
@@ -113,11 +98,7 @@ func TestRootCapturesPreserveSourceTenant(t *testing.T) {
 				w := httptest.NewRecorder()
 				s.Handler().ServeHTTP(w, req)
 				if w.Code != 200 {
-					t.Fatalf(
-						"root management failed: status=%d body=%s",
-						w.Code,
-						w.Body.String(),
-					)
+					t.Fatalf("root management failed: status=%d body=%s", w.Code, w.Body.String())
 				}
 				var result Result
 				if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
@@ -133,11 +114,7 @@ func TestRootCapturesPreserveSourceTenant(t *testing.T) {
 					t.Fatal(err)
 				}
 				if owner != alice.TenantID {
-					t.Fatalf(
-						"root capture changed owner: got=%s want=%s",
-						owner,
-						alice.TenantID,
-					)
+					t.Fatalf("root capture changed owner: got=%s want=%s", owner, alice.TenantID)
 				}
 				if _, err := s.Execute(
 					context.Background(),
@@ -151,10 +128,7 @@ func TestRootCapturesPreserveSourceTenant(t *testing.T) {
 							Shape:      source.Sandbox.Shape,
 						},
 					},
-				); !isCode(
-					err,
-					ErrNotFound,
-				) {
+				); !isCode(err, ErrNotFound) {
 					t.Fatal("Bob imported Alice capture", err)
 				}
 				if action == "checkpoint" {
@@ -216,8 +190,7 @@ func TestHTTPRoutesAndAuthentication(t *testing.T) {
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
-			if tc.path != "/metrics" &&
-				w.Header().Get("Cache-Control") != "no-store" {
+			if tc.path != "/metrics" && w.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("missing cache protection: %v", w.Header())
 			}
 		})
@@ -231,9 +204,7 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 		r := httptest.NewRequest(
 			http.MethodPost,
 			"/v1/claim",
-			strings.NewReader(
-				`{"template_id":"python","policy":{"mode":"none"}}`,
-			),
+			strings.NewReader(`{"template_id":"python","policy":{"mode":"none"}}`),
 		)
 		r.Header.Set("Authorization", "Bearer alice-token")
 		r.Header.Set("Idempotency-Key", "http-claim")
@@ -243,20 +214,10 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 		return w
 	}
 	first := claim("respond-async")
-	if first.Code != http.StatusAccepted ||
-		!strings.HasPrefix(first.Header().Get("Location"), "/v1/operations/") {
-		t.Fatalf(
-			"asynchronous claim: %d %v %s",
-			first.Code,
-			first.Header(),
-			first.Body.String(),
-		)
+	if first.Code != http.StatusAccepted || !strings.HasPrefix(first.Header().Get("Location"), "/v1/operations/") {
+		t.Fatalf("asynchronous claim: %d %v %s", first.Code, first.Header(), first.Body.String())
 	}
-	r := httptest.NewRequest(
-		http.MethodGet,
-		first.Header().Get("Location"),
-		nil,
-	)
+	r := httptest.NewRequest(http.MethodGet, first.Header().Get("Location"), nil)
 	r.Header.Set("Authorization", "Bearer alice-token")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -266,31 +227,18 @@ func TestHTTPClaimIdempotencyAndOperationRoute(t *testing.T) {
 	var results [2]Result
 	for i := range results {
 		w := claim("")
-		if err := json.Unmarshal(
-			w.Body.Bytes(),
-			&results[i],
-		); err != nil || w.Code != http.StatusOK ||
-			results[i].Sandbox == nil {
+		if err := json.Unmarshal(w.Body.Bytes(), &results[i]); err != nil || w.Code != http.StatusOK || results[i].Sandbox == nil {
 			t.Fatalf("claim: %d %s decode=%v", w.Code, w.Body.String(), err)
 		}
 	}
-	if results[0].Sandbox.ID != results[1].Sandbox.ID ||
-		f.count("create") != 1 {
-		t.Fatalf(
-			"claim replay created a new sandbox: %+v creations=%d",
-			results,
-			f.count("create"),
-		)
+	if results[0].Sandbox.ID != results[1].Sandbox.ID || f.count("create") != 1 {
+		t.Fatalf("claim replay created a new sandbox: %+v creations=%d", results, f.count("create"))
 	}
 }
 
 func TestHTTPUpgradeRejectsHTTP2BeforeResuming(t *testing.T) {
 	s, f, _, _ := fixture(t)
-	r := httptest.NewRequest(
-		http.MethodGet,
-		"/v1/sandboxes/missing/connect",
-		nil,
-	)
+	r := httptest.NewRequest(http.MethodGet, "/v1/sandboxes/missing/connect", nil)
 	r.Proto, r.ProtoMajor, r.ProtoMinor = "HTTP/2.0", 2, 0
 	r.Header.Set("Authorization", "Bearer alice-token")
 	r.Header.Set("Connection", "Upgrade")
@@ -303,13 +251,7 @@ func TestHTTPUpgradeRejectsHTTP2BeforeResuming(t *testing.T) {
 		&result,
 	); err != nil || w.Code != http.StatusUnprocessableEntity || result.Code != ErrIncompatible ||
 		f.count("clone") != 0 {
-		t.Fatalf(
-			"status=%d result=%+v clones=%d decode=%v",
-			w.Code,
-			result,
-			f.count("clone"),
-			err,
-		)
+		t.Fatalf("status=%d result=%+v clones=%d decode=%v", w.Code, result, f.count("clone"), err)
 	}
 }
 
@@ -322,11 +264,7 @@ func TestHTTPRejectsInvalidJSONBeforeMutation(t *testing.T) {
 		`{"template_id":`,
 		`{"template_id":"` + strings.Repeat("x", 1<<20) + `"}`,
 	} {
-		r := httptest.NewRequest(
-			http.MethodPost,
-			"/v1/claim",
-			strings.NewReader(body),
-		)
+		r := httptest.NewRequest(http.MethodPost, "/v1/claim", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer alice-token")
 		r.Header.Set("Idempotency-Key", "invalid-claim")
 		w := httptest.NewRecorder()
@@ -335,15 +273,8 @@ func TestHTTPRejectsInvalidJSONBeforeMutation(t *testing.T) {
 		if err := json.Unmarshal(
 			w.Body.Bytes(),
 			&result,
-		); err != nil || w.Code != http.StatusBadRequest || result.Code != ErrInvalid ||
-			f.count("create") != 0 {
-			t.Fatalf(
-				"status=%d result=%+v creations=%d decode=%v",
-				w.Code,
-				result,
-				f.count("create"),
-				err,
-			)
+		); err != nil || w.Code != http.StatusBadRequest || result.Code != ErrInvalid || f.count("create") != 0 {
+			t.Fatalf("status=%d result=%+v creations=%d decode=%v", w.Code, result, f.count("create"), err)
 		}
 	}
 }

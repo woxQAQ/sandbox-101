@@ -13,12 +13,7 @@ import (
 	"github.com/woxQAQ/sandboxd/egress"
 )
 
-func (s *Service) Execute(
-	ctx context.Context,
-	p Principal,
-	key string,
-	c Command,
-) (Result, error) {
+func (s *Service) Execute(ctx context.Context, p Principal, key string, c Command) (Result, error) {
 	o, err := s.Submit(ctx, p, key, c)
 	if err != nil {
 		return Result{}, err
@@ -50,11 +45,7 @@ func (s *Service) start(o Operation) {
 	}()
 }
 
-func (s *Service) Wait(
-	ctx context.Context,
-	p Principal,
-	id string,
-) (Result, error) {
+func (s *Service) Wait(ctx context.Context, p Principal, id string) (Result, error) {
 	t := time.NewTicker(10 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -79,11 +70,7 @@ func (s *Service) Wait(
 	}
 }
 
-func (s *Service) Operation(
-	ctx context.Context,
-	p Principal,
-	id string,
-) (Operation, error) {
+func (s *Service) Operation(ctx context.Context, p Principal, id string) (Operation, error) {
 	o, err := s.store.operation(ctx, id)
 	if err != nil {
 		return o, err
@@ -110,8 +97,7 @@ func (s *Service) resultTokens(p Principal, r Result) (Result, error) {
 			return Result{}, Fail(ErrNotFound, "not found")
 		}
 	}
-	if r.Checkpoint != nil &&
-		!visible(p, r.Checkpoint.TenantID, r.Checkpoint.SandboxID) {
+	if r.Checkpoint != nil && !visible(p, r.Checkpoint.TenantID, r.Checkpoint.SandboxID) {
 		return Result{}, Fail(ErrNotFound, "not found")
 	}
 	if r.Template != nil && !visible(p, r.Template.TenantID, "") {
@@ -133,11 +119,7 @@ func (s *Service) setStep(o *Operation, step string) error {
 	return saveOp(s.ctx, s.store.db, *o)
 }
 
-func (s *Service) engine(
-	o Operation,
-	step string,
-	r api.Request,
-) (api.Operation, error) {
+func (s *Service) engine(o Operation, step string, r api.Request) (api.Operation, error) {
 	r.Key = stepKey(o, step)
 	if group, err := s.findAllocationGroup(o); err != nil {
 		return api.Operation{}, err
@@ -147,10 +129,7 @@ func (s *Service) engine(
 	if a, err := s.quotaRecoveryAllocation(o, step); err != nil {
 		return api.Operation{}, err
 	} else if a != nil && !bytes.Equal(encode(a.Request), encode(r)) {
-		return api.Operation{}, Fail(
-			ErrManualRecovery,
-			"recovery dispatch does not match frozen allocation request",
-		)
+		return api.Operation{}, Fail(ErrManualRecovery, "recovery dispatch does not match frozen allocation request")
 	}
 	if err := s.requireQuotaReservation(o, step); err != nil {
 		return api.Operation{}, err
@@ -165,10 +144,7 @@ func (s *Service) engine(
 			return api.Operation{}, err
 		}
 		if source.VMID != r.VMID || source.Instance != r.ExpectedInstance {
-			return api.Operation{}, Fail(
-				ErrManualRecovery,
-				"capture does not match the source sandbox instance",
-			)
+			return api.Operation{}, Fail(ErrManualRecovery, "capture does not match the source sandbox instance")
 		}
 		// Root's selected tenant scopes the request, not the existing data.
 		captureTenant = source.TenantID
@@ -179,10 +155,7 @@ func (s *Service) engine(
 			return api.Operation{}, err
 		}
 		if source.TenantID != o.ChargeTenantID {
-			return api.Operation{}, Fail(
-				ErrManualRecovery,
-				"restore charge owner mismatch",
-			)
+			return api.Operation{}, Fail(ErrManualRecovery, "restore charge owner mismatch")
 		}
 		if err = putQuotaRef(
 			s.ctx,
@@ -236,14 +209,7 @@ func (s *Service) engine(
 	}
 	if err == nil && r.Action == "snapshot" {
 		ownership := s.lockResourceOwnership()
-		err = recordSnapshotOwner(
-			s.ctx,
-			s.store.db,
-			result.SnapshotID,
-			captureTenant,
-			o.ID,
-			"captured",
-		)
+		err = recordSnapshotOwner(s.ctx, s.store.db, result.SnapshotID, captureTenant, o.ID, "captured")
 		ownership()
 	}
 	return result, err
@@ -253,8 +219,7 @@ func (s *Service) run(o Operation) {
 	// A retry may carry a stale pending copy after atomic configure delivery.
 	if o.Command.Action == "configure" {
 		current, err := s.store.operation(s.ctx, o.ID)
-		if err != nil || current.Status == "succeeded" ||
-			current.Status == "failed" {
+		if err != nil || current.Status == "succeeded" || current.Status == "failed" {
 			return
 		}
 		o = current
@@ -337,11 +302,7 @@ func (s *Service) run(o Operation) {
 
 func operationError(o Operation, err error) *Error {
 	e := publicError(err)
-	return Wrap(
-		e.Code,
-		fmt.Sprintf("%s (%s): %s", o.Command.Action, o.Step, e.Message),
-		err,
-	)
+	return Wrap(e.Code, fmt.Sprintf("%s (%s): %s", o.Command.Action, o.Step, e.Message), err)
 }
 
 func saveOp(ctx context.Context, e executor, o Operation) error {
@@ -361,8 +322,7 @@ func saveOp(ctx context.Context, e executor, o Operation) error {
 func (s *store) operation(ctx context.Context, id string) (Operation, error) {
 	var b []byte
 	var hash string
-	err := s.db.QueryRowContext(ctx, "SELECT body,spec_hash FROM operations WHERE id=?", id).
-		Scan(&b, &hash)
+	err := s.db.QueryRowContext(ctx, "SELECT body,spec_hash FROM operations WHERE id=?", id).Scan(&b, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Operation{}, Fail(ErrNotFound, "not found")
 	}
@@ -374,13 +334,9 @@ func (s *store) operation(ctx context.Context, id string) (Operation, error) {
 	return o, err
 }
 
-func (s *store) byKey(
-	ctx context.Context,
-	tenant, key string,
-) (Operation, error) {
+func (s *store) byKey(ctx context.Context, tenant, key string) (Operation, error) {
 	var id string
-	err := s.db.QueryRowContext(ctx, "SELECT id FROM operations WHERE tenant=? AND idem_key=?", tenant, key).
-		Scan(&id)
+	err := s.db.QueryRowContext(ctx, "SELECT id FROM operations WHERE tenant=? AND idem_key=?", tenant, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Operation{}, Fail(ErrNotFound, "not found")
 	}
@@ -441,9 +397,6 @@ type Operation struct {
 	FinishedAt     time.Time `json:"finished_at"`
 }
 
-func stepKey(
-	op Operation,
-	step string,
-) string {
+func stepKey(op Operation, step string) string {
 	return "sbx-op:" + op.ID + ":step:" + step
 }

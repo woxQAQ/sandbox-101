@@ -15,9 +15,7 @@ func TestHTTPFailuresBelongToSandboxd(t *testing.T) {
 	server := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write(
-				[]byte(`{"code":"forbidden","message":"root access required"}`),
-			)
+			_, _ = w.Write([]byte(`{"code":"forbidden","message":"root access required"}`))
 		}),
 	)
 	defer server.Close()
@@ -30,12 +28,8 @@ func TestHTTPFailuresBelongToSandboxd(t *testing.T) {
 			_, err = client.Get(context.Background(), "sandbox")
 		}
 		var failure *sandboxd.Error
-		if !errors.As(err, &failure) || failure.Code != sandboxd.ErrForbidden ||
-			failure.Cause != nil {
-			t.Fatalf(
-				"HTTP error did not retain the sandboxd contract: %#v",
-				err,
-			)
+		if !errors.As(err, &failure) || failure.Code != sandboxd.ErrForbidden || failure.Cause != nil {
+			t.Fatalf("HTTP error did not retain the sandboxd contract: %#v", err)
 		}
 	}
 }

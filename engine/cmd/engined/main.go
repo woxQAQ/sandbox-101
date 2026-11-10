@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	engine "github.com/woxQAQ/sandbox-engine"
-	"github.com/woxQAQ/sandbox-engine/server"
+	"github.com/woxQAQ/sandbox-engine/cmd/engined/internal/server"
 )
 
 func main() {
@@ -33,11 +33,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	output := func(v any) error { enc := json.NewEncoder(os.Stdout); enc.SetIndent("", "  "); return enc.Encode(v) }
 	switch cfg.Mode {
@@ -58,8 +54,7 @@ func run() error {
 	default:
 		return fmt.Errorf("unsupported --mode %s", cfg.Mode)
 	}
-	if cfg.VMMUID == 0 || cfg.VMMGID == 0 || uint64(cfg.VMMUID) > 1<<32-1 ||
-		uint64(cfg.VMMGID) > 1<<32-1 {
+	if cfg.VMMUID == 0 || cfg.VMMGID == 0 || uint64(cfg.VMMUID) > 1<<32-1 || uint64(cfg.VMMGID) > 1<<32-1 {
 		return fmt.Errorf("VMM UID/GID must be nonzero 32-bit IDs")
 	}
 	backend := engine.NewCloudHypervisor(
@@ -91,10 +86,7 @@ func run() error {
 	defer func() { _ = e.Close() }()
 	switch cfg.Mode {
 	case "gc":
-		r, collectErr := e.CollectGarbage(
-			ctx,
-			engine.GCOptions{DryRun: cfg.GCDryRun, MaxArtifacts: cfg.GCBatch},
-		)
+		r, collectErr := e.CollectGarbage(ctx, engine.GCOptions{DryRun: cfg.GCDryRun, MaxArtifacts: cfg.GCBatch})
 		if err = output(r); err != nil {
 			return err
 		}

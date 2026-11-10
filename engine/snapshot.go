@@ -70,15 +70,11 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	}
 	r := *o.Journal.Resource
 	capture := filepath.Join(r.Dir, "capture", o.Operation.ID)
-	if o.Journal.CaptureBoundary == nil &&
-		(o.Journal.Captured || o.Journal.ResumeRequired) {
+	if o.Journal.CaptureBoundary == nil && (o.Journal.Captured || o.Journal.ResumeRequired) {
 		return e.captureFailure(
 			o,
 			r,
-			api.Fail(
-				api.Incompatible,
-				"legacy capture journal requires manual recovery; original materials retained",
-			),
+			api.Fail(api.Incompatible, "legacy capture journal requires manual recovery; original materials retained"),
 		)
 	}
 	stage := filepath.Join(capture, "publication")
@@ -110,10 +106,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 			return x
 		}
 		if !obs.Alive || v.VM.Phase != "running" || !v.VM.AgentReady {
-			return api.Fail(
-				api.Conflict,
-				"snapshot requires a verified running VM",
-			)
+			return api.Fail(api.Conflict, "snapshot requires a verified running VM")
 		}
 		select {
 		case e.capture <- struct{}{}:
@@ -127,10 +120,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 				return err
 			}
 			if backend, ok := e.opts.Backend.(interface{ prepareCaptureWriter(Resource, string) error }); ok {
-				if err = backend.prepareCaptureWriter(
-					r,
-					filepath.Join(capture, "ch"),
-				); err != nil {
+				if err = backend.prepareCaptureWriter(r, filepath.Join(capture, "ch")); err != nil {
 					return err
 				}
 			}
@@ -148,18 +138,10 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		if err = e.saveOp(o, "paused"); err != nil {
 			return err
 		}
-		if err = e.opts.Backend.Capture(
-			e.ctx,
-			r,
-			filepath.Join(capture, "ch"),
-		); err != nil {
+		if err = e.opts.Backend.Capture(e.ctx, r, filepath.Join(capture, "ch")); err != nil {
 			return e.captureFailure(o, r, err)
 		}
-		if err = copyFile(
-			r.Disk,
-			filepath.Join(stage, "disk.raw"),
-			0o600,
-		); err != nil {
+		if err = copyFile(r.Disk, filepath.Join(stage, "disk.raw"), 0o600); err != nil {
 			return e.captureFailure(o, r, err)
 		}
 		o.Journal.Captured = true
@@ -183,8 +165,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		}
 	}
 	// No artifact fsync, hashing or publication work is done while paused.
-	if !capturedThisAttempt &&
-		(!o.Journal.Materialized || len(o.Journal.CaptureFiles) != 4) {
+	if !capturedThisAttempt && (!o.Journal.Materialized || len(o.Journal.CaptureFiles) != 4) {
 		return api.Fail(
 			api.Incompatible,
 			"capture interrupted before durable independent materials; source resumed and materials retained for manual recovery",
@@ -192,10 +173,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	}
 	boundary := o.Journal.CaptureBoundary
 	if boundary == nil || boundary.Path != capture {
-		return api.Fail(
-			api.Incompatible,
-			"capture ownership journal missing or inconsistent",
-		)
+		return api.Fail(api.Incompatible, "capture ownership journal missing or inconsistent")
 	}
 	parent, err := boundary.open()
 	if err != nil {
@@ -204,10 +182,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	_ = parent.Close()
 	if st, x := os.Lstat(s.Dir); x == nil {
 		if !o.Journal.ArtifactsSynced || gcNode(st) != boundary.Publication {
-			return api.Fail(
-				api.Incompatible,
-				"published directory identity unconfirmed",
-			)
+			return api.Fail(api.Incompatible, "published directory identity unconfirmed")
 		}
 		stage = s.Dir
 	} else if !os.IsNotExist(x) {
@@ -218,16 +193,10 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		return err
 	}
 	if gcNode(stageInfo) != boundary.Publication {
-		return api.Fail(
-			api.Incompatible,
-			"publication staging identity changed",
-		)
+		return api.Fail(api.Incompatible, "publication staging identity changed")
 	}
 	if !o.Journal.Materialized {
-		if err = materializeCapture(
-			boundary,
-			v.VM.Config.Shape.MemoryMiB,
-		); err != nil {
+		if err = materializeCapture(boundary, v.VM.Config.Shape.MemoryMiB); err != nil {
 			return err
 		}
 		// This progress checkpoint is deliberately not a completion proof.
@@ -237,11 +206,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 	}
 	files, err := hashTree(stage)
 	if err != nil {
-		return api.Fail(
-			api.Incompatible,
-			"independent capture integrity: %v",
-			err,
-		)
+		return api.Fail(api.Incompatible, "independent capture integrity: %v", err)
 	}
 	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
 		if _, ok := files[name]; !ok {
@@ -249,18 +214,12 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		}
 	}
 	if len(files) != 4 {
-		return api.Fail(
-			api.Incompatible,
-			"unexpected independent capture artifacts",
-		)
+		return api.Fail(api.Incompatible, "unexpected independent capture artifacts")
 	}
 	if o.Journal.Materialized {
 		// Never rehash altered replay input into a new authoritative manifest.
 		if !reflect.DeepEqual(files, o.Journal.CaptureFiles) {
-			return api.Fail(
-				api.Incompatible,
-				"durable independent capture checksum mismatch; materials retained",
-			)
+			return api.Fail(api.Incompatible, "durable independent capture checksum mismatch; materials retained")
 		}
 	} else {
 		// Include disk.raw, all independent CH data, and every directory entry.
@@ -289,10 +248,7 @@ func (e *Engine) snapshot(o *opRecord, v *vmRecord) error {
 		Files:           files,
 		Image:           image,
 	}
-	if err = writeJSON(
-		filepath.Join(stage, "manifest.json"),
-		manifest,
-	); err != nil {
+	if err = writeJSON(filepath.Join(stage, "manifest.json"), manifest); err != nil {
 		return err
 	}
 	if err = sealTree(stage); err != nil {
@@ -352,16 +308,11 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 		return err
 	}
 	var n int
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE snapshot=?", s.Snapshot.ID).
-		Scan(&n); err != nil {
+	if err = e.db.QueryRow("SELECT COUNT(*) FROM leases WHERE snapshot=?", s.Snapshot.ID).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {
-		return api.Fail(
-			api.Conflict,
-			"snapshot deletion waits for %d durable readers; retry with a new key",
-			n,
-		)
+		return api.Fail(api.Conflict, "snapshot deletion waits for %d durable readers; retry with a new key", n)
 	}
 	if err = e.saveOp(o, "snapshot_remove_intent"); err != nil {
 		return err
@@ -381,28 +332,17 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 		if err = json.Unmarshal(b, &old); err != nil {
 			break
 		}
-		if old.Operation.SnapshotID == s.Snapshot.ID &&
-			old.Operation.Request.Action == "snapshot" {
+		if old.Operation.SnapshotID == s.Snapshot.ID && old.Operation.Request.Action == "snapshot" {
 			if !terminal(old.Operation.Status) || old.Journal.ResumeRequired {
-				err = api.Fail(
-					api.Conflict,
-					"snapshot capture still unresolved",
-				)
+				err = api.Fail(api.Conflict, "snapshot capture still unresolved")
 				break
 			}
 			if old.Journal.Resource != nil {
-				path := filepath.Join(
-					old.Journal.Resource.Dir,
-					"capture",
-					old.Operation.ID,
-				)
+				path := filepath.Join(old.Journal.Resource.Dir, "capture", old.Operation.ID)
 				if _, x := os.Lstat(path); x == nil {
 					boundary := old.Journal.CaptureBoundary
 					if boundary == nil || boundary.Path != path {
-						err = api.Fail(
-							api.Incompatible,
-							"legacy capture deletion requires manual recovery",
-						)
+						err = api.Fail(api.Incompatible, "legacy capture deletion requires manual recovery")
 						break
 					}
 					parent, x := boundary.open()
@@ -411,17 +351,10 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 						break
 					}
 					_ = parent.Close()
-					if st, x := os.Lstat(
-						filepath.Join(path, "publication"),
-					); x == nil &&
-						gcNode(st) != boundary.Publication {
-						err = api.Fail(
-							api.Incompatible,
-							"staging identity changed",
-						)
+					if st, x := os.Lstat(filepath.Join(path, "publication")); x == nil && gcNode(st) != boundary.Publication {
+						err = api.Fail(api.Incompatible, "staging identity changed")
 						break
-					} else if x != nil &&
-						!os.IsNotExist(x) {
+					} else if x != nil && !os.IsNotExist(x) {
 						err = x
 						break
 					}
@@ -430,26 +363,15 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 					break
 				}
 				if st, x := os.Lstat(s.Dir); x == nil {
-					if old.Journal.CaptureBoundary == nil ||
-						gcNode(st) != old.Journal.CaptureBoundary.Publication {
-						err = api.Fail(
-							api.Incompatible,
-							"snapshot deletion identity unconfirmed",
-						)
+					if old.Journal.CaptureBoundary == nil || gcNode(st) != old.Journal.CaptureBoundary.Publication {
+						err = api.Fail(api.Incompatible, "snapshot deletion identity unconfirmed")
 						break
 					}
 				} else if !os.IsNotExist(x) {
 					err = x
 					break
 				}
-				captures = append(
-					captures,
-					filepath.Join(
-						old.Journal.Resource.Dir,
-						"capture",
-						old.Operation.ID,
-					),
-				)
+				captures = append(captures, filepath.Join(old.Journal.Resource.Dir, "capture", old.Operation.ID))
 			}
 		}
 	}
@@ -478,16 +400,10 @@ func (e *Engine) deleteSnapshot(o *opRecord) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.Exec(
-		"DELETE FROM snapshots WHERE id=?",
-		s.Snapshot.ID,
-	); err != nil {
+	if _, err = tx.Exec("DELETE FROM snapshots WHERE id=?", s.Snapshot.ID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(
-		"DELETE FROM reservations WHERE owner=?",
-		s.Snapshot.ID,
-	); err != nil {
+	if _, err = tx.Exec("DELETE FROM reservations WHERE owner=?", s.Snapshot.ID); err != nil {
 		return err
 	}
 	return tx.Commit()

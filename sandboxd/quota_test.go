@@ -22,12 +22,7 @@ func TestQuotaLedgerReleaseKeepsCharge(t *testing.T) {
 				ledgerLimit(t, s, p, 1, 1<<20)
 				b := *claimTest(t, s, p, "source", nil).Sandbox
 				if paused {
-					if _, err := s.Execute(
-						s.ctx,
-						p,
-						"pause",
-						Command{Action: "pause", SandboxID: b.ID},
-					); err != nil {
+					if _, err := s.Execute(s.ctx, p, "pause", Command{Action: "pause", SandboxID: b.ID}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -46,12 +41,7 @@ func TestQuotaLedgerReleaseKeepsCharge(t *testing.T) {
 					f.failDeletes = 1
 				}
 				f.control.Unlock()
-				o, err := s.Submit(
-					s.ctx,
-					p,
-					"release",
-					Command{Action: "release", SandboxID: b.ID},
-				)
+				o, err := s.Submit(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -60,11 +50,7 @@ func TestQuotaLedgerReleaseKeepsCharge(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					unblock()
 					current, _ := s.store.operation(s.ctx, o.ID)
-					t.Fatalf(
-						"delete did not enter: %+v error=%v",
-						current,
-						current.Error,
-					)
+					t.Fatalf("delete did not enter: %+v error=%v", current, current.Error)
 				}
 				if !paused {
 					ledgerRejectClaim(t, s, f, p, "while-delete-blocked")
@@ -87,9 +73,7 @@ func TestQuotaLedgerReleaseKeepsCharge(t *testing.T) {
 				// Serialize with startup maintenance before observing its recovery result.
 				reopened.cancel()
 				reopened.wg.Wait()
-				reopened.ctx, reopened.cancel = context.WithCancel(
-					context.Background(),
-				)
+				reopened.ctx, reopened.cancel = context.WithCancel(context.Background())
 				if err = reopened.recoverResources(); err != nil {
 					t.Fatal(err)
 				}
@@ -106,12 +90,7 @@ func TestQuotaLedgerLostDeleteResponse(t *testing.T) {
 	f.control.Lock()
 	f.dropDeleteResponses = 1
 	f.control.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	); err == nil {
+	if _, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID}); err == nil {
 		t.Fatal("lost response accepted")
 	}
 	ledgerRejectClaim(t, s, f, p, "unknown-stays-charged")
@@ -148,58 +127,22 @@ func TestQuotaLedgerPauseResumeCheckpointSharing(t *testing.T) {
 		b := *claimTest(t, s, p, fmt.Sprintf("claim-%d", cycle), nil).Sandbox
 		ledgerMoney(t, s, p.TenantID, 1, 64)
 		key := fmt.Sprintf("cycle-%d-", cycle)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			key+"pause",
-			Command{Action: "pause", SandboxID: b.ID},
-		)
+		ledgerExecute(t, s, p, key+"pause", Command{Action: "pause", SandboxID: b.ID})
 		ledgerMoney(t, s, p.TenantID, 1, 192)
-		cp1 := ledgerExecute(
-			t,
-			s,
-			p,
-			key+"cp1",
-			Command{Action: "checkpoint", SandboxID: b.ID},
-		).Checkpoint
-		cp2 := ledgerExecute(
-			t,
-			s,
-			p,
-			key+"cp2",
-			Command{Action: "checkpoint", SandboxID: b.ID},
-		).Checkpoint
+		cp1 := ledgerExecute(t, s, p, key+"cp1", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
+		cp2 := ledgerExecute(t, s, p, key+"cp2", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 		if cp1.SnapshotID != cp2.SnapshotID {
 			t.Fatal("sleep checkpoints did not share identity")
 		}
 		ledgerMoney(t, s, p.TenantID, 1, 192)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			key+"resume",
-			Command{Action: "resume", SandboxID: b.ID},
-		)
+		ledgerExecute(t, s, p, key+"resume", Command{Action: "resume", SandboxID: b.ID})
 		ledgerMoney(t, s, p.TenantID, 1, 256)
 		for _, cp := range []*Checkpoint{cp1, cp2} {
-			ledgerExecute(
-				t,
-				s,
-				p,
-				key+cp.ID,
-				Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
-			)
+			ledgerExecute(t, s, p, key+cp.ID, Command{Action: "delete_checkpoint", CheckpointID: cp.ID})
 		}
 		// Catalog deletion cannot retire the hardlink memory backing of the resumed VM.
 		ledgerMoney(t, s, p.TenantID, 1, 256)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			key+"release",
-			Command{Action: "release", SandboxID: b.ID},
-		)
+		ledgerExecute(t, s, p, key+"release", Command{Action: "release", SandboxID: b.ID})
 		if err := s.recoverResources(); err != nil {
 			t.Fatal(err)
 		}
@@ -243,11 +186,7 @@ func TestQuotaLedgerAdmissionIsAtomic(t *testing.T) {
 			}
 		}
 		if accepted != 2 || f.count("clone") != 2 {
-			t.Fatalf(
-				"admitted forks=%d clone effects=%d",
-				accepted,
-				f.count("clone"),
-			)
+			t.Fatalf("admitted forks=%d clone effects=%d", accepted, f.count("clone"))
 		}
 		ledgerMoney(t, s, p.TenantID, 3, 3*64+2*192)
 	})
@@ -273,12 +212,7 @@ func TestQuotaLedgerBackupAndRestart(t *testing.T) {
 	f.control.Lock()
 	f.failDeletes = 100
 	f.control.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	); err == nil {
+	if _, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID}); err == nil {
 		t.Fatal("delete fault lost")
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 64)
@@ -318,12 +252,7 @@ func TestQuotaLedgerBackupAndRestart(t *testing.T) {
 	next.wg.Wait()
 	next.ctx, next.cancel = context.WithCancel(context.Background())
 	ledgerMoney(t, next, p.TenantID, 1, 64)
-	if fence, err := configFence(
-		next.ctx,
-		next.store.db,
-		b.ID,
-	); err != nil ||
-		fence == "" {
+	if fence, err := configFence(next.ctx, next.store.db, b.ID); err != nil || fence == "" {
 		t.Fatal("configuration fence lost", err)
 	}
 	ledgerLimit(t, next, p, 1, 1<<20)
@@ -356,12 +285,7 @@ func TestQuotaLedgerRootUsesResourceOwner(t *testing.T) {
 			var once sync.Once
 			unblock := func() { once.Do(func() { close(gate) }) }
 			defer unblock()
-			o, err := s.Submit(
-				s.ctx,
-				root,
-				"root-pause",
-				Command{Action: "pause", SandboxID: b.ID},
-			)
+			o, err := s.Submit(s.ctx, root, "root-pause", Command{Action: "pause", SandboxID: b.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -376,8 +300,7 @@ func TestQuotaLedgerRootUsesResourceOwner(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if persisted.TenantID != requestTenant ||
-				persisted.ChargeTenantID != p.TenantID {
+			if persisted.TenantID != requestTenant || persisted.ChargeTenantID != p.TenantID {
 				t.Fatal("request identity and resource owner conflated")
 			}
 			unblock()
@@ -386,33 +309,14 @@ func TestQuotaLedgerRootUsesResourceOwner(t *testing.T) {
 			}
 			ledgerMoney(t, s, p.TenantID, 1, 192)
 			beforeAuto := f.count("clone")
-			if _, err = s.DataReady(
-				s.ctx,
-				root,
-				b.ID,
-			); !isCode(
-				err,
-				ErrExhausted,
-			) {
+			if _, err = s.DataReady(s.ctx, root, b.ID); !isCode(err, ErrExhausted) {
 				t.Fatal("automatic owner admission inherited root bypass", err)
 			}
 			if f.count("clone") != beforeAuto {
 				t.Fatal("automatic admission rejected after engine allocation")
 			}
-			ledgerExecute(
-				t,
-				s,
-				root,
-				"root-checkpoint",
-				Command{Action: "checkpoint", SandboxID: b.ID},
-			)
-			ledgerExecute(
-				t,
-				s,
-				root,
-				"root-resume",
-				Command{Action: "resume", SandboxID: b.ID},
-			)
+			ledgerExecute(t, s, root, "root-checkpoint", Command{Action: "checkpoint", SandboxID: b.ID})
+			ledgerExecute(t, s, root, "root-resume", Command{Action: "resume", SandboxID: b.ID})
 			ledgerMoney(t, s, p.TenantID, 1, 256)
 			f.control.Lock()
 			f.failDeletes = 100
@@ -440,22 +344,10 @@ func TestQuotaLedgerSlotRetirementBoundaries(t *testing.T) {
 			ledgerLimit(t, s, p, 1, 1<<20)
 			b := *claimTest(t, s, p, "source", nil).Sandbox
 			if mode != "vm-delete-failed" {
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"pause",
-					Command{Action: "pause", SandboxID: b.ID},
-				)
+				ledgerExecute(t, s, p, "pause", Command{Action: "pause", SandboxID: b.ID})
 			}
 			if mode == "shared-checkpoint" {
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"cp",
-					Command{Action: "checkpoint", SandboxID: b.ID},
-				)
+				ledgerExecute(t, s, p, "cp", Command{Action: "checkpoint", SandboxID: b.ID})
 			}
 			f.control.Lock()
 			switch mode {
@@ -465,12 +357,7 @@ func TestQuotaLedgerSlotRetirementBoundaries(t *testing.T) {
 				f.failSnapshotDeletes = 1
 			}
 			f.control.Unlock()
-			_, err := s.Execute(
-				s.ctx,
-				p,
-				"release",
-				Command{Action: "release", SandboxID: b.ID},
-			)
+			_, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID})
 			if mode == "shared-checkpoint" {
 				if err != nil {
 					t.Fatal(err)
@@ -505,52 +392,20 @@ func TestQuotaLedgerSnapshotChargeExactBoundaries(t *testing.T) {
 	t.Run("shared-pause-448-447", func(t *testing.T) {
 		s, f, _, p := recoveryFixture(t)
 		b := *claimTest(t, s, p, "source", nil).Sandbox
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"pause",
-			Command{Action: "pause", SandboxID: b.ID},
-		)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"checkpoint",
-			Command{Action: "checkpoint", SandboxID: b.ID},
-		)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"resume",
-			Command{Action: "resume", SandboxID: b.ID},
-		)
+		ledgerExecute(t, s, p, "pause", Command{Action: "pause", SandboxID: b.ID})
+		ledgerExecute(t, s, p, "checkpoint", Command{Action: "checkpoint", SandboxID: b.ID})
+		ledgerExecute(t, s, p, "resume", Command{Action: "resume", SandboxID: b.ID})
 		ledgerMoney(t, s, p.TenantID, 1, 256)
 		ledgerLimit(t, s, p, 10, 447)
 		before := f.count("snapshot") + f.count("network") + f.count("delete")
-		if _, err := s.Execute(
-			s.ctx,
-			p,
-			"lower",
-			Command{Action: "pause", SandboxID: b.ID},
-		); !isCode(
-			err,
-			ErrExhausted,
-		) {
+		if _, err := s.Execute(s.ctx, p, "lower", Command{Action: "pause", SandboxID: b.ID}); !isCode(err, ErrExhausted) {
 			t.Fatal(err)
 		}
 		if f.count("snapshot")+f.count("network")+f.count("delete") != before {
 			t.Fatal("lower boundary reached engine")
 		}
 		ledgerLimit(t, s, p, 10, 448)
-		ledgerExecute(
-			t,
-			s,
-			p,
-			"exact",
-			Command{Action: "pause", SandboxID: b.ID},
-		)
+		ledgerExecute(t, s, p, "exact", Command{Action: "pause", SandboxID: b.ID})
 		ledgerMoney(t, s, p.TenantID, 1, 384)
 	})
 	for _, action := range []string{"checkpoint", "fork", "resume"} {
@@ -562,41 +417,15 @@ func TestQuotaLedgerSnapshotChargeExactBoundaries(t *testing.T) {
 				boundary = 320
 			}
 			if action == "resume" {
-				ledgerExecute(
-					t,
-					s,
-					p,
-					"pause",
-					Command{Action: "pause", SandboxID: b.ID},
-				)
+				ledgerExecute(t, s, p, "pause", Command{Action: "pause", SandboxID: b.ID})
 			}
 			ledgerLimit(t, s, p, 10, boundary-1)
-			before := f.count(
-				"snapshot",
-			) + f.count(
-				"clone",
-			) + f.count(
-				"network",
-			)
+			before := f.count("snapshot") + f.count("clone") + f.count("network")
 			c := Command{Action: action, SandboxID: b.ID, Count: 1}
-			if _, err := s.Execute(
-				s.ctx,
-				p,
-				"lower",
-				c,
-			); !isCode(
-				err,
-				ErrExhausted,
-			) {
+			if _, err := s.Execute(s.ctx, p, "lower", c); !isCode(err, ErrExhausted) {
 				t.Fatal(err)
 			}
-			if f.count(
-				"snapshot",
-			)+f.count(
-				"clone",
-			)+f.count(
-				"network",
-			) != before {
+			if f.count("snapshot")+f.count("clone")+f.count("network") != before {
 				t.Fatal("rejection reached engine")
 			}
 			ledgerLimit(t, s, p, 10, boundary)
@@ -619,15 +448,7 @@ func TestQuotaLedgerUnknownInstanceKeepsCharge(t *testing.T) {
 	vm.Instance = "foreign-instance"
 	f.vms[b.VMID] = vm
 	f.mu.Unlock()
-	if _, err := s.Execute(
-		s.ctx,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	); !isCode(
-		err,
-		ErrManualRecovery,
-	) {
+	if _, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID}); !isCode(err, ErrManualRecovery) {
 		t.Fatal("unproven instance accepted", err)
 	}
 	if err := s.recoverResources(); err == nil {
@@ -662,10 +483,7 @@ func TestQuotaLedgerSchemaBoundaryAndCorruption(t *testing.T) {
 					Engine:    f,
 					Agent:     &fakeAgent{},
 				},
-			); !isCode(
-				err,
-				ErrIncompatible,
-			) {
+			); !isCode(err, ErrIncompatible) {
 				t.Fatal("incompatible schema accepted", err)
 			}
 			db, err := sql.Open("sqlite", filepath.Join(dir, "sandboxd.db"))
@@ -678,8 +496,7 @@ func TestQuotaLedgerSchemaBoundaryAndCorruption(t *testing.T) {
 				Scan(&tables); err != nil {
 				t.Fatal(err)
 			}
-			if err = db.QueryRow(`SELECT version FROM version`).
-				Scan(&actual); err != nil {
+			if err = db.QueryRow(`SELECT version FROM version`).Scan(&actual); err != nil {
 				t.Fatal(err)
 			}
 			if tables != 0 || actual != version || f.count("create") != 0 {
@@ -741,27 +558,18 @@ type quotaUnknownEngine struct {
 	dropped   bool
 }
 
-func (f *quotaUnknownEngine) Submit(
-	ctx context.Context,
-	r api.Request,
-) (api.Operation, error) {
+func (f *quotaUnknownEngine) Submit(ctx context.Context, r api.Request) (api.Operation, error) {
 	result, err := f.recoveryTestEngine.Submit(ctx, r)
 	f.muReceipt.Lock()
 	defer f.muReceipt.Unlock()
 	if r.Action == "create" && !f.dropped && err == nil {
 		f.dropped = true
-		return api.Operation{}, api.Fail(
-			api.Unknown,
-			"allocation receipt unavailable",
-		)
+		return api.Operation{}, api.Fail(api.Unknown, "allocation receipt unavailable")
 	}
 	return result, err
 }
 
-func (f *quotaUnknownEngine) FindOperation(
-	ctx context.Context,
-	key string,
-) (api.Operation, error) {
+func (f *quotaUnknownEngine) FindOperation(ctx context.Context, key string) (api.Operation, error) {
 	f.muReceipt.Lock()
 	hide := f.hide
 	f.muReceipt.Unlock()
@@ -776,12 +584,7 @@ func TestQuotaLedgerUnknownAllocationKeepsReservation(t *testing.T) {
 	ledgerLimit(t, s, p, 1, 64)
 	engine := &quotaUnknownEngine{recoveryTestEngine: f, hide: true}
 	s.opts.Engine = engine
-	result, err := s.Execute(
-		s.ctx,
-		p,
-		"lost-create",
-		Command{Action: "claim", TemplateID: "python"},
-	)
+	result, err := s.Execute(s.ctx, p, "lost-create", Command{Action: "claim", TemplateID: "python"})
 	if !isCode(err, ErrUnknown) {
 		t.Fatal("original failure changed", err)
 	}
@@ -810,13 +613,7 @@ func TestQuotaLedgerUnknownAllocationKeepsReservation(t *testing.T) {
 func TestQuotaLedgerRollbackRetainsIndependentVersions(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"checkpoint",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "checkpoint", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	ledgerMoney(t, s, p.TenantID, 1, 256)
 	ledgerLimit(t, s, p, 10, 319)
 	before := f.count("stop") + f.count("restore")
@@ -825,40 +622,19 @@ func TestQuotaLedgerRollbackRetainsIndependentVersions(t *testing.T) {
 		p,
 		"lower",
 		Command{Action: "rollback", SandboxID: b.ID, CheckpointID: cp.ID},
-	); !isCode(
-		err,
-		ErrExhausted,
-	) {
+	); !isCode(err, ErrExhausted) {
 		t.Fatal(err)
 	}
 	if f.count("stop")+f.count("restore") != before {
 		t.Fatal("rollback rejected after engine effect")
 	}
 	ledgerLimit(t, s, p, 10, 320)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"exact",
-		Command{Action: "rollback", SandboxID: b.ID, CheckpointID: cp.ID},
-	)
+	ledgerExecute(t, s, p, "exact", Command{Action: "rollback", SandboxID: b.ID, CheckpointID: cp.ID})
 	// Original disk D + independent restore disk D + shared snapshot D+M.
 	ledgerMoney(t, s, p.TenantID, 1, 320)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	ledgerExecute(t, s, p, "release", Command{Action: "release", SandboxID: b.ID})
 	ledgerMoney(t, s, p.TenantID, 0, 192)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"delete-cp",
-		Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
-	)
+	ledgerExecute(t, s, p, "delete-cp", Command{Action: "delete_checkpoint", CheckpointID: cp.ID})
 	ledgerMoney(t, s, p.TenantID, 0, 0)
 }
 
@@ -866,13 +642,7 @@ func TestQuotaLedgerCleanupCollectors(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
 	ledgerExecute(t, s, p, "pause", Command{Action: "pause", SandboxID: b.ID})
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	ledgerExecute(t, s, p, "resume", Command{Action: "resume", SandboxID: b.ID})
 	intents, err := s.resourceRecoveries()
 	if err != nil {
@@ -896,13 +666,7 @@ func TestQuotaLedgerCleanupCollectors(t *testing.T) {
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 256)
 	// Release transfers the last sandbox usage to the independent checkpoint.
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	ledgerExecute(t, s, p, "release", Command{Action: "release", SandboxID: b.ID})
 	ledgerMoney(t, s, p.TenantID, 0, 192)
 	f.control.Lock()
 	f.failSnapshotDeletes = 1
@@ -918,13 +682,7 @@ func TestQuotaLedgerCleanupCollectors(t *testing.T) {
 	ledgerMoney(t, s, p.TenantID, 0, 192)
 	// Deleting the checkpoint removes the active holder. Duplicate cleanup
 	// intents converge on the same identity and never duplicate its cost.
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"delete-cp",
-		Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
-	)
+	ledgerExecute(t, s, p, "delete-cp", Command{Action: "delete_checkpoint", CheckpointID: cp.ID})
 	after := f.count("delete_snapshot")
 	if err = s.recoverResources(); err != nil {
 		t.Fatal(err)
@@ -938,13 +696,7 @@ func TestQuotaLedgerCleanupCollectors(t *testing.T) {
 func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	s, f, _, p := recoveryFixture(t)
 	b := *claimTest(t, s, p, "source", nil).Sandbox
-	cp := ledgerExecute(
-		t,
-		s,
-		p,
-		"cp",
-		Command{Action: "checkpoint", SandboxID: b.ID},
-	).Checkpoint
+	cp := ledgerExecute(t, s, p, "cp", Command{Action: "checkpoint", SandboxID: b.ID}).Checkpoint
 	ledgerExecute(
 		t,
 		s,
@@ -963,20 +715,8 @@ func TestQuotaLedgerWarmBackingKeepsSharedCharge(t *testing.T) {
 	s.pools()
 	s.wg.Wait()
 	ledgerMoney(t, s, p.TenantID, 1, 320)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"delete-cp",
-		Command{Action: "delete_checkpoint", CheckpointID: cp.ID},
-	)
-	ledgerExecute(
-		t,
-		s,
-		p,
-		"release",
-		Command{Action: "release", SandboxID: b.ID},
-	)
+	ledgerExecute(t, s, p, "delete-cp", Command{Action: "delete_checkpoint", CheckpointID: cp.ID})
+	ledgerExecute(t, s, p, "release", Command{Action: "release", SandboxID: b.ID})
 	ledgerMoney(t, s, p.TenantID, 0, 256)
 	f.mu.Lock()
 	f.snaps["new-golden"] = api.Snapshot{
@@ -1026,12 +766,7 @@ func TestQuotaLedgerMissingResumeVMUsesAbsenceProof(t *testing.T) {
 	f.control.Lock()
 	f.failDeletes = 1
 	f.control.Unlock()
-	result, err := s.Execute(
-		s.ctx,
-		p,
-		"resume-fault",
-		Command{Action: "resume", SandboxID: b.ID},
-	)
+	result, err := s.Execute(s.ctx, p, "resume-fault", Command{Action: "resume", SandboxID: b.ID})
 	if err == nil {
 		t.Fatal("resume failure lost")
 	}

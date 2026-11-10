@@ -67,4 +67,4 @@ replace github.com/woxQAQ/sandbox-engine => ../engine
 
 replace github.com/woxQAQ/sandbox-protocol/gen => ../protocol/gen
 
-replace github.com/erofs/go-erofs => ../engine/third_party/go-erofs
+replace github.com/erofs/go-erofs => ../third_party/go-erofs

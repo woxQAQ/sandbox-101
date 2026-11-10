@@ -111,11 +111,7 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 	)
 	r, _ := get(t, proxyClient(t, m, b), "http://example.com/")
 	if r.StatusCode != 502 || dials.Load() != 0 {
-		t.Fatalf(
-			"rebinding was not denied: %d dials=%d",
-			r.StatusCode,
-			dials.Load(),
-		)
+		t.Fatalf("rebinding was not denied: %d dials=%d", r.StatusCode, dials.Load())
 	}
 	var reached atomic.Int32
 	up := httptest.NewTLSServer(
@@ -158,9 +154,7 @@ func TestPrivateCIDRExemptionsAndSecretFormatting(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if allowed := p.checkIP(
-			netip.MustParseAddr("10.2.3.4"),
-		) == nil; allowed != enabled {
+		if allowed := p.checkIP(netip.MustParseAddr("10.2.3.4")) == nil; allowed != enabled {
 			t.Fatal("private CIDR opt-in ignored")
 		}
 		for _, raw := range []string{"10.3.3.4", "169.254.169.254", "64:ff9b::808:808"} {

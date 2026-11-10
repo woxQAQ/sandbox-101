@@ -31,14 +31,13 @@ import (
 	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
-// This acceptance test runs the actual pinned VMM and guest, independently of
-// the engine's privileged cgroup/network launcher. It requires working KVM and
-// native image tools; selecting the build tag never silently skips prerequisites.
+// This KVM integration test runs the actual pinned VMM and guest, independently
+// of the engine's privileged cgroup/network launcher and both daemons. It proves
+// guest file views, RPC and COW restore, not production lifecycle or isolation.
+// It requires working KVM and native image tools; prerequisites never silently skip.
 func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	if os.Getuid() == 0 {
-		t.Fatal(
-			"run this standalone KVM acceptance as an unprivileged device-authorized user",
-		)
+		t.Fatal("run this standalone KVM integration test as an unprivileged device-authorized user")
 	}
 	hypervisor := kvmRequired(t, "SANDBOX_KVM_HYPERVISOR")
 	kernel := kvmRequired(t, "SANDBOX_KVM_KERNEL")
@@ -48,11 +47,11 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	if err := os.MkdirAll(artifacts, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	run, err := os.MkdirTemp(artifacts, "kvm-acceptance-")
+	run, err := os.MkdirTemp(artifacts, "kvm-integration-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("persistent acceptance artifacts: %s", run)
+	t.Logf("persistent KVM integration artifacts: %s", run)
 	version, err := exec.Command(hypervisor, "--version").CombinedOutput()
 	if err != nil || !strings.Contains(string(version), cloudHypervisorCommit) {
 		t.Fatalf("wrong pinned hypervisor: %s: %v", version, err)
@@ -61,9 +60,8 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	for _, executable := range []string{hypervisor, filepath.Join(guest, "sandbox-agent"), filepath.Join(guest, "sandbox-init")} {
 		for _, args := range [][]string{{"-l", executable}, {"-d", executable}} {
 			out := kvmTool(t, "readelf", args...)
-			if bytes.Contains(out, []byte("INTERP")) ||
-				bytes.Contains(out, []byte("NEEDED")) {
-				t.Fatalf("acceptance executable is not static: %s", executable)
+			if bytes.Contains(out, []byte("INTERP")) || bytes.Contains(out, []byte("NEEDED")) {
+				t.Fatalf("KVM fixture executable is not static: %s", executable)
 			}
 		}
 	}
@@ -71,13 +69,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	if err := os.Mkdir(layout, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := kvmRuntimeLayer(
-		t,
-		layout,
-		kernel,
-		guest,
-		rootfs,
-	)
+	base := kvmRuntimeLayer(t, layout, kernel, guest, rootfs)
 	meta := kvmMetadataLayers(t, layout)
 	cross := hardEntry("acceptance/cross-layer-hard", "acceptance/regular")
 	cross.header.Mode = 0o644
@@ -89,10 +81,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 		root,
 		cross,
 		fileEntry("acceptance/implicit/deep/value", "implicit"),
-		fileEntry(
-			"acceptance/duplicate",
-			"old",
-		),
+		fileEntry("acceptance/duplicate", "old"),
 		fileEntry("acceptance/duplicate", "last"),
 	}
 	for i := range broaderEntries {
@@ -116,10 +105,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			}
 			e := openTest(t, store, newTestBackend(), true, nil)
 			defer e.Close()
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				8*time.Minute,
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
 			image := image
 			if materialization == LayeredEROFSLayout {
@@ -127,10 +113,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				// which the explicit umoci compatibility path does not accept.
 				forwardEntries := []tarEntry{
 					hardEntry("acceptance/forward-a", "acceptance/forward-b"),
-					hardEntry(
-						"acceptance/forward-b",
-						"acceptance/forward-target",
-					),
+					hardEntry("acceptance/forward-b", "acceptance/forward-target"),
 					fileEntry("acceptance/forward-target", "forward"),
 				}
 				for i := range forwardEntries {
@@ -181,11 +164,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				t.Fatal(err)
 			}
 			upper := filepath.Join(dir, "upper.raw")
-			file, err := os.OpenFile(
-				upper,
-				os.O_CREATE|os.O_EXCL|os.O_RDWR,
-				0o600,
-			)
+			file, err := os.OpenFile(upper, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -280,37 +259,17 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			vm.treeRoundtrip(t)
 			vm.exec(t, "printf 'original' > /workspace/branch; sync")
 			capture := vm.capture(t, upper, "first")
-			clone := kvmRestore(
-				t,
-				hypervisor,
-				filepath.Join(dir, "clone"),
-				capture,
-			)
+			clone := kvmRestore(t, hypervisor, filepath.Join(dir, "clone"), capture)
 			clone.ready(t, ctx, true)
 			if err := os.RemoveAll(capture); err != nil {
 				t.Fatal(err)
 			}
-			clone.exec(
-				t,
-				"test \"$(cat /workspace/branch)\" = original; printf 'clone' > /workspace/branch; sync",
-			)
-			vm.exec(
-				t,
-				"test \"$(cat /workspace/branch)\" = original; printf 'source' > /workspace/branch; sync",
-			)
-			second := clone.capture(
-				t,
-				filepath.Join(clone.dir, "upper.raw"),
-				"second",
-			)
+			clone.exec(t, "test \"$(cat /workspace/branch)\" = original; printf 'clone' > /workspace/branch; sync")
+			vm.exec(t, "test \"$(cat /workspace/branch)\" = original; printf 'source' > /workspace/branch; sync")
+			second := clone.capture(t, filepath.Join(clone.dir, "upper.raw"), "second")
 			clone.stop()
 			vm.stop()
-			grandchild := kvmRestore(
-				t,
-				hypervisor,
-				filepath.Join(dir, "grandchild"),
-				second,
-			)
+			grandchild := kvmRestore(t, hypervisor, filepath.Join(dir, "grandchild"), second)
 			grandchild.ready(t, ctx, true)
 			grandchild.exec(t, "test \"$(cat /workspace/branch)\" = clone")
 			grandchild.exec(t, fileViewChecks)
@@ -414,10 +373,7 @@ func kvmTool(t *testing.T, tool string, args ...string) []byte {
 	return out
 }
 
-func kvmRuntimeLayer(
-	t *testing.T,
-	layout, kernel, guest, rootfs string,
-) ociLayerFixture {
+func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLayerFixture {
 	t.Helper()
 	var err error
 	rootfs, err = filepath.EvalSymlinks(rootfs)
@@ -426,10 +382,7 @@ func kvmRuntimeLayer(
 	}
 	rootfs, err = filepath.Abs(rootfs)
 	if err != nil || rootfs == "/" {
-		t.Fatalf(
-			"acceptance requires a dedicated rootfs, not the host root: %v",
-			err,
-		)
+		t.Fatalf("KVM integration requires a dedicated rootfs, not the host root: %v", err)
 	}
 	root, err := os.Open(rootfs)
 	if err != nil {
@@ -444,7 +397,7 @@ func kvmRuntimeLayer(
 			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
 		})
 		if err != nil {
-			t.Fatalf("incomplete acceptance rootfs (%s): %v", name, err)
+			t.Fatalf("incomplete KVM rootfs (%s): %v", name, err)
 		}
 		file := os.NewFile(uintptr(fd), name)
 		info, err := file.Stat()
@@ -453,7 +406,7 @@ func kvmRuntimeLayer(
 			t.Fatal(err)
 		}
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-			t.Fatalf("acceptance rootfs requires an executable at %s", name)
+			t.Fatalf("KVM rootfs requires an executable at %s", name)
 		}
 	}
 	archive, err := os.CreateTemp(filepath.Dir(layout), "runtime-layer-*.tar")
@@ -576,11 +529,7 @@ func kvmRuntimeLayer(
 		if err != nil {
 			t.Fatal(err)
 		}
-		add(
-			name,
-			&tar.Header{Typeflag: tar.TypeReg, Mode: 0o755, Size: info.Size()},
-			file,
-		)
+		add(name, &tar.Header{Typeflag: tar.TypeReg, Mode: 0o755, Size: info.Size()}, file)
 	}
 	for _, executable := range []struct{ name, source string }{{"boot/vmlinux", kernel}, {"boot/initramfs", filepath.Join(guest, "initramfs")}, {"usr/local/libexec/sandbox-agent", filepath.Join(guest, "sandbox-agent")}} {
 		file, err := os.Open(executable.source)
@@ -604,26 +553,16 @@ func kvmRuntimeLayer(
 	}
 	addFile("usr/lib/systemd/systemd", os.NewFile(uintptr(fd), "systemd"))
 	text("etc/os-release", "ID=sandbox-acceptance\nNAME=Sandbox\n", 0o644)
-	text(
-		"etc/passwd",
-		"root:x:0:0:root:/root:/bin/sh\nsandbox:x:1000:1000:sandbox:/home/sandbox:/bin/sh\n",
-		0o644,
-	)
+	text("etc/passwd", "root:x:0:0:root:/root:/bin/sh\nsandbox:x:1000:1000:sandbox:/home/sandbox:/bin/sh\n", 0o644)
 	text("etc/group", "root:x:0:\nsandbox:x:1000:\n", 0o644)
 	text("etc/machine-id", "", 0o644)
 	text("etc/resolv.conf", "", 0o644)
-	unit, err := os.ReadFile(
-		filepath.Join("..", "guest", "systemd", "sandbox-agent.service"),
-	)
+	unit, err := os.ReadFile(filepath.Join("..", "guest", "systemd", "sandbox-agent.service"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text("etc/systemd/system/sandbox-agent.service", string(unit), 0o644)
-	text(
-		"usr/local/libexec/acceptance-raw-protection",
-		kvmRawWriteChecks,
-		0o644,
-	)
+	text("usr/local/libexec/acceptance-raw-protection", kvmRawWriteChecks, 0o644)
 	text(
 		"etc/systemd/system/sandbox-agent.service.d/console.conf",
 		"[Service]\nExecStartPre=/bin/sh /usr/local/libexec/acceptance-raw-protection\nStandardOutput=tty\nStandardError=tty\nTTYPath=/dev/ttyS0\n",
@@ -635,10 +574,7 @@ func kvmRuntimeLayer(
 		0o644,
 	)
 	link("etc/systemd/system/default.target", "acceptance.target")
-	link(
-		"etc/systemd/system/sysinit.target.wants/sandbox-agent.service",
-		"../sandbox-agent.service",
-	)
+	link("etc/systemd/system/sysinit.target.wants/sandbox-agent.service", "../sandbox-agent.service")
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -660,10 +596,7 @@ func kvmRuntimeLayer(
 	if err := os.MkdirAll(blobDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(
-		archive.Name(),
-		filepath.Join(blobDir, d.Encoded()),
-	); err != nil {
+	if err := os.Rename(archive.Name(), filepath.Join(blobDir, d.Encoded())); err != nil {
 		t.Fatal(err)
 	}
 	return ociLayerFixture{
@@ -678,7 +611,7 @@ func kvmRuntimeLayer(
 
 // This exercises the userspace handoff through actual OCI materialization,
 // without booting a VM or consulting a package database.
-func TestAcceptanceRootfsOCI(t *testing.T) {
+func TestKVMRootfsOCI(t *testing.T) {
 	requireEROFS(t)
 	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
 		t.Run(materialization, func(t *testing.T) {
@@ -688,17 +621,10 @@ func TestAcceptanceRootfsOCI(t *testing.T) {
 			rootfs, guest, layout := t.TempDir(), t.TempDir(), t.TempDir()
 			payload := "self-contained-runtime"
 			target := "packages/runtime/executable"
-			if err := os.MkdirAll(
-				filepath.Join(rootfs, "packages/runtime"),
-				0o755,
-			); err != nil {
+			if err := os.MkdirAll(filepath.Join(rootfs, "packages/runtime"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(
-				filepath.Join(rootfs, target),
-				[]byte(payload),
-				0o755,
-			); err != nil {
+			if err := os.WriteFile(filepath.Join(rootfs, target), []byte(payload), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			// Absolute links must resolve in the guest, not against the host.
@@ -712,27 +638,12 @@ func TestAcceptanceRootfsOCI(t *testing.T) {
 				}
 			}
 			for _, name := range []string{"kernel", "initramfs", "sandbox-agent"} {
-				if err := os.WriteFile(
-					filepath.Join(guest, name),
-					[]byte("fixture-"+name),
-					0o755,
-				); err != nil {
+				if err := os.WriteFile(filepath.Join(guest, name), []byte("fixture-"+name), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
-			layer := kvmRuntimeLayer(
-				t,
-				layout,
-				filepath.Join(guest, "kernel"),
-				guest,
-				rootfs,
-			)
-			image := putOCIManifest(
-				t,
-				layout,
-				"provider-independent-runtime",
-				[]ociLayerFixture{layer},
-			)
+			layer := kvmRuntimeLayer(t, layout, filepath.Join(guest, "kernel"), guest, rootfs)
+			image := putOCIManifest(t, layout, "provider-independent-runtime", []ociLayerFixture{layer})
 			e := openTest(t, t.TempDir(), newTestBackend(), true, nil)
 			t.Cleanup(func() { e.Close() })
 			m, err := e.ImportOCI(context.Background(), ImportOptions{
@@ -786,9 +697,7 @@ func kvmMetadataLayers(t *testing.T, layout string) []ociLayerFixture {
 	setid.header.Mode = 0o6755
 	capability := entry("acceptance/capability", "capability")
 	capability.header.Xattrs = map[string]string{
-		"security.capability": string(
-			[]byte{1, 0, 0, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-		),
+		"security.capability": string([]byte{1, 0, 0, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
 	}
 	acl := entry("acceptance/acl", "acl")
 	// POSIX access ACL: owner rw, named UID1000 r, group r, mask r, other r.
@@ -954,11 +863,7 @@ func (vm *kvmMachine) api(t *testing.T, endpoint string, body any) {
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(
-		http.MethodPut,
-		"http://localhost/api/v1/"+endpoint,
-		reader,
-	)
+	req, err := http.NewRequest(http.MethodPut, "http://localhost/api/v1/"+endpoint, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -970,25 +875,13 @@ func (vm *kvmMachine) api(t *testing.T, endpoint string, body any) {
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil || response.StatusCode != 204 && response.StatusCode != 200 {
-		t.Fatalf(
-			"%s: %d %s %v; artifacts %s",
-			endpoint,
-			response.StatusCode,
-			data,
-			err,
-			vm.dir,
-		)
+		t.Fatalf("%s: %d %s %v; artifacts %s", endpoint, response.StatusCode, data, err, vm.dir)
 	}
 }
 
 func (vm *kvmMachine) ready(t *testing.T, ctx context.Context, restored bool) {
 	t.Helper()
-	if err := systemAgent(
-		ctx,
-		vm.vsock,
-		"kvm-acceptance",
-		restored,
-	); err != nil {
+	if err := systemAgent(ctx, vm.vsock, "kvm-acceptance", restored); err != nil {
 		t.Fatalf("real guest readiness: %v; inspect %s", err, vm.dir)
 	}
 }
@@ -1051,21 +944,10 @@ func (vm *kvmMachine) rpc(
 	for {
 		frame, err := protocol.ReadFrame(reader)
 		if err != nil {
-			t.Fatalf(
-				"%s: %v; output %q; logs %s",
-				method,
-				err,
-				output.String(),
-				vm.dir,
-			)
+			t.Fatalf("%s: %v; output %q; logs %s", method, err, output.String(), vm.dir)
 		}
 		if frame.Id != id || frame.Error != "" {
-			t.Fatalf(
-				"%s: invalid/error reply %+v; output %q",
-				method,
-				frame,
-				output.String(),
-			)
+			t.Fatalf("%s: invalid/error reply %+v; output %q", method, frame, output.String())
 		}
 		output.Write(frame.Data)
 		if frame.Eof {
@@ -1101,20 +983,8 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	vm.rpc(
-		t,
-		2048,
-		"tree_push",
-		map[string]any{"path": "/workspace/tree-original"},
-		archive.Bytes(),
-	)
-	_, pulled := vm.rpc(
-		t,
-		2048,
-		"tree_pull",
-		map[string]any{"path": "/workspace/tree-original"},
-		nil,
-	)
+	vm.rpc(t, 2048, "tree_push", map[string]any{"path": "/workspace/tree-original"}, archive.Bytes())
+	_, pulled := vm.rpc(t, 2048, "tree_pull", map[string]any{"path": "/workspace/tree-original"}, nil)
 	reader := tar.NewReader(strings.NewReader(pulled))
 	found := false
 	for {
@@ -1127,15 +997,10 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 		}
 		if header.Typeflag == tar.TypeReg {
 			got, err := io.ReadAll(reader)
-			if err != nil || !bytes.Equal(got, content) || header.Uid != 1000 ||
-				header.Gid != 1000 ||
+			if err != nil || !bytes.Equal(got, content) || header.Uid != 1000 || header.Gid != 1000 ||
 				header.Mode != 0o6751 ||
 				!header.ModTime.Equal(mtime) {
-				t.Fatalf(
-					"actual guest tree metadata/content mismatch: %+v: %v",
-					header,
-					err,
-				)
+				t.Fatalf("actual guest tree metadata/content mismatch: %+v: %v", header, err)
 			}
 			found = true
 		}
@@ -1143,13 +1008,7 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if !found {
 		t.Fatal("actual guest pull omitted regular file")
 	}
-	vm.rpc(
-		t,
-		2048,
-		"tree_push",
-		map[string]any{"path": "/workspace/tree-copy"},
-		[]byte(pulled),
-	)
+	vm.rpc(t, 2048, "tree_push", map[string]any{"path": "/workspace/tree-copy"}, []byte(pulled))
 	vm.exec(t, `set -eu
 export PATH=/bin
 for tree in /workspace/tree-original /workspace/tree-copy; do
@@ -1162,23 +1021,11 @@ for tree in /workspace/tree-original /workspace/tree-copy; do
 done
 printf 'guest-tree-roundtrip-ok\n'
 `)
-	_, copied := vm.rpc(
-		t,
-		2048,
-		"fs_read",
-		map[string]any{"path": "/workspace/tree-copy/file"},
-		nil,
-	)
+	_, copied := vm.rpc(t, 2048, "fs_read", map[string]any{"path": "/workspace/tree-copy/file"}, nil)
 	if !bytes.Equal([]byte(copied), content) {
 		t.Fatal("binary file changed during guest tree roundtrip")
 	}
-	_, raw := vm.rpc(
-		t,
-		2048,
-		"fs_read",
-		map[string]any{"path": "/workspace/tree-copy/xattr-value"},
-		nil,
-	)
+	_, raw := vm.rpc(t, 2048, "fs_read", map[string]any{"path": "/workspace/tree-copy/xattr-value"}, nil)
 	if !bytes.Equal([]byte(raw), xattr) {
 		t.Fatal("binary user xattr changed during guest tree roundtrip")
 	}
@@ -1186,20 +1033,9 @@ printf 'guest-tree-roundtrip-ok\n'
 
 func (vm *kvmMachine) exec(t *testing.T, command string) {
 	t.Helper()
-	params, out := vm.rpc(
-		t,
-		2048,
-		"exec",
-		map[string]any{"command": command},
-		nil,
-	)
+	params, out := vm.rpc(t, 2048, "exec", map[string]any{"command": command}, nil)
 	if exit, ok := params["exit_code"].(float64); !ok || exit != 0 {
-		t.Fatalf(
-			"guest command failed: %v output %q command:\n%s",
-			params,
-			out,
-			command,
-		)
+		t.Fatalf("guest command failed: %v output %q command:\n%s", params, out, command)
 	}
 	t.Log(strings.TrimSpace(out))
 }
@@ -1212,16 +1048,8 @@ func (vm *kvmMachine) capture(t *testing.T, upper, name string) string {
 	}
 	vm.api(t, "vm.pause", nil)
 	defer vm.api(t, "vm.resume", nil)
-	vm.api(
-		t,
-		"vm.snapshot",
-		map[string]any{"destination_url": "file://" + capture},
-	)
-	if err := copyFile(
-		upper,
-		filepath.Join(capture, "disk.raw"),
-		0o600,
-	); err != nil {
+	vm.api(t, "vm.snapshot", map[string]any{"destination_url": "file://" + capture})
+	if err := copyFile(upper, filepath.Join(capture, "disk.raw"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateCOWTopology(capture, 512<<20); err != nil {
@@ -1238,27 +1066,16 @@ func kvmRestore(t *testing.T, hypervisor, dir, capture string) *kvmMachine {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"config.json", "state.json"} {
-		if err := copyFile(
-			filepath.Join(capture, name),
-			filepath.Join(restore, name),
-			0o600,
-		); err != nil {
+		if err := copyFile(filepath.Join(capture, name), filepath.Join(restore, name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	backing := filepath.Join(restore, "memory-ranges")
-	if err := os.Link(
-		filepath.Join(capture, "memory-ranges"),
-		backing,
-	); err != nil {
+	if err := os.Link(filepath.Join(capture, "memory-ranges"), backing); err != nil {
 		t.Fatal(err)
 	}
 	upper := filepath.Join(dir, "upper.raw")
-	if err := copyFile(
-		filepath.Join(capture, "disk.raw"),
-		upper,
-		0o600,
-	); err != nil {
+	if err := copyFile(filepath.Join(capture, "disk.raw"), upper, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var config map[string]any
@@ -1293,17 +1110,11 @@ func kvmRestore(t *testing.T, hypervisor, dir, capture string) *kvmMachine {
 	if err := unix.Stat(backing, &stat); err != nil {
 		t.Fatal(err)
 	}
-	maps, err := os.ReadFile(
-		fmt.Sprintf("/proc/%d/maps", vm.command.Process.Pid),
-	)
+	maps, err := os.ReadFile(fmt.Sprintf("/proc/%d/maps", vm.command.Process.Pid))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(
-		filepath.Join(dir, "maps.txt"),
-		maps,
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "maps.txt"), maps, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	identity, _ := json.Marshal(
@@ -1313,18 +1124,10 @@ func kvmRestore(t *testing.T, hypervisor, dir, capture string) *kvmMachine {
 			"bytes":  stat.Size,
 		},
 	)
-	if err := os.WriteFile(
-		filepath.Join(dir, "backing.json"),
-		identity,
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "backing.json"), identity, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyCOWFileMappings(
-		bytes.NewReader(maps),
-		&stat,
-		uint64(stat.Size),
-	); err != nil {
+	if err := verifyCOWFileMappings(bytes.NewReader(maps), &stat, uint64(stat.Size)); err != nil {
 		t.Fatalf("VMM did not retain private file-backed RAM: %v", err)
 	}
 	vm.api(t, "vm.resume", nil)

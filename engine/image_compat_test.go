@@ -36,16 +36,9 @@ func requireMergedOCI(t *testing.T) {
 		}
 		if x == nil {
 			var args []string
-			args, err = imageToolSandbox(
-				t.TempDir(),
-				[]imageMount{{binary, "/tools/umoci"}},
-				true,
-			)
+			args, err = imageToolSandbox(t.TempDir(), []imageMount{{binary, "/tools/umoci"}}, true)
 			if err == nil {
-				err = runMappedImageTool(
-					context.Background(),
-					append(args, "--", "/tools/umoci", "--version"),
-				)
+				err = runMappedImageTool(context.Background(), append(args, "--", "/tools/umoci", "--version"))
 			}
 		} else {
 			err = x
@@ -55,17 +48,11 @@ func requireMergedOCI(t *testing.T) {
 		if os.Getenv("SANDBOX_REQUIRE_EROFS_TESTS") == "1" {
 			t.Fatal(err)
 		}
-		t.Skipf(
-			"actual OCI compatibility tool/namespace test unavailable: %v",
-			err,
-		)
+		t.Skipf("actual OCI compatibility tool/namespace test unavailable: %v", err)
 	}
 }
 
-func importMergedFixture(
-	t *testing.T,
-	layers ...[]tarEntry,
-) (*Engine, string, ImageManifest) {
+func importMergedFixture(t *testing.T, layers ...[]tarEntry) (*Engine, string, ImageManifest) {
 	t.Helper()
 	requireMergedOCI(t)
 	layout := t.TempDir()
@@ -94,9 +81,7 @@ func importMergedFixture(
 
 func extractMergedManifest(t *testing.T, e *Engine, m ImageManifest) string {
 	t.Helper()
-	bindings, err := m.ReadOnlyBindings(
-		filepath.Join(e.opts.StateDir, "images", m.Digest[7:]),
-	)
+	bindings, err := m.ReadOnlyBindings(filepath.Join(e.opts.StateDir, "images", m.Digest[7:]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,24 +130,13 @@ while read -r inner outer count; do printf '%s %s %s\n' "$inner" "$outer" "$coun
 	return filepath.Join(out, "tree")
 }
 
-func dumpMergedPath(
-	t *testing.T,
-	e *Engine,
-	m ImageManifest,
-	path string,
-) string {
+func dumpMergedPath(t *testing.T, e *Engine, m ImageManifest, path string) string {
 	t.Helper()
-	image := filepath.Join(
-		e.opts.StateDir,
-		"images",
-		m.Digest[7:],
-		"root.erofs",
-	)
+	image := filepath.Join(e.opts.StateDir, "images", m.Digest[7:], "root.erofs")
 	if len(m.Artifacts) != 0 {
 		image = filepath.Join(e.opts.StateDir, m.Artifacts[0].Path)
 	}
-	out, err := exec.Command("dump.erofs", "--path="+path, image).
-		CombinedOutput()
+	out, err := exec.Command("dump.erofs", "--path="+path, image).CombinedOutput()
 	if err != nil {
 		t.Fatalf("native inode inspection: %v: %s", err, out)
 	}
@@ -195,12 +169,7 @@ func TestActualOCIRejectsInvalidToolRoots(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
 	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(
-		t,
-		layout,
-		"invalid-tool-environment",
-		[]ociLayerFixture{layer},
-	)
+	image := putOCIManifest(t, layout, "invalid-tool-environment", []ociLayerFixture{layer})
 	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
 		t.Run(materialization, func(t *testing.T) {
 			for _, roots := range []string{"relative/path", "/", "/proc", "/tmp/alternate-tools", "/missing-acceptance-tool-root"} {
@@ -216,27 +185,15 @@ func TestActualOCIRejectsInvalidToolRoots(t *testing.T) {
 						MaxFiles:        1000,
 					})
 					if err == nil {
-						t.Fatal(
-							"OCI import accepted invalid tool dependency roots",
-						)
+						t.Fatal("OCI import accepted invalid tool dependency roots")
 					}
 					if !strings.Contains(err.Error(), "tool root") &&
-						!strings.Contains(
-							err.Error(),
-							"SANDBOX_IMAGE_TOOL_ROOTS",
-						) {
+						!strings.Contains(err.Error(), "SANDBOX_IMAGE_TOOL_ROOTS") {
 						t.Fatalf("unexpected OCI import failure: %v", err)
 					}
-					published := filepath.Join(
-						e.opts.StateDir,
-						"images",
-						image[7:],
-					)
+					published := filepath.Join(e.opts.StateDir, "images", image[7:])
 					if _, err := os.Stat(published); !os.IsNotExist(err) {
-						t.Fatalf(
-							"invalid tool environment published an image: %v",
-							err,
-						)
+						t.Fatalf("invalid tool environment published an image: %v", err)
 					}
 				})
 			}
@@ -327,8 +284,7 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 	}
 	for name, header := range map[string]tar.Header{".": root.header, "inherited": parent.header, "target": file.header, "acl": aclFile.header, "cap-ns": capNS.header} {
 		st, err := os.Stat(filepath.Join(tree, name))
-		if err != nil || st.Mode().Perm() != os.FileMode(header.Mode&0o777) ||
-			!st.ModTime().Equal(header.ModTime) {
+		if err != nil || st.Mode().Perm() != os.FileMode(header.Mode&0o777) || !st.ModTime().Equal(header.ModTime) {
 			t.Fatalf("%s metadata: %+v %v; expected %+v", name, st, err, header)
 		}
 		dump := dumpMergedPath(t, e, m, "/"+strings.TrimPrefix(name, "."))
@@ -340,18 +296,8 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 			t.Fatalf("%s ownership: %s", name, dump)
 		}
 		var native unix.Stat_t
-		if err := unix.Lstat(
-			filepath.Join(tree, name),
-			&native,
-		); err != nil ||
-			native.Mode&0o7777 != uint32(header.Mode) {
-			t.Fatalf(
-				"%s permission bits: %#o %v; expected %#o",
-				name,
-				native.Mode&0o7777,
-				err,
-				header.Mode,
-			)
+		if err := unix.Lstat(filepath.Join(tree, name), &native); err != nil || native.Mode&0o7777 != uint32(header.Mode) {
+			t.Fatalf("%s permission bits: %#o %v; expected %#o", name, native.Mode&0o7777, err, header.Mode)
 		}
 		for key, value := range header.Xattrs {
 			buf := make([]byte, 4096)
@@ -360,8 +306,7 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 			// Extracting a v2 capability in a user namespace writes a v3
 			// capability owned by that namespace's host root ID. Verify both
 			// payload and root mapping before comparing its original v2 value.
-			if key == "security.capability" && n == 24 &&
-				binary.LittleEndian.Uint32(got) == 0x03000001 &&
+			if key == "security.capability" && n == 24 && binary.LittleEndian.Uint32(got) == 0x03000001 &&
 				binary.LittleEndian.Uint32(got[20:]) == uint32(os.Geteuid()) {
 				got = append([]byte(nil), got[:20]...)
 				binary.LittleEndian.PutUint32(got, 0x02000001)
@@ -372,11 +317,7 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 				id := binary.LittleEndian.Uint32(want[20:])
 				binary.LittleEndian.PutUint32(
 					want[20:],
-					mappedHostID(
-						t,
-						filepath.Join(filepath.Dir(tree), "uid_map"),
-						id,
-					),
+					mappedHostID(t, filepath.Join(filepath.Dir(tree), "uid_map"), id),
 				)
 			}
 			if key == "system.posix_acl_access" {
@@ -391,51 +332,32 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 						id := binary.LittleEndian.Uint32(want[offset+4:])
 						binary.LittleEndian.PutUint32(
 							want[offset+4:],
-							mappedHostID(
-								t,
-								filepath.Join(filepath.Dir(tree), kind),
-								id,
-							),
+							mappedHostID(t, filepath.Join(filepath.Dir(tree), kind), id),
 						)
 					}
 				}
 			}
 			if err != nil || !bytes.Equal(got, want) {
-				t.Fatalf(
-					"%s xattr %s: %x %v; expected %x",
-					name,
-					key,
-					got,
-					err,
-					want,
-				)
+				t.Fatalf("%s xattr %s: %x %v; expected %x", name, key, got, err, want)
 			}
 		}
 	}
 	if materialization == LayeredEROFSLayout {
-		if m.Format != 2 || !m.sharedLayered() ||
-			m.Builder != imageBuilder(m.Tools) {
-			t.Fatal(
-				"shared materialization lacks its new immutable builder identity",
-			)
+		if m.Format != 2 || !m.sharedLayered() || m.Builder != imageBuilder(m.Tools) {
+			t.Fatal("shared materialization lacks its new immutable builder identity")
 		}
 		return
 	}
-	if m.Format != 3 || m.Layout != MergedOCIEROFSLayout ||
-		m.Builder != mergedOCIBuilder(m.Tools) ||
+	if m.Format != 3 || m.Layout != MergedOCIEROFSLayout || m.Builder != mergedOCIBuilder(m.Tools) ||
 		m.Builder == imageBuilder(m.Tools) {
 		t.Fatal("merged compatibility lacks a distinct immutable identity")
 	}
-	bindings, err := m.ReadOnlyBindings(
-		filepath.Join(e.opts.StateDir, "images", m.Digest[7:]),
-	)
-	if err != nil || len(bindings) != 1 ||
-		bindings[0].GuestPath != "/images/root.erofs" ||
+	bindings, err := m.ReadOnlyBindings(filepath.Join(e.opts.StateDir, "images", m.Digest[7:]))
+	if err != nil || len(bindings) != 1 || bindings[0].GuestPath != "/images/root.erofs" ||
 		bindings[0].Serial != "sandbox-root" {
 		t.Fatalf("merged runtime binding: %+v %v", bindings, err)
 	}
-	if parameter, err := m.DataKernelParameter(); err != nil ||
-		parameter != "" {
+	if parameter, err := m.DataKernelParameter(); err != nil || parameter != "" {
 		t.Fatalf("merged data kernel parameter: %q %v", parameter, err)
 	}
 }
@@ -469,30 +391,20 @@ func TestActualMergedOCIWhiteoutOpaqueAndReplacement(t *testing.T) {
 			t.Fatalf("whiteout/opaque not applied: %s %v", name, err)
 		}
 	}
-	rootTop := append(
-		bootLayerEntries(),
-		fileEntry(".wh..wh..opq", ""),
-		fileEntry("survivor", "top"),
-	)
+	rootTop := append(bootLayerEntries(), fileEntry(".wh..wh..opq", ""), fileEntry("survivor", "top"))
 	e2, _, m2 := importMergedFixture(t, base, rootTop)
 	tree2 := extractMergedManifest(t, e2, m2)
 	if _, err := os.Stat(filepath.Join(tree2, "replace")); !os.IsNotExist(err) {
 		t.Fatalf("root opaque retained lower file: %v", err)
 	}
-	if data, err := os.ReadFile(
-		filepath.Join(tree2, "survivor"),
-	); err != nil ||
-		string(data) != "top" {
+	if data, err := os.ReadFile(filepath.Join(tree2, "survivor")); err != nil || string(data) != "top" {
 		t.Fatalf("root opaque lost same-layer file: %q %v", data, err)
 	}
 }
 
 func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 	e, layout, m := importMergedFixture(t, bootLayerEntries())
-	_, err := e.ImportOCI(
-		context.Background(),
-		ImportOptions{Layout: layout, Digest: m.Digest},
-	)
+	_, err := e.ImportOCI(context.Background(), ImportOptions{Layout: layout, Digest: m.Digest})
 	var apiErr *api.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != api.Conflict {
 		t.Fatalf("digest layout change must conflict: %v", err)
@@ -504,17 +416,11 @@ func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 			Digest:          m.Digest,
 			Materialization: MergedOCIEROFSLayout,
 		},
-	); err != nil ||
-		again.Builder != m.Builder {
+	); err != nil || again.Builder != m.Builder {
 		t.Fatalf("same layout reimport: %v", err)
 	}
 	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(
-		t,
-		layout,
-		"layered-first",
-		[]ociLayerFixture{layer},
-	)
+	image := putOCIManifest(t, layout, "layered-first", []ociLayerFixture{layer})
 	opts := ImportOptions{
 		Layout:   layout,
 		Digest:   image,
@@ -558,17 +464,8 @@ func TestActualMergedOCIOrderedEntries(t *testing.T) {
 func TestActualMergedOCIForwardHardlinkRefusal(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
-	entries := append(
-		bootLayerEntries(),
-		hardEntry("alias", "target"),
-		fileEntry("target", "data"),
-	)
-	image := putOCIManifest(
-		t,
-		layout,
-		"forward",
-		[]ociLayerFixture{putOCILayer(t, layout, entries, false)},
-	)
+	entries := append(bootLayerEntries(), hardEntry("alias", "target"), fileEntry("target", "data"))
+	image := putOCIManifest(t, layout, "forward", []ociLayerFixture{putOCILayer(t, layout, entries, false)})
 	e := openTest(t, t.TempDir(), newTestBackend(), true, nil)
 	defer e.Close()
 	_, err := e.ImportOCI(
@@ -581,17 +478,11 @@ func TestActualMergedOCIForwardHardlinkRefusal(t *testing.T) {
 			MaxFiles:        1000,
 		},
 	)
-	if err == nil ||
-		!strings.Contains(err.Error(), "link: no such file or directory") {
-		t.Fatalf(
-			"expected explicit native umoci forward-hardlink failure: %v",
-			err,
-		)
+	if err == nil || !strings.Contains(err.Error(), "link: no such file or directory") {
+		t.Fatalf("expected explicit native umoci forward-hardlink failure: %v", err)
 	}
 	var count int
-	if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).
-		Scan(&count); err != nil ||
-		count != 0 {
+	if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed unpack published an image: %d %v", count, err)
 	}
 }
@@ -634,23 +525,12 @@ func TestActualMergedOCISymlinkHardlinkAndConfinement(t *testing.T) {
 	if a == nil || b == nil || !os.SameFile(a, b) {
 		t.Fatal("symlink hardlink identity lost")
 	}
-	if data, err := os.ReadFile(
-		filepath.Join(tree, "victim"),
-	); err != nil ||
-		string(data) != "unchanged" {
+	if data, err := os.ReadFile(filepath.Join(tree, "victim")); err != nil || string(data) != "unchanged" {
 		t.Fatalf("symlink parent escaped root: %q %v", data, err)
 	}
 	if data, err := os.ReadFile(
-		filepath.Join(
-			e.opts.StateDir,
-			"imports",
-			m.Digest[7:],
-			"output",
-			"victim",
-		),
-	); !os.IsNotExist(
-		err,
-	) {
+		filepath.Join(e.opts.StateDir, "imports", m.Digest[7:], "output", "victim"),
+	); !os.IsNotExist(err) {
 		t.Fatalf("symlink parent wrote builder workspace: %q %v", data, err)
 	}
 }
@@ -672,22 +552,12 @@ func TestMergedOCIPreflight(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			file, diff := layerFixture(t, header)
-			if _, _, err := validateLayerFor(
-				file,
-				v1.MediaTypeImageLayer,
-				diff,
-				1<<20,
-				100,
-				true,
-			); err == nil {
+			if _, _, err := validateLayerFor(file, v1.MediaTypeImageLayer, diff, 1<<20, 100, true); err == nil {
 				t.Fatal("compatibility bypassed security preflight")
 			}
 		})
 	}
-	file, diff := layerFixture(
-		t,
-		&tar.Header{Name: "file", Typeflag: tar.TypeReg, Size: 1024},
-	)
+	file, diff := layerFixture(t, &tar.Header{Name: "file", Typeflag: tar.TypeReg, Size: 1024})
 	for name, limits := range map[string][2]int64{"bytes": {100, 100}, "files": {1 << 20, 0}} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := validateLayerFor(
@@ -731,13 +601,8 @@ func TestActualMergedOCIExplicitSelectionAndVerification(t *testing.T) {
 	shared := openTest(t, t.TempDir(), newTestBackend(), true, nil)
 	defer shared.Close()
 	defaultManifest, err := shared.ImportOCI(context.Background(), opts)
-	if err != nil || defaultManifest.Layout != LayeredEROFSLayout ||
-		!defaultManifest.sharedLayered() {
-		t.Fatalf(
-			"default must preserve root metadata in shared layers: %+v %v",
-			defaultManifest,
-			err,
-		)
+	if err != nil || defaultManifest.Layout != LayeredEROFSLayout || !defaultManifest.sharedLayered() {
+		t.Fatalf("default must preserve root metadata in shared layers: %+v %v", defaultManifest, err)
 	}
 	opts.Materialization = MergedOCIEROFSLayout
 	original, err := e.ImportOCI(context.Background(), opts)
@@ -822,16 +687,10 @@ func TestActualMergedOCIUnpublishedDestinationGuard(t *testing.T) {
 			}
 			dest := filepath.Join(e.opts.StateDir, "images", image[7:])
 			if kind == "other layout" {
-				if _, err := e.ImportOCI(
-					context.Background(),
-					opts,
-				); err != nil {
+				if _, err := e.ImportOCI(context.Background(), opts); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := e.db.Exec(
-					"DELETE FROM meta WHERE key=?",
-					"image:"+image,
-				); err != nil {
+				if _, err := e.db.Exec("DELETE FROM meta WHERE key=?", "image:"+image); err != nil {
 					t.Fatal(err)
 				}
 			} else if err := os.Symlink(filepath.Join(t.TempDir(), "absent"), dest); err != nil {
@@ -843,9 +702,7 @@ func TestActualMergedOCIUnpublishedDestinationGuard(t *testing.T) {
 			}
 			opts.Materialization = MergedOCIEROFSLayout
 			if _, err := e.ImportOCI(context.Background(), opts); err == nil {
-				t.Fatal(
-					"existing unpublished destination replaced or layout changed",
-				)
+				t.Fatal("existing unpublished destination replaced or layout changed")
 			}
 			after, err := os.Lstat(dest)
 			if err != nil || !os.SameFile(before, after) {
@@ -853,8 +710,7 @@ func TestActualMergedOCIUnpublishedDestinationGuard(t *testing.T) {
 			}
 			var count int
 			if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).
-				Scan(&count); err != nil ||
-				count != 0 {
+				Scan(&count); err != nil || count != 0 {
 				t.Fatalf("failed import published image: %d %v", count, err)
 			}
 		})
@@ -907,21 +763,11 @@ func TestActualMergedOCIInvalidInputsDoNotPublish(t *testing.T) {
 				}
 				manifest.Config.Size++
 				data, _ := json.Marshal(manifest)
-				image = putOCIBlob(
-					t,
-					layout,
-					data,
-					v1.MediaTypeImageManifest,
-				).Digest.String()
+				image = putOCIBlob(t, layout, data, v1.MediaTypeImageManifest).Digest.String()
 			}
 			if kind == "layer checksum" {
 				if err := os.WriteFile(
-					filepath.Join(
-						layout,
-						"blobs",
-						"sha256",
-						layer.descriptor.Digest.Encoded(),
-					),
+					filepath.Join(layout, "blobs", "sha256", layer.descriptor.Digest.Encoded()),
 					[]byte("corrupt"),
 					0o600,
 				); err != nil {
@@ -945,8 +791,7 @@ func TestActualMergedOCIInvalidInputsDoNotPublish(t *testing.T) {
 			}
 			var count int
 			if err := e.db.QueryRow("SELECT count(*) FROM meta WHERE key=?", "image:"+image).
-				Scan(&count); err != nil ||
-				count != 0 {
+				Scan(&count); err != nil || count != 0 {
 				t.Fatalf("failed import published image: %d %v", count, err)
 			}
 		})

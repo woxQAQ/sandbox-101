@@ -13,17 +13,9 @@ func TestCloneRejectsLegacyPublication(t *testing.T) {
 	b := newTestBackend()
 	e := openTest(t, t.TempDir(), b, true, nil)
 	defer e.Close()
-	vm := wait(
-		t,
-		e,
-		api.Request{Key: "create", Action: "create", Config: config()},
-	)
+	vm := wait(t, e, api.Request{Key: "create", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "start", Action: "start", VMID: vm.VMID})
-	op := wait(
-		t,
-		e,
-		api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID},
-	)
+	op := wait(t, e, api.Request{Key: "snapshot", Action: "snapshot", VMID: vm.VMID})
 	lock := e.vmLock(vm.VMID)
 	lock.Lock()
 	s, err := e.loadSnapshot(context.Background(), op.SnapshotID)
@@ -52,8 +44,7 @@ func TestCloneRejectsLegacyPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	final := awaitStatus(t, e, clone.ID)
-	if final.Status != "failed" || final.Error == nil ||
-		final.Error.Code != api.Incompatible {
+	if final.Status != "failed" || final.Error == nil || final.Error.Code != api.Incompatible {
 		t.Fatalf("legacy publication trusted: %+v", final)
 	}
 	b.mu.Lock()
@@ -80,10 +71,7 @@ func TestCloneRecoveryAfterBackingTransferAndSnapshotDeletion(t *testing.T) {
 	a := wait(t, e, api.Request{Key: "a", Action: "create", Config: config()})
 	wait(t, e, api.Request{Key: "boot", Action: "start", VMID: a.VMID})
 	s := wait(t, e, api.Request{Key: "snap", Action: "snapshot", VMID: a.VMID})
-	op, err := e.Submit(
-		context.Background(),
-		api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID},
-	)
+	op, err := e.Submit(context.Background(), api.Request{Key: "clone", Action: "clone", SnapshotID: s.SnapshotID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +114,7 @@ func TestRestoreUsesFreshInstanceAndDefaultNetworkBlock(t *testing.T) {
 		},
 	)
 	after, _ := e.GetVM(context.Background(), a.VMID)
-	if after.Instance == before.Instance || after.ID != before.ID ||
-		after.NetworkActual ||
-		after.NetworkEnabled ||
+	if after.Instance == before.Instance || after.ID != before.ID || after.NetworkActual || after.NetworkEnabled ||
 		!after.AgentReady {
 		t.Fatalf("bad restore identity %+v", after)
 	}

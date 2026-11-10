@@ -35,10 +35,7 @@ func (h *countedHash) Write(b []byte) (int, error) {
 func shaName(s string) (string, error) {
 	d, err := digest.Parse(s)
 	if err != nil || d.Algorithm() != digest.SHA256 {
-		return "", api.Fail(
-			api.Invalid,
-			"only canonical sha256 OCI descriptors accepted",
-		)
+		return "", api.Fail(api.Invalid, "only canonical sha256 OCI descriptors accepted")
 	}
 	return d.Encoded(), nil
 }
@@ -97,18 +94,11 @@ func tarPath(s string) error {
 	return nil
 }
 
-func validateLayer(
-	file, media, diffID string,
-	maxBytes, maxFiles int64,
-) (int64, int64, error) {
+func validateLayer(file, media, diffID string, maxBytes, maxFiles int64) (int64, int64, error) {
 	return validateLayerFor(file, media, diffID, maxBytes, maxFiles, false)
 }
 
-func validateLayerFor(
-	file, media, diffID string,
-	maxBytes, maxFiles int64,
-	merged bool,
-) (int64, int64, error) {
+func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merged bool) (int64, int64, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return 0, 0, err
@@ -126,11 +116,7 @@ func validateLayerFor(
 		stream = g
 	case v1.MediaTypeImageLayer:
 	default:
-		return 0, 0, api.Fail(
-			api.Incompatible,
-			"only uncompressed/gzip OCI layers supported, got %s",
-			media,
-		)
+		return 0, 0, api.Fail(api.Incompatible, "only uncompressed/gzip OCI layers supported, got %s", media)
 	}
 	// Validate the uncompressed digest and tar's complete stream (including padding).
 	hash := newSHA256()
@@ -160,21 +146,13 @@ func validateLayerFor(
 				return 0, 0, e
 			}
 		default:
-			return 0, 0, api.Fail(
-				api.Invalid,
-				"unsupported OCI tar special file %q",
-				h.Name,
-			)
+			return 0, 0, api.Fail(api.Invalid, "unsupported OCI tar special file %q", h.Name)
 		}
 		if h.Size < 0 || h.Size > maxBytes-size {
-			return 0, 0, api.Fail(
-				api.Exhausted,
-				"OCI expanded size exceeds bound",
-			)
+			return 0, 0, api.Fail(api.Exhausted, "OCI expanded size exceeds bound")
 		}
 		size += h.Size
-		if strings.HasPrefix(path.Base(h.Name), ".wh.") &&
-			(h.Typeflag != tar.TypeReg || h.Size != 0) {
+		if strings.HasPrefix(path.Base(h.Name), ".wh.") && (h.Typeflag != tar.TypeReg || h.Size != 0) {
 			return 0, 0, api.Fail(api.Invalid, "invalid whiteout marker")
 		}
 		e = validateMergedOCIEntry(h)

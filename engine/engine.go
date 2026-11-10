@@ -33,9 +33,7 @@ type Options struct {
 	Fault func(string) error
 }
 
-var ErrInterrupted = errors.New(
-	"operation interrupted; durable intent retained",
-)
+var ErrInterrupted = errors.New("operation interrupted; durable intent retained")
 
 // Engine serializes durable VM intents and coordinates backend effects with
 // operation, snapshot, and resource ownership records.
@@ -62,18 +60,14 @@ var _ api.Client = (*Engine)(nil)
 // starts operation dispatch, reconciliation, and garbage collection.
 func Open(opts Options) (*Engine, error) {
 	if opts.StateDir == "" || opts.Backend == nil {
-		return nil, api.Fail(
-			api.Invalid,
-			"state directory and real backend are required",
-		)
+		return nil, api.Fail(api.Invalid, "state directory and real backend are required")
 	}
 	dir, err := filepath.Abs(opts.StateDir)
 	if err != nil {
 		return nil, err
 	}
 	opts.StateDir = dir
-	if opts.SafetyBytes < 0 || opts.MaxMemoryMiB < 0 || opts.MaxVCPUs < 0 ||
-		opts.ReconcileInterval < 0 ||
+	if opts.SafetyBytes < 0 || opts.MaxMemoryMiB < 0 || opts.MaxVCPUs < 0 || opts.ReconcileInterval < 0 ||
 		opts.GCInterval < 0 {
 		return nil, api.Fail(api.Invalid, "negative resource/reconcile limits")
 	}
@@ -83,11 +77,7 @@ func Open(opts Options) (*Engine, error) {
 	if opts.MaxMemoryMiB == 0 {
 		var s unix.Sysinfo_t
 		if unix.Sysinfo(&s) == nil {
-			opts.MaxMemoryMiB = int64(
-				s.Totalram,
-			) * int64(
-				s.Unit,
-			) / (1 << 20) * 8 / 10
+			opts.MaxMemoryMiB = int64(s.Totalram) * int64(s.Unit) / (1 << 20) * 8 / 10
 		}
 	}
 	if opts.MaxVCPUs == 0 {
@@ -106,25 +96,15 @@ func Open(opts Options) (*Engine, error) {
 		return nil, x
 	}
 	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return nil, api.Fail(
-			api.Invalid,
-			"state directory must be private (mode 0700)",
-		)
+		return nil, api.Fail(api.Invalid, "state directory must be private (mode 0700)")
 	}
-	lock, err := os.OpenFile(
-		filepath.Join(dir, "writer.lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
+	lock, err := os.OpenFile(filepath.Join(dir, "writer.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = lock.Close()
-		return nil, api.Fail(
-			api.Conflict,
-			"another engine writer owns this state directory",
-		)
+		return nil, api.Fail(api.Conflict, "another engine writer owns this state directory")
 	}
 	fail := func(e error) (*Engine, error) { return nil, errors.Join(e, lock.Close()) }
 	dbpath := filepath.Join(dir, "metadata.db")
@@ -144,21 +124,13 @@ func Open(opts Options) (*Engine, error) {
 		}
 		for _, entry := range entries {
 			if entry.Name() != "writer.lock" {
-				return fail(
-					api.Fail(
-						api.ManualRecovery,
-						"initialization requires an empty state directory",
-					),
-				)
+				return fail(api.Fail(api.ManualRecovery, "initialization requires an empty state directory"))
 			}
 		}
 	}
 	if _, e := os.Stat(filepath.Join(dir, "RECOVERY_REQUIRED")); e == nil {
 		return fail(
-			api.Fail(
-				api.ManualRecovery,
-				"backup restored: run recover with explicit acknowledgement before starting",
-			),
+			api.Fail(api.ManualRecovery, "backup restored: run recover with explicit acknowledgement before starting"),
 		)
 	}
 	db, err := sql.Open(
@@ -174,28 +146,12 @@ func Open(opts Options) (*Engine, error) {
 	failDB := func(e error) (*Engine, error) { return fail(errors.Join(e, db.Close())) }
 	if staterr == nil {
 		var integrity string
-		if err = db.QueryRow("PRAGMA quick_check").
-			Scan(&integrity); err != nil ||
-			integrity != "ok" {
-			return failDB(
-				api.Fail(
-					api.ManualRecovery,
-					"database integrity check failed: %v %s",
-					err,
-					integrity,
-				),
-			)
+		if err = db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
+			return failDB(api.Fail(api.ManualRecovery, "database integrity check failed: %v %s", err, integrity))
 		}
 		var version string
-		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema'").
-			Scan(&version); err != nil ||
-			version != "1" {
-			return failDB(
-				api.Fail(
-					api.ManualRecovery,
-					"existing DB does not have the supported engine schema",
-				),
-			)
+		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema'").Scan(&version); err != nil || version != "1" {
+			return failDB(api.Fail(api.ManualRecovery, "existing DB does not have the supported engine schema"))
 		}
 	}
 	schema := `CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -209,10 +165,7 @@ func Open(opts Options) (*Engine, error) {
 	if _, err = db.Exec(schema); err != nil {
 		return failDB(err)
 	}
-	if _, err = db.Exec(
-		"INSERT OR IGNORE INTO meta VALUES('identity',?)",
-		newID("store-"),
-	); err != nil {
+	if _, err = db.Exec("INSERT OR IGNORE INTO meta VALUES('identity',?)", newID("store-")); err != nil {
 		return failDB(err)
 	}
 	if _, err = db.Exec(
@@ -238,12 +191,10 @@ func Open(opts Options) (*Engine, error) {
 	if err = readJSON(filepath.Join(dir, "HEAD.json"), &head); err == nil {
 		var store string
 		var epoch int64
-		if err = db.QueryRow("SELECT value FROM meta WHERE key='identity'").
-			Scan(&store); err != nil {
+		if err = db.QueryRow("SELECT value FROM meta WHERE key='identity'").Scan(&store); err != nil {
 			return failDB(err)
 		}
-		if err = db.QueryRow("SELECT CAST(value AS INTEGER) FROM meta WHERE key='epoch'").
-			Scan(&epoch); err != nil {
+		if err = db.QueryRow("SELECT CAST(value AS INTEGER) FROM meta WHERE key='epoch'").Scan(&epoch); err != nil {
 			return failDB(err)
 		}
 		if store != head.Store || epoch < head.Epoch {
@@ -290,9 +241,7 @@ func Open(opts Options) (*Engine, error) {
 		cancel()
 		return failDB(err)
 	}
-	rows, err := db.Query(
-		"SELECT body FROM operations WHERE status IN ('pending','running') ORDER BY rowid",
-	)
+	rows, err := db.Query("SELECT body FROM operations WHERE status IN ('pending','running') ORDER BY rowid")
 	if err != nil {
 		cancel()
 		return failDB(err)

@@ -16,15 +16,11 @@ import (
 func newCA() (tls.Certificate, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, nil, errors.New(
-			"egress: CA generation failed",
-		)
+		return tls.Certificate{}, nil, errors.New("egress: CA generation failed")
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return tls.Certificate{}, nil, errors.New(
-			"egress: CA generation failed",
-		)
+		return tls.Certificate{}, nil, errors.New("egress: CA generation failed")
 	}
 	now := time.Now()
 	template := &x509.Certificate{
@@ -40,29 +36,17 @@ func newCA() (tls.Certificate, []byte, error) {
 		MaxPathLenZero:        true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
-	der, err := x509.CreateCertificate(
-		rand.Reader,
-		template,
-		template,
-		&key.PublicKey,
-		key,
-	)
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		return tls.Certificate{}, nil, errors.New(
-			"egress: CA generation failed",
-		)
+		return tls.Certificate{}, nil, errors.New("egress: CA generation failed")
 	}
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {
-		return tls.Certificate{}, nil, errors.New(
-			"egress: CA generation failed",
-		)
+		return tls.Certificate{}, nil, errors.New("egress: CA generation failed")
 	}
 	return tls.Certificate{
 		Certificate: [][]byte{der},
 		PrivateKey:  key,
 		Leaf:        leaf,
-	}, pem.EncodeToMemory(
-		&pem.Block{Type: "CERTIFICATE", Bytes: der},
-	), nil
+	}, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
 }

@@ -19,10 +19,7 @@ type observationErrorEngine struct {
 	err error
 }
 
-func (e *observationErrorEngine) GetVM(
-	context.Context,
-	string,
-) (api.VM, error) {
+func (e *observationErrorEngine) GetVM(context.Context, string) (api.VM, error) {
 	return api.VM{}, e.err
 }
 
@@ -41,29 +38,20 @@ func TestRecoveryRequiresDirectEngineAbsence(t *testing.T) {
 					Client: engine,
 					err: fmt.Errorf(
 						"adapter: %w",
-						Wrap(ErrInternal, "dependency failed",
-							api.Fail(api.NotFound, "private VM observation")),
+						Wrap(ErrInternal, "dependency failed", api.Fail(api.NotFound, "private VM observation")),
 					),
 				}
 			case "joined":
 				s.opts.Engine = &observationErrorEngine{
 					Client: engine,
-					err: errors.Join(
-						api.Fail(api.NotFound, "absent"),
-						errors.New("observation incomplete"),
-					),
+					err:    errors.Join(api.Fail(api.NotFound, "absent"), errors.New("observation incomplete")),
 				}
 			case "absent":
 				engine.mu.Lock()
 				delete(engine.vms, b.VMID)
 				engine.mu.Unlock()
 			}
-			_, err := s.Execute(
-				s.ctx,
-				p,
-				"release",
-				Command{Action: "release", SandboxID: b.ID},
-			)
+			_, err := s.Execute(s.ctx, p, "release", Command{Action: "release", SandboxID: b.ID})
 			if name == "absent" {
 				if err != nil {
 					t.Fatal(err)
@@ -113,13 +101,7 @@ func TestHTTPDistinguishesAuthorizationAndMissingEngineVM(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil ||
 			response.Code != tc.status || failure.Code != tc.code ||
 			bytes.Contains(response.Body.Bytes(), []byte("/private/")) {
-			t.Fatalf(
-				"%s: status=%d body=%s decode=%v",
-				tc.path,
-				response.Code,
-				response.Body,
-				err,
-			)
+			t.Fatalf("%s: status=%d body=%s decode=%v", tc.path, response.Code, response.Body, err)
 		}
 	}
 	ledgerMoney(t, s, p.TenantID, 1, 64)
@@ -139,38 +121,24 @@ func TestHistoricalOperationProjectionDoesNotRewriteReceipt(t *testing.T) {
 	if _, err = s.Wait(s.ctx, p, o.ID); err == nil {
 		t.Fatal("expected warmup failure")
 	}
-	if diagnostic := templateQuotaOperationDiagnostic(
-		t,
-		s,
-		o.ID,
-	); !bytes.Contains(
-		[]byte(diagnostic),
-		[]byte("/private/host/cause"),
-	) {
+	if diagnostic := templateQuotaOperationDiagnostic(t, s, o.ID); !bytes.Contains([]byte(diagnostic), []byte("/private/host/cause")) {
 		t.Fatal("private cause was not retained in the journal", diagnostic)
 	}
 	// Model a pre-separation receipt using precisely the previous error JSON.
 	var body []byte
-	if err = s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", o.ID).
-		Scan(&body); err != nil {
+	if err = s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", o.ID).Scan(&body); err != nil {
 		t.Fatal(err)
 	}
 	var record map[string]json.RawMessage
 	if err = json.Unmarshal(body, &record); err != nil {
 		t.Fatal(err)
 	}
-	record["error"] = json.RawMessage(
-		`{"code":"conflict","message":"/private/historical/cause"}`,
-	)
+	record["error"] = json.RawMessage(`{"code":"conflict","message":"/private/historical/cause"}`)
 	body, err = json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.store.db.Exec(
-		"UPDATE operations SET body=? WHERE id=?",
-		body,
-		o.ID,
-	); err != nil {
+	if _, err = s.store.db.Exec("UPDATE operations SET body=? WHERE id=?", body, o.ID); err != nil {
 		t.Fatal(err)
 	}
 	options := s.opts
@@ -184,8 +152,7 @@ func TestHistoricalOperationProjectionDoesNotRewriteReceipt(t *testing.T) {
 	}
 	defer s.Close()
 	replayed, err := s.Submit(s.ctx, p, "historical", command)
-	if err != nil || replayed.Error == nil ||
-		replayed.Error.Code != ErrConflict ||
+	if err != nil || replayed.Error == nil || replayed.Error.Code != ErrConflict ||
 		replayed.Error.Message != "operation state conflict" {
 		t.Fatalf("unsafe replay: %+v %v", replayed.Error, err)
 	}
@@ -193,19 +160,12 @@ func TestHistoricalOperationProjectionDoesNotRewriteReceipt(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer alice-token")
 	response := httptest.NewRecorder()
 	s.Handler().ServeHTTP(response, request)
-	if response.Code != 200 ||
-		bytes.Contains(response.Body.Bytes(), []byte("/private/")) ||
+	if response.Code != 200 || bytes.Contains(response.Body.Bytes(), []byte("/private/")) ||
 		bytes.Contains(response.Body.Bytes(), []byte(`"Cause"`)) {
-		t.Fatalf(
-			"unsafe operation response: %d %s",
-			response.Code,
-			response.Body,
-		)
+		t.Fatalf("unsafe operation response: %d %s", response.Code, response.Body)
 	}
 	var after []byte
-	if err = s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", o.ID).
-		Scan(&after); err != nil ||
-		!bytes.Equal(body, after) {
+	if err = s.store.db.QueryRow("SELECT body FROM operations WHERE id=?", o.ID).Scan(&after); err != nil || !bytes.Equal(body, after) {
 		t.Fatal("serving a historical receipt rewrote its durable bytes", err)
 	}
 }

@@ -43,14 +43,7 @@ func (s *Service) bind(ctx context.Context, b Sandbox, vsockPath string) error {
 			return err
 		}
 	}
-	if err := s.opts.Egress.Bind(
-		ctx,
-		b.ID,
-		b.TenantID,
-		vsockPath,
-		b.Policy,
-		secrets,
-	); err != nil {
+	if err := s.opts.Egress.Bind(ctx, b.ID, b.TenantID, vsockPath, b.Policy, secrets); err != nil {
 		return err
 	}
 	s.mu.Lock()

@@ -26,10 +26,7 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 		if group != nil && group.Group.Identity != nil {
 			i := group.Group.Identity
 			if i.Instance == "" {
-				return Fail(
-					ErrManualRecovery,
-					"allocation activation lacks successful witness",
-				)
+				return Fail(ErrManualRecovery, "allocation activation lacks successful witness")
 			}
 			return s.activateTarget(
 				o,
@@ -47,30 +44,19 @@ func (s *Service) activate(o Operation, b *Sandbox, reset bool) error {
 	return s.activateTarget(o, b, reset, nil)
 }
 
-func (s *Service) activateTarget(
-	o Operation,
-	b *Sandbox,
-	reset bool,
-	target *activationTarget,
-) (err error) {
+func (s *Service) activateTarget(o Operation, b *Sandbox, reset bool, target *activationTarget) (err error) {
 	if err = s.activationFence(o, b.ID); err != nil {
 		return err
 	}
 	if s.credentialsMissing(*b) {
-		return Fail(
-			ErrConflict,
-			"host credentials must be supplied again after daemon restart",
-		)
+		return Fail(ErrConflict, "host credentials must be supplied again after daemon restart")
 	}
 	v, err := s.opts.Engine.GetVM(s.ctx, b.VMID)
 	if err != nil {
 		return engineFailure(err)
 	}
 	if target != nil && (v.ID != target.VM || v.Instance != target.Instance) {
-		return Fail(
-			ErrManualRecovery,
-			"activation read returned another instance",
-		)
+		return Fail(ErrManualRecovery, "activation read returned another instance")
 	}
 	if target != nil {
 		if err = s.checkActivationTarget(o, *b, target); err != nil {
@@ -108,10 +94,7 @@ func (s *Service) activateTarget(
 		if s.opts.Egress != nil {
 			err = s.bind(s.ctx, *b, v.VSockPath)
 		} else if b.Policy.Mode != "none" {
-			err = Fail(
-				ErrIncompatible,
-				"egress manager required for network mode",
-			)
+			err = Fail(ErrIncompatible, "egress manager required for network mode")
 		}
 	}
 	publication()
@@ -170,9 +153,7 @@ func (s *Service) activateTarget(
 	next := *b
 	next.Instance = v.Instance
 	if b.State != "running" {
-		next.Deadline = time.Now().
-			UTC().
-			Add(time.Duration(b.TTLSeconds) * time.Second)
+		next.Deadline = time.Now().UTC().Add(time.Duration(b.TTLSeconds) * time.Second)
 	}
 	next.State, next.OperationID, next.LastError = "running", "", ""
 	if err = s.commitRunning(o, &next, target); err != nil {
@@ -182,11 +163,7 @@ func (s *Service) activateTarget(
 	return nil
 }
 
-func (s *Service) commitGroupActiveTx(
-	tx *sql.Tx,
-	b Sandbox,
-	target *activationTarget,
-) error {
+func (s *Service) commitGroupActiveTx(tx *sql.Tx, b Sandbox, target *activationTarget) error {
 	r, err := loadRecoveryTx(s.ctx, tx, "allocation:"+target.Origin)
 	if err != nil {
 		return err
@@ -195,8 +172,7 @@ func (s *Service) commitGroupActiveTx(
 	if err != nil {
 		return err
 	}
-	if r.Group == nil || r.Group.Identity == nil ||
-		current.State != "provisioning" ||
+	if r.Group == nil || r.Group.Identity == nil || current.State != "provisioning" ||
 		current.OperationID != target.Origin ||
 		current.TenantID != r.TenantID ||
 		current.VMID != target.VM ||
@@ -207,8 +183,7 @@ func (s *Service) commitGroupActiveTx(
 	}
 	for index := range r.Allocations {
 		a := &r.Allocations[index]
-		if a.Kind == "vm_disk" && a.Resolution.Proof != nil &&
-			a.Resolution.Proof.VMID == target.VM {
+		if a.Kind == "vm_disk" && a.Resolution.Proof != nil && a.Resolution.Proof.VMID == target.VM {
 			a.Resolution.State = "active"
 			a.Resolution.Destination = "sandbox:" + b.ID
 		}
@@ -241,11 +216,7 @@ func (s *Service) commitGroupActiveTx(
 
 // commitRunning transfers the sleep reference and its storage charge together.
 // The caller holds the sandbox lock; no db query is opened inside the transaction.
-func (s *Service) commitRunning(
-	o Operation,
-	b *Sandbox,
-	exact ...*activationTarget,
-) error {
+func (s *Service) commitRunning(o Operation, b *Sandbox, exact ...*activationTarget) error {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	next := *b
@@ -334,11 +305,7 @@ func (s *Service) commitRunning(
 	return nil
 }
 
-func (s *Service) checkActivationTarget(
-	o Operation,
-	b Sandbox,
-	target *activationTarget,
-) error {
+func (s *Service) checkActivationTarget(o Operation, b Sandbox, target *activationTarget) error {
 	current, err := getSandbox(s.ctx, s.store.db, b.ID)
 	if err != nil {
 		return err
@@ -348,24 +315,19 @@ func (s *Service) checkActivationTarget(
 		if e != nil {
 			return e
 		}
-		if r.Group == nil || r.Group.Identity == nil ||
-			current.State != "provisioning" ||
+		if r.Group == nil || r.Group.Identity == nil || current.State != "provisioning" ||
 			current.OperationID != target.Origin ||
 			current.VMID != target.VM ||
 			r.Group.Identity.VM != target.VM ||
 			r.Group.Identity.Instance != target.Instance {
-			return Fail(
-				ErrConflict,
-				"allocation activation lifecycle changed",
-			)
+			return Fail(ErrConflict, "allocation activation lifecycle changed")
 		}
 	} else if target.Kind == "selection" {
 		r, e := s.loadRecovery("allocation:" + target.Origin)
 		if e != nil {
 			return e
 		}
-		if r.Group == nil || r.Group.Selection == nil ||
-			r.Group.Selection.Stage != "selected" ||
+		if r.Group == nil || r.Group.Selection == nil || r.Group.Selection.Stage != "selected" ||
 			current.State != "provisioning" ||
 			current.OperationID != target.Origin ||
 			current.TenantID != r.TenantID ||
@@ -373,13 +335,9 @@ func (s *Service) checkActivationTarget(
 			current.Instance != target.Instance ||
 			r.Group.Selection.Identity.VM != target.VM ||
 			r.Group.Selection.Identity.Instance != target.Instance {
-			return Fail(
-				ErrConflict,
-				"exact warm activation lifecycle changed",
-			)
+			return Fail(ErrConflict, "exact warm activation lifecycle changed")
 		}
-	} else if current.TenantID != b.TenantID || current.State != "resuming" ||
-		current.VMID != b.VMID ||
+	} else if current.TenantID != b.TenantID || current.State != "resuming" || current.VMID != b.VMID ||
 		(current.OperationID != o.ID && !strings.HasPrefix(o.ID, "recovery:sandbox:"+b.ID+":"+current.OperationID+":")) {
 		return Fail(ErrConflict, "exact activation lifecycle changed")
 	}
@@ -387,22 +345,14 @@ func (s *Service) checkActivationTarget(
 	if err != nil {
 		return engineFailure(err)
 	}
-	if v.ID != target.VM || v.Instance != target.Instance ||
-		v.OperationID != "" ||
-		!v.Verified ||
-		!v.AgentReady ||
+	if v.ID != target.VM || v.Instance != target.Instance || v.OperationID != "" || !v.Verified || !v.AgentReady ||
 		v.Phase != "running" {
 		return Fail(ErrManualRecovery, "exact activation instance changed")
 	}
 	return nil
 }
 
-func (s *Service) commitAllocationActiveTx(
-	tx *sql.Tx,
-	o Operation,
-	b Sandbox,
-	target string,
-) error {
+func (s *Service) commitAllocationActiveTx(tx *sql.Tx, o Operation, b Sandbox, target string) error {
 	var id string
 	var raw []byte
 	if err := tx.QueryRowContext(s.ctx, `SELECT r.id,r.body FROM resource_recovery r,json_each(r.body,'$.allocations') a WHERE json_extract(a.value,'$.operation_id')=? AND json_extract(a.value,'$.resolution.state')='result_known' AND json_extract(a.value,'$.resolution.proof.result_instance')=?`, o.ID, target).
@@ -417,8 +367,7 @@ func (s *Service) commitAllocationActiveTx(
 	if err != nil {
 		return err
 	}
-	if current.State != "resuming" || current.VMID != b.VMID ||
-		current.TenantID != b.TenantID ||
+	if current.State != "resuming" || current.VMID != b.VMID || current.TenantID != b.TenantID ||
 		(current.OperationID != r.Source && !strings.HasPrefix(current.OperationID, "recovery:"+r.ID+":")) ||
 		b.Instance != target {
 		return Fail(ErrConflict, "publication lifecycle changed")
@@ -429,21 +378,12 @@ func (s *Service) commitAllocationActiveTx(
 			continue
 		}
 		proof := a.Resolution.Proof
-		if proof == nil || proof.Status != "succeeded" ||
-			proof.VMID != b.VMID ||
-			proof.ResultInstance != target ||
+		if proof == nil || proof.Status != "succeeded" || proof.VMID != b.VMID || proof.ResultInstance != target ||
 			a.ChargeTenantID != b.TenantID {
-			return Fail(
-				ErrManualRecovery,
-				"active destination proof mismatch",
-			)
+			return Fail(ErrManualRecovery, "active destination proof mismatch")
 		}
 		a.Resolution.State = "active"
-		a.Resolution.Destination = string(
-			encode(
-				[]string{b.TenantID, b.ID, b.VMID, target, "sandbox:" + b.ID},
-			),
-		)
+		a.Resolution.Destination = string(encode([]string{b.TenantID, b.ID, b.VMID, target, "sandbox:" + b.ID}))
 	}
 	if _, err = tx.ExecContext(
 		s.ctx,

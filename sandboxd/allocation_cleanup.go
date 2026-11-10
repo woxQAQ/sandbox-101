@@ -21,11 +21,7 @@ type allocationDeletion struct {
 	Absent   bool               `json:"absent,omitempty"`
 }
 
-func allocationCollectorID(
-	tenant string,
-	subject allocationSubject,
-	vm, instance string,
-) string {
+func allocationCollectorID(tenant string, subject allocationSubject, vm, instance string) string {
 	h := sha256.New()
 	for _, part := range []string{"plan013-allocation-cleanup-v1", tenant, subject.Kind, subject.ID, vm, instance} {
 		var size [8]byte
@@ -45,12 +41,8 @@ func (s *Service) allocationUsersTx(tx *sql.Tx, r resourceRecovery) error {
 		if err != nil {
 			return err
 		}
-		if b.TenantID != r.TenantID || b.State != "terminated" ||
-			(b.VMID != i.VM && b.VMID != "") {
-			return Fail(
-				ErrManualRecovery,
-				"sandbox allocation is still live or changed",
-			)
+		if b.TenantID != r.TenantID || b.State != "terminated" || (b.VMID != i.VM && b.VMID != "") {
+			return Fail(ErrManualRecovery, "sandbox allocation is still live or changed")
 		}
 		excluded = b.ID
 	}
@@ -66,19 +58,12 @@ func (s *Service) allocationUsersTx(tx *sql.Tx, r resourceRecovery) error {
 		return err
 	}
 	if users != 0 {
-		return Fail(
-			ErrConflict,
-			"allocation VM has another owner or dependency",
-		)
+		return Fail(ErrConflict, "allocation VM has another owner or dependency")
 	}
 	return nil
 }
 
-func (s *Service) handoffAllocationCleanup(
-	id string,
-	v api.VM,
-	evict bool,
-) (string, error) {
+func (s *Service) handoffAllocationCleanup(id string, v api.VM, evict bool) (string, error) {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -102,20 +87,12 @@ func (s *Service) handoffAllocationCleanup(
 	for _, a := range r.Allocations {
 		if a.Kind == "snapshot" && !a.Resolution.delivered() &&
 			(a.Resolution.Proof == nil || !recoveryTerminal(a.Resolution.Proof.Status)) {
-			return "", Fail(
-				ErrConflict,
-				"capture still owns the VM source",
-			)
+			return "", Fail(ErrConflict, "capture still owns the VM source")
 		}
 	}
 	i := *r.Group.Identity
 	collector := resourceRecovery{
-		ID: allocationCollectorID(
-			r.TenantID,
-			r.Group.Subject,
-			i.VM,
-			i.Instance,
-		),
+		ID:       allocationCollectorID(r.TenantID, r.Group.Subject, i.VM, i.Instance),
 		Source:   r.Source,
 		TenantID: r.TenantID,
 		Kind:     "allocation_cleanup",
@@ -137,15 +114,11 @@ func (s *Service) handoffAllocationCleanup(
 		Bound: true,
 	}
 	if r.Group.Subject.Kind == "build" {
-		collector.Deletion.Step.Request.Key = stepKey(
-			Operation{ID: r.Source},
-			"build-delete",
-		)
+		collector.Deletion.Step.Request.Key = stepKey(Operation{ID: r.Source}, "build-delete")
 	}
 	old, e := loadRecoveryTx(s.ctx, tx, collector.ID)
 	if e == nil {
-		if old.Deletion == nil || old.Deletion.Group != r.ID ||
-			!reflect.DeepEqual(old.Deletion.Identity, i) ||
+		if old.Deletion == nil || old.Deletion.Group != r.ID || !reflect.DeepEqual(old.Deletion.Identity, i) ||
 			old.Deletion.Subject != r.Group.Subject {
 			return "", Fail(ErrManualRecovery, "cleanup tuple collision")
 		}
@@ -205,10 +178,7 @@ func (s *Service) handoffAllocationCleanup(
 
 // Absence retirement is a ledger transaction. It never authorizes a physical
 // delete, and it never cancels an unknown capture simply because its VM is gone.
-func (s *Service) retireAllocationAbsent(
-	id string,
-	collectors ...string,
-) error {
+func (s *Service) retireAllocationAbsent(id string, collectors ...string) error {
 	ownership := s.lockResourceOwnership()
 	defer ownership()
 	tx, err := s.store.db.BeginTx(s.ctx, nil)
@@ -231,14 +201,9 @@ func (s *Service) retireAllocationAbsent(
 		return err
 	}
 	if !recoveryTerminal(i.Receipt.Status) {
-		return Fail(
-			ErrConflict,
-			"nonterminal allocation cannot retire its known disk",
-		)
+		return Fail(ErrConflict, "nonterminal allocation cannot retire its known disk")
 	}
-	if i.Owner != r.TenantID || i.Source != r.Source ||
-		i.Shape != r.Group.Template.Shape ||
-		i.Receipt.VMID != i.VM ||
+	if i.Owner != r.TenantID || i.Source != r.Source || i.Shape != r.Group.Template.Shape || i.Receipt.VMID != i.VM ||
 		i.Receipt.ID == "" {
 		return Fail(ErrManualRecovery, "absence provenance mismatch")
 	}
@@ -251,24 +216,19 @@ func (s *Service) retireAllocationAbsent(
 		return err
 	}
 	if other != 0 {
-		return Fail(
-			ErrManualRecovery,
-			"absent VM belongs to another sandbox",
-		)
+		return Fail(ErrManualRecovery, "absent VM belongs to another sandbox")
 	}
 	// Undispatched steps can be canceled individually; known allocations
 	// retain their own destination regardless of unrelated step markers.
 	for index := range r.Allocations {
 		a := &r.Allocations[index]
 		frozen := r.Group.Steps[a.Step]
-		if a.Kind == "vm_disk" && a.Resolution.Proof != nil &&
-			a.Resolution.Proof.VMID == i.VM {
+		if a.Kind == "vm_disk" && a.Resolution.Proof != nil && a.Resolution.Proof.VMID == i.VM {
 			a.Resolution.State = "reclaimed"
 			a.Resolution.Destination = "vm-absent:" + i.VM
 			continue
 		}
-		if !a.Resolution.delivered() && !frozen.Dispatched &&
-			frozen.Proof == nil {
+		if !a.Resolution.delivered() && !frozen.Dispatched && frozen.Proof == nil {
 			if err = deleteQuotaRows(
 				s.ctx,
 				tx,
@@ -288,10 +248,7 @@ func (s *Service) retireAllocationAbsent(
 		return err
 	}
 	if dependency != 0 {
-		return Fail(
-			ErrConflict,
-			"absent VM still has independent dependencies",
-		)
+		return Fail(ErrConflict, "absent VM still has independent dependencies")
 	}
 	if err = deleteQuotaRows(
 		s.ctx,
@@ -398,13 +355,9 @@ func (s *Service) retireAllocationAbsent(
 		if e != nil {
 			return e
 		}
-		if collector.Deletion == nil || collector.Deletion.Group != r.ID ||
-			collector.VMID != i.VM ||
+		if collector.Deletion == nil || collector.Deletion.Group != r.ID || collector.VMID != i.VM ||
 			collector.Instance == "" {
-			return Fail(
-				ErrManualRecovery,
-				"absence collector destination changed",
-			)
+			return Fail(ErrManualRecovery, "absence collector destination changed")
 		}
 		collector.Done = true
 		collector.Deletion.Absent = true
@@ -423,47 +376,33 @@ func (s *Service) retireAllocationAbsent(
 
 func validateAllocationDeletion(c, r resourceRecovery) error {
 	if c.Deletion == nil || r.Group == nil || r.Group.Identity == nil {
-		return Fail(
-			ErrManualRecovery,
-			"cleanup has no allocation provenance",
-		)
+		return Fail(ErrManualRecovery, "cleanup has no allocation provenance")
 	}
 	i := r.Group.Identity
 	d := c.Deletion
-	if c.Source != r.Source || c.TenantID != r.TenantID || d.Group != r.ID ||
-		d.Subject != r.Group.Subject ||
+	if c.Source != r.Source || c.TenantID != r.TenantID || d.Group != r.ID || d.Subject != r.Group.Subject ||
 		!reflect.DeepEqual(d.Identity, *i) ||
 		c.VMID != i.VM ||
 		c.Instance != i.Instance ||
 		i.Instance == "" ||
 		c.ID != allocationCollectorID(r.TenantID, d.Subject, i.VM, i.Instance) {
-		return Fail(
-			ErrManualRecovery,
-			"cleanup tuple differs from its frozen allocation",
-		)
+		return Fail(ErrManualRecovery, "cleanup tuple differs from its frozen allocation")
 	}
 	request := d.Step.Request
 	key := stepKey(c.operation(), "delete")
 	if c.Attempt == 0 && d.Subject.Kind == "build" {
 		key = stepKey(Operation{ID: r.Source}, "build-delete")
 	}
-	if !d.Step.Bound || request.Action != "delete" || request.Key != key ||
-		request.VMID != i.VM ||
+	if !d.Step.Bound || request.Action != "delete" || request.Key != key || request.VMID != i.VM ||
 		request.ExpectedInstance != i.Instance ||
 		request.SnapshotID != "" ||
 		request.Config != nil ||
 		request.Policy != nil ||
 		request.NetworkEnabled {
-		return Fail(
-			ErrManualRecovery,
-			"cleanup request differs from exact generation destination",
-		)
+		return Fail(ErrManualRecovery, "cleanup request differs from exact generation destination")
 	}
 	if uint64(len(d.History)) != c.Attempt {
-		return Fail(
-			ErrManualRecovery,
-			"cleanup attempt lacks terminal failure history",
-		)
+		return Fail(ErrManualRecovery, "cleanup attempt lacks terminal failure history")
 	}
 	for index, history := range d.History {
 		attempt := c
@@ -478,15 +417,10 @@ func validateAllocationDeletion(c, r resourceRecovery) error {
 			VMID:             i.VM,
 			ExpectedInstance: i.Instance,
 		}
-		if !reflect.DeepEqual(history.Request, expected) ||
-			history.Receipt.ID == "" ||
-			history.Receipt.Key != oldKey ||
+		if !reflect.DeepEqual(history.Request, expected) || history.Receipt.ID == "" || history.Receipt.Key != oldKey ||
 			history.Receipt.Status != "failed" ||
 			!reflect.DeepEqual(history.Receipt.Request, expected) {
-			return Fail(
-				ErrManualRecovery,
-				"cleanup history differs from fixed generation request",
-			)
+			return Fail(ErrManualRecovery, "cleanup history differs from fixed generation request")
 		}
 	}
 	return validateAllocationProvenance(r)
@@ -521,10 +455,7 @@ func (s *Service) consumeAllocationCleanup(id string) error {
 		return err
 	}
 	if c.Deletion.Step.Dispatched {
-		proof, e := s.opts.Engine.FindOperation(
-			s.ctx,
-			c.Deletion.Step.Request.Key,
-		)
+		proof, e := s.opts.Engine.FindOperation(s.ctx, c.Deletion.Step.Request.Key)
 		if e != nil && !isEngineCode(e, api.NotFound) {
 			return e
 		}
@@ -549,10 +480,7 @@ func (s *Service) consumeAllocationCleanup(id string) error {
 						latest.Attempt++
 						latest.Deletion.Step = allocationStep{
 							Request: api.Request{
-								Key: stepKey(
-									latest.operation(),
-									"delete",
-								),
+								Key:              stepKey(latest.operation(), "delete"),
 								Action:           "delete",
 								VMID:             latest.VMID,
 								ExpectedInstance: latest.Instance,
@@ -608,11 +536,7 @@ func (s *Service) consumeAllocationCleanup(id string) error {
 	if err != nil {
 		return err
 	}
-	if _, err = api.Wait(
-		s.ctx,
-		s.opts.Engine,
-		c.Deletion.Step.Request,
-	); err != nil {
+	if _, err = api.Wait(s.ctx, s.opts.Engine, c.Deletion.Step.Request); err != nil {
 		return err
 	}
 	_, err = s.opts.Engine.GetVM(s.ctx, c.VMID)

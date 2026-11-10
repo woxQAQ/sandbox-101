@@ -35,8 +35,7 @@ func (m ImageManifest) Verify(dir, digest string) error {
 	if m.Layout == MergedOCIEROFSLayout {
 		return m.verifyMergedOCI(dir, digest)
 	}
-	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest ||
-		m.Architecture != runtime.GOARCH ||
+	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest || m.Architecture != runtime.GOARCH ||
 		m.Builder != "" ||
 		len(m.Artifacts) != 0 {
 		return api.Fail(api.Incompatible, "image format/platform mismatch")
@@ -60,10 +59,7 @@ type ImportOptions struct {
 // ImportOCI is an offline administrative operation: the caller must hold this
 // Engine's single-writer lock; the CLI opens it itself, so it cannot race a
 // running daemon. Registry download and authentication are intentionally absent.
-func (e *Engine) ImportOCI(
-	ctx context.Context,
-	opts ImportOptions,
-) (ImageManifest, error) {
+func (e *Engine) ImportOCI(ctx context.Context, opts ImportOptions) (ImageManifest, error) {
 	// Publication and cache collection share a guard for the entire read/build
 	// interval, including cache hits before the catalog transaction.
 	e.artifacts.Lock()
@@ -78,13 +74,8 @@ func (e *Engine) ImportOCI(
 	if opts.Materialization == "" {
 		opts.Materialization = LayeredEROFSLayout
 	}
-	if opts.Materialization != LayeredEROFSLayout &&
-		opts.Materialization != MergedOCIEROFSLayout {
-		return output, api.Fail(
-			api.Invalid,
-			"unknown image materialization %q",
-			opts.Materialization,
-		)
+	if opts.Materialization != LayeredEROFSLayout && opts.Materialization != MergedOCIEROFSLayout {
+		return output, api.Fail(api.Invalid, "unknown image materialization %q", opts.Materialization)
 	}
 	merged := opts.Materialization == MergedOCIEROFSLayout
 	name, err := shaName(opts.Digest)
@@ -97,14 +88,12 @@ func (e *Engine) ImportOCI(
 	if opts.MaxFiles == 0 {
 		opts.MaxFiles = 1000000
 	}
-	if opts.MaxBytes <= 0 || opts.MaxBytes > 1<<40 || opts.MaxFiles <= 0 ||
-		opts.MaxFiles > 1<<30 {
+	if opts.MaxBytes <= 0 || opts.MaxBytes > 1<<40 || opts.MaxFiles <= 0 || opts.MaxFiles > 1<<30 {
 		return output, api.Fail(api.Invalid, "invalid import bounds")
 	}
 	dest := filepath.Join(e.opts.StateDir, "images", name)
 	var published string
-	if err = e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+opts.Digest).
-		Scan(&published); err == nil {
+	if err = e.db.QueryRow("SELECT value FROM meta WHERE key=?", "image:"+opts.Digest).Scan(&published); err == nil {
 		if err = json.Unmarshal([]byte(published), &output); err != nil {
 			return output, err
 		}
@@ -141,13 +130,8 @@ func (e *Engine) ImportOCI(
 	if err = readBlobJSON(manifestPath, opts.Digest, &manifest); err != nil {
 		return output, err
 	}
-	if manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 ||
-		len(manifest.Layers) > MaxImageDataDevices {
-		return output, api.Fail(
-			api.Incompatible,
-			"image requires 1..%d layer data backends",
-			MaxImageDataDevices,
-		)
+	if manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 || len(manifest.Layers) > MaxImageDataDevices {
+		return output, api.Fail(api.Incompatible, "image requires 1..%d layer data backends", MaxImageDataDevices)
 	}
 	configPath, err := blob(source, manifest.Config.Digest.String())
 	if err != nil {
@@ -158,26 +142,15 @@ func (e *Engine) ImportOCI(
 		return output, err
 	}
 	if manifest.Config.Size < 0 || configStat.Size() != manifest.Config.Size {
-		return output, api.Fail(
-			api.Invalid,
-			"OCI config descriptor size mismatch",
-		)
+		return output, api.Fail(api.Invalid, "OCI config descriptor size mismatch")
 	}
 	var config v1.Image
-	if err = readBlobJSON(
-		configPath,
-		manifest.Config.Digest.String(),
-		&config,
-	); err != nil {
+	if err = readBlobJSON(configPath, manifest.Config.Digest.String(), &config); err != nil {
 		return output, err
 	}
-	if config.OS != "linux" || config.Architecture != runtime.GOARCH ||
-		config.RootFS.Type != "layers" ||
+	if config.OS != "linux" || config.Architecture != runtime.GOARCH || config.RootFS.Type != "layers" ||
 		len(config.RootFS.DiffIDs) != len(manifest.Layers) {
-		return output, api.Fail(
-			api.Incompatible,
-			"OCI platform/rootfs mismatch",
-		)
+		return output, api.Fail(api.Incompatible, "OCI platform/rootfs mismatch")
 	}
 	work := filepath.Join(e.opts.StateDir, "imports", name)
 	owner := "import:" + name
@@ -185,13 +158,7 @@ func (e *Engine) ImportOCI(
 	tx, err := e.db.Begin()
 	if err == nil {
 		// Flat per-file block alignment and metadata can exceed tar payload size.
-		err = e.reserve(
-			tx,
-			owner,
-			opts.MaxBytes*4+opts.MaxFiles*8192+(32<<20),
-			0,
-			0,
-		)
+		err = e.reserve(tx, owner, opts.MaxBytes*4+opts.MaxFiles*8192+(32<<20), 0, 0)
 		if err == nil {
 			err = tx.Commit()
 		} else {
@@ -202,10 +169,7 @@ func (e *Engine) ImportOCI(
 	if err != nil {
 		return output, err
 	}
-	if err = os.MkdirAll(
-		filepath.Join(work, "input", "blobs", "sha256"),
-		0o700,
-	); err != nil {
+	if err = os.MkdirAll(filepath.Join(work, "input", "blobs", "sha256"), 0o700); err != nil {
 		return output, err
 	}
 	if err = writeJSON(filepath.Join(work, "intent.json"), opts); err != nil {
@@ -222,10 +186,7 @@ func (e *Engine) ImportOCI(
 			return x
 		}
 		if st.Size() > maxSize {
-			return api.Fail(
-				api.Exhausted,
-				"OCI input blob exceeds staging bound",
-			)
+			return api.Fail(api.Exhausted, "OCI input blob exceeds staging bound")
 		}
 		n, _ := shaName(digest)
 		dst := filepath.Join(input, "blobs", "sha256", n)
@@ -260,10 +221,7 @@ func (e *Engine) ImportOCI(
 			)
 		}
 		if layer.Size > opts.MaxBytes*2-compressedBytes {
-			return output, api.Fail(
-				api.Exhausted,
-				"OCI compressed input size exceeds staging bound",
-			)
+			return output, api.Fail(api.Exhausted, "OCI compressed input size exceeds staging bound")
 		}
 		compressedBytes += layer.Size
 		diff := config.RootFS.DiffIDs[i].String()
@@ -277,30 +235,15 @@ func (e *Engine) ImportOCI(
 			if err = stage(layer.Digest.String(), opts.MaxBytes*2); err != nil {
 				return output, err
 			}
-			file := filepath.Join(
-				input,
-				"blobs",
-				"sha256",
-				layer.Digest.Encoded(),
-			)
+			file := filepath.Join(input, "blobs", "sha256", layer.Digest.Encoded())
 			st, x := os.Stat(file)
 			if x != nil {
 				return output, x
 			}
 			if st.Size() != layer.Size {
-				return output, api.Fail(
-					api.Invalid,
-					"OCI layer descriptor size mismatch",
-				)
+				return output, api.Fail(api.Invalid, "OCI layer descriptor size mismatch")
 			}
-			n, c, x := validateLayerFor(
-				file,
-				layer.MediaType,
-				diff,
-				opts.MaxBytes-used,
-				opts.MaxFiles-files,
-				true,
-			)
+			n, c, x := validateLayerFor(file, layer.MediaType, diff, opts.MaxBytes-used, opts.MaxFiles-files, true)
 			if x != nil {
 				return output, x
 			}
@@ -317,52 +260,25 @@ func (e *Engine) ImportOCI(
 			if err = stage(layer.Digest.String(), opts.MaxBytes*2); err != nil {
 				return output, err
 			}
-			file := filepath.Join(
-				input,
-				"blobs",
-				"sha256",
-				layer.Digest.Encoded(),
-			)
+			file := filepath.Join(input, "blobs", "sha256", layer.Digest.Encoded())
 			st, statErr := os.Stat(file)
 			if statErr != nil {
 				return output, statErr
 			}
 			if st.Size() != layer.Size {
-				return output, api.Fail(
-					api.Invalid,
-					"OCI layer descriptor size mismatch",
-				)
+				return output, api.Fail(api.Invalid, "OCI layer descriptor size mismatch")
 			}
 			var n, c int64
-			n, c, x = validateLayer(
-				file,
-				layer.MediaType,
-				diff,
-				opts.MaxBytes-used,
-				opts.MaxFiles-files,
-			)
+			n, c, x = validateLayer(file, layer.MediaType, diff, opts.MaxBytes-used, opts.MaxFiles-files)
 			if x == nil {
-				cached, x = buildSharedLayerCache(
-					ctx,
-					e.opts.StateDir,
-					file,
-					layer.MediaType,
-					builder,
-					diff,
-					n,
-					c,
-				)
+				cached, x = buildSharedLayerCache(ctx, e.opts.StateDir, file, layer.MediaType, builder, diff, n, c)
 			}
 		}
 		if x != nil {
 			return output, x
 		}
-		if cached.Bytes > opts.MaxBytes-used ||
-			cached.Entries > opts.MaxFiles-files {
-			return output, api.Fail(
-				api.Exhausted,
-				"cached OCI layer exceeds import bounds",
-			)
+		if cached.Bytes > opts.MaxBytes-used || cached.Entries > opts.MaxFiles-files {
+			return output, api.Fail(api.Exhausted, "cached OCI layer exceeds import bounds")
 		}
 		used += cached.Bytes
 		files += cached.Entries
@@ -382,21 +298,9 @@ func (e *Engine) ImportOCI(
 		return output, err
 	}
 	if merged {
-		err = materializeMergedOCI(
-			ctx,
-			input,
-			out,
-			opts.Digest,
-			opts.MaxBytes+opts.MaxFiles*4096,
-		)
+		err = materializeMergedOCI(ctx, input, out, opts.Digest, opts.MaxBytes+opts.MaxFiles*4096)
 	} else {
-		err = materializeSharedFsmeta(
-			ctx,
-			e.opts.StateDir,
-			out,
-			artifacts,
-			builder,
-		)
+		err = materializeSharedFsmeta(ctx, e.opts.StateDir, out, artifacts, builder)
 	}
 	if err != nil {
 		return output, err
@@ -446,24 +350,14 @@ func (e *Engine) ImportOCI(
 	}
 	if _, x := os.Lstat(dest); x == nil {
 		var previous ImageManifest
-		if err = readJSON(
-			filepath.Join(dest, "image.json"),
-			&previous,
-		); err != nil {
-			return output, api.Fail(
-				api.ManualRecovery,
-				"unpublished image destination cannot be verified",
-			)
+		if err = readJSON(filepath.Join(dest, "image.json"), &previous); err != nil {
+			return output, api.Fail(api.ManualRecovery, "unpublished image destination cannot be verified")
 		}
 		if err = previous.Verify(dest, opts.Digest); err != nil {
 			return output, err
 		}
 		if previous.Layout != opts.Materialization {
-			return output, api.Fail(
-				api.Conflict,
-				"image digest already materialized with layout %s",
-				previous.Layout,
-			)
+			return output, api.Fail(api.Conflict, "image digest already materialized with layout %s", previous.Layout)
 		}
 		output = previous
 	} else if !os.IsNotExist(x) {
@@ -490,11 +384,7 @@ func (e *Engine) ImportOCI(
 	); err != nil {
 		return output, err
 	}
-	if _, err = tx.Exec(
-		"UPDATE reservations SET owner=? WHERE owner=?",
-		"image:"+name,
-		owner,
-	); err != nil {
+	if _, err = tx.Exec("UPDATE reservations SET owner=? WHERE owner=?", "image:"+name, owner); err != nil {
 		return output, err
 	}
 	if err = tx.Commit(); err != nil {
