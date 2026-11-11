@@ -35,7 +35,8 @@
 
 ## 参考实现研究
 
-- [Microsandbox 深入剖析](research/microsandbox.md)：固定参考源码版本的部署、网络、镜像/磁盘、快照和引导分析，含 documd 图与源码定位；不是本项目的运行契约或实测验收。
+- [Microsandbox 深入剖析](research/microsandbox.md)：部署、网络、镜像/磁盘、快照和引导分析，含 documd 图。
+- [Cocoonstack 深入剖析](research/cocoonstack.md)：Cocoon、sandboxd、Kubernetes 与 macOS 分支的部署、网络、存储和恢复机制，含 documd 图。
 
 ## 维护边界
 
