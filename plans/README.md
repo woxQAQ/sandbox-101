@@ -2,11 +2,14 @@
 
 本目录仅保留未完成工作。016 和本轮完成的 [023](../.agents/archive/023-structured-error-design.md) 已归档；017、020、021 继续暂停。本轮 023 实施授权不包含提交、推送、共享分支合入或 VM 验收。
 
+新增 [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md)：Haven 独占业务与资源元数据、持久步骤、恢复及 GC 决策，Loom 只提供资源操作与核验。本轮仅交付设计，尚未实施；不恢复暂停计划，也不授权提交、推送或合入。
+
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
+| [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | DESIGN_READY / IMPLEMENTATION_NOT_STARTED | 单宿主、单 store、单恢复权威；先迁移证明与行为，再删除双 daemon/双库边界；实施后旧暂停计划须重新映射 |
 
 ## 恢复工作前
 
