@@ -38,6 +38,7 @@
 - [Microsandbox 深入剖析](research/microsandbox.md)：部署、网络、镜像/磁盘、快照和引导分析，含 documd 图。
 - [Cocoonstack 深入剖析](research/cocoonstack.md)：Cocoon、sandboxd、Kubernetes 与 macOS 分支的部署、网络、存储和恢复机制，含 documd 图。
 - [CubeSandbox 深入剖析](research/cubesandbox.md)：集群组件、CubeVS 与透明代理、业务磁盘、CubeCoW、S3 跨节点恢复和客体引导，含 documd 图。
+- [三个 sandbox 项目的架构比较](research/sandbox-comparison.md)：按部署责任、网络权限、磁盘共享、快照恢复与产品生命周期比较设计取舍。
 
 ## 维护边界
 
