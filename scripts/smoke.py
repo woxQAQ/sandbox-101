@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
-"""Launch the actual daemons in new private state directories and drive public APIs.
+"""Exercise one real Haven daemon and both protocol CLIs in private state.
 
-This checks daemon startup, persistence and CLI wiring. It deliberately does not
-claim to boot a VM: use the privileged integration suite for that.
+This proves entrypoint, writer, persistence and offline metadata wiring. It does
+not boot a VM or establish guest, kernel isolation or daemon lifecycle proof.
 """
 import argparse
+import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
 import secrets
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
 import urllib.request
 
 
-class UnixHTTP(http.client.HTTPConnection):
-    def __init__(self, path):
-        super().__init__("localhost", timeout=3)
-        self.path = str(path)
-
-    def connect(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(self.path)
-
-
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     root = parser.parse_args().root.resolve()
-    with tempfile.TemporaryDirectory(prefix="sandbox-smoke-") as work:
+    with tempfile.TemporaryDirectory(prefix="h24e.", dir="/dev/shm") as work:
         directory = Path(work)
+        state = directory / "state"
+        management = directory / "management.sock"
         token = secrets.token_urlsafe(48)
         token_file = directory / "root.token"
         descriptor = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -43,110 +36,170 @@ def main():
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         endpoint = f"http://127.0.0.1:{port}"
-        engine_socket = directory / "engine.sock"
+        config = directory / "haven.json"
+        config.write_text(json.dumps({
+            "state-dir": str(state), "socket": str(directory / "unused.sock"),
+            "listen": "127.0.0.1:1", "root-token-file": str(token_file),
+            "gc-interval": "0s", "max-memory-mib": 8192, "max-vcpus": 64,
+        }))
+        client_config = directory / "havenctl.json"
+        client_config.write_text(json.dumps({
+            "endpoint": "http://127.0.0.1:1", "token-file": str(token_file),
+        }))
+        loom_config = directory / "loomctl.json"
+        loom_config.write_text(json.dumps({"socket": str(directory / "unused.sock")}))
         processes = []
-        logs = open(directory / "daemons.log", "w+")
+        logs = open(directory / "haven.log", "w+")
+        daemon = None
 
-        def launch(arguments, env=None):
-            process = subprocess.Popen(arguments, stdout=logs, stderr=logs, env=env)
+        def request(path, body=None, bearer=token):
+            headers = {"Authorization": "Bearer " + bearer}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+            query = urllib.request.Request(
+                endpoint + path, headers=headers,
+                data=None if body is None else json.dumps(body).encode(),
+            )
+            with urllib.request.urlopen(query, timeout=5) as response:
+                return json.load(response)
+
+        def command(binary, arguments, env=None, body=None, success=True):
+            result = subprocess.run(
+                [str(root / "bin" / binary), *arguments],
+                input=None if body is None else json.dumps(body),
+                text=True, capture_output=True, timeout=15,
+                env={**os.environ, **(env or {})},
+            )
+            if success and result.returncode:
+                raise RuntimeError(f"{binary} failed: {result.stderr}")
+            if not success:
+                assert result.returncode != 0, f"{binary} unexpectedly succeeded"
+                return result
+            return json.loads(result.stdout)
+
+        def ready():
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if daemon.poll() is not None:
+                    raise RuntimeError("Haven exited during startup")
+                try:
+                    assert request("/healthz")["status"] == "ok"
+                    return
+                except (OSError, http.client.HTTPException, ValueError):
+                    time.sleep(0.05)
+            raise RuntimeError("Haven startup timed out")
+
+        def start(initialize):
+            arguments = [str(root / "bin/haven"), "--config", str(config)]
+            if initialize:
+                arguments += ["--listen", f"127.0.0.1:{port}",
+                              "--socket", str(management), "--init"]
+            environment = {
+                **os.environ, "HAVEN_LISTEN": f"127.0.0.1:{port}",
+                "HAVEN_SOCKET": str(management),
+                "ENGINE_STATE_DIR": str(directory / "legacy-engine-must-not-exist"),
+                "SANDBOXD_STATE_DIR": str(directory / "legacy-sandboxd-must-not-exist"),
+            }
+            process = subprocess.Popen(arguments, stdout=logs, stderr=logs, env=environment)
             processes.append(process)
             return process
 
-        def request(path, body=None, key=None):
-            headers = {"Authorization": "Bearer " + token}
-            if key:
-                headers["Idempotency-Key"] = key
-            if body is not None:
-                headers["Content-Type"] = "application/json"
-            req = urllib.request.Request(endpoint + path,
-                                         data=None if body is None else json.dumps(body).encode(),
-                                         headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as response:
-                return json.load(response)
+        def stop(process):
+            process.terminate()
+            process.wait(timeout=10)
+            assert process.returncode == 0, "Haven did not shut down cleanly"
+            processes.remove(process)
 
-        def ready(check):
-            deadline = time.monotonic() + 10
-            last = None
-            while time.monotonic() < deadline:
-                try:
-                    return check()
-                except (OSError, http.client.HTTPException, ValueError) as error:
-                    last = error
-                    if any(process.poll() is not None for process in processes):
-                        raise RuntimeError("daemon exited during startup") from error
-                    time.sleep(0.05)
-            raise RuntimeError("daemon startup timed out") from last
-
-        def inventory():
-            connection = UnixHTTP(engine_socket)
-            try:
-                connection.request("GET", "/v1/vms")
-                response = connection.getresponse()
-                assert response.status == 200, response.status
-                return json.load(response)
-            finally:
-                connection.close()
-
-        engine_config = directory / "engine.json"
-        engine_config.write_text(json.dumps({
-            "state-dir": str(directory / "engine"),
-            "socket": str(directory / "unused.sock"),
-            "init": False,
-        }))
-        sandboxd_config = directory / "sandboxd.json"
-        sandboxd_config.write_text(json.dumps({
-            "state-dir": str(directory / "sandboxd"),
-            "engine-socket": str(engine_socket),
-            "listen": "127.0.0.1:1",
-            "root-token-file": str(token_file),
-        }))
-        client_config = directory / "client.json"
-        client_config.write_text(json.dumps({
-            "endpoint": "http://127.0.0.1:1",
-            "token-file": str(token_file),
-        }))
-
+        haven_args = ["--config", str(client_config), "--endpoint", endpoint]
+        loom_args = ["--config", str(loom_config), "--socket", str(management)]
         try:
-            launch([str(root / "bin/engined"), "--config", str(engine_config),
-                    "--socket", str(engine_socket), "--init"])
-            assert ready(inventory) in (None, [])
-            sandboxd_args = [str(root / "bin/sandboxd"), "--state-dir", str(directory / "sandboxd"),
-                            "--engine-socket", str(engine_socket), "--listen", f"127.0.0.1:{port}",
-                            "--root-token-file", str(token_file)]
-            sandboxd = launch(sandboxd_args + ["--init"])
-            assert ready(lambda: request("/healthz"))["status"] == "ok"
-            command = {"action": "template_put", "template": {
-                "id": "smoke-template", "image": "sha256:" + "1" * 64,
-                "shape": {"vcpus": 1, "memory_mib": 128, "disk_mib": 64}}}
-            first = request("/v1/templates", command, "smoke-register")
-            assert first["template"]["state"] == "ready"
-            listed = subprocess.check_output([str(root / "bin/sandboxctl"), "--endpoint", endpoint,
-                                              "--token-file", str(token_file), "list"], text=True)
-            assert json.loads(listed) == []
-            print("PASS: actual engined UDS, sandboxd health, template registration, sandboxctl list")
-            listed = subprocess.check_output([
-                str(root / "bin/sandboxctl"), "--config", str(client_config),
-                "--endpoint", endpoint, "list",
-            ], env={**os.environ, "SANDBOXCTL_ENDPOINT": "http://127.0.0.1:2"}, text=True)
-            assert json.loads(listed) == []
-            sandboxd.terminate()
-            sandboxd.wait(timeout=10)
-            processes.remove(sandboxd)
-            sandboxd = launch([str(root / "bin/sandboxd"), "--config", str(sandboxd_config)],
-                             env={**os.environ, "SANDBOXD_LISTEN": f"127.0.0.1:{port}"})
-            ready(lambda: request("/healthz"))
-            again = request("/v1/templates", command, "smoke-register")
-            assert first["operation_id"] == again["operation_id"]
-            print("PASS: sandboxd restart preserves the same idempotent operation")
-            print("PASS: Viper files, environment overrides and explicit flags across all three CLIs")
-            sandboxd.terminate()
-            sandboxd.wait(timeout=10)
-            processes.remove(sandboxd)
-            result = subprocess.check_output([str(root / "bin/sandboxd"), "--state-dir",
-                                              str(directory / "sandboxd"), "--mode", "backup",
-                                              "--backup", str(directory / "backup")], text=True)
-            assert json.loads(result)["format"] == 1
-            print("PASS: offline sandboxd backup records a consistent recovery point")
+            invalid = directory / "invalid.json"
+            for settings, reason in [
+                ({"engine-socket": "unused"}, "unknown key"),
+                ({"max-vcpus": 1.5}, "decode config"),
+                ({"socket": None}, "must not be null"),
+            ]:
+                invalid.write_text(json.dumps(settings))
+                rejected = command("haven", ["--config", str(invalid)], success=False)
+                assert reason in rejected.stderr
+            rejected = command("haven", ["--engine-socket", "unused"], success=False)
+            assert "unknown flag" in rejected.stderr
+            rejected = command("haven", ["--tls-cert", "unused"], success=False)
+            assert "provided together" in rejected.stderr
+            print("PASS: renamed configuration rejects legacy flags, unknown/null keys and fractional budgets")
+            daemon = start(True)
+            ready()
+            business = command("havenctl", [*haven_args, "status"],
+                               {"HAVENCTL_ENDPOINT": "http://127.0.0.1:2"})
+            local = command("loomctl", [*loom_args, "status"],
+                            {"LOOMCTL_SOCKET": str(directory / "wrong.sock")})
+            assert business == local
+            assert local["format"] == "haven-single-control" and local["version"] >= 9
+            assert command("havenctl", [*haven_args, "list"]) == []
+            tenant = request("/v1/tenants", {
+                "id": "smoke", "max_sandboxes": 2, "max_storage_mib": 256,
+            })
+            assert tenant["id"] == "smoke" and tenant["token"]
+            assert request("/v1/sandboxes", bearer=tenant["token"]) == []
+            print("PASS: one Haven, both protocol CLIs, same store identity and tenant HTTP")
+
+            rejected = command("haven", ["--config", str(config), "--listen", "127.0.0.1:0",
+                                          "--socket", str(directory / "second.sock")], success=False)
+            assert "another writer" in rejected.stderr
+            blocked_backup = directory / "blocked-backup"
+            rejected = command("haven", ["--state-dir", str(state), "--mode", "backup",
+                                          "--backup", str(blocked_backup)], success=False)
+            assert "another writer" in rejected.stderr and not blocked_backup.exists()
+            print("PASS: second daemon and live offline-backup attempt respect writer exclusion")
+
+            before = command("loomctl", [*loom_args, "status"])
+            dry_run = command("loomctl", [*loom_args, "--dry-run", "gc"])["gc"]
+            after = command("loomctl", [*loom_args, "status"])
+            assert dry_run["dry_run"] and not dry_run.get("operation_id")
+            assert before["epoch"] == after["epoch"]
+            collection = command("loomctl", [*loom_args, "--key", "smoke-collection", "gc"])
+            operation_id = collection["gc"]["operation_id"]
+            operation = command("loomctl", [*loom_args, "operation", operation_id])
+            assert operation["status"] == "succeeded"
+            print("PASS: read-only GC preserves epoch; management mutation has a durable operation")
+
+            stop(daemon)
+            daemon = start(False)
+            ready()
+            replay = command("loomctl", [*loom_args, "--key", "smoke-collection", "gc"])
+            assert replay == collection
+            status = command("havenctl", ["--config", str(client_config), "status"], {
+                "HAVENCTL_ENDPOINT": endpoint, "SANDBOXCTL_ENDPOINT": "http://127.0.0.1:2",
+            })
+            assert status["store_id"] == local["store_id"]
+            assert request("/v1/sandboxes", bearer=tenant["token"]) == []
+            assert command("loomctl", ["--config", str(loom_config), "status"],
+                           {"LOOMCTL_SOCKET": str(management)})["store_id"] == status["store_id"]
+            assert not (directory / "legacy-engine-must-not-exist").exists()
+            assert not (directory / "legacy-sandboxd-must-not-exist").exists()
+            print("PASS: restart preserves operation identity; HAVEN/HAVENCTL/LOOMCTL precedence")
+            stop(daemon)
+            daemon = None
+
+            backup = directory / "backup"
+            point = command("haven", ["--state-dir", str(state), "--mode", "backup",
+                                      "--backup", str(backup)])
+            assert point["store"]["identity"] == status["store_id"]
+            assert set(point["files"]) == {"haven.db", "node.key", "store.json", "HEAD.json"}
+            for name, expected in point["files"].items():
+                actual = "sha256:" + hashlib.sha256((backup / name).read_bytes()).hexdigest()
+                assert actual == expected, name
+            with sqlite3.connect(f"file:{backup / 'haven.db'}?mode=ro&immutable=1", uri=True) as database:
+                assert database.execute("SELECT id FROM tenants").fetchall() == [("smoke",)]
+                assert database.execute("SELECT scope_kind,status FROM operations WHERE id=?",
+                                        (operation_id,)).fetchone() == ("node", "succeeded")
+            assert json.loads((backup / "HEAD.json").read_text())["epoch"] == point["epoch"]
+            print("PASS: one offline backup contains business and management state plus matching key/HEAD")
+        except BaseException:
+            logs.flush()
+            logs.seek(0)
+            print(logs.read())
+            raise
         finally:
             for process in reversed(processes):
                 if process.poll() is None:

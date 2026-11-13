@@ -1,251 +1,82 @@
-# Engine integration
+# Haven 资源集成契约
 
-The Go module is `github.com/woxQAQ/sandbox-engine`. [API types](../engine/api/types.go#L1) define the shared contract, including durable per-instance network policy. The runtime always constructs the real Linux Cloud Hypervisor backend. The injected backend in `*_test.go` is confined to tests. Read [the architecture](architecture.md) for ownership boundaries and [the documentation index](README.md) for related contracts.
+宿主 module 为 `github.com/woxQAQ/haven`。`internal/haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [api](../api/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../api/management.go)、管理 UDS 与 `loomctl`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
 
-## Build and public client
+配置、鉴权、CLI、统一离线备份与恢复命令见 [Haven control](haven-control.md)，业务资源和配额见 [Sandbox](../sandboxd/README.md)。本文维护资源协议与责任边界；[架构](architecture.md) 说明职责和锁，镜像格式见 [镜像物化](image-materialization.md)。
 
-From the repository root:
+## 构建和依赖
 
-```sh
-GOWORK=off go -C engine build -o /tmp/engined ./cmd/engined
-GOWORK=off go -C engine test ./...
-GOWORK=off go -C engine test -race ./...
-GOWORK=off go -C engine vet ./...
+根 `go.mod` 的相对 replacements 指向 `protocol/gen` 与 `third_party/go-erofs`。protocol 和 operator 仍是独立 workspace modules。普通构建不初始化 reference submodules，也不修改第三方 provenance。
+
+```nu
+make build
+make test check test-race
+make integration
+make smoke
+python3 -I scripts/check-architecture.py
 ```
 
-Keep the relative source replacements declared in [engine/go.mod](../engine/go.mod#L1) when building outside the workspace, including the repository-level `third_party/go-erofs` directory. A consumer importing the runtime must carry the same go-erofs replacement, as sandboxd does: Go does not inherit dependency modules' replace directives. The patched builder identity and provenance are maintained in [UPSTREAM.md](../third_party/go-erofs/UPSTREAM.md).
-
-The public UDS client satisfies `api.Client`:
-
-```go
-c := client.New("/run/sandbox-engine/engine.sock")
-defer c.Close()
-op, err := c.Submit(ctx, api.Request{
-    Key: "tenant-request-123", Action: "create",
-    Config: &api.Config{
-        Image: "sha256:<64 hexadecimal characters>",
-        Shape: api.Shape{VCPUs: 1, MemoryMiB: 512, DiskMiB: 1024},
-    },
-})
-// Persist op.ID/op.VMID. Poll GetOperation, or use api.Wait with the same request.
-```
-
-`Submit` returns durable acceptance, not lifecycle completion. Client cancellation after acceptance does not cancel the daemon's operation. Keys contain 1–256 bytes. An identical request with the same key returns the original operation, including its fixed terminal result; different parameters under that key return `conflict`. If a response is lost, use `FindOperation(ctx, key)` before issuing a new key. Operation records remain after VM/snapshot deletion. IDs for new VMs and snapshots are allocated by the engine in the admission transaction.
-
-VM phases are `creating`, `created`, `running`, and `stopped`. Read `Verified`, `BlockedReason`, `OperationID`, `Instance`, `AgentReady`, `NetworkEnabled`, `NetworkActual`, and `Deleting` as well as `Phase`. An identity/API inspection failure leaves the last confirmed phase and marks the VM unverified. An instance token changes on cold start or restore; use `ExpectedInstance` for actions whose target must be that particular running instance.
-
-For `start` and `restore`, `ExpectedInstance` conditions admission on the stopped instance being replaced. An accepted operation can recover its own new candidate after a daemon restart: the VM must still name that operation, the candidate must name the target VM and a nonempty instance, and the current VM instance and complete resource record must match the journal candidate. A journal written before the VM switches still permits the original admission instance. These metadata checks only permit execution to continue; backend `Inspect` must still establish actual process identity, and restore must retain its durable material and private-memory mapping proofs. Unknown identity never establishes readiness. Other actions retain strict instance matching, and a new request conditioned on the replaced instance is rejected. The original request and fixed terminal result remain unchanged under its key; this adds no broader exactly-once guarantee.
+`make lint` 含 `go fix`；只读检查使用 `golangci-lint run ./... ./operator/... ./protocol/gen/...`。测试、runner 与实际材料边界见 [scripts](../scripts/README.md)。
 
 ## Allocation results and mixed versions
 
-New successful `start`, `restore`, and `clone` receipts include optional
-`result_instance`: the exact candidate that operation delivered after actual
-backend Inspect, Boot/COW and Agent checks. Completion verifies the durable
-request, full journal/current resource, operation owner and running/verified/
-agent-ready state in the same SQLite transaction that publishes success,
-witness and owner/lease release. Clone requests keep `VMID` empty; their
-operation carries the allocated target. Other actions and pending/running/failed
-receipts omit the field, even when a failure retained candidate materials.
+operation、subordinate step、候选资源、预算和依赖在同一 SQLite admission 事务中固定。公开 operation 的终态固定；成功资源 witness 在完成事务内记录，不能从当前 VM 状态或较新实例补造。当前归属和历史 witness 都匹配才可推进实例相关副作用。
 
-The witness identifies historical B, even if the VM later runs C or is deleted.
-It grants no deletion permission by itself. `GetOperation`, `FindOperation`,
-same-key submission and restart never enrich terminal receipts. Older successful
-receipts stay byte-for-byte unchanged without a witness. A mixed-version consumer
-that needs an exact result must fail closed on that absence and retain resource
-responsibility; reading current `GetVM` cannot supply historical proof. There is
-no read-time migration. This additive JSON field does not promise compatibility
-with external strict response decoders or positional Go struct literals.
+公开 API 的认证 scope、稳定键和冻结 result 独立于资源 generation。内部 child 通过同库 parent link 接受请求、预算、完成证明与责任目的地，不复制一个远程 receipt 当作事实。SQL 拒写、零行写入、COMMIT 失败都保留原责任，不宣称半完成。
 
-## Actions
-
-| Action | Request fields | Completion behavior |
-| --- | --- | --- |
-| `create` | `Config` | Validates published image and host prerequisites, reserves resources, prepares an independent ext4 upper disk and blocked network. Leaves phase `created`. |
-| `start` | `VMID`, optional `ExpectedInstance` | Records launch intent, launches/adopts one VMM, boots, completes system-agent ping, then records running. A failed cold agent handshake attempts to stop the VMM. |
-| `stop` | `VMID`, optional `ExpectedInstance` | Verifies ownership, blocks network, terminates through pidfd, confirms exit before recording stopped. |
-| `snapshot` | `VMID`, optional `ExpectedInstance` | Requires verified running/agent-ready source; returns `SnapshotID` once the durable operation is accepted. Publication is a later step. |
-| `restore` | `VMID`, `SnapshotID`, optional `ExpectedInstance` | Requires a stopped target with matching image and shape. Creates fresh target resources and a fresh instance; network defaults off. |
-| `clone` | `SnapshotID`, optional matching `Config` | Allocates a new VM and restores from a published snapshot with default-off network. |
-| `delete` | `VMID`, optional `ExpectedInstance` | Persists a tombstone, stops, removes owned resources, then removes the VM record and its reservations/backing records. |
-| `delete_snapshot` | `SnapshotID` | Tombstones before deletion. Existing reader leases cause a failed `conflict`; retry with a new operation key after readers finish. New readers cannot enter a tombstoned snapshot. |
-| `network_policy` | `VMID`, required `ExpectedInstance`, `Policy` | Requires actual and desired network off; atomically installs and verifies a versioned IPv4 CIDR/connection policy. A nil policy revokes authorization and installs deny-all. |
-| `network` | `VMID`, `NetworkEnabled`, required `ExpectedInstance` | Saves desired state before effects. Enabling requires verified running/agent-ready state, a verified policy for this exact instance, and host admission prerequisites. |
-
-Sandbox `none`/`relay` modes keep engine network disabled. Direct mode uses `network(false)` → `network_policy` → guest activation → `network(true)`. Policy replacement and activation share the per-VM lifecycle lock. Policies are never inherited by a new cold/restore/clone instance. Nonempty hostname policies are rejected; reserved/private/metadata destinations remain denied. Receipt and live nft rules must agree before enabling or adopting enabled interfaces. See [network policy](network-policy.md) for the exact budget and destination semantics.
-
-The transport exposes these JSON routes:
-
-```text
-POST /v1/operations
-GET  /v1/operations?key=...
-GET  /v1/operations/{id}
-GET  /v1/vms
-GET  /v1/vms/{id}
-GET  /v1/snapshots
-GET  /v1/snapshots/{id}
-```
-
-Lists return all current records, including unpublished/deleting snapshots. Only `Published && !Deleting` snapshots can acquire new restore leases. HTTP errors preserve `api.Error` codes. Request bodies are limited to 1 MiB and reject unknown fields; client response decoding is bounded at 64 MiB. There is no pagination, so exceptionally large inventories need a later transport extension. The UDS is mode 0600; access to it is privileged control over all engine VMs.
-
-## Command line
-
-The public [`config.Config`](../engine/config/engine.go#L10) data model defines engine host settings and administrative actions, separately from the per-VM `api.Config`. `engine/cmd/engined` registers flag defaults and uses Viper with pflag to load it; the HTTP adapter is private to that command under `cmd/engined/internal/server`. Explicit flags override `ENGINE_*` environment variables, then a file selected with `--config` or `ENGINE_CONFIG`, then defaults. File keys match flag names; environment names replace hyphens with underscores (`ENGINE_GC_INTERVAL=30s`, for example). YAML, JSON and TOML are supported, with typed decoding and rejection of unknown keys. Files are loaded once, with no implicit discovery or runtime reload. See [engined.example.yaml](../deploy/host/engined.example.yaml).
-
-| Flag | Default / meaning |
-| --- | --- |
-| `--config` | Optional explicit configuration file |
-| `--state-dir` | `/var/lib/sandbox-engine`, private durable directory, mode 0700 |
-| `--socket` | `/run/sandbox-engine/engine.sock` |
-| `--init` | Explicit creation of a fresh empty store; never infers recovery from missing metadata |
-| `--mode` | `serve`, or `import`, `gc`, `backup`, `restore-backup`, `recover`, `doctor` |
-| `--gc-dry-run` | Report eligible resources without unlinking (`gc` mode) |
-| `--gc-batch` | Maximum artifacts per administrative GC pass, default 16, range 1–1024 |
-| `--gc-interval` | Background collection interval, default 1 minute |
-| `--backup` | Backup DB path; matching receipt is `<path>.json` |
-| `--recovery-note` | Required operator review note for `recover` |
-| `--oci-layout`, `--digest` | Local OCI layout and exact manifest digest for `import` |
-| `--materialization` | `layered-erofs-v1` by default; explicit `merged-oci-erofs-v1` uses isolated umoci materialization |
-| `--cloud-hypervisor` | `/usr/local/libexec/sandbox/cloud-hypervisor` |
-| `--build-receipt` | Defaults to `<cloud-hypervisor>.json` |
-| `--cgroup-root` | `/sys/fs/cgroup/sandbox-engine` (the sample service overrides this to `sandbox-vms`) |
-| `--host-policy` | `/etc/sandbox-engine/host-policy.json` |
-| `--io-max` | Required real-backend single-line cgroup v2 device budget |
-| `--vmm-uid`, `--vmm-gid` | 65534/65534; both must be nonzero and have device access |
-| `--max-memory-mib` | Default reservation ceiling: 80% of physical RAM |
-| `--max-vcpus` | Default reservation ceiling: host logical CPU count |
-| `--storage-margin-bytes` | Default 256 MiB |
-
-Shape bounds are 1–255 vCPUs, 128–2^24 MiB RAM, and 64–2^30 MiB disk; admission also applies actual host budgets. Per-VM memory reservations include 128 MiB VMM overhead. Reservations are durable and conservative, and admission can reject a workload even when current physical allocation is smaller. Snapshot reservations precede pause. Clone/restore reserve private disk plus COW backing before copying.
-
-All modes that open an Engine acquire the same exclusive flock. CLI `import` and `backup` are therefore offline administrative commands: stop the daemon first. Existing VMMs survive daemon shutdown. Opening the store for those modes still reconciles resources and can resume unfinished operations; do not use them as a way to bypass resource review. `doctor` is read-only and does not create missing metadata.
+旧双库、旧 prototype、早期 schema 或缺 witness 明确拒绝并保留人工恢复门禁。当前 format/schema 见 [Haven control](haven-control.md)；无推断式兼容、自动合库或目录扫描接管。
 
 ## Snapshot and restore persistence
 
-SQLite uses WAL, synchronous FULL, and one writer connection. Operation and object intents, tombstones, leases, and reservations are committed before external effects. Host side effects remain non-transactional; uncertain identities require explicit diagnosis instead of destructive guesses.
+### 捕获
 
-Capture uses two ownership domains. The root engine controls directory entries; the dropped VMM can write only the CH leaf. All capture preparation resolves directory components with no-follow directory descriptors, and ownership changes use the opened leaf descriptor.
+1. 同事务冻结源 VM/instance、candidate paths、capture/staging 身份、保守容量与 source resume-required。
+2. 核验精确实例，pause CH 内置块设备和 vCPU，capture 机器状态并复制独立 writable disk。
+3. 独立捕获完成即恢复源。耗时 hash、独立 publication copy、fsync 与 sealing 在源恢复后执行。
+4. 固定文件大小、摘要、目录/inode 和同步完成证明；rename 后同步父目录，再原子发布 snapshot catalog、holder 与费用目的地。
 
-| Directory (relative to the state root) | Owner / mode | Durable responsibility |
-|---|---|---|
-| `vms/<vm>/capture` | root / 0711 | Traversal only for the VMM; never delegated by Launch |
-| `vms/<vm>/capture/<op>` | root / 0711 | Journal `capture_boundary.path` and parent device/inode/mode |
-| `vms/<vm>/capture/<op>/ch` | VMM UID/GID / 0700 | Untrusted CH output; VMM cannot replace the leaf's parent entry |
-| `vms/<vm>/capture/<op>/publication` | root / 0700 | Journal publication identity; private independent disk and CH inodes |
-| `snapshots/<snapshot>` | root / 0700; files 0444 | Atomic rename of the private publication directory, preserving its journaled identity |
+Captured、Materialized、ArtifactsSynced 和 Published 是不同事实。重启只验证原证明，不重新 hash 损坏文件来补造它。capture 父目录 root-owned 0711，仅 `ch` leaf 可由 VMM 写入；publication 使用新的 root-private inode。保留 raw write FD 不得改变已发布快照。
 
-Before pause, `capture_prepared` persists parent/staging identities after syncing the new directories. `pause_intent`, `paused`, `captured`, and `source_resumed` retain their meanings: `captured` means CH completed and the independent disk copy in private staging completed. The paused window contains neither artifact hashing nor artifact fsync; journal checkpoints remain durable. After resume, only `config.json` (16 MiB), `state.json` (64 MiB), and `memory-ranges` (configured RAM size) are read from the fixed CH leaf. No-follow, nonblocking opens and same-fd regular-file/size validation reject links, special files, unknown names and excess entries. Copy/reflink creates new root-owned inodes; no hardlinks or ownership reclamation of VMM data are used. A retained VMM write descriptor therefore cannot modify publication data.
+raw capture 有独立持久 cleanup。源 release 可接过该责任，确认 reader 退出、精确删除后才退休；不能因源 VM 删除就假定 raw 与 publication 都已回收。failed capture 清理绑定原失败 step 和同一实例的成功 stop proof，保留源盘、永久 snapshot owner 和原失败终态。
 
-The durable capture state machine deliberately distinguishes completed copying from completed persistence:
+### Restore、clone 和 generation
 
-| Journal step | Persisted meaning | Recovery |
-|---|---|---|
-| `capture_prepared` | Parent/staging directory identities synced and recorded, no capture yet | A fresh capture may start |
-| `pause_intent` / `paused` | Source may need resume; no completed capture | Inspect/resume source, fail without publication |
-| `captured` | CH and independent disk copy returned, but artifact bytes are not yet proven durable | Inspect/resume source, fail Incompatible and retain materials |
-| `source_resumed` / `capture_copied` | Source runs; private disk/CH copies may still contain unsynced data | Fail Incompatible and retain materials |
-| `capture_materialized` | All four private files and every directory entry synced; `materialized=true` and their fixed SHA256 map `capture_files` committed afterwards | Verify directory identity and the exact checksum map, then continue |
-| `artifacts_synced` | Manifest and sealed publication tree also synced | Verify the existing proof, then rename if needed |
-| `publish_intent` | Atomic rename and both parent-directory syncs completed | Verify final directory identity and the existing proof, then publish database metadata |
+source manifest、读取 lease、目标身份、完整 shape、路径与复制预留在效果前固定。Loom 复制独立可写盘和私有 config/state，创建不可变 RAM hardlink并返回固定 hash/inode/fsync proof。来源 lease 到长期 backing 在完成事务内连续交接。
 
-After source resume, the engine copies CH output, hashes the four independent files, fsyncs all of them and the child/staging directories, and only then commits the materialized flag with its fixed checksum proof. Manifest creation, sealing and final publication sync follow. On recovery, it compares current artifacts against the persisted proof; it never regenerates authority by hashing changed bytes into a new manifest. A materialized flag without the checksum proof is incompatible. A final directory is accepted only with the synced flag, the exact journaled staging inode and matching proof.
+运行前及 restart adoption 必须核验真实 `/proc/PID/maps` 的 writable-private COW、完整范围、device/inode/offset；拒绝 shared mapping、缺段或 eager-copy fallback。stat/mapping device identity 不一致的 filesystem 不支持该恢复路径。已经运行的 writable disk 不得按历史 digest 重建或覆盖。
 
-A daemon restart before the durable proof conservatively rejects even apparently intact cached files. A host loss can leave valid names/inodes but truncated or zero data, and the running source cannot safely reconstruct its earlier disk generation. Recovery resumes a paused source without re-capturing or launching another VMM, preserves the uncertain materials, and returns Incompatible. Intact independently synced material still converges after restart without another VMM launch. Crash behavior tests explicitly truncate, zero or remove private disk/RAM files after durable journal checkpoints; process close/open alone is not treated as power-loss evidence. A legacy captured/in-progress journal without boundary identities resumes the source as needed, returns Incompatible and retains its materials for manual recovery. New manifests also carry `publication_mode: IndependentInodes`. Restore requires that marker, including when using a manifest already transferred into a restore journal, so old published captures cannot bypass the new boundary merely because their old publication flag is true.
+停止目标 restore 目前只接纳未交付、仍 provisioning 的 sandbox，要求原 stop operation 固定旧实例退出证明。新 generation 沿用逻辑 VM、slot/runtime budget，保留旧盘、旧 RAM backing 与 immutable ancestry。release/discard 先核验所有历史/当前/候选实例，unknown sibling 阻断；实际回收后同事务退休每代责任。
 
-Snapshot admission reserves `(2 * MemoryMiB + DiskMiB + 224) MiB`: full CH output plus its private copy, one independent disk, both bounded JSON files in both domains (160 MiB), and the existing 64 MiB metadata margin. This covers copy fallback rather than assuming reflink succeeds. Source output remains owned by its operation until explicit deletion or GC after readers exit. GC understands private staging alongside the CH leaf, checks the journaled parent/staging identities, and records every inode before partial deletion. Resuming a deletion journal also requires that its recorded parent/staging identities match the operation boundary; an old deletion intent alone cannot authorize the new layout. Unknown or replaced entries and legacy capture ownership are retained. Dry-run performs no capture metadata repair.
+snapshot 的 D+M 费用与 catalog/路径是不同事实。显式 snapshot delete 要求 raw cleanup 已退休，先提交删除 fence/原 inode receipt，拒绝新 reader/lease。目录删除后仍有 clone backing 时保留 D+M、镜像依赖与删除证明；最后 backing 实际回收才退休费用。开放 FD 或 mapping 不因 unlink 而消失。
 
-Restore requires matching engine format, CH build digest/revision/features, architecture, CPU identity (including microcode and flags), image materialization, and shape. Compatibility includes `layout-v2`, whose saved disk IDs/order/paths/serials/read-only roles must match the verified image device table. It requests CH `CopyOnWrite` with prefault disabled and resume disabled. Admission validates static private RAM and complete, aligned, nonoverlapping saved ranges against each pinned memory-manager region; shared/file-backed/hugepage/mergeable/hotplug/virtio-mem layouts are rejected. Before resuming, it reads the verified VMM's `/proc/PID/maps` and requires complete writable-private mappings of the retained backing's device/inode and exact file offsets. Upstream eager-copy fallback therefore prevents readiness. The mapping proof is repeated when adopting restored instances. Filesystems whose stat and proc mapping device identities differ are rejected; the development Btrfs subvolume exhibited this limitation. Standalone real CH COW/clone/resnapshot acceptance has passed on tmpfs with matching identities. Production launcher, daemon adoption and full lifecycle outcomes are tracked in [the acceptance record](acceptance.md).
+### 容量
 
-Config/state are target-private copies, disk is a reflink or sparse copy, and immutable `memory-ranges` is a per-VM hardlink on the same filesystem. Restore uses the operation-owned directory `vms/<vm>/versions/<op>`; temporary copies have fixed `.pending` names inside that boundary. `copyFile` retains its capture contract: it does not fsync. Restore separately opens each candidate without following links and checks regular-file type, exact source size, and SHA256 on the same descriptor used for fsync. Each temporary file is synced before rename; final files, the restore/version directories, their versions parent, and the VM directory are synced before committing completion.
-
-| Restore journal step | Durable meaning | Replay boundary |
-| --- | --- | --- |
-| `restore_prepare_intent` | Resource identity and source manifest saved; source lease retained | Only a fresh private version can be prepared. An existing unproved version is retained and rejected. |
-| `restore_candidate_prepared` | Private directory identities and fixed source digests/sizes recorded | An interrupted incomplete attempt fails closed; it is never repaired by overwriting cached files. |
-| `restore_candidate_copied` / `restore_candidate_renamed` / `restore_candidate_synced` | Copy, rename, or filesystem sync returned; completion is still false | Retain the source lease, candidate and VM ownership fence, even if bytes appear intact. |
-| `restore_materials_complete` | All four files and directory entries synced; fixed source/candidate digests, sizes, inode identities and the completed flag committed | Inspect candidate ownership, compare to the saved proof, and continue only if intact. Memory must retain the source hardlink inode. |
-| `restore_resources_ready` | Backing registration, source lease removal and ready journal committed in one SQLite transaction | The source snapshot may be deleted. Verify the retained proof before authorizing launch; never copy from the source again. |
-| `restore_launch_intent` / `launched` and later | One instance is authorized to launch or has already launched | Inspect and adopt the recorded instance. A live instance's writable disk may differ from the delivery digest; it is never rebuilt or re-certified. |
-
-The completion proof describes delivery bytes. It is not a checksum of a VM's evolving writable disk. A transferred historical journal without this proof is rejected, including when its old manifest is present. A live candidate without launch intent, unknown instance identity, replaced directories/backing inodes, and altered proved input fail closed. There is no automatic migration or digest regeneration for old/incomplete materials. An intact transferred proof lets source deletion and daemon restart converge without another copy or VMM launch. Images have no delete API and remain retained.
-
-Failures after candidate intent persist an internal `restore_blocked` fence before fixing the public failed operation. Generic completion retains any existing source lease, old/candidate resources, backing registrations, reservations and VM operation ownership. No lease is reconstructed after transfer. Reconcile retains that fence, and startup reconstructs it from unresolved failed restore journals if a blanket backup-recovery acknowledgement cleared the VM field. Start/restore and GC cannot clear it. Ordinary admission errors before candidate intent still use normal completion when they have no candidate effects.
-
-Only an explicit new `delete` may resolve the fence. `ExpectedInstance` must equal the VM's current instance (including empty for a clone that never acquired one). Admission verifies the original failed restore and VM identity and persists its ID in the delete journal. Failed delete keys can only continue that original blocked restore. Deletion validates all recorded current, old, candidate and historical resources, then calls the self-proving `Stop` for every known instance. `Stop` verifies only the exact recorded process before signaling it; it does not require sibling scopes to be empty. After all known instances have exited, full `Inspect` must accept every resource before any device/network change or removal. This preserves the rejection of genuinely unknown live siblings while allowing several journal-owned live instances to stop. Deletion then disables network, confirms all instances and devices are down, and removes backend resources. Unknown instances, mounts, unexpected paths and replaced deletion-receipt inodes retain evidence. The original restore journal holds an exact deletion receipt, so partial unlinks and lost responses can be retried without authorizing arbitrary recursive deletion. Only after all owned files and directory entries are removed and synced does one transaction retire the VM/backing/reservations, release the original lease, and mark internal cleanup complete. The original failed operation's public status, error, result and timestamps remain byte-for-byte unchanged. A restart after the cleanup transaction committed but before the delete response uses that durable cleanup marker to finish the same delete successfully, even though the VM row is already gone.
+保守 admission 使用完整上界，reflink、稀疏分配或预计共享收益均不减免未知效果责任。tenant 的 D/M 费用见 [配额责任](../sandboxd/README.md#durable-quota-responsibility)；host reservations 还覆盖 runtime、capture/restore 复制、导入 staging/cache/metadata 与空间 margin。预算不能替代实际 byte/inode quota。
 
 ## Reference-aware garbage collection
 
-The engine runs a GC pass every minute, with a two-second context budget and at most 16 artifact deletions per pass. `CollectGarbage(ctx, GCOptions)` exposes the same collector to embeddings; `LastGCReport()` returns its latest result, including concrete deferral reasons. For an explicit administrative report, stop the daemon and run `engined --state-dir=... --mode=gc --gc-dry-run`; omit `--gc-dry-run` to collect. Dry-run does not unlink artifacts or retire their backing/reservation metadata, including when a historical artifact is already missing. As with other Engine-opening administrative modes, opening the store reconciles resources and resumes pending operations. A batch limit or context expiry leaves further work for a later pass. Scanning and checksums consume the context budget, so large inventories can require a longer explicit administrative context.
+节点 GC 通过 `loomctl --key KEY gc` 进入同一 Haven。`--dry-run` 只读 inventory，不改变 epoch、fence、费用或删除 journal；`--gc-batch`、`--gc-budget` 限定一次处理预算。background maintenance 使用同一资格检查。
 
-GC holds the same import guard for cache lookup/build/publication and collection, takes VM/snapshot lifecycle locks without waiting for active work, then freezes admission and rechecks the inventory. Roots include current VM resources, all snapshot records including tombstones, catalog image manifests and their fsmeta/layer dependencies, unpublished image destinations, pending/unresolved operation old/candidate resources, snapshot leases, and current backing registrations. Historical journals prove version ownership without permanently rooting retired versions. A retired writable/backing version and its restore reservation are collected only when unreachable and the owning VM plus every recorded instance has been inspected and confirmed dead. Current stopped VM resources remain roots. Deleting a source snapshot never authorizes deletion of a clone's retained backing link. Open descriptors or mappings in the engine process, unknown instance identity, mounts, and unexpected artifact names prevent collection.
+根包括 published image/snapshot、current VM、generation/backing、live/在途使用、未解决 step、source lease、pool 与独立 cleanup。规范化引用与原 step 关系必须完整。损坏/未知根保守阻断；未知目录与 cache child 只报告，不因名称、年龄、内容 hash 而接管。
 
-Completed import work is eligible only with matching catalog publication, durable import intent and reservation ownership; blob identities and exact expected contents are checked. Shared layer cache entries require a verified immutable receipt and artifact checksum and must be absent from every rooted image/fsmeta dependency. Interrupted/unknown import stages and cache stages without ownership receipts are retained, regardless of age. Images have no delete API and remain roots, so collection currently reclaims orphan cache entries rather than evicting published images.
+回收按原持久 authority 接纳，先保存删除 fence 和 inode receipt，Loom 核验无 reader/mapping、目录和所有允许 producer 文件，再 unlink/fsync；之后原子退休责任。部分 unlink 后重启仍沿同一 receipt。替换 inode、missing history 或未知效果保持费用；初次路径缺失不能自动制造删除证明。
 
-Before the first unlink, SQLite `gc_deletions` records the exact file/directory inode identities and a durable HEAD checkpoint. Files and parent directory entries are synced before backing/reservation retirement and deletion-intent removal. An interrupted pass rebuilds reachability and checks the recorded inode identities before continuing; replacement files and unknown additions are preserved. GC never recursively removes arbitrary directories and never prunes operation/idempotency records. A historical failed delete with `manual_recovery_required` ceases to fence GC only when its linked original failed restore/clone has matching VM/source identity, a durable completed deletion receipt, no retained source lease and no VM row. The original restore and failed delete public responses remain unchanged. An unresolved, unrelated or mismatched cleanup proof still fences collection. Missing/corrupt roots, unsupported metadata, inconsistent leases/backing, or recovery evidence fence collection and are reported. A reviewed database rollback remains fenced: the current recovery acknowledgement does not establish a complete ownership inventory or authorize GC of history it may have lost. The authority boundary is engine-owned resources and recorded runtime instances; unrelated privileged external readers are outside that boundary and are not enumerated through a global `/proc` scan.
+可回收对象包括独立 supply/import/cache cleanup、内部 sleep snapshot 和符合完整 generation 协议的资源。published images、永久 authorization/idempotency/operation 历史保持保留。删除 snapshot catalog 不自动退还 clone backing 的责任，cleanup 也不重写原公开失败结果。
 
-A failed create/clone keeps its current ownership records and reservations until explicit deletion. Failed/unpublished snapshots remain visible and can be explicitly deleted once capture recovery is resolved; completed failed capture work can be collected after its source's readers have exited. Unknown temporary files, including anonymous atomic-write stages without durable ownership, remain diagnostic evidence.
+## Guest 与网络
 
-## OCI materialization boundary
+System 2047 执行 ping/reseed/clock_sync：冷启动验证协议/portal，restore 用新 entropy 和直接 syscall 校时。Admin 2046 由 Haven 执行 activate/prepare_template/quiesce；Workload 2048 只经已鉴权数据接纳开放。System ready 与 sandbox delivery 分离。帧和 guest 行为见 [Protocol](../protocol/README.md) 与 [Guest](../guest/README.md)。
 
-`ImportOCI` accepts a local OCI layout and an exact sha256 manifest digest for native Linux architecture. Registry fetching/authentication and OCI indexes/platform selection are outside this baseline. It validates manifest/config checksums, compressed blob checksums, uncompressed diff IDs, expanded-byte/file-count bounds, tar paths, hardlink targets, entry types, and empty regular whiteouts. Only uncompressed and gzip layers are accepted; zstd and special device/FIFO entries are rejected.
-
-Default imports compose shared per-`diff_id` EROFS payloads with an image-specific fsmeta view. Explicit `ImportOptions.Materialization = MergedOCIEROFSLayout` (CLI `--materialization=merged-oci-erofs-v1`) selects the independent native umoci compatibility profile. Exact tools, mapping requirements, builder identities, namespace semantics and resource bounds are maintained in [image materialization](image-materialization.md). Native fsck validates/extracts the final view before boot materials are copied. The imported root must contain:
-
-```text
-boot/vmlinux
-boot/initramfs
-usr/lib/systemd/systemd
-usr/local/libexec/sandbox-agent
-etc/systemd/system/sysinit.target.wants/sandbox-agent.service
-```
-
-Boot files must be regular nonsymlink files. The merged-root checks use `os.OpenRoot`; extraction and boot-file copying are confined. Filesystem output is synced before SQLite publication. Files left on disk by interrupted import are unavailable until explicitly verified/published by import; create/start/restore require the catalog record and matching image metadata/checksums.
-
-Layered publications use `images/<manifest-hex>/{kernel,initramfs,fsmeta.erofs,image.json}`, with shared data files under `layer-cache/<builder-hex>/<diff_id-hex>/`. Their manifests use `format=2`, `layout=layered-erofs-v1`, exact builder/tool identity and ordered layer devices/receipts. Compatibility publications use `{kernel,initramfs,root.erofs,image.json}`, `format=3`, `layout=merged-oci-erofs-v1`, ordered original layer/diff IDs and a distinct builder pinned to exact umoci/unshare/bubblewrap/EROFS versions and policy. They expose one `/images/root.erofs` readonly disk with serial `sandbox-root`, no data serials and no shared layer cache. Snapshot manifests embed the selected image manifest. Explicit legacy `format=1`, `layout=merged-erofs-v1` catalogs remain readable. Each digest's first published layout is immutable; a different requested materialization returns `conflict`. No error triggers automatic fallback.
-
-The shared builder has actual-tool regressions for root ownership/mode/xattrs/nanosecond mtime, inherited and implicit directories, same-layer and cross-layer regular/symlink hardlinks, true forward chains, duplicate inode replacement, root/nonroot opaque markers and whiteout/replacement combinations. Native capability and named-user ACL bytes are preserved. Cache-only rebuild works without original layer blobs; independent imports produce deterministic artifacts. Existing restrictive native-rebuild catalogs remain readable under their frozen identity. Explicit umoci compatibility retains its own tested semantics and fixed umask 077; it refuses true forward links to nonexistent targets. Both builders reject directory/cyclic/unresolved links, unsupported PAX/xattrs, special files, zstd, invalid metadata and Linux symlink modes other than 0777.
-
-Image tools come from an administrator-controlled PATH and readonly dependency roots; see [host tool installation](image-materialization.md#host-tool-installation). Import reservations remain conservative even for shared/cache-hit inputs. [Reference-aware GC](#reference-aware-garbage-collection) reclaims proven orphan caches and completed owned work, not published images or uncertain stages. Guest and COW results belong to their exact materials in [the acceptance record](acceptance.md).
-
-## Guest contract
-
-Each VM has a virtio-net device/TAP even when links are blocked. Stable VMM paths include `/boot/kernel`, `/boot/initramfs`, `/disks/upper.raw`, `/run/vsock`, and `/restore/*`. Layered images bind `/sandbox/ro/fsmeta.erofs` and ordered `/sandbox/ro/data-NNNN.erofs` read-only; merged layouts bind `/images/root.erofs` read-only. Root and upper serials are `sandbox-root` and `sandbox-write`. Layer data serials are `sandbox-data-0000` through `sandbox-data-0015`; `sandbox.data_serials` preserves device-table order independently of kernel device enumeration. The guest discovers roles by serial and mounts EROFS with those external data devices before ext4/OverlayFS. Other cmdline keys are `sandbox.lower_serial`, `sandbox.upper_serial`, and `sandbox.dns`. Network identity is fixed at guest `192.168.127.2/30`, gateway `192.168.127.1`, guest MAC `02:00:00:00:00:02`, MTU 1500. Host mapping/namespace NAT gives each VM a distinct external identity.
-
-The VMM vsock CID remains 3 across restore; its private mount namespace maps the same socket path onto target-owned host resources. The system agent connects through CH's UDS-vsock transport (`CONNECT 2047\n`) using shared generated length-prefixed protobuf frames. Requests have unique nonempty IDs and `eof=true`; replies must match ID and terminal EOF. Cold start requires `ping` protocol 1/portal system. Restore additionally sends 64 fresh random bytes through `reseed`, then `clock_sync` with `unix_seconds` and `nanoseconds`. Failure prevents running readiness. sandboxd uses host-only Admin port 2046 for `activate`, `prepare_template` and `quiesce`; Workload port 2048 carries tenant exec/filesystem/session/port RPC through its authenticated byte relay. Neither channel belongs to engine readiness, and tenant relay cannot access System or Admin methods.
+direct desired policy、configuration generation 与原实例退休责任保存在 Haven，Loom 执行实际 netns/nft/links。off → policy → Admin/Workload → on → final admission 不变；未知 inspect 不是 NotFound，旧 callback 不能影响新实例。详见 [网络策略](network-policy.md)。
 
 ## Backup and explicit recovery
 
-1. Stop the daemon; retain running VMMs and kernel ownership anchors. Create a consistent metadata backup:
+停服后的 `haven --mode backup` 取得同一 writer lock，统一保存完整 `haven.db`、node key、HEAD 和 checksummed receipt。业务和节点管理事实位于同一点，不再协调两份元数据备份。资源字节须独立协调保存。
 
-   ```sh
-   engined --state-dir=/var/lib/sandbox-engine --mode=backup --backup=/safe/engine.db
-   ```
+restore 到新私有目标，保留完整原现场，正常 startup 在 review 前拒绝。显式 review 仅允许元数据诊断；pending replay、数据面和 GC 仍阻断，不从 acknowledgment 补造 witness。具体命令及限制见 [离线备份和恢复](haven-control.md#统一离线备份与恢复)。
 
-   Save both DB and `.json` receipt. `VACUUM INTO` captures a consistent DB; copying a live WAL DB is unsupported. This metadata backup does not copy writable disks, snapshots, or images. Coordinate a separate resource backup with VM/snapshot semantics if disaster recovery requires those bytes.
+writer lock、schema/identity、不可变 request/terminal/publication、完整证明和 HEAD 都在 writable connection/worker 前验证。必要 WAL/SHM 只在持锁下复制到私有 probe 解释；失败不修改原 state。HEAD 不能检测 DB 与全部本地历史一起回退。
 
-2. Run `--mode=doctor` to inspect missing/corrupt metadata. Preserve the entire damaged state and runtime evidence. With the daemon stopped, move the original DB, `metadata.db-wal`, and `metadata.db-shm` together to evidence storage. Keep resource directories at their recorded absolute paths; moving the engine to a different state path is unsupported.
+## Runtime 与验证范围
 
-3. Restore explicitly:
-
-   ```sh
-   engined --state-dir=/var/lib/sandbox-engine --mode=restore-backup --backup=/safe/engine.db
-   ```
-
-   Existing DB/WAL/SHM paths cause refusal. Checksum and receipt must match. A durable `RECOVERY_REQUIRED` marker blocks normal startup.
-
-4. Compare the backup point against operation history, retained process receipts/PID starttimes, boot identity, cgroups, namespace receipts/inodes, disks, captures, and snapshot dependencies. An old DB may omit still-live instances or externally applied effects. Do not delete unknown resources or restart old operations based solely on the recovered phase.
-
-5. Record the completed review with `--mode=recover --recovery-note='...'`. Recovered pending/running operations become fixed `manual_recovery_required` failures; they are not replayed from rolled-back history. VM verification is cleared; conservative leases/reservations remain. Start normally to reconcile retained resources, then submit new explicit keys only after resolving uncertainty.
-
-`HEAD.json` store identity/epoch detects a DB rolled back behind a retained HEAD. A coordinated rollback of both DB and HEAD cannot be detected locally. Recovery review does not reconstruct lost history. Unknown ownership, partial namespace creation without a receipt, and live processes with unreachable CH APIs can require manual recovery. The engine preserves evidence rather than guessing.
-
-## Validation and remaining operational work
-
-The test suite covers idempotency and immutable terminal responses, restart adoption without relaunch, snapshot crashes at six boundaries, source resume and disk independence, clone dependency handoff followed by source snapshot deletion, resource rejection before pause, exclusive writer/missing metadata refusal, explicit backup review, identity uncertainty, failed cold agent handshake, restore's fresh instance/default-off network, image publication, OCI traversal/type/diffID/size validation, independent writable copies, and typed UDS transport errors.
-
-Plan 011 exercises conditional start/restore recovery through the real Engine and its durable store with a test-only backend. `TestInstanceConditionStartRecovery` and `TestInstanceConditionRestoreRecovery` cover journal-before-VM, persisted-candidate, unrecorded-launch, launched, booted and agent-ready interruptions, checking one candidate launch, process identity, retained guest writes and default-off network. `TestInstanceConditionRejectsForeignCandidate` checks operation ownership, candidate/resource mismatches, unknown actual identity and strict matching for other actions. `TestInstanceConditionKeepsTerminalResult` checks unchanged successful/failed keyed results across restarts and rejects stale new requests.
-
-The restore-durability and instance-recovery plans are complete; their historical intermediate failures and matching-guest provenance correction remain in [Plan 010](../.agents/archive/010-restore-candidate-durability.md) and [Plan 011](../.agents/archive/011-instance-condition-recovery.md). They are historical source-bound evidence, not current execution instructions. Matching guest source, actual portal identity and the production launcher remain distinct verification requirements.
-
-Lifecycle unit tests use an injected backend. Required-native image tests exercise real mkfs.erofs/fsck.erofs/umoci in isolated namespaces, and COW mapping tests use actual private/shared native memory mappings. `make kvm-e2e KVM_MATERIALS_DIR=... KVM_ARTIFACTS_DIR=...` additionally boots the exact pinned CH, matching built-in-driver kernel and static guest through systemd. Both image layouts pass guest file/metadata and binary tree-transfer checks, independent writable disks, source-capture deletion, retained private-memory mapping proof and COW resnapshot recovery. Merged cross-layer regular hardlinks are checked before and after restore.
-
-`make kernel-isolation-e2e` verifies actual nft/NAT/TCP policy behavior, including a shared two-flow budget and rejection of a third concurrent connection, in fresh private namespaces and real CLONE_INTO_CGROUP placement/PID/CPU/memory enforcement and actual block-I/O throttling in a new delegated transient user service. Its I/O probe discovers the accounted backing device through io.stat, then compares bounded 4 MiB O_DIRECT writes with fdatasync before and after production setupScope applies a 1 MiB/s budget. It exercises production network preparation with a veth substituted for guest packet injection. Missing prerequisites fail instead of skipping. `make production-e2e` separately passed the actual root launcher/pivot/UID/GID/fd handoff, live VMM adoption after daemon failure, complete 512 MiB sandbox lifecycle, golden/warm provisioning and actual guest/TAP policy+SNAT TCP for source/fork/resume. It uses private namespaces and bounded bindfs/tmpfs storage while preserving all production VMM limits. Actual block-I/O throttling is proven by the separate kernel suite; each deployment must validate its configured backing-device budgets and external firewall integration. See [host setup](../deploy/host/README.md), [the acceptance record](acceptance.md) and `make privileged-e2e` for external-host lifecycle checks. No runtime simulation fallback is provided.
+真实 entrypoint 始终构造 Cloud Hypervisor。Loom 检查二进制 receipt、设备、namespace/cgroup、进程身份、COW 和网络，保留原生产资源限制。替身只经测试显式注入；组件通过不证明 KVM、kernel 或 production。当前源码的完整命令、pass/FAIL/BLOCKED、材料与实际边界按 [计划 024](../plans/024-haven-loom-single-control-design.md) 记录，历史 [验收](acceptance.md) 不覆盖新树。

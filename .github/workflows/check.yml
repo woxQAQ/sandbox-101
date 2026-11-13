@@ -11,8 +11,7 @@ jobs:
         with:
           go-version: '1.26.5'
           cache-dependency-path: |
-            engine/go.sum
-            sandboxd/go.sum
+            go.sum
             protocol/gen/go.sum
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -21,9 +20,10 @@ jobs:
         with:
           shared-key: core-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler ripgrep build-essential binutils file
-      - run: python3 -I scripts/test_acceptance_environment.py
+      - run: python3 -I scripts/test_runner_environment.py
       - run: python3 -I scripts/test_native_gate.py
-      - run: GOWORK=off go -C engine test -tags=kvm ./... -run '^TestKVMRootfsOCI$' -count=1
+      - run: python3 -I scripts/check-architecture.py
+      - run: GOWORK=off go test -tags=kvm ./internal/haven -run '^TestKVMRootfsOCI$' -count=1
       - run: make test check test-race integration smoke
   native-image:
     runs-on: ubuntu-24.04

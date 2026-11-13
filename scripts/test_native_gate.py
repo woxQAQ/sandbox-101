@@ -13,7 +13,7 @@ import unittest
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-PACKAGE = "github.com/woxQAQ/sandbox-engine"
+PACKAGE = "github.com/woxQAQ/haven/internal/haven"
 TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
@@ -60,8 +60,8 @@ from pathlib import Path
 if Path(sys.argv[0]).name == "make":
     assert sys.argv[1:] == ["--no-print-directory", "test-native"]
 else:
-    assert sys.argv[1:] == ["-C", "engine", "test", "-json", "-run",
-        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "."]
+    assert sys.argv[1:] == ["test", "-json", "-run",
+        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "./internal/haven"]
     assert os.environ["GOWORK"] == "off"
     assert os.environ["SANDBOX_REQUIRE_EROFS_TESTS"] == "1"
     assert not (Path(os.environ["PATH"]) / "bwrap").exists()

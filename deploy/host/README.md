@@ -1,103 +1,67 @@
-# Host deployment
+# Haven 宿主部署
 
-Use a dedicated Linux KVM host. These files are examples for reviewed host provisioning, not an unattended installer. The daemon uses the real Cloud Hypervisor backend and fails lifecycle operations when prerequisites are unavailable. The API and recovery contract are in [engine integration](../../docs/engine-integration.md); sandboxd deployment is in [sandboxd](../sandboxd/README.md).
+本目录提供专用 Linux KVM 宿主的部署示例。一个 `haven` 进程独占控制 store，提供业务 HTTP 和私有管理 UDS；`havenctl`、`loomctl` 只调用协议。配置与离线恢复见 [Haven 控制契约](../../docs/haven-control.md)，业务 API 与配额见 [Sandbox 契约](../../sandboxd/README.md)。本次源码迁移没有停止或切换既有部署；旧 state 不自动合并、发现或接管。
 
-## Hypervisor, tools and device identity
+## 宿主、VMM 与材料
 
-The supported Cloud Hypervisor revision is exactly `a02b114bd42c65b73033231a27bd23f3c487fc4c`. The launcher requires seccomp and a static binary. Provision a matching artifact and its JSON receipt from a trusted supplier. Building CH here is not a deployment or acceptance prerequisite. If no matching artifact is available and a source build is explicitly desired, the optional builder uses a fresh nonexistent directory separate from engine state:
+Cloud Hypervisor 精确 revision 由 [版本文件](cloud-hypervisor-revision) 固定。提供可信供应方构建的静态 x86_64 musl 二进制及 JSON build receipt，包含 `kvm,io_uring` 和该 revision 内置的 seccomp。只有显式需要构建时才运行 [构建脚本](build-cloud-hypervisor.sh)，使用新目录。Loom 校验 revision、特性、完整 SHA256 和静态链接；receipt 是部署信任材料，不是独立构建认证。
 
-```sh
-bash deploy/host/build-cloud-hypervisor.sh /build/ch-engine-pinned /usr/local/libexec/sandbox
-GOWORK=off go -C engine build -o /tmp/engined ./cmd/engined
-install -m 0755 /tmp/engined /usr/local/bin/engined
-```
+宿主需要 root setup、KVM API 12、`/dev/net/tun`、pidfd、`CLONE_INTO_CGROUP`、mount/PID/IPC/UTS/network namespaces、pivot_root、seccomp、cgroup v2、iproute2、nftables、e2fsprogs 和 sysctl。OCI 工具、namespace/mapping 与受控 PATH 见 [镜像物化](../../docs/image-materialization.md#host-tool-installation)。非系统工具的只读依赖根通过 `SANDBOX_IMAGE_TOOL_ROOTS` 提供；示例 service 的环境文件应包含实际 PATH 与依赖根。
 
-The script builds x86_64 musl with `kvm,io_uring`; seccomp is built in at this revision. Other architectures require their own static toolchain and privileged validation. Keep the binary and JSON receipt writable only by a trusted administrator. The engine verifies source revision, feature identity, binary SHA256 and absence of dynamic dependencies. The receipt is deployment trust metadata, not an independent build attestation.
+Haven setup 使用 root。每个 VMM 使用配置的非零 UID/GID，清空 supplementary groups/capabilities，设置 no_new_privs/seccomp，在独立 namespace、受限 root 和单独 cgroup 中运行。launcher 原地 exec CH，不留下特权 supervisor。NIC 由宿主创建，MTU 1500；冷启动通过预启动 `vm.add-net`/SCM_RIGHTS 交接 TAP FD，保留固定 CH 的设备机制。不要给 VMM 添加 parent-death signal，也不要放入 daemon service cgroup。
 
-Runtime requires root, KVM API version 12, `/dev/net/tun`, pidfd, CLONE_INTO_CGROUP, mount/PID/IPC/UTS/network namespaces, pivot_root, seccomp, cgroup v2, iproute2, nftables, e2fsprogs and sysctl. Image import uses erofs-utils >=1.9.4 and <2 plus bubblewrap; explicit merged OCI compatibility also uses umoci. See [image materialization](../../docs/image-materialization.md) for exact tool and namespace requirements. System tool directories and explicitly configured `SANDBOX_IMAGE_TOOL_ROOTS` are bound read-only; see [host tool installation](../../docs/image-materialization.md#host-tool-installation). Configure an administrator-controlled PATH for host helpers and provide any extra readonly dependency roots in the engined service environment.
+为 VMM UID/GID 提供 KVM/TUN 访问权限。默认 GID 65534 通常没有 root:kvm 0660 设备访问权；选择实际 KVM group 或窄设备 ACL。准备前的 helper 使用准确 UID/GID 和空 supplementary groups 验证实际设备打开；不能通过 root VMM 绕过失败。
 
-The daemon runs as root for setup. Each VMM runs with a nonzero configured UID/GID, no supplementary groups or capabilities, no_new_privs and seccomp, inside a restricted private root. The launcher execs CH in place; no privileged supervisor remains. Cold boot creates the VM without a NIC, then passes the owned TAP descriptor through preboot `vm.add-net` with SCM_RIGHTS: this pinned CH ignores network descriptors on `vm.create`. The engine sets MTU 1500 before dropping privileges, so CH does not need a privileged MTU ioctl. Replay inspects the existing net0 before attaching another device. Do not add a parent-death signal or put VMMs in the daemon service cgroup.
+## 存储与资源预算
 
-Set `--vmm-gid` to the KVM group, or provision narrowly scoped persistent device ACLs for the VMM UID. A root:kvm 0660 device usually cannot be opened by the default GID 65534. Preflight now launches a short-lived helper with the exact configured UID/GID and an empty supplementary group set; it opens KVM/TUN and checks the KVM API before VM allocation. Device access failure rejects preparation. Do not solve device access by running the VMM as root.
+`/var/lib/haven` 为 root 私有目录，包含唯一 `haven.db`、node key、HEAD 及归属明确的资源目录。初始化只接受显式 `--init` 和新空目录。保留损坏/旧格式现场，不以初始化覆盖。
 
-## Durable storage and resource limits
+文件系统须可靠支持 file/directory fsync、sparse files、hardlinks；镜像、snapshot 与 RAM backing 保持所需同文件系统关系。可写盘始终独立 inode。reflink 减少复制，不减少保守 admission 费用。实际 COW 必须满足 stat 与 `/proc/PID/maps` 的 device/inode 一致；历史开发 Btrfs 环境因身份不一致被拒绝，reflink 能力本身不能证明 restore 兼容。
 
-Initialize private root-owned state explicitly. Never use `--init` to replace damaged metadata over retained resources.
+capture 父目录由 root 持有、模式 0711；只有 `ch` 叶交给 VMM。禁止递归 chown。Loom 将 CH 文件复制到新的 root 私有 publication inode，之后 hash/fsync/seal/rename；原 raw capture 的独立 cleanup 在确认无 reader 后退休。详见 [资源持久协议](../../docs/engine-integration.md#snapshot-and-restore-persistence)。
 
-The state filesystem must provide reliable file/directory fsync, sparse files and hardlinks. XFS or btrfs reflinks reduce writable-disk copy and resnapshot work; the fallback is an independent sparse copy. Keep snapshot and per-VM immutable memory links on one filesystem. Never truncate or edit published memory. Writable disks are always independent inodes.
+由宿主 cgroup manager 预置空的 `/sys/fs/cgroup/sandbox-vms`，祖先和该目录启用 `cpu memory io pids`。它须跨 daemon 重启保留，不能在服务停止时清理仍有 VMM 的 subtree。每实例限制保持 RAM+128 MiB、swap=0、pids=256、每请求 vCPU 的 CPU quota、25 ms burst、weight=100 和实际 `io.max`。restore loading 的临时 CPU 策略不改变 resume 前恢复 runtime quota 的要求。
 
-Capture roots and operation parents remain root-owned 0711; only the `ch` leaf is writable by the VMM UID/GID. Do not recursively chown capture trees to the VMM. The engine copies/reflinks CH files into new root-private publication inodes before sealing and atomic publication, so a retained VMM source descriptor cannot alter a published snapshot. Provision the conservative reservation even when reflink succeeds, and retain raw CH output until its readers exit. The exact budget, layout, identity checks, legacy refusal and durable steps are specified in [capture publication](../../docs/engine-integration.md#snapshot-and-restore-persistence).
-
-COW restore validates saved static memory topology and then proves complete writable-private mappings of the backing device/inode in the verified VMM's `/proc/PID/maps` before resume. Use a filesystem with consistent stat/mapping identity. The development Btrfs subvolume returned different device IDs between stat and proc mappings and was rejected. Standalone acceptance passes on tmpfs, where those identities agree. Btrfs COW restores remain unsupported under this strict identity check; its reflink support alone does not establish restore compatibility. Compatibility includes the ordered fsmeta/data/upper block layout (`layout-v2`).
-
-Provision an empty cgroup v2 parent such as `/sys/fs/cgroup/sandbox-vms` through the host cgroup manager. It must survive service restarts, with `cpu memory io pids` enabled in `cgroup.subtree_control` and delegated by ancestors. Do not remove populated VM children when engined stops. The engine creates per-instance children and spawns atomically into them.
-
-Required files include `cpu.max`, `cpu.max.burst`, `cpu.weight`, `memory.max`, `memory.swap.max`, `pids.max` and `io.max`. Per instance the engine applies RAM plus 128 MiB overhead, no swap, 256 tasks, one CPU quota per requested vCPU, a 25 ms burst and weight 100. Restore loading temporarily has unlimited CPU quota; runtime quota is armed before resume. Configure aggregate host limits separately.
-
-Create `/etc/sandbox-engine/engine.env` with the actual device budget and nonzero VMM identity:
-
-```text
-ENGINE_IO_MAX="259:0 rbps=268435456 wbps=134217728 riops=20000 wiops=10000"
-ENGINE_VMM_UID=65534
-ENGINE_VMM_GID=REPLACE_WITH_KVM_GROUP_ID
-```
-
-Replace the device major:minor and group placeholder. Device-mapper and multi-device filesystems need storage-specific accounting. Accepted io.max syntax does not prove that the intended backing I/O is limited.
-
-SQLite reservations are conservative admission accounting. Provision hard storage/project and inode quotas plus a safety reserve over engine state. Host tc/packet/allocation limits remain deployment responsibilities. The engine direct-policy connection budget counts tracked flows; it does not replace host bandwidth and conntrack allocation controls. After applying those controls, create root-owned `/etc/sandbox-engine/host-policy.json`:
+提供外部存储 byte/inode quota、空间 reserve、网络带宽/包速率与 conntrack allocation 限额，再写 root-owned `/etc/haven/host-policy.json`：
 
 ```json
 {"version":1,"storage_quota":true,"network_quotas":true}
 ```
 
-This receipt acknowledges external provisioning; it does not fully inspect or attest those controls.
+该 receipt 仅记录部署者确认，不证明所有外部限额已经生效。`HAVEN_IO_MAX` 必须使用真实 backing-device major:minor 与预算；多设备、device-mapper 和 filesystem 的实际 I/O 计费需独立核验。
 
-## Network ownership and direct policy
+## 网络
 
-Reserve nonoverlapping engine ranges:
+保留现有宿主机制的 namespace、link aliases 和 nft table identity：guest namespace 内 `192.168.127.0/30`，独立映射范围 `10.200.0.0/17`，veth links `10.201.0.0/16`。每实例拥有 `sbe-<token>` netns、`sb<slot>h` host veth、`uplink` 和 `tap0`。token/inode/alias 共同校验归属。
 
-- `192.168.127.0/30`: guest `.2`, gateway `.1`, reused in separate namespaces.
-- `10.200.0.0/17`, slots 1–32767: host-visible guest mappings.
-- `10.201.0.0/16`: host veth /31 links.
+部署前审查并加载 [宿主防火墙示例](sandbox-engine.nft)，启用 IPv4 forwarding，协调宿主 firewall priorities。`inet sandbox_engine` 是保留的内核资源 identity；不要在 VMM 存活时清空 `active_ifaces`/`active_ips`。IPv6 与 VMM-originated IP 被阻断。
 
-Each VM owns namespace `sbe-<durable-token>`, host veth `sb<five-digit-slot>h`, namespace peer `uplink`, and TAP `tap0`. Receipts retain namespace token/inode; link aliases prove ownership. Namespace NAT maps the shared guest address to an independent host-visible identity. VMM-local IP input/output is denied except loopback. IPv6 forwarding is denied and namespace IPv6 is disabled.
+Haven 按 off → 安装并核验策略 → Admin/Workload ready → on → 最终交付执行 direct。`none`/`relay` NIC 保持关闭。CIDR/flow、精确实例退休及实际规则核验见 [网络策略](../../docs/network-policy.md)。未知 namespace/link/进程或缺失 receipt 保留现场，不能凭目录名删除。
 
-Review and load `sandbox-engine.nft`, enable host IPv4 forwarding, and integrate chain priorities with the host firewall. The example owns only `inet sandbox_engine`; it never flushes other rules. Preserve its chains, static sets, `active_ifaces` and `active_ips` while VMMs remain alive.
+## 安装和首次启动
 
-Links default down. To enable direct egress, submit `network(false)`, then `network_policy` with exact `ExpectedInstance`, then `network(true)`. Version 1 accepts canonical IPv4 CIDRs and an explicit flow budget, rejects hostname policies, and always denies private/reserved/metadata addresses. An empty allowlist denies all; explicit `0.0.0.0/0` permits public destinations under that reserved deny. Policy replacement requires actual and desired network off. Nil policy installs deny-all and revokes authorization.
+构建 `make build`，安装 `bin/haven`、`bin/havenctl`、`bin/loomctl`。审查 [配置示例](haven.example.yaml) 和 [service](haven.service)，预置私有 `/etc/haven`、token、host policy、cgroup、firewall 与可信 VMM 材料。token 至少 32 个 trimmed 字符、文件仅管理员可读。环境文件 `/etc/haven/haven.env` 使用 `HAVEN_IO_MAX`、`HAVEN_VMM_UID`、`HAVEN_VMM_GID` 等新前缀；旧前缀不参与配置。
 
-The engine atomically replaces its namespace policy table while retaining NAT, fsyncs a receipt binding policy/instance/namespace and stateless nft rules, and verifies actual rules before enabling/adopting an enabled VM. New cold/restore/clone instances have no inherited authorization. Reconcile attempts to shut down unverified interfaces and never reinstalls policy or re-enables links automatically. See [the exact policy contract](../../docs/network-policy.md), including tracked-flow lifetime and replacement semantics. Sandbox `none` and `relay` leave the NIC blocked; relay traffic uses vsock.
+首次手动启动：
 
-Network inspection checks namespace inode/token, ownership aliases, veth pairing, UP state, and installed policy rules. Complete validation of every address/route/MAC/MTU remains pending. Partial creation without a receipt preserves unknown resources for diagnosis. Teardown records intent and removes the namespace last, rejecting replaced namespaces/reused links before deletion.
-
-## First start and restart
-
-The daemon loads configuration with Viper. Install and review [engined.example.yaml](engined.example.yaml) as `/etc/sandbox-engine/config.yaml`; the sample service passes this path with `--config`. Keys match the existing flag names. Explicit flags override `ENGINE_*` environment variables, which override the file and then defaults. Hyphens become underscores in environment names, so the service's existing `ENGINE_IO_MAX`, `ENGINE_VMM_UID` and `ENGINE_VMM_GID` settings apply directly. Unknown keys and invalid typed values reject startup. Configuration is read once; initialization and recovery remain explicit operations.
-
-The sample `sandbox-engine.service` requires initialized state, installed binaries, host policy, cgroup parent, firewall and environment. `KillMode=process` and `SendSIGKILL=no` keep separately placed VMMs alive across daemon exit; review parent slice cleanup as well.
-
-Initialize manually with the production flags, then stop cleanly before enabling the service:
-
-```sh
-engined --init --state-dir=/var/lib/sandbox-engine \
-  --socket=/run/sandbox-engine/engine.sock \
-  --cgroup-root=/sys/fs/cgroup/sandbox-vms \
-  --vmm-gid=REPLACE_WITH_KVM_GROUP_ID \
-  --io-max='259:0 rbps=268435456 wbps=134217728 riops=20000 wiops=10000'
+```nu
+haven --config /etc/haven/config.yaml --init
 ```
 
-Replace placeholders first and use the same identity/budgets in the service. CLI import and backup are offline commands sharing the writer flock. The private 0600 UDS grants control over every engine VM; arrange sandboxd service access explicitly.
+它是前台服务；完成初始化后正常终止，再由 service 启动同一配置。service 不包含 `--init`。配置优先级为显式 flags > `HAVEN_*` > 显式 file > defaults；文件不自动发现。TLS cert/key 成对提供。HTTP 默认 loopback；网关须保留 HTTP/1.1 Upgrade、streaming 与长连接。
 
-On restart retain state, mounts, cgroups, namespaces, binary and nft sets. The engine compares PID/starttime/boot ID/executable/cgroup, reattaches pidfds and inspects CH before replay. A host reboot removes processes and kernel anchors; reconstruction of every lost anchor is not automatic. Preserve evidence before replacements.
+管理 socket 为 0600，父目录须受控且私有；Linux `SO_PEERCRED` 仅允许 daemon UID/root。不要向租户开放此 socket。`loomctl status` 和 root 业务 `/v1/status` 应给出相同 store identity。在线导入通过管理端完成：
 
-## Recovery and acceptance
+```nu
+loomctl --key import-reviewed-image --oci-layout /private/oci --digest 'sha256:REPLACE_WITH_MANIFEST_HEX' import
+```
 
-Follow [engine recovery](../../docs/engine-integration.md#backup-and-explicit-recovery). Keep DB/WAL/SHM together as evidence, retain absolute resource paths, and restore only through the explicit recovery fence. Backups contain metadata; resource bytes require separate coordinated backup. Review an old backup against real processes, instances and resources before acknowledgment. Local HEAD detects some DB-only rollbacks, not rollback of the entire store and its history.
+`--materialization merged-oci-erofs-v1` 显式选择兼容布局。CLI flag 放在 command 前。root 管理租户的模板/分支时，`havenctl --tenant OWNER` 明确指定 owner。
 
-Standalone acceptance has built the exact pinned static CH and matching kernel, booted both EROFS materializations through the actual static init and systemd/agent, and verified guest file/tree semantics, boot-time root raw write rejection for every readonly root/data block device, private COW mappings, independent writable disks, source-capture deletion and COW resnapshot recovery. `make kvm-e2e` runs these checks as a device-authorized nonroot user; see [runtime acceptance](../../README.md#runtime-acceptance). Use storage with matching stat/mapping identity and sufficient free space for conservative import reservations and retained captures.
+重启保留 state、资源绝对路径、mounts、cgroups、namespaces、CH binary 和 nft sets。`KillMode=process`、`SendSIGKILL=no` 与 VMM 的独立 scope 保持 daemon/VMM 生命周期分离；同时审查父 slice 的退出策略。Haven 只接续有原意图和精确现场证明的实例；host reboot 后丢失的 kernel anchors 不自动重建。
 
-`make capture-isolation-e2e` runs four real filesystem isolation scenarios in fresh user/mount/PID namespaces with separate mapped root and writer identities. It verifies protected parents, symlink/destination rejection, independent publication despite retained source write FDs, and bounded rejection of special/unknown/oversized artifacts. Missing subordinate UID/GID mappings fail the suite; no KVM, cgroups or host-root elevation is needed.
+## 备份、恢复与验收
 
-`make kernel-isolation-e2e` runs real nft/NAT/TCP checks in fresh user/network/mount/PID namespaces and cgroup checks in a new transient systemd user service with delegated controllers. The test prepares the production TAP topology, then substitutes a veth for guest packet injection. It verifies allow/deny, shared-flow budget saturation, revocation, stale-instance rejection, tampered-policy shutdown, CLONE_INTO_CGROUP placement, PID exhaustion, CPU throttling, memory OOM enforcement and actual block-I/O throttling. The bounded I/O probe discovers the accounted backing device through io.stat and compares two O_DIRECT writes with fdatasync before and after applying a 1 MiB/s budget. It changes only the newly owned namespace/service subtree and cleans those resources. It needs usable user namespaces, TUN and systemd user delegation; missing prerequisites fail explicitly. It does not exercise the production privileged launcher. Its actual block-I/O result applies to the observed test device; validate the configured budget on each deployment's backing storage.
+使用 [统一离线备份与恢复门禁](../../docs/haven-control.md#统一离线备份与恢复)。备份由停服后的同一 writer lock 排他取得，覆盖完整 DB/key/HEAD，不复制磁盘、镜像、快照或 RAM。恢复 review 只解锁元数据诊断，不授权数据面、工作流 replay 或 GC。DB 与完整本地历史一起回退无法靠本机 HEAD 检出。
 
-`make production-e2e` has additionally passed the actual production launcher, pivot_root, UID/GID/capability reduction, KVM/TAP fd handoff and live daemon-failure adoption. Both daemons passed the complete 512 MiB sandbox lifecycle, template_build/golden/warm provisioning and real guest/TAP policy+SNAT TCP for source/fork/resume. This runner uses fresh namespaces, a private bounded bindfs/tmpfs filesystem and its own transient user delegation; see [reproduction and evidence](../../docs/acceptance.md). On each provisioned host also run `make privileged-e2e` with the `SANDBOX_E2E_*` variables from [sandboxd deployment](../sandboxd/README.md) and qualify the actual storage budget, external firewall/MTU integration, concurrent allocation and partial teardown. [Reference-aware GC](../../docs/engine-integration.md#reference-aware-garbage-collection) collects proven unreachable caches, completed owned work and retired resource versions; published images and operation/idempotency history remain retained.
+[测试输入与 runner](../../scripts/README.md) 分别定义 capture、kernel-isolation、KVM、production 和显式 `SANDBOX_E2E_*` 私有部署验收。production 保留 512 MiB shape、真实 launcher、daemon-failure 后精确 live adoption、golden/warm、fork/resume 后 TAP/SNAT 断言。缺材料/namespace/mapping/device/delegation 时记 BLOCKED。历史双 daemon [验收记录](../../docs/acceptance.md) 不证明当前 Haven 或任意实际宿主通过；当前迁移证据见 [计划 024](../../plans/024-haven-loom-single-control-design.md)。本文件和 service 更新不表示已有宿主已切换。

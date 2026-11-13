@@ -1,0 +1,7 @@
+# havenctl --config /private/havenctl.yaml list
+# Explicit flags > HAVENCTL_* environment > this file > defaults.
+endpoint: http://127.0.0.1:7777
+token-file: /private/tenant-token
+# Root requests modifying owner-scoped resources must select that tenant.
+tenant: ""
+key: ""

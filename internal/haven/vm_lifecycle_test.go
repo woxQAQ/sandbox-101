@@ -1,0 +1,355 @@
+package haven
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/woxQAQ/haven/loom"
+)
+
+func TestHavenStepAdmissionAtomicity(t *testing.T) {
+	parallelLifecycle(t)
+	for _, failure := range []string{"abort-quota", "ignore-version", "before-commit"} {
+		t.Run(failure, func(t *testing.T) {
+			var fault func(string) error
+			if failure == "before-commit" {
+				fault = func(point string) error {
+					if point == "admission_before_commit" {
+						return ErrInterrupted
+					}
+					return nil
+				}
+			}
+			service, backend := coldService(t, fault)
+			switch failure {
+			case "abort-quota":
+				_, err := service.store.db.Exec("CREATE TRIGGER deny_quota BEFORE INSERT ON quota_resources BEGIN SELECT RAISE(ABORT,'fixture quota rejection'); END")
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "ignore-version":
+				_, err := service.store.db.Exec("CREATE TRIGGER deny_version BEFORE INSERT ON resource_versions BEGIN SELECT RAISE(IGNORE); END")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			tables := []string{"sandboxes", "operation_steps", "vms", "instances", "resource_versions", "reservations", "quota_resources", "quota_refs", "resource_refs"}
+			baseline := map[string]int{}
+			for _, table := range tables {
+				var count int
+				if err := service.store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				baseline[table] = count
+			}
+			if _, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "atomic", TemplateID: "cold"}); err == nil {
+				t.Fatal("failed admission reported success")
+			}
+			for _, table := range tables {
+				var count int
+				if err := service.store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != baseline[table] {
+					t.Fatalf("partial admission in %s: %d %v", table, count, err)
+				}
+			}
+			var operations int
+			if err := service.store.db.QueryRow("SELECT COUNT(*) FROM operations WHERE idem_key='atomic'").Scan(&operations); err != nil || operations != 0 {
+				t.Fatal("rejected operation persisted", operations, err)
+			}
+			if backend.count("prepare") != 0 || backend.count("launch") != 0 {
+				t.Fatal("external effect preceded admission commit")
+			}
+		})
+	}
+	t.Run("committed-before-effects", func(t *testing.T) {
+		service, backend := coldService(t, nil)
+		backend.before = func(_ string, resource loom.Resource) error {
+			if !service.admission.TryLock() {
+				return fmt.Errorf("effect held the global admission lock")
+			}
+			service.admission.Unlock()
+			var count int
+			if err := service.store.db.QueryRow("SELECT COUNT(*) FROM vms v JOIN instances i ON i.vm_id=v.id JOIN resource_versions r ON r.vm_id=v.id WHERE v.id=? AND i.id=?", resource.VMID, resource.Instance).Scan(&count); err != nil {
+				return err
+			}
+			if count != 1 {
+				return fmt.Errorf("effect did not have a committed candidate")
+			}
+			return nil
+		}
+		operation := coldClaim(t, service, "committed")
+		step := awaitColdWorker(t, service, operation.ID)
+		if step.Status != "succeeded" {
+			t.Fatal("cold step did not complete", step.State)
+		}
+		coldResponsibility(t, service, operation, true)
+		original, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "committed", TemplateID: "cold"})
+		if err != nil || original.ID != operation.ID {
+			t.Fatal("same-key replay lost original admission", err)
+		}
+		if _, err = service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "committed", TemplateID: "changed"}); err == nil {
+			t.Fatal("same key changed its request")
+		}
+	})
+}
+
+func TestHavenStepCrashRecovery(t *testing.T) {
+	parallelLifecycle(t)
+	for _, point := range []string{"admission_committed", "step_prepare_intent", "effect_prepared", "step_launch_intent", "effect_launched", "step_launched", "step_booted", "step_agent_ready", "completion_before_commit", "step_completed"} {
+		t.Run(point, func(t *testing.T) {
+			service, backend := coldService(t, func(candidate string) error {
+				if candidate == point {
+					return ErrInterrupted
+				}
+				return nil
+			})
+			operation := coldClaim(t, service, "recover")
+			if point != "admission_committed" {
+				awaitColdWorker(t, service, operation.ID)
+			}
+			before, err := loadStep(context.Background(), service.store.db, operation.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backend.count("launch") > 0 {
+				file, err := os.OpenFile(before.Input.Resource.Disk, os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, writeErr := file.WriteAt([]byte("guest writes survive"), 0)
+				if err = errors.Join(writeErr, file.Close()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service = resumeColdService(t, service, backend)
+			after := awaitColdWorker(t, service, operation.ID)
+			if after.Status != "succeeded" || after.State.Witness != before.Input.Resource.Instance || after.Input.Resource.VMID != before.Input.Resource.VMID || backend.count("launch") != 1 {
+				t.Fatalf("recovery allocated another candidate: before=%+v after=%+v launches=%d", before.Input.Resource, after.State, backend.count("launch"))
+			}
+			if point == "effect_launched" || point == "step_launched" || point == "step_booted" || point == "step_agent_ready" || point == "completion_before_commit" || point == "step_completed" {
+				file, err := os.Open(after.Input.Resource.Disk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := make([]byte, len("guest writes survive"))
+				_, readErr := file.ReadAt(data, 0)
+				err = errors.Join(readErr, file.Close())
+				if err != nil || string(data) != "guest writes survive" {
+					t.Fatal("running disk was rebuilt during replay", err)
+				}
+			}
+			coldResponsibility(t, service, operation, true)
+		})
+	}
+}
+
+func TestHavenInstanceAtomicCompletion(t *testing.T) {
+	parallelLifecycle(t)
+	for _, write := range []struct{ name, event, table, condition string }{
+		{"vm", "UPDATE", "vms", "NEW.state='running'"},
+		{"instance", "UPDATE", "instances", "json_extract(NEW.body,'$.agent_ready')=1"},
+		{"sandbox", "UPDATE", "sandboxes", "json_extract(NEW.body,'$.instance')!=''"},
+		{"disk", "INSERT", "quota_resources", "NEW.kind='vm_disk'"},
+		{"pending-ref", "DELETE", "quota_refs", "OLD.kind='pending_storage'"},
+		{"pending-cost", "DELETE", "quota_resources", "OLD.kind='pending_storage'"},
+		{"source-ref", "DELETE", "resource_refs", "OLD.holder_kind='step'"},
+		{"witness", "UPDATE", "operation_steps", "NEW.status='succeeded'"},
+		{"parent", "UPDATE", "operations", "json_extract(NEW.body,'$.resource_ready')=1"},
+	} {
+		for _, mode := range []string{"ABORT,'fixture completion rejection'", "IGNORE"} {
+			t.Run(write.name+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
+				service, backend := coldService(t, nil)
+				statement := fmt.Sprintf("CREATE TRIGGER reject_completion BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
+				if _, err := service.store.db.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+				operation := coldClaim(t, service, "completion")
+				step := awaitColdWorker(t, service, operation.ID)
+				if step.Status != "running" || step.State.Phase != "agent_ready" || step.State.Witness != "" {
+					t.Fatalf("rejected SQL published a terminal witness: %+v", step.State)
+				}
+				coldResponsibility(t, service, operation, false)
+				var ready int
+				if err := service.store.db.QueryRow("SELECT COUNT(*) FROM instances WHERE json_extract(body,'$.agent_ready')=1").Scan(&ready); err != nil || ready != 0 {
+					t.Fatal("instance became ready outside completion transaction", ready, err)
+				}
+				if backend.count("launch") != 1 {
+					t.Fatal("fixture did not reach the actual host effect")
+				}
+				if _, err := service.store.db.Exec("DROP TRIGGER reject_completion"); err != nil {
+					t.Fatal(err)
+				}
+				service = resumeColdService(t, service, backend)
+				step = awaitColdWorker(t, service, operation.ID)
+				if step.Status != "succeeded" || backend.count("launch") != 1 {
+					t.Fatal("result commit retry relaunched the VM", step.State)
+				}
+				coldResponsibility(t, service, operation, true)
+			})
+		}
+	}
+}
+
+func TestHavenTerminalResultImmutable(t *testing.T) {
+	parallelLifecycle(t)
+	service, backend := coldService(t, nil)
+	backend.failBoot = true
+	failed := coldClaim(t, service, "failed")
+	step := awaitColdWorker(t, service, failed.ID)
+	if step.Status != "failed" || step.State.Witness != "" {
+		t.Fatal("failure fabricated a witness")
+	}
+	original, err := service.GetOperation(context.Background(), "tenant", failed.ID)
+	if err != nil || original.Status != "failed" {
+		t.Fatal("original failure not fixed", err)
+	}
+	originalBytes := encode(original)
+	backend.mu.Lock()
+	backend.failBoot = false
+	backend.mu.Unlock()
+	service = resumeColdService(t, service, backend)
+	replayed, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "failed", TemplateID: "cold"})
+	if err != nil || !bytes.Equal(encode(replayed), originalBytes) || backend.count("launch") != 1 {
+		t.Fatal("failed key was re-executed or enriched", err)
+	}
+	if _, err = service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "unproved-delete", SandboxID: failed.Result.SandboxID}); err == nil {
+		t.Fatal("failed candidate supplied deletion authority")
+	}
+	coldResponsibility(t, service, failed, false)
+	current := coldClaim(t, service, "new-generation")
+	good := awaitColdWorker(t, service, current.ID)
+	if good.Status != "succeeded" {
+		t.Fatal("new request did not complete", good.State)
+	}
+	var witnessBefore []byte
+	if err = service.store.db.QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessBefore); err != nil {
+		t.Fatal(err)
+	}
+	service.opts.Fault = func(point string) error {
+		if point == "release_admitted" {
+			return ErrInterrupted
+		}
+		return nil
+	}
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: current.Result.SandboxID})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatal("cleanup was not paused after its durable admission", err)
+	}
+	parentFailure, err := service.GetOperation(context.Background(), "tenant", current.ID)
+	if err != nil || parentFailure.Status != "failed" {
+		t.Fatal("released parent was not fixed before cleanup", err)
+	}
+	parentFailureBytes := encode(parentFailure)
+	service = resumeColdService(t, service, backend)
+	deleted := awaitColdWorker(t, service, release.ID)
+	if deleted.Status != "succeeded" {
+		t.Fatal("release did not retire its own responsibility", deleted.State)
+	}
+	parentAfterCleanup, err := service.GetOperation(context.Background(), "tenant", current.ID)
+	if err != nil || !bytes.Equal(encode(parentAfterCleanup), parentFailureBytes) {
+		t.Fatal("independent cleanup rewrote its failed parent's public result", err)
+	}
+	var witnessAfter []byte
+	if err = service.store.db.QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessAfter); err != nil || !bytes.Equal(witnessBefore, witnessAfter) {
+		t.Fatal("cleanup rewrote historical generation proof", err)
+	}
+	old, err := service.GetOperation(context.Background(), "tenant", failed.ID)
+	if err != nil || !bytes.Equal(encode(old), originalBytes) {
+		t.Fatal("another generation/cleanup changed original failure", err)
+	}
+	var held int64
+	if err = service.store.db.QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&held); err != nil || held != 64 {
+		t.Fatal("cleanup refunded unrelated unknown allocation", held, err)
+	}
+	cached, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: current.Result.SandboxID})
+	if err != nil || cached.ID != release.ID || cached.Status != "succeeded" {
+		t.Fatal("release terminal result was not replayed", err)
+	}
+}
+
+func TestHavenStepReleaseRecovery(t *testing.T) {
+	parallelLifecycle(t)
+	for _, point := range []string{"release_admitted", "effect_stopped", "effect_removed", "deletion_intent", "release_unlinked", "effect_files_removed", "release_completion_before_commit"} {
+		t.Run(point, func(t *testing.T) {
+			var armed bool
+			service, backend := coldService(t, func(candidate string) error {
+				if armed && candidate == point {
+					return ErrInterrupted
+				}
+				return nil
+			})
+			claim := coldClaim(t, service, "claim")
+			if step := awaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
+				t.Fatal(step.State)
+			}
+			armed = true
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+			if err != nil && !errors.Is(err, ErrInterrupted) {
+				t.Fatal(err)
+			}
+			if point != "release_admitted" {
+				awaitColdWorker(t, service, release.ID)
+			}
+			var storage int64
+			if err = service.store.db.QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE tenant_id='tenant'").Scan(&storage); err != nil || storage != 64 {
+				t.Fatal("incomplete deletion refunded charge", storage, err)
+			}
+			service = resumeColdService(t, service, backend)
+			step := awaitColdWorker(t, service, release.ID)
+			if step.Status != "succeeded" {
+				t.Fatal("release did not resume original cleanup", step.State)
+			}
+			var remaining int
+			if err = service.store.db.QueryRow("SELECT COUNT(*) FROM quota_resources").Scan(&remaining); err != nil || remaining != 0 {
+				t.Fatal("trusted cleanup did not retire responsibility", remaining, err)
+			}
+			if backend.count("launch") != 1 {
+				t.Fatal("cleanup started another VM")
+			}
+		})
+	}
+}
+
+func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
+	parallelLifecycle(t)
+	service, backend := coldService(t, func(point string) error {
+		if point == "release_admitted" {
+			return ErrInterrupted
+		}
+		return nil
+	})
+	claim := coldClaim(t, service, "claim")
+	cold := awaitColdWorker(t, service, claim.ID)
+	if cold.Status != "succeeded" {
+		t.Fatal(cold.State)
+	}
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatal("release was not frozen before side effects", err)
+	}
+	disk := cold.Input.Resource.Disk
+	if err = os.Rename(disk, filepath.Join(t.TempDir(), "original-disk")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(disk, []byte("unknown replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service = resumeColdService(t, service, backend)
+	step := awaitColdWorker(t, service, release.ID)
+	if step.Status == "succeeded" {
+		t.Fatal("unproved replacement was reclaimed")
+	}
+	data, err := os.ReadFile(disk)
+	if err != nil || string(data) != "unknown replacement" {
+		t.Fatal("replacement file changed", err)
+	}
+	var storage int64
+	if err = service.store.db.QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storage); err != nil || storage != 64 {
+		t.Fatal("uncertain replacement retired its charge", storage, err)
+	}
+}

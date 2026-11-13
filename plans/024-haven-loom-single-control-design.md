@@ -1,12 +1,12 @@
 # Plan 024：将持久控制面收归 Haven，将 Loom 收敛为资源操作库
 
-> 本文是目标设计与分阶段实施方案，不描述已经上线的能力。本轮只交付设计，不修改运行时代码，不启动旧计划，不提交、推送或合入。
+> 本文是目标设计与分阶段实施方案；实施进度与实际验证见下方状态及 [迁移证据](evidence/024-migration-map.md)。设计阶段不修改运行时代码；当前实施授权不包含启动旧计划、提交、推送或合入。
 >
 > 执行者先完整阅读本文与根 `AGENTS.md`。每阶段保留行为证据；遇到 STOP 条件先报告，不通过放宽身份核验、资源限制或恢复断言完成迁移。
 
 ## 1. 状态、决定与范围
 
-- Status：DESIGN_READY / IMPLEMENTATION_NOT_STARTED。
+- Status：STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED。旧控制模块、双 daemon 与 engine UDS facade 已删除；workspace、CI、native gate、KVM/production runner 和部署示例已迁到单 Haven。原 native/guest/生产断言保留，补上未知 cache 报告、跨 fork writer-lock handoff 与 capture runner TMPDIR 修复。当前 schema 仍为 9。最终组件、完整 race、六项 Rust integration、六组 smoke、静态及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**，原 JSON/race/count=1/300s 不变；实际 capture/kernel-isolation 通过。当前 Haven 的 KVM boot/production 因未提供显式私有材料、rootfs、OCI 与 I/O 预算保持 BLOCKED。当前证据见 [阶段 F](evidence/024-stage-f-retirement.md)，[阶段 E](evidence/024-stage-e-entrypoints.md) 与 [阶段 D](evidence/024-stage-d-control-matrix.md) 的结果只绑定各自历史完成树。既有部署未切换；017/020/021 继续暂停，未提交、推送或合入，整体不标为实施全部完成。随后按命名约束将完整 daemon 生命周期入口改为 `runtime-e2e` / `SANDBOX_RUNTIME_*`，并完成受影响的定向验证；原全量数据仅绑定整理前的 F 树，当前命名映射与验证见 F 证据的“后续命名整理”。
 - Priority：P1；Effort：L；Risk：HIGH；Category：architecture / migration。
 - Planned at：`d6ced5b`，2026-11-12。
 - Depends on：无；017、020、021 继续 PAUSED，不作为本任务自动执行的依赖。
@@ -451,12 +451,16 @@ python3 -I scripts/check-architecture.py
 
 `make build` 此时构建 `bin/haven`、`bin/havenctl`、`bin/loomctl` 与原 Rust workspace；不得再构建或启动 `engined` / `sandboxd`。
 
+阶段 E 已完成。四个目标入口命令、workspace/tagged integration lint、vet 与最终 required-native 已通过；完整记录及失败修复见 [阶段 E 证据](evidence/024-stage-e-entrypoints.md)。`run.d6zrkslx` 为 940 pass、0 fail/skip，当前 Go/Rust fixture 与原 native gate 的证明范围分别记录。F 不随 E 完成自动开始。
+
 ### 阶段 F：清除旧边界并做真实路径验收
 
 1. 删除旧 daemon、UDS engine client/facade、旧模块与双库运行路径；迁移必要测试后再删文件。
 2. 更新 Makefile、CI、native gate、runner 模块/测试定位与部署材料；保留原 gate 的 required-native、超时、JSON 输出及必须观察 pass 的语义。
 3. 当前文档改为 Haven/Loom；专项契约仍分别维护。历史验收与研究不做全局替换。017/020/021 保持暂停，在索引注明后续实施前需映射新架构。
 4. 最后运行下节全量与真实路径门槛；明确未运行项，不以 host fixture 通过替代 production。
+
+F 的旧边界清除、入口/测试/部署迁移已实现；最终组件、Rust/smoke、静态与完整 required-native 通过（677 pass、0 fail/skip，Haven 278.938s），capture/kernel 实际检查通过。当前 KVM boot/production 材料缺失，整体为 PARTIAL/BLOCKED。完整检查与失败修复见 [阶段 F 证据](evidence/024-stage-f-retirement.md)，不由历史 E/D 的通过代替。
 
 构建/组件门槛：
 
@@ -465,7 +469,7 @@ make test check test-race
 make integration
 make smoke
 python3 -I scripts/check-architecture.py
-python3 -I scripts/test_acceptance_environment.py
+python3 -I scripts/test_runner_environment.py
 python3 -I scripts/test_native_gate.py
 golangci-lint run ./... ./operator/... ./protocol/gen/...
 ```
@@ -487,14 +491,14 @@ VM 材料齐备后，使用显式准备的私有材料目录；下列环境变�
 
 ```nu
 make kvm-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"KVM_ROOTFS_DIR=($env.KVM_ROOTFS_DIR)" $"KVM_ARTIFACTS_DIR=($env.KVM_ARTIFACTS_DIR)"
-make production-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"PRODUCTION_OCI_LAYOUT=($env.PRODUCTION_OCI_LAYOUT)" $"PRODUCTION_ARTIFACTS_DIR=($env.PRODUCTION_ARTIFACTS_DIR)"
+make runtime-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"RUNTIME_OCI_LAYOUT=($env.RUNTIME_OCI_LAYOUT)" $"RUNTIME_ARTIFACTS_DIR=($env.RUNTIME_ARTIFACTS_DIR)"
 ```
 
-production 还需按现有 runner 提供 `SANDBOX_PRODUCTION_IO_MAX`，保留原 512 MiB shape、launcher/接管、golden/warm、fork/resume 后真实 TAP/SNAT 断言。缺少任何条件标记 BLOCKED；不得由本计划推导 sudo、生产宿主操作、停止旧服务或额外材料下载的授权。
+完整 daemon 生命周期还需按现有 runner 提供 `SANDBOX_RUNTIME_IO_MAX`，保留原 512 MiB shape、launcher/接管、golden/warm、fork/resume 后真实 TAP/SNAT 断言。缺少任何条件标记 BLOCKED；不得由本计划推导 sudo、生产宿主操作、停止旧服务或额外材料下载的授权。
 
 ## 10. 行为测试与验收矩阵
 
-新增测试围绕真实 Haven Service/HTTP/SQLite 和实际资源边界，不写镜像 helper 实现的函数单测。下面名称是目标测试，不是现有通过记录。按测试组放在 `internal/haven/*_test.go`、`integration/*_test.go`，物理机制测试放 `loom/*_test.go`。
+新增测试围绕真实 Haven Service/HTTP/SQLite 和实际资源边界，不写镜像 helper 实现的函数单测。下面名称对应当前执行测试；源行为与补充迁移见 [F 证据](evidence/024-stage-f-retirement.md)。测试按职责放在 `internal/haven/*_test.go`、`integration/*_test.go`，物理机制测试放 `loom/*_test.go`；名称发现不替代实际运行结果。
 
 | 目标测试/场景 | 必须证明 | 现有范例或来源 |
 |---|---|---|
@@ -506,12 +510,12 @@ production 还需按现有 runner 提供 `SANDBOX_PRODUCTION_IO_MAX`，保留原
 | `TestHavenTerminalResultImmutable` | 同键请求/结果固定；新实例和 cleanup 不改旧终态，不从当前状态补 witness | `engine/operation_completion_test.go`、`sandboxd/error_boundary_test.go` |
 | `TestHavenSnapshotDurability` | 暂停边界、源恢复、独立 inode、固定 hash/落盘证明、rename 恢复 | `engine/snapshot_test.go`、`capture_isolation_linux_test.go` |
 | `TestHavenRestoreResponsibility` | 源租约/backing 连续，失败候选阻断，显式 cleanup 核验所有已知实例 | `engine/restore*_test.go`、`sandboxd/allocation_recovery_test.go` |
-| `TestHavenSupplyResponsibility` | build/warm/claim 的 pending/slot/磁盘/snapshot 责任和 owner 原子交接；失败不假补池位 | `sandboxd/allocation*_test.go`、`warm_*_test.go` |
-| `TestHavenGCDeletionFence` | 回收与新引用不能交错；部分 unlink 重启、替换 inode、未知根、dry-run 不写 | `engine/gc*_test.go` |
+| `TestHavenSupplySlotBudgets`、`TestHavenWarmClaimAndFallback`、`TestHavenTemplateBuildAndGoldenClaim` | build/warm/claim 的 pending/slot/磁盘/snapshot 责任和 owner 原子交接；失败不假补池位 | `sandboxd/allocation*_test.go`、`warm_*_test.go` |
+| `TestHavenSnapshotDeleteFence`、`TestHavenSnapshotDeleteLeaseFence` | 回收与新引用不能交错；部分 unlink 重启、替换 inode、未知根、dry-run 不写 | `engine/gc*_test.go` |
 | `TestHavenConfigureAdmission` | revoke/fence/最终短 guard、迟到接纳与 stale instance 均 fail-closed | `sandboxd/configure_test.go`、`data_admission_test.go` |
 | `TestHavenSecretRestart` | 真值不进入 DB/step/audit/快照；重启后未重供凭据不接纳 | `sandboxd/configure_test.go:2414` |
-| `TestHavenAdminAuthority` | UDS 身份及权限；租户不能调用；raw 业务绕过拒绝；两 CLI 查询同一 operation/VM | 当前 HTTP/CLI 行为，新增同进程断言 |
-| `TestHavenShutdownRecovery` | 停接纳/撤连接、安全收尾顺序、deadline 后责任保留、重启不连坐杀/重启 VM | 现有 Close/restart 与 production adoption 场景 |
+| `TestHavenHTTPContractAndIdempotency` + 单 daemon smoke | UDS 身份及权限；租户不能调用；raw 业务绕过拒绝；两 CLI 查询同一 operation/VM | 当前 HTTP/CLI 行为，新增同进程断言 |
+| `TestHavenStepShutdownKeepsWriterUntilWorkersExit`、`TestHavenStepShutdownBackendDeadline` | 停接纳/撤连接、安全收尾顺序、deadline 后责任保留、重启不连坐杀/重启 VM | 现有 Close/restart 与 production adoption 场景 |
 | `TestHavenBackupRecoveryFence` | 同一备份覆盖两类事实；恢复阻断、ack 不授予 GC、不重放回退意图 | `sandboxd/backup_test.go`、`engine/admin_test.go` |
 | 真实 Rust fixture | Upgrade 预读、half-close、keyed exec、Preview 与 guest 门户权限不退化 | `sandboxd/integration/transport_test.go` |
 | native / kernel / KVM / production | 各自真实边界全部保留，新宿主实际执行 launcher 与接管 | `scripts/README.md` 及现有 runners |
@@ -520,24 +524,25 @@ production 还需按现有 runner 提供 `SANDBOX_PRODUCTION_IO_MAX`，保留原
 
 ```nu
 with-env {GOWORK: 'off'} { go test ./internal/haven -list '^TestHaven' }
+with-env {GOWORK: 'off'} { go test -tags=integration ./integration -list '^Test(Haven|Rust)' }
 ```
 
-预期包含表中所有 `TestHaven...` 测试；缺失不是 SKIP，不允许空集合绿灯。真实 Rust/native/VM 测试结果单列，不混入纯替身组件结果。
+两组发现结果的并集须包含上表列出的实际 `TestHaven...`；smoke 通过其真实进程入口执行。缺失不是 SKIP，不允许空集合绿灯，也不为匹配旧设计标签添加空 wrapper。真实 Rust/native/VM 测试结果单列，不混入纯替身组件结果。
 
 ## 11. Done criteria、STOP 与交付
 
 ### 11.1 全部完成才算实施完成
 
-- [ ] 只有 Haven 打开控制数据库并托管资源/业务工作流；新私有部署只有一个持久资源权威。
-- [ ] Loom 及传递依赖不含 SQL/store/业务控制层；无自主恢复、GC、资源 catalog 或后台控制循环。
-- [ ] `loomctl` 只经 Haven 管理入口操作；无第二份数据库、无业务生命周期旁路。
-- [ ] 跨 engine Submit/Find/Wait/adopt 路径和第二 daemon 从生产依赖、构建、部署和 runner 中删除。
+- [x] 只有 Haven 打开控制数据库并托管资源/业务工作流；新私有部署只有一个持久资源权威。
+- [x] Loom 及传递依赖不含 SQL/store/业务控制层；无自主恢复、GC、资源 catalog 或后台控制循环。
+- [x] `loomctl` 只经 Haven 管理入口操作；无第二份数据库、无业务生命周期旁路。
+- [x] 跨 engine Submit/Find/Wait/adopt 路径和第二 daemon 从生产依赖、构建、部署和 runner 中删除。
 - [ ] 第 10 节全部行为在新树有对应测试与结果；物理证明及费用/引用规则不因重构变弱。
-- [ ] 同库责任交接拒写/零行更新、崩溃重启、迟到实例及回收 fence 的测试通过。
-- [ ] 根 Makefile、CI、CLI smoke 和实际 Rust fixture 使用新目录及唯一服务并通过。
+- [x] 同库责任交接拒写/零行更新、崩溃重启、迟到实例及回收 fence 的测试通过。
+- [x] 根 Makefile、CI、CLI smoke 和实际 Rust fixture 使用新目录及唯一服务，本地门槛通过；GitHub CI 未运行。
 - [ ] native、capture/kernel-isolation、KVM 与 production 绑定新源码和材料重新验收；缺条件则整体交付保持 PARTIAL/BLOCKED，不能声称生产完成。
-- [ ] 旧库明确拒绝、不被覆盖；无默认自动合库/目录发现接管；备份和恢复门禁覆盖完整控制状态。
-- [ ] 当前契约、部署与计划状态同步；历史材料不被改写成新树证据。
+- [x] 旧库明确拒绝、不被覆盖；无默认自动合库/目录发现接管；备份和恢复门禁覆盖完整控制状态。
+- [x] 当前契约、部署与计划状态同步；历史材料不被改写成新树证据。
 
 ### 11.2 STOP conditions
 

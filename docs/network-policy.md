@@ -1,148 +1,51 @@
 # Direct network policy contract
 
-`network` alone cannot activate direct networking. The engine serializes
-`network`, `network_policy`, start/stop, restore, snapshot and deletion using the
-same per-VM lifecycle lock. No global lock covers policy installation or launch.
+Haven owns desired policy, activation generation and retirement responsibility. Loom performs explicit `Network`, `InstallNetworkPolicy` and `VerifyNetworkPolicy` effects on the frozen `loom.Resource`. Network, start/stop, capture, restore and deletion share the VM lifecycle guard; long host effects run outside global admission/ownership locks. There is no public engine network operation API.
 
-The stable JSON policy is:
+## Policy and packet limits
+
+The resource policy shape remains:
 
 ```json
-{
-  "version": 1,
-  "allowed_cidrs": ["1.1.1.1/32", "8.8.8.0/24"],
-  "max_connections": 256
-}
+{"version":1,"allowed_cidrs":["1.1.1.1/32","8.8.8.0/24"],"max_connections":256}
 ```
 
-`version` must be 1. `max_connections` must be explicitly supplied in 1..65535;
-zero is invalid. At most 256 canonical IPv4 CIDRs are supported. Empty/null
-`allowed_cidrs` denies every destination. `0.0.0.0/0` permits public destinations
-subject to the mandatory deny rules. Duplicate, noncanonical, IPv6 and wholly
-private/reserved/metadata prefixes are rejected. Broader prefixes that include
-reserved ranges never override the deny rules. There is no host-policy mechanism
-for private-network exemptions in this implementation.
+Version is 1. The resource policy requires an explicit connection count 1..65535 and at most 256 canonical IPv4 CIDRs. Haven normalizes the business default to 256. Empty/null CIDRs deny all. Explicit `0.0.0.0/0` permits public destinations subject to mandatory reserved denial. Duplicate, noncanonical, IPv6 and wholly private/reserved/metadata prefixes fail. Broader prefixes cannot override denied ranges; this implementation has no private-network exemption.
 
-The mandatory deny ranges cover unspecified/this-network, RFC1918, CGNAT,
-loopback, link-local/cloud metadata, IETF protocol assignments, documentation,
-6to4 relay, benchmarking, multicast and reserved/broadcast space, plus Azure's
-168.63.129.16 service endpoint. Only IPv4 TCP, UDP and ICMP outbound flows and
-tracked replies are allowed. Reply packets are checked against the current
-policy's original destination, including after replacement; old conntrack state
-cannot bypass a narrower destination policy. IPv6 and VMM-originated IP sockets
-are blocked; namespace loopback and vsock are independent of this mechanism.
+Mandatory denial covers unspecified/this-network, RFC1918, CGNAT, loopback, link-local/cloud metadata, IETF protocol assignments, documentation, 6to4 relay, benchmarking, multicast, reserved/broadcast space and Azure `168.63.129.16`. Only IPv4 TCP/UDP/ICMP outbound flows and tracked replies are admitted. Reply rules check the original destination under the current policy, so old conntrack does not bypass narrower replacement. IPv6 forwarding and VMM-originated IP sockets are blocked; namespace loopback/vsock are independent.
 
-`allowed_hosts`, if supplied, must be empty. Hostnames cannot be converted to a
-CIDR policy by dropping that constraint or resolving them once. Reject hostname
-policies (including a combination of hosts and CIDRs), or require the caller to
-explicitly choose an address policy. Direct mode does not enforce TLS/HTTP
-identity and performs no L7 credential injection. The bridge must reject
-host-only secrets/injection before installing direct policy.
+`allowed_hosts` must be empty in direct mode. Haven rejects hostname constraints and host-only secret/injection before installation; it never silently drops names or resolves them once into CIDRs. Direct does not enforce TLS/HTTP identity or inject L7 credentials. Use relay for those requirements.
 
-The connection budget is a namespace-local nft `ct count` shared across outbound
-and reply traffic and all allowed destinations. It counts TCP/UDP/ICMP flows
-according to the kernel's `ct count` lifetime rules, rather than application
-requests, file descriptors or guest sockets. Completed TCP flows can leave this
-count before their conntrack entries expire; closing a socket does not guarantee
-an immediate reusable slot. Both directions pass the same budget rule; already
-tracked flows are counted as they send or receive packets after policy replacement. Host deployment remains responsible
-for bandwidth, packet rate and kernel conntrack allocation quotas: this filter
-limits admitted forwarding, not allocations made before the forward hook.
+The namespace-local nft `ct count` budget is shared across outbound/reply traffic and all destinations. It counts TCP/UDP/ICMP flows under kernel lifetime rules, not requests, FDs or guest sockets. Completed TCP can leave the count before conntrack expiration; close does not promise an immediate free slot. Both directions enforce the same count after replacement. Host deployment separately provides bandwidth, packet-rate and conntrack allocation quotas; forward filtering does not bound allocations before the hook.
 
-## Sandboxd `Egress.InstallDirect` bridge
+## Haven activation and exact retirement
 
-Use `Binding.VMID` and the exact `Binding.Instance` captured for the activation.
-Use the durable public client and await each operation's terminal result; Submit
-alone means acceptance. Suggested requests, using unique persisted keys scoped
-to this binding/activation generation:
+The sequence in `internal/haven/activation.go` is:
 
-```go
-// 1. Confirm shutdown before installation; this is safe to repeat.
-api.Wait(ctx, engine, api.Request{
-    Key: bindingKey + ":off", Action: "network", VMID: vmID,
-    ExpectedInstance: instance, NetworkEnabled: false,
-})
+1. Verify the original resource/instance and ensure every effective interface is off.
+2. Install and verify the frozen policy through Loom while off, recording its exact instance and durable activation/retirement relationship.
+3. Configure through Admin 2046, confirm Workload 2048, and establish the binding for that exact settings generation.
+4. Verify policy, receipt, current ownership and live/System-ready instance before enabling links.
+5. Under the final configuration guard, recheck lease/fence/instance/settings and atomically publish delivery.
 
-// 2. Install the policy while every effective interface remains down.
-api.Wait(ctx, engine, api.Request{
-    Key: bindingKey + ":policy", Action: "network_policy", VMID: vmID,
-    ExpectedInstance: instance,
-    Policy: &api.NetworkPolicy{
-        Version: 1, AllowedCIDRs: policy.AllowedCIDRs,
-        MaxConnections: maxConnections, // normalize the sandbox default to 256
-    },
-})
-```
+`InstallDirect` verifies the policy already installed by that activation and returns teardown bound to its original step, policy and instance. Even partial/unknown installation retains explicit retirement responsibility. The callback never chooses a current successor by VM ID alone.
 
-`InstallDirect` returns success only after step 2 succeeds. It returns a cleanup
-closure even after an uncertain/partial installation. It never enables links.
-After guest configuration/activation through Admin port 2046, sandboxd separately awaits:
+New cold/restore/clone instances start off with no inherited policy. Installing an identical policy is a verified no-op only while all effective links remain off. Replacement/revocation refuses effective active interfaces; it does not silently shut them down to satisfy the precondition. Nil policy installs deny-all.
 
-```go
-api.Wait(ctx, engine, api.Request{
-    Key: bindingKey + ":on", Action: "network", VMID: vmID,
-    ExpectedInstance: instance, NetworkEnabled: true,
-})
-```
+Retirement freezes its own immutable input before effects, turns the original instance off, then verifies/revokes its policy. An uncertain query/effect keeps the pending step and fence. Restart retries the same responsibility. A matching prior retirement/replacement or verified original-instance teardown can complete it; stale callback cannot revoke a successor. SQL completion failure retains the old responsibility. Cached terminal results remain history and do not reapply effects.
 
-The engine requires a live, verified, agent-ready VM, a committed policy bound to
-this instance, a matching namespace ownership receipt, an intact installation
-receipt and a matching full stateless namespace nft ruleset before enabling.
-Policy installation by a new key with identical parameters is a verified no-op
-when the rules still match and every interface is off. Replacing or revoking
-while desired network state or any effective interface is on fails `conflict`.
-A policy operation never disables an active interface merely to satisfy that
-precondition.
+Configure admission commits its fence and revokes old data/proxy before saving new settings. Any networking/guest/bind/SQL failure retains blocking; automatic rebind does not clear an explicit fence. Final data admission verifies actual policy and current generation, not only last committed metadata.
 
-## Revocation and retries
+## Kernel identity and restart
 
-The cleanup closure awaits an instance-conditioned `network(false)` using its
-own stable cleanup key, then awaits `network_policy` with `Policy:nil` using a
-second stable cleanup key. Nil atomically installs deny-all and clears the
-committed authorization. Repeating either operation with the same key returns
-its original terminal result. A new key reasserts shutdown or deny-all. Neither
-operation flushes conntrack or promises that all old NAT state has disappeared.
+Loom replaces only the owned `inet engine_policy` table in one nft transaction, preserving NAT and other tables. That retained kernel table name is a resource identity, not an independent engine control plane. Its fsynced receipt binds policy, instance, namespace token/inode and a hash of the full stateless ruleset. Hashing excludes allocation handles/tool metainfo and includes rules/hooks/verdicts/address sets/NAT/budgets. Interrupted installation cannot authorize delivery before the matching Haven step commits.
 
-All network and network_policy requests require a nonempty ExpectedInstance.
-Both admission and execution check it while holding the lifecycle lock. Stale
-cleanup must not target a fresh instance. A stale-instance `conflict`, confirmed
-VM `not_found`, or successful deletion can be treated by sandboxd as cleanup of
-that old binding being complete; unrelated conflicts and unknown failures must
-remain retryable/diagnosable. A successful cached operation is a historical
-result, not a fresh inspection, and never reapplies effects to a newer instance.
-Do not reuse binding keys across activation generations, even on the same VM.
-If an operation has a terminal failure, retries needing new effects require a
-new key after inspecting its outcome. In-flight operations survive caller
-cancellation; use FindOperation with the original key after a lost response.
+Inspection verifies namespace inode/token, link ownership aliases, veth pairing, effective UP state and actual rules. Missing/mismatched receipt, unverified instance or rules tampering triggers a shutdown attempt and blocks admission. Query error is never trusted absence. Reconciliation can preserve a still-valid live binding; it does not manufacture historical witnesses or authorize stale policies. Full address/route/MAC/MTU inspection remains outside the current proof, as documented in [host deployment](../deploy/host/README.md).
 
-`VM.NetworkPolicy` and `NetworkPolicyInstance` expose the last committed policy;
-they are not a claim that kernel rules are currently verified. Cold start,
-restore and clone create a fresh instance with networking off and no committed
-policy. Policy is not inherited from snapshots. A daemon reopen keeps a live
-network only if its persisted intent, instance, receipt and actual rules match.
-Unknown inspection, missing/mismatched policy or stale rules triggers a shutdown
-attempt and marks the VM unverified. Reconciliation repeats these checks for
-active links; it never automatically reinstalls policy or enables links.
+Host root and tools are trusted. There is no continuous kernel watcher that instantly disables links when another administrator edits rules; activation, data admission and reconciliation detect mismatches. Policy never attests external host firewall or allocation quotas.
 
-## Runtime verification limits
+## Validation boundary
 
-Installation replaces only the engine-owned inet engine_policy table, in one
-nft transaction. NAT and other tables are not flushed. Its fsynced receipt binds
-the policy, instance, namespace token/inode and a hash of the full stateless
-namespace ruleset. Allocation handles/tool metainfo are excluded from that hash;
-rules, hooks, verdicts, address sets, NAT and budgets are included. An interrupted
-install cannot authorize activation before the engine commits the matching
-policy. Reinstalling while off is the explicit repair path.
+`make kernel-isolation-e2e` exercises real nft/NAT/TCP in fresh user/network/mount/PID namespaces: public allow/deny, mandatory private/metadata denial under `/0`, revocation, stale instance and tampered-rule shutdown. A two-flow budget holds connections to two public targets and rejects a third handshake. The fixture proves target reachability and substitutes a veth for packet injection after real TAP preparation; it does not prove production privileged VMM launch.
 
-Host root and its tools are trusted. There is no continuous kernel-side watcher
-that shuts links at the instant another privileged administrator edits rules;
-engine activation and reconciliation detect mismatches. The existing host
-firewall/quota prerequisite still applies, and host policy can further restrict
-access. `make kernel-isolation-e2e` has verified actual nft/NAT/TCP behavior in
-fresh user/network/mount/PID namespaces: public allow/deny, mandatory private and
-metadata denial under `/0`, revocation, stale-instance rejection and shutdown
-after ruleset tampering. A two-flow policy admits concurrent connections to two
-public destinations and rejects a third handshake while both remain open. The
-fixture first proves all targets reachable and substitutes a veth for guest
-packet injection after production TAP preparation. It does not exercise the
-production privileged VMM launcher or attest host bandwidth/conntrack allocation
-quotas; those remain provisioned-host checks.
+Production separately retains real guest virtio/TAP plus policy/SNAT probes for source, fork and resume. Current command outcomes and missing prerequisites are recorded in [Plan 024](../plans/024-haven-loom-single-control-design.md); historical [acceptance](acceptance.md) does not validate the new Haven tree. Host bandwidth/conntrack/storage qualification remains per deployment.

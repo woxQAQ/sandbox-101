@@ -1,0 +1,93 @@
+package config
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/spf13/pflag"
+)
+
+type Daemon struct {
+	Config              string        `mapstructure:"config"`
+	StateDir            string        `mapstructure:"state-dir"`
+	Socket              string        `mapstructure:"socket"`
+	Listen              string        `mapstructure:"listen"`
+	Init                bool          `mapstructure:"init"`
+	Mode                string        `mapstructure:"mode"`
+	RootTokenFile       string        `mapstructure:"root-token-file"`
+	TLSCert             string        `mapstructure:"tls-cert"`
+	TLSKey              string        `mapstructure:"tls-key"`
+	Backup              string        `mapstructure:"backup"`
+	RecoveryNote        string        `mapstructure:"recovery-note"`
+	CloudHypervisor     string        `mapstructure:"cloud-hypervisor"`
+	BuildReceipt        string        `mapstructure:"build-receipt"`
+	CgroupRoot          string        `mapstructure:"cgroup-root"`
+	HostPolicy          string        `mapstructure:"host-policy"`
+	IOMax               string        `mapstructure:"io-max"`
+	VMMUID              uint          `mapstructure:"vmm-uid"`
+	VMMGID              uint          `mapstructure:"vmm-gid"`
+	MaxMemoryMiB        int64         `mapstructure:"max-memory-mib"`
+	MaxVCPUs            int           `mapstructure:"max-vcpus"`
+	StorageMarginBytes  int64         `mapstructure:"storage-margin-bytes"`
+	MaxTTL              time.Duration `mapstructure:"max-ttl"`
+	PausedTTL           time.Duration `mapstructure:"paused-ttl"`
+	MaxWarm             int           `mapstructure:"max-warm"`
+	MaintenanceInterval time.Duration `mapstructure:"maintenance-interval"`
+	GCInterval          time.Duration `mapstructure:"gc-interval"`
+	GCBatch             int           `mapstructure:"gc-batch"`
+}
+
+func ParseDaemon(args []string) (Daemon, error) {
+	flags := pflag.NewFlagSet("haven", pflag.ContinueOnError)
+	flags.SetInterspersed(false)
+	flags.String("config", "", "explicit configuration file")
+	flags.String("state-dir", "/var/lib/haven", "single durable state directory")
+	flags.String("socket", "/run/haven/management.sock", "local administration socket")
+	flags.String("listen", "127.0.0.1:7777", "business HTTP address")
+	flags.Bool("init", false, "explicitly initialize an empty state directory")
+	flags.String("mode", "serve", "serve, backup, restore-backup, recover, or doctor")
+	flags.String("root-token-file", "", "private HTTP administrator token file")
+	flags.String("tls-cert", "", "HTTP TLS certificate")
+	flags.String("tls-key", "", "HTTP TLS private key")
+	flags.String("backup", "", "offline backup input or output directory")
+	flags.String("recovery-note", "", "explicit metadata recovery review note")
+	flags.String("cloud-hypervisor", "/usr/local/libexec/sandbox/cloud-hypervisor", "pinned Cloud Hypervisor binary")
+	flags.String("build-receipt", "", "trusted CH build receipt (defaults to binary.json)")
+	flags.String("cgroup-root", "/sys/fs/cgroup/haven", "delegated cgroup v2 root")
+	flags.String("host-policy", "/etc/haven/host-policy.json", "host resource policy receipt")
+	flags.String("io-max", "", "explicit cgroup v2 io.max budget")
+	flags.Uint("vmm-uid", 65534, "unprivileged VMM UID")
+	flags.Uint("vmm-gid", 65534, "unprivileged VMM GID")
+	flags.Int64("max-memory-mib", 0, "host memory reservation ceiling (0 selects 80 percent of RAM)")
+	flags.Int("max-vcpus", 0, "host CPU reservation ceiling (0 selects logical CPU count)")
+	flags.Int64("storage-margin-bytes", 256<<20, "free filesystem safety margin")
+	flags.Duration("max-ttl", time.Hour, "maximum running sandbox lease")
+	flags.Duration("paused-ttl", 24*time.Hour, "maximum paused sandbox lease")
+	flags.Int("max-warm", 32, "per-template warm pool ceiling")
+	flags.Duration("maintenance-interval", time.Second, "workflow, binding, lease and pool maintenance interval")
+	flags.Duration("gc-interval", time.Minute, "background collection interval (0 disables)")
+	flags.Int("gc-batch", 16, "maximum artifacts per collection pass")
+	var result Daemon
+	if err := flags.Parse(args); err != nil {
+		return result, err
+	}
+	if flags.NArg() != 0 {
+		return result, fmt.Errorf("unexpected positional arguments")
+	}
+	if err := Load(flags, "HAVEN", &result); err != nil {
+		return result, err
+	}
+	if result.Mode != "serve" && result.Mode != "backup" && result.Mode != "restore-backup" && result.Mode != "recover" && result.Mode != "doctor" {
+		return result, fmt.Errorf("unsupported --mode %s", result.Mode)
+	}
+	if result.MaxMemoryMiB < 0 || result.MaxVCPUs < 0 || result.StorageMarginBytes < 0 || result.MaxTTL < time.Second || result.PausedTTL < time.Second || result.MaxWarm < 1 || result.MaintenanceInterval <= 0 || result.GCInterval < 0 || result.GCBatch < 1 || result.GCBatch > 1024 {
+		return result, fmt.Errorf("invalid resource or maintenance bounds")
+	}
+	if result.VMMUID == 0 || result.VMMGID == 0 || uint64(result.VMMUID) > 1<<32-1 || uint64(result.VMMGID) > 1<<32-1 {
+		return result, fmt.Errorf("VMM UID/GID must be nonzero 32-bit IDs")
+	}
+	if (result.TLSCert == "") != (result.TLSKey == "") {
+		return result, fmt.Errorf("TLS certificate and key must be provided together")
+	}
+	return result, nil
+}

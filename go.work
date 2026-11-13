@@ -1,8 +1,7 @@
 go 1.26.5
 
 use (
-	./engine
+	.
 	./operator
 	./protocol/gen
-	./sandboxd
 )

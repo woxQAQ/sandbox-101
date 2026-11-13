@@ -1,4 +1,4 @@
-//! Explicit local integration fixture. Production remains AF_VSOCK-only.
+//! Explicit local integration fixture. The guest agent remains AF_VSOCK-only.
 //! Only the unprivileged workload portal is exposed: no host entropy, clock,
 //! hostname, machine-id, template preparation, or activation operations.
 use anyhow::Result;

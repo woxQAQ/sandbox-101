@@ -1,254 +1,137 @@
-# sandboxd API and lifecycle
+# Haven Sandbox API 与生命周期
 
-The Go module `github.com/woxQAQ/sandboxd` provides the sandbox service, HTTP control API, end-to-end guest SDK, host egress manager and CLI. Build with `make build`; deployment and metadata recovery are described in [deploy/sandboxd](../deploy/sandboxd/README.md).
+本路径保留文档索引入口，当前实现为根 `github.com/woxQAQ/haven` module，没有 sandboxd Go module 或独立 daemon。入口与配置见 [Haven control](../docs/haven-control.md)，宿主部署见 [Host](../deploy/host/README.md)。公开 DTO 在 `api/`，SDK 在 `sdk/`，HTTP adapter 在 `internal/httpapi/`；业务和资源工作流共享 `internal/haven` 的唯一 store。
 
-## Configuration
+## Tokens、幂等和错误
 
-The HTTP API uses Gin, including authenticated route groups, raw Upgrade connections and Preview forwarding. Daemon and CLI configuration use Viper with `--config FILE`, retaining the existing flags. Explicit flags override environment variables, then file values, then defaults. YAML, JSON and TOML files use flat flag names such as `engine-socket` and `root-token-file`; environment names use `SANDBOXD_` or `SANDBOXCTL_` and replace hyphens with underscores. Files can also be selected with `SANDBOXD_CONFIG` or `SANDBOXCTL_CONFIG`. Unknown file keys and invalid typed values are errors; configuration is loaded once at startup.
+HTTP 使用 `Authorization: Bearer TOKEN`。root 管理 tenant/metrics/node status；tenant 管理自身模板、sandbox/checkpoint；sandbox token 仅访问自身。root 修改 owner-scoped 模板或 fork 时，使用 `X-Tenant-ID` 明确选择 owner。外来与缺失对象均返回同一 404。
 
-See the [daemon example](../deploy/sandboxd/sandboxd.example.yaml) and [client example](../deploy/client/sandboxctl.example.yaml). Token contents remain in private files. CLI options precede the command, so guest command arguments keep their original meaning.
+mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键同参数返回原 operation/冻结 result，包括失败；异参冲突。认证 role/scope 和 secret-safe HMAC 参与请求身份。取消 HTTP 只结束等待。`Prefer: respond-async` 返回 202、operation 与 Location，由同一 authority 查询。sandbox token 只能查询自己的 renew/release operation；终止后仅能读取对应历史，不能进入资源/数据路由。
 
-## Tokens and commands
+终态 result 和时间在原工作流事务中冻结，后来 renew/configure/release 不修改原 delivery。result 可能含 sandbox token，应私密保存；令牌不以真值写入 DB。
 
-Use `Authorization: Bearer TOKEN`. Root tokens administer tenants and metrics; tenant tokens manage their templates/sandboxes/checkpoints; sandbox tokens are restricted to their own sandbox. Root may select an existing tenant with `X-Tenant-ID`. Foreign and missing objects return the same 404 body.
+HTTP 错误及 `Operation.Error` 属于 `api.Error`，JSON 为 `{"code":"...","message":"..."}`。SDK 只解码此公开类型；私有 Cause 不进入 wire，不作为 Loom absence proof。需要 operator 诊断的资源丢失不变成 tenant 404。
 
-Mutations require a stable `Idempotency-Key`. The same key and parameters return the original operation/result, including terminal failure. Changed parameters conflict. A canceled HTTP request stops waiting while durable work continues. `Prefer: respond-async` returns 202 with an operation and `Location`; poll that location with the same authority. Sandbox tokens may poll only their own renew/release operations, including the completed release after termination; terminated credentials remain rejected on other routes. An operation ID is not an authorization credential. Result responses can contain sandbox tokens, so store them privately.
+| Code | HTTP | 调用方处理 |
+|---|---:|---|
+| not_found | 404 | 核对 tenant-visible identity/authority |
+| forbidden | 403 | 使用所需 root authority |
+| invalid | 400 | 修正请求 |
+| conflict | 409 | 处理当前接纳/lifecycle 冲突 |
+| resource_exhausted | 429 | 减少使用或安排容量 |
+| incompatible | 422 | 修正不支持的配置 |
+| result_unknown | 503 | 保留原 key，不盲目重放 |
+| manual_recovery_required | 503 | 保留责任与现场，安排人工恢复 |
+| internal | 500 | 检查私有诊断，不自动重试 mutation |
 
-### Error ownership and diagnostics
-
-HTTP errors and `Operation.Error` belong to `sandboxd.Error`, with the unchanged
-JSON shape `{"code":"...","message":"..."}`. SDK HTTP failures decode to this
-type, independently of Engine errors. `Cause` is process-local diagnostic
-evidence, excluded from JSON and deliberately not exposed through `Unwrap`;
-translated dependency errors cannot be reused as Engine absence proofs.
-
-| sandboxd code | HTTP | Caller action |
-|---|---|---|
-| `not_found` | 404 | Check the tenant-visible identity/authority; foreign and missing resources stay indistinguishable |
-| `forbidden` | 403 | Use root authority for a root-only operation |
-| `invalid` | 400 | Correct the tenant request |
-| `conflict` | 409 | Resolve the sandbox's current lifecycle/admission state |
-| `resource_exhausted` | 429 | Reduce usage or arrange additional capacity |
-| `incompatible` | 422 | Correct the incompatible configuration |
-| `result_unknown` | 503 | Retain the original operation/exec key; do not infer safe replay |
-| `manual_recovery_required` | 503 | Arrange operator review; retained responsibility is not reclaimed |
-| `internal` | 500 | Inspect private operator diagnostics; no automatic mutation replay |
-
-Engine replies are interpreted at the call site before translation. Only a
-direct, authoritative Engine observation, combined with the existing frozen
-ownership proof, can establish physical absence. A missing Engine VM for an
-existing sandbox is a recovery problem, not a tenant 404. Unconsumed Engine
-not-found/conflict/recovery errors map to operator recovery; Engine invalid
-requests are internal failures of host-constructed requests. Unknown results,
-capacity exhaustion and incompatible configuration retain their action categories.
-
-New terminal errors persist safe action/step context. Raw causes are recorded
-best-effort in the existing private, integrity-chained audit journal; journal
-failure does not rewrite a committed terminal result. Journal/metadata backups
-are operator-private and can contain diagnostic paths. `Cause` itself does not
-survive reloading a receipt. Public HTTP errors, operation queries/replays and
-sandbox failure projections omit private diagnostic details, including those
-in historical receipts. Serving these projections does not rewrite stored
-historical error JSON, terminal identity or result witnesses. Direct service
-callers should treat error messages as diagnostics rather than parsing them.
-
-Create a tenant using a root token and `POST /v1/tenants`:
-
-```json
-{"id":"team","max_sandboxes":20,"max_storage_mib":65536}
-```
-
-The response returns the tenant token when generated. With that tenant authority, register a template using `POST /v1/templates` and a unique idempotency key:
-
-```json
-{
-  "action":"template_put",
-  "template":{
-    "id":"python",
-    "image":"sha256:REPLACE_WITH_IMPORTED_MANIFEST_HEX",
-    "shape":{"vcpus":1,"memory_mib":512,"disk_mib":512},
-    "target_warm":0
-  }
-}
-```
-
-Replace the digest with an already imported engine image. `template_put` registers cold provisioning or an authorized published golden snapshot. Snapshot provenance is private to one tenant: tenants can register their own sandboxd captures; external golden snapshots require a root `template_put` with an explicit target tenant (`X-Tenant-ID` over HTTP). Published engine state alone grants no tenant access. Root import cannot transfer an existing snapshot owner. Root may pause or checkpoint an existing sandbox with its default or selected request tenant; every resulting capture remains owned by the source sandbox's tenant, including receipt recovery. Captures and root grants are immutable SQLite authorization records, rechecked before publication, clone and warm refill; these records do not retain physical snapshots for GC. `template_build` creates a build VM, runs optional `template.warmup`, prepares the guest for capture, publishes a golden snapshot and retires the build VM. Build warmup uses a deterministic keyed guest execution intent. Build network currently remains blocked, so bake dependencies into the image or supply them without external fetches. A template's first ordinary admission uses `target_warm:0`; only root, explicitly selecting the permanent owner, may change the published target in either direction. Ordinary rebuilds retain the published target. Automatic refill always uses that owner's finite ordinary quota, including when root configured the pool.
-
-The first admission of a template name reserves it permanently to that tenant (`template_intents`): another tenant's submission gets the same 404 as a foreign published name, a second in-flight publication from the owning tenant conflicts, and a failed build keeps the reservation so only the owner retries. Root updates require the explicit owning target tenant and never transfer the reservation. A rolling rebuild keeps serving the previously published snapshot until the new one publishes.
-
-A published template with a missing ownership placeholder or a conflicting tenant requires manual recovery; admission preserves the existing rows and never reconstructs an owner from the published catalog. A publication pointer is reusable only when it references a `succeeded` or `failed` template operation for the same tenant and template. Missing operations, unknown statuses or inconsistent provenance also require manual recovery; foreign tenants still receive the uniform 404. Publication verifies ownership and writes the catalog in one transaction under the resource ownership guard, after guest and engine calls finish.
-
-Claim using `POST /v1/claim`:
-
-```json
-{
-  "template_id":"python",
-  "ttl_seconds":300,
-  "on_expire":"pause",
-  "auto_renew":true,
-  "policy":{"mode":"none"},
-  "env":{"PROJECT":{"value":"demo"}}
-}
-```
-
-Provisioning atomically transfers a matching warm instance, otherwise clones the frozen golden snapshot or cold boots the image. A rejected warm activation is durably marked and cleaned before using golden/cold supply, with distinct activation keys. Replay resumes the same replacement. Every delivery checks engine readiness, disables the NIC, probes the workload portal, binds egress and activates the guest before enabling a verified direct NIC.
+公开错误不包含私有路径、环境或 secret。raw cause 仅供私有诊断，审计链写入失败不改已提交终态。operation/幂等/授权历史保留，当前查询不重写历史错误或补造 witness。
 
 ## Routes
 
-| Route | Behavior |
-| --- | --- |
-| `GET /healthz` | Public process health |
-| `GET /metrics` | Root-only sandbox state counts |
-| `POST /v1/tenants` | Root tenant/quota/token administration |
-| `GET /v1/templates`, `POST /v1/templates` | List/register/build tenant templates |
-| `POST /v1/claim` | Claim a sandbox |
-| `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}` | Tenant/sandbox inventory |
-| `POST /v1/sandboxes/{id}/{action}` | `renew`, `configure`, `pause`, `resume`, `checkpoint`, `fork`, `rollback`, `release` |
-| `DELETE /v1/sandboxes/{id}` | Release without waking a paused sandbox |
-| `GET /v1/checkpoints`, `DELETE /v1/checkpoints/{id}` | List/delete checkpoints |
-| `POST /v1/checkpoints/{id}/fork` | Fork a published checkpoint |
-| `GET /v1/operations/{id}` | Durable operation status |
-| `GET /v1/sandboxes/{id}/connect` | HTTP/1.1 Upgrade to raw guest workload portal |
-| `POST /v1/sandboxes/{id}/preview?port=8080&ttl_seconds=60` | Signed Preview URL; send `{}` body |
-| `POST /v1/drain` | Root-only stop of new claims/refills |
+| Route | 行为 |
+|---|---|
+| GET /healthz | 公开进程健康 |
+| GET /metrics | root 状态计数；保留既有 metric wire 名称 |
+| GET /v1/status | root store identity/schema/epoch |
+| POST /v1/tenants | root tenant/quota/token 管理 |
+| GET、POST /v1/templates | 列表、template_put/build |
+| POST /v1/claim | 领取 sandbox |
+| GET /v1/sandboxes、/v1/sandboxes/{id} | 可见 inventory |
+| POST /v1/sandboxes/{id}/{action} | renew/configure/pause/resume/checkpoint/fork/rollback/release |
+| DELETE /v1/sandboxes/{id} | 不唤醒的 release |
+| GET /v1/checkpoints、DELETE /v1/checkpoints/{id} | checkpoint 列表/删除 |
+| POST /v1/checkpoints/{id}/fork | 从 checkpoint 派生 |
+| GET /v1/operations/{id} | 固定 authority 的 operation/history |
+| GET /v1/sandboxes/{id}/connect | HTTP/1.1 Upgrade 到 Workload |
+| POST /v1/sandboxes/{id}/preview?port=8080&ttl_seconds=60 | `{}` body，生成 signed Preview |
+| POST /v1/drain | root 停止新 claim/refill |
 
-Bodies are strict JSON with a 1 MiB limit. Fork takes `count`; rollback takes `checkpoint_id`. Checkpoint creation returns a sandbox checkpoint referring to a published engine snapshot. A paused source can checkpoint or fork without waking. Release closes active data streams and deletes dedicated resources. Repeated operation requests converge on the same result.
+body 为严格 JSON，上限 1 MiB，未知字段/多余 JSON 拒绝。路由不自动 redirect。错误 method 与非 HTTP/1.1 Upgrade 保持明确拒绝。
 
-`paused` means an immutable sleep snapshot and no VMM. Concurrent data requests converge on one resume operation and new clone. Resume preserves machine identity, shell/process state and the guest execution ledger; fork resets identity/environment/history. Publishing a running sandbox atomically transfers its old sleep snapshot holder to a durable cleanup intent while retaining its full resource charge. Cleanup retries independently, preserves live shared references, and retains the tenant charge until physical reclamation. A later pause always captures the current running state. Failed resume retains the sleep snapshot and permits a later distinct attempt. Reaper actions record their expected deadline and recheck it under the sandbox lock, so stale expiry work cannot delete a renewed sandbox.
+root 创建 tenant：`{"id":"team","max_sandboxes":20,"max_storage_mib":65536}`。使用该 tenant 注册 template：
 
-`auto_renew` refreshes TTL when a data connection is established or a Preview HTTP request is admitted. Expired leases cannot be revived by activity. Existing raw streams are not decoded by the host, so internal RPC frames do not continuously renew a long-lived connection; call `renew` explicitly for that case. Rebind work that outlives the lease cannot renew it afterward.
+```json
+{"action":"template_put","template":{"id":"python","image":"sha256:REPLACE_WITH_IMPORTED_MANIFEST_HEX","shape":{"vcpus":1,"memory_mib":512,"disk_mib":512},"target_warm":0}}
+```
+
+镜像先通过 `loomctl import` 进入同一 store。模板首次接纳永久绑定 owner，失败保留占位，滚动 build 继续服务旧版本；published catalog 必须匹配原 immutable publication step。snapshot published 不授予访问权，`snapshot_owners` 是永久 authorization provenance。root 外部 golden grant 必须明确 tenant，不能转移已有 owner。
+
+`template_build` 固定 build slot/D/D+M，运行一次确定性 keyed warmup，Admin prepare_template 后 capture golden，实际回收 build VM 后发布。unknown warmup 不重放，build 网络保持 off。prepare_template 不通用清理应用内存、RNG 或外部注册。ordinary 首次 target=0、后续保持发布 target；root 选 owner 才能改。refill 使用 owner 的有限普通预算，unknown/pending/cleanup 继续占 target。
+
+claim 示例：
+
+```json
+{"template_id":"python","ttl_seconds":300,"on_expire":"pause","auto_renew":true,"policy":{"mode":"none"},"env":{"PROJECT":{"value":"demo"}}}
+```
+
+供给依次使用 ready warm、golden、cold。warm 选择、sandbox slot 与磁盘 holder 交接同事务；坏 warm 精确退休后才 fallback。business birth 独立于 warm age 与资源 generations。delivery 前仍需 Admin/Workload、lease/settings/fence 和实际网络接纳。
+
+paused 为完整 sleep snapshot 且无 VMM；并发数据请求合并为一次透明 resume。resume 保留 machine-id、进程/session/ledger，并应用当前 settings/policy。running 发布同事务把 sleep holder 交给独立 cleanup，backing 费用继续保留。pause 失败保源，resume 失败保 sleep，paused release 不启动 VM。
+
+fork 支持 running/paused sandbox 或 checkpoint，count 默认 1、范围 1–32。running 源只捕获一次；整批固定 IDs、births、slot/storage/host peak 并原子承接后才执行。省略 policy 时继承 source policy，env 不继承。分支通过 Admin 重置身份/env/ledger；失败沿原 branch intent 精确补偿。paused checkpoint 直接绑定原完整 sleep，不唤醒。
+
+rollback 保留逻辑 sandbox 身份，但回滚 guest ledger；跨 rollback 的去重需独立 host fence。默认 lease 300s。reaper 冻结并重核预期 deadline，不能处理后来的 renew。auto_renew 只在连接或 Preview admission 刷新，不能复活过期租约；raw stream 内 RPC 不持续续租。
 
 ## Raw protocol and SDK
 
-Connect with `Connection: Upgrade` and `Upgrade: sandbox-v1`. After 101, the host copies bytes with bounded buffers/backpressure, preserving buffered upgrade bytes and half-close. Only the Rust guest and client parse user frames. Guest host administration is on port 2046, system control on 2047 and unprivileged workload RPC on 2048. Workload RPC cannot invoke administrative activation or reseeding.
-
-Frames are generated Protobuf preceded by a four-byte big-endian length. Maximum frame size is 8 MiB; data chunks are 64 KiB. See [protocol](../protocol/README.md) and [guest RPC](../guest/README.md). `port_forward` must be first on a fresh connection: one ready frame, then entirely raw duplex bytes with no final Protobuf frame.
+使用 `Connection: Upgrade` / `Upgrade: sandbox-v1`。101 后为有界背压的双向原始流，保留预读字节与 half-close；宿主不解释 Workload frame。System 2047、Admin 2046 不对租户开放，Workload 固定 2048。协议为四字节 big-endian 长度前缀 protobuf，frame 最大 8 MiB、chunk 64 KiB；port_forward 必须是新连接的首请求，ready 后完全 raw duplex，无最终 protobuf frame。详细方法见 [Protocol](../protocol/README.md) 与 [Guest](../guest/README.md)。
 
 ```go
+import (
+    "github.com/woxQAQ/haven/api"
+    "github.com/woxQAQ/haven/sdk"
+)
+
 client := sdk.New("https://sandbox.example", tenantToken)
-result, err := client.Claim(ctx, "persisted-claim-key", sandboxd.Command{
-    TemplateID: "python", TTLSeconds: 300,
-    Policy: egress.Policy{Mode: "none"},
+result, err := client.Claim(ctx, "persisted-claim-key", api.Command{
+    TemplateID: "python", TTLSeconds: 300, Policy: api.Policy{Mode: "none"},
 })
-if err != nil { return err }
-conn, err := client.Connect(ctx, result.Sandbox.ID)
-if err != nil { return err }
-defer conn.Close()
-_, err = conn.Call(ctx, "exec", map[string]any{
-    "exec_key": "persisted-work-step", "command": "python3 --version",
-}, consumeOutputFrame)
 ```
 
-`Call` serializes RPCs per connection and honors context cancellation in two distinct positions. A call queued behind an in-flight RPC returns `ctx.Err()` while waiting for admission: it sends nothing and consumes no RPC id. Canceling a call whose request was already sent closes the transport to interrupt that RPC; the connection is then unusable, and later calls fail instead of writing onto a torn stream. Cancellation does not preempt a blocked `consume` callback — `consume` is caller code and must return before cancellation takes effect.
+`Connect` 后使用 `Call`/`Exec`。Call 串行接纳，排队取消不发送、不耗 RPC ID；发送后取消关闭连接，之后不能复用。consume callback 须自行返回，取消不能抢占用户 callback。`sdk.RPCError` 暴露 guest Code/ResultState。keyed exec 先记 intent、同参重放、异参冲突；unknown 不重跑。frame ID 仅关联回复。unkeyed Exec 不去重，SDK 不盲目重试未知副作用。
 
-Use imports `github.com/woxQAQ/sandboxd`, `/sdk`, `/egress`, and the generated frame type for the output callback. A keyed exec records intent before spawn, deduplicates matching inputs and conflicts on changed inputs. An unresolved intent after agent restart returns `result_unknown` instead of rerunning side effects. Keyed stdin/session/PTY restrictions and bounded saved output are documented in the guest guide. Frame IDs alone are correlation IDs. `Call` returns terminal guest parameters even on error; `errors.As(err, &rpcError)` with `var rpcError *sdk.RPCError` exposes `Code` and `ResultState`, including `result_unknown`. Unkeyed exec is not deduplicated; the SDK never blindly retries uncertain side effects. The ledger is part of VM snapshot history: rollback to before an intent also rolls back that record, so cross-rollback deduplication requires an external host ledger/fence.
-
-CLI examples use tokens from private files:
-
-```sh
-sandboxctl --token-file /private/tenant-token list
-sandboxctl --token-file /private/tenant-token --key claim-001 claim < claim.json
-sandboxctl --token-file /private/sandbox-token exec SANDBOX_ID 'python3 --version'
-sandboxctl --token-file /private/tenant-token --key pause-001 change SANDBOX_ID < pause.json
+```nu
+havenctl --token-file /private/tenant-token list
+havenctl --token-file /private/tenant-token --key claim-001 claim
+havenctl --token-file /private/sandbox-token exec SANDBOX_ID 'python3 --version'
 ```
 
-`pause.json` contains `{"action":"pause"}`. `sandboxctl exec` uses unkeyed execution; use the SDK's explicit `exec_key` for durable deduplication.
-
-Metadata schema 6 preserves snapshot authorization, configuration fences, template ownership placeholders and the resource quota ledger, including build slots and private allocation groups, through backup/restore. Schema 1–5 and future versions are rejected before schema DDL. No labels, sandbox JSON or existing template references are used to migrate a ledger or infer owners. Stop the service and preserve a consistent backup before planning an explicit migration; do not overwrite old state to bypass the version boundary.
+claim JSON 通过私有 stdin 传入。flag 放在 command 前。`havenctl exec` 为 unkeyed；持久去重使用 SDK 的 exec_key。
 
 ## Durable quota responsibility
 
-`quota_resources` is the only source of quota totals. `quota_refs` records holders of those resources; it grants no engine deletion authority. A resource without references still counts until a trusted engine receipt or NotFound proves reclamation. Query failures and unknown dispatch outcomes retain the charge. `snapshot_owners` remains authorization provenance and is never a billing table or GC root.
+`quota_resources` 唯一计总量，`quota_refs` 表示 active_use/engine_dependency/cleanup。授权来源不是费用或 GC root。query error、unknown dispatch、未确认删除继续收费；访问终止、字段清空、catalog/path 消失不自动退款。D 为磁盘 MiB、M 为捕获 RAM MiB，root 也计可信 owner；maintenance/refill 使用 owner 普通预算。
 
-D denotes the shape's writable disk MiB, and M its captured memory MiB. Running guest RAM is not disk usage. These are conservative logical MiB; neither reflinks nor hardlinks promise physical savings to admission.
+| 资源 | 费用 | 交接与退休 |
+|---|---|---|
+| sandbox_slot | 1 slot | unknown allocation、VM、必要独占 sleep cleanup 保留；实际退休或可信独立目的地才退出 |
+| build_slot | 1 slot | 原 build 的未知/实际资源完全退休或交接后退出 |
+| vm_disk | 每独立 generation D | 按原步骤/目录/inode 核验实际回收，旧 restore 盘保守保留 |
+| snapshot | 同 owner/SID 去重 D+M | sleep/checkpoint/template/reader/backing/cleanup；最后实际 backing 与必要资源回收才退休 |
+| pending_storage | 固定意图上界 | admission 前持久；同事务转入实际责任或可信 never-dispatched/回收目的地 |
 
-| Resource kind | Stable resource key | Slots | Storage MiB | Holders and retirement proof |
-| --- | --- | ---: | ---: | --- |
-| `sandbox_slot` | sandbox ID | 1 | 0 | Admission through unknown allocation, live VM or exclusive sleep cleanup; retired after proven VM/unknown-allocation reclamation and either snapshot reclamation or transfer to an independent live holder |
-| `build_slot` | original build operation ID | 1 | 0 | Consumes `MaxSandboxes` without a user sandbox or token; retained until the build VM and every unknown allocation have retired or have an independent durable destination |
-| `vm_disk` | VM ID; independent restore versions also include the engine restore receipt ID | 0 | D per independent disk | Sandbox and exact allocation receipt; VM deletion/NotFound retires its disks and backing holders together |
-| `snapshot` | snapshot ID, deduplicated within its trusted tenant | 0 | D+M | Sleep, checkpoint, template, operation dependency, VM/warm memory backing or cleanup; physical absence plus no live/dependent holders retires the charge |
-| `pending_storage` | deterministic operation/step key | 0 | Cost of the intended allocation | Persisted before dispatch; receipt transfers the charge to its actual identity in one transaction. A terminal receipt without an identity, or a durable proof that dispatch never began, can cancel it |
+| 生命周期 | 原子责任边界 |
+|---|---|
+| claim/fork | 固定整批 slot、D、source dependency 与必要 D+M；branch admission 同事务接过 forecasts |
+| pause | 先保留 VM D 和 D+M capture；sleep publication 与可信 VM 退休分别完成 |
+| resume | 保留 sleep SID，预留新 D；交接长期 backing 与独立 sleep cleanup |
+| checkpoint/delete | publication 与 holder 同事务；删除 binding 只释放自己的引用 |
+| rollback/restore | 新 D/version/backing 与旧 ancestry 连续保留，不用当前 instance 补 witness |
+| release/discard | 先终止访问与固定 cleanup；精确回收所有 known generations 后退休费用 |
+| build/publish | build D/slot 退休后发布 golden holder，并交接旧 SID cleanup |
+| warm | 零 slot birth 固定；claim SlotAssignment、row selection、holder 同事务；unknown 继续占池位 |
+| backup/restart | 同一 DB 保存归属/ledger/fence/历史；review 不授予 replay、数据或 GC |
 
-`active_use` means an actual consumer, `engine_dependency` means allocation/dispatch has not resolved, and `cleanup` means retained deletion responsibility. Cleanup is not a permanent GC blocker. The existing ownership checks choose one collector per identity and exclude only its own/transferred holders; other active catalog users and unresolved dependencies block deletion. Engine deletion of a snapshot catalog entry does not reclaim a clone's hardlinked memory backing. The ledger retains that snapshot's full conservative D+M charge through its `backing:VM_ID` holder until the VM is deleted or proven absent. A stopped VM still retains its backing. Builds reserve one slot plus D+(D+M) before Engine work. Template publication retains one D+M charge for each actual SID; same-owner checkpoint, sleep and template holders share that identity. A warm clone reserves its own D before dispatch, without a user or build slot. Ready, pending, known but undelivered, and unknown cleanup responsibility occupies the pool target until retirement. Missing owner rows do not bootstrap quota. Failed admission follows the existing bounded refill backoff.
+实例清理同时验证冻结历史和当前归属；缺 witness、foreign generation、未知 sibling、SQL 拒写或效果未知保留费用、slot/池位与原 intent。失败 candidate 的显式 discard 使用原 preparation 证明，不伪造成功 witness。operation/step、parent/child 与 cleanup 目的地在同库事务内交接；旧跨库 receipt adoption/Resolution JSON 不再是运行路径。
 
-| Lifecycle phase | Durable responsibility before engine work | Receipt/publication transaction | Failure and cleanup |
-| --- | --- | --- | --- |
-| claim / fork branch | slot + pending disk; shared source snapshot dependency; running fork additionally reserves D+M capture | Pending disk/capture becomes its receipt identity; clone adds backing holder | Unknown dispatch keeps pending cost and slot; failed branches retain physical allocations through compensation |
-| pause | Existing VM disk + new D+M capture reservation | Capture gains sleep holder; confirmed VM deletion retires only that VM's disks/backings | Failed VM deletion retains both disk and snapshot; exclusive sleeping deletion failure retains slot + D+M |
-| resume | Sleep snapshot + pending disk D | Clone gains independent disk and backing; running publication transfers sleep holder to cleanup atomically | Clearing `Sandbox.SnapshotID` never clears backing cost; failed clone compensation retains the sleep capture |
-| checkpoint | Running source reserves D+M; sleeping source shares its SID without another reservation | Checkpoint publication and active holder commit together | A failed or unknown capture retains its actual/reserved cost; checkpoint deletion transfers/removes only its own holder |
-| rollback | Target snapshot dependency + D for a new clone or independent restore disk version | Receipt records the exact clone/version and backing | Older versions/backings remain conservatively charged until VM deletion because the public engine API supplies no per-version GC proof |
-| release | Terminal access marker and cleanup-holder transfer commit together | VM/snapshot proof retires only physically reclaimed responsibility | `terminated` revokes access immediately. Delete failure, lost response, restart and unknown instance do not free quota |
-| recovery capture / restore | The existing `resource_recovery` body freezes each attempt's operation ID, step, full engine request, request tenant, charge owner, sandbox ID and shape in the same transaction as its pending charge; restore also holds its source snapshot dependency | Every maintenance/restart pass adopts deterministic receipts using this descriptor before checking current sandbox state or `OperationID`; snapshot cleanup gets its own durable proof descriptor before the parent responsibility can become done | Lost replies and failed receipt writes retain pending cost and the original slot. Unknown receipts remain charged. Snapshot cleanup survives a later release; independent restore disks and D+M backing retain VM/sandbox holders until actual VM deletion. Original failed public operation bodies are never rewritten |
-| template build / put | Build reserves one build slot, pending D and pending D+M; put admits only the incremental cost of a trusted full-shape SID | Create/start/capture requests and immutable receipts are frozen in private `allocation_group` bodies. Build D/slot retire before publication; catalog, new holder and old-SID cleanup handoff commit together | Unknown capture retains its pending charge, source dependency and necessary slot. An old SID remains charged through other templates, checkpoints, readers and VM backings |
-| warm refill / claim | Ordinary owner quota reserves D and source-SID dependency before clone; Submit selects a ready warm row while admitting the real sandbox slot | Exact row removal, frozen selection, sandbox/op and existing D-holder transfer share one transaction; no second D or fabricated provision receipt | Rejected warm deletion retains D and slot. Trusted absence transfers D directly to replacement pending D in one transaction, so competing requests cannot claim a refund gap |
-| backup / restart | SQLite snapshot copies both ledger tables and ownership/fence tables | Restored metadata remains behind the existing recovery acknowledgement fence | Startup rejects negative/noninteger amounts, unsupported kinds, dangling references and live sandboxes without slots |
+D=64、M=128 时，cold=64，checkpoint/resume peak=256，running 单 branch fork peak=320，已有共享 checkpoint/backing 再 pause peak=448。63/255/319/447 在效果前拒绝。多 holder 不重复计 SID192；删除一个 source 不退休仍被 branch backing 持有的 SID192。
 
-Every admitted operation persists `ChargeTenantID` separately from request/idempotency `TenantID`. Existing sandbox/checkpoint actions charge their trusted owner even when root uses its default identity or selects another tenant. Root bypasses admission limits only, while recording the same full responsibility. Maintenance and recovery allocate against the owner's ordinary budget. Public authorization, idempotency namespaces and failed client results remain unchanged.
+## Egress、配置与 Preview
 
-Boundary examples for D=64 and M=128: cold claim = 64; running checkpoint or resume peak = 64+192=256; running one-branch fork peak = source disk 64 + branch disk 64 + capture/backing 192 = 320; shared checkpoint/backing plus a new pause capture peak = VM disk 64 + shared SID 192 + new SID 192 = 448. The corresponding 63/255/319/447 limits reject before allocation. A running rollback retaining its original disk uses original D + restored D + checkpoint D+M = 320. An accepted failed public restore also returns the real VMID without a successful instance witness: its additional conservative D remains billed, so original D64 + failed D64 + successful compensation D64 + SID192 = 384; 383 rejects that compensation before its restore effect. The failed D is retained responsibility, not a claim that a successful physical candidate was delivered. Deleting V retires all its D versions/backings; an independently active checkpoint retains SID192 with slot0, and only its trusted reclamation retires that remaining charge. Multiple holders of one SID never add another 192.
+relay 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../internal/egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/relay NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
 
-Recovery allocations use one durable `Resolution`. `unresolved` retains pending
-responsibility; `result_known` fixes the exact keyed receipt and resulting V/SID/B
-while retaining responsibility. Only committed `active` or `cleanup` destinations,
-or proven `reclaimed`/never-dispatched `cancelled` records allow their parent to
-finish. Temporary `AllowedLifecycleWork` and `AllowedParentDone` decisions keep
-known B eligible for activation without treating fee adoption as delivery.
-Scanning includes unfinished allocations even after lifecycle ownership changes
-or a parent completion marker; the internal branch-only boolean format has no
-migration or compatibility path.
+configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 settings。runtime/guest/bind/SQL 失败保留阻断；自动 rebind/reconcile 不清 fence。最终 running/result/settings/fence retirement 原子提交，失败撤销新 binding。迟到 worker 或旧 direct callback 不影响后继实例。
 
-| Transaction | Records committed together | Crash/replay behavior |
-| --- | --- | --- |
-| Receipt adoption | Pending to exact resource/backing refs and `result_known` proof | A failed SQL write retains the old responsibility; replay never recreates reclaimed disks |
-| First release | Terminated access marker, original tenant/S/V/A request/key and cleanup/slot refs | Dispatch marker commits before the frozen A request is sent; fresh releases reuse its sequence |
-| B handoff | Deterministic `instance_cleanup`, exact independent B delete request, cleanup/slot refs and `Resolution.cleanup` | Collector ID hashes length-prefixed domain/tenant/S/V/B in the existing recovery PK/body; original failed release Source and A intent never change |
-| Exact-B activation | Running S/V/B, active holders, optional retired-snapshot handoff and historical `Resolution.active` | Publication failure leaves `result_known`; after commit, parent errors or a later C only require historical delivery cleanup, without another restore/activation |
-| B reclamation | All V disks/backings, eligible slot retirement, collector deletion proof, allocation resolutions and matching terminated metadata | A lost reply or SQL failure keeps the same B key; receipt recovery completes accounting after one physical delete |
+数据 setup、最终 downstream Hijack 和上下游连接均参与配置 guard、revocation registry 与 shutdown。Preview 绑定 tenant/sandbox/epoch/port/expiry，期限不超 lease；移除 Authorization/Cookie，强制 no-referrer。当前没有每 sandbox 浏览器 origin。
 
-A successful restore receipt's `result_instance` is immutable B proof; current
-VM lookup additionally verifies that V/B is still trusted and unowned. Missing
-legacy witness, foreign W/C, unverified state, another owner, receipt mismatch or
-query errors retain charges and slot. Terminated sandboxes only hand off cleanup;
-they are never reactivated. The stale A pre-admission conflict exception requires
-the frozen exact A request, immutable A→B proof and verified current B, with no
-contradictory/nonterminal receipt. Find NotFound alone proves neither dispatch
-absence nor a failed receipt.
-
-The B collector consumes its existing attempt before checking deletion refs.
-Unknown/nonterminal outcomes, missing dispatch receipts, query failure and lost
-replies reuse that exact request/key. Only an exact terminal failed receipt
-atomically appends attempt history and freezes the next B request. Fresh release
-IDs never change collector Source, Attempt or key. Ordinary A terminal-failed
-cleanup preserves the existing synthetic compensation attempts. Cleanup-only and
-explicitly transferred duplicate refs permit progress; genuine active users,
-warm consumers and engine dependencies still block deletion. Restore-version
-quota keys map through their `vm:V` holder to physical V, rather than being used
-as VMIDs. Original public failed rollback/release bodies remain immutable.
-
-
-New build, refill and selected-warm replacement VMs require a frozen successful
-start/clone receipt with a nonempty `result_instance` before any automatic VM
-delete. The exact V/B, full shape/config, owner and dependency checks remain
-necessary. A created VM, a failed start candidate, current-instance lookup or
-an undispatched own start supplies no deletion authority. A private
-`generation_witness_missing` / `observe_absence_only` gate keeps the disk,
-subject-specific slot or pool occupation and original keys across restart and
-backup. Recovery keeps observing original receipts and actual GetVM absence;
-inventory omissions and query errors cannot refund responsibility. Trusted
-absence retires only the proven disk versions/backings and eligible slot in one
-transaction with its Resolution destination. Unknown SID responsibility remains.
-Acknowledging a restored backup grants no missing generation witness.
-
-## Egress, Preview and boundaries
-
-Relay mode applies host/DNS/address checks before pinned numeric dialing and verifies upstream TLS. Host-only env values use `guest:false` and an `inject` rule; only the harmless placeholder reaches guest state. Secret values never enter SQLite or snapshots. They must be resupplied after restart. Injection requires a durable sanitized audit record before header replacement. See [egress](egress/README.md) for matching, trusted CA, reflection handling and SOCKS restrictions.
-
-Direct mode accepts canonical IPv4 `allowed_cidrs` and `max_connections` (default 256), installs them through the engine policy API, and denies private/reserved/metadata targets. Nonempty `allowed_hosts` and host-only credentials are rejected. Empty direct CIDRs deny all. Use explicit `0.0.0.0/0` for permitted public destinations. Host bandwidth and conntrack allocation quotas remain deployment responsibilities.
-
-`configure` on a running sandbox revokes the existing proxy binding and closes live streams before the new environment or policy is published. Admission records a durable configuration fence with the operation: if revocation, engine networking, the agent probe or activation fails, the sandbox stays fenced with the old data path closed, `last_error` records the diagnostic, and automatic resume/rebind and maintenance never reopen the proxy. Only the matching explicit `configure` that finishes activation and delivery clears its fence; an older operation cannot clear a newer fence, and `release` retires it with teardown. Final sandbox delivery, the successful operation result and retirement of its fence commit together; a final persistence failure revokes the new binding and keeps the fence. A superseding admission also closes any binding published by a blocked older worker, which must recheck ownership before publishing or completing. Maintenance revokes locally owned proxies even when VM verification is unknown, and changes the NIC only for a verified matching instance. Retry a failed change with a new intent (new idempotency key).
-
-Preview capabilities bind tenant, sandbox, creation epoch, port and expiry capped by lease. Authorization/Cookie headers are stripped before guest forwarding; responses enforce `Referrer-Policy: no-referrer`. Preview uses a signed path on the service origin. It does not provide per-sandbox browser origins or rewrite absolute asset URLs; use a separate origin gateway when that isolation is needed.
-
-Current bounds include managed-only process inspection/attach, output-only attach and nonrecursive watch. [Tree transfer](../guest/README.md#directory-tree-transfers) preserves supported file/link/mode/mtime/user-xattr semantics and normalizes imported ownership to the workload UID/GID. The engine collects proven unreachable caches, completed import work and retired resource versions/backings; published images and operation/idempotency history stay retained, while uncertain ownership and recovery evidence fence GC. Audit is locally chained without external rollback anchoring. Optional gossip placement and remote archives are outside this single-host implementation. Real production acceptance has passed the privileged launcher and live daemon-failure adoption, complete 512 MiB lifecycle, golden/warm provisioning and guest/TAP policy+SNAT TCP after fork/resume. Standalone KVM/guest and kernel isolation acceptance complement unit and Rust fixture tests. Reproduction commands, exact limits and deployment-specific qualification are in [the acceptance record](../docs/acceptance.md).
+当前 schema 见 [Haven control](../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。组件/Rust/native/capture/kernel/KVM/production 证据分列，历史 [验收](../docs/acceptance.md) 不证明当前树。

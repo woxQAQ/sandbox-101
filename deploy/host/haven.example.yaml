@@ -1,0 +1,25 @@
+# haven --config /etc/haven/config.yaml
+# Explicit flags > HAVEN_* environment > this file > defaults.
+# Initialization is an explicit first-start command, omitted from the service.
+state-dir: /var/lib/haven
+socket: /run/haven/management.sock
+listen: 127.0.0.1:7777
+root-token-file: /etc/haven/root-token
+mode: serve
+cloud-hypervisor: /usr/local/libexec/sandbox/cloud-hypervisor
+build-receipt: /usr/local/libexec/sandbox/cloud-hypervisor.json
+cgroup-root: /sys/fs/cgroup/sandbox-vms
+host-policy: /etc/haven/host-policy.json
+# Supply the actual backing-device budget through HAVEN_IO_MAX in haven.env.
+io-max: ""
+vmm-uid: 65534
+vmm-gid: 65534
+max-memory-mib: 0
+max-vcpus: 0
+storage-margin-bytes: 268435456
+maintenance-interval: 1s
+gc-interval: 1m
+gc-batch: 16
+max-ttl: 1h
+paused-ttl: 24h
+max-warm: 32

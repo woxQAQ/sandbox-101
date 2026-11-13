@@ -2,14 +2,14 @@
 
 本目录仅保留未完成工作。016 和本轮完成的 [023](../.agents/archive/023-structured-error-design.md) 已归档；017、020、021 继续暂停。本轮 023 实施授权不包含提交、推送、共享分支合入或 VM 验收。
 
-新增 [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md)：Haven 独占业务与资源元数据、持久步骤、恢复及 GC 决策，Loom 只提供资源操作与核验。本轮仅交付设计，尚未实施；不恢复暂停计划，也不授权提交、推送或合入。
+[024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) 当前为 STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED。旧 Go 控制模块、双 daemon 和 engine UDS facade 已删除；workspace、CI、native gate、runner 和部署示例迁到单 Haven。最终组件、完整 race、六项 Rust integration、六组 smoke、静态检查及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**，JSON/race/count=1/300s 不变。上述全量数据绑定命名整理前的 F 树；当前入口为 `runtime-e2e` / `SANDBOX_RUNTIME_*`，后续命名整理及定向验证见 F 证据。capture/kernel 实际检查通过；KVM boot/production 缺显式私有材料、rootfs、OCI 和 I/O 预算，整体尚未全部完成。当前树证据见 [阶段 F](evidence/024-stage-f-retirement.md)，历史来源分别见 [E](evidence/024-stage-e-entrypoints.md)、[D](evidence/024-stage-d-control-matrix.md) 与 [迁移记录](evidence/024-migration-map.md)。既有部署未切换；017/020/021 继续暂停，恢复前必须映射当前 Haven store/step/观测与诊断边界。未提交、推送或合入。
 
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
-| [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | DESIGN_READY / IMPLEMENTATION_NOT_STARTED | 单宿主、单 store、单恢复权威；先迁移证明与行为，再删除双 daemon/双库边界；实施后旧暂停计划须重新映射 |
+| [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED | 旧边界清除和测试/runner/部署迁移完成；组件/Rust/smoke/静态、required-native 677 pass 与实际 capture/kernel 通过，当前 KVM/production 缺显式私有材料和预算 |
 
 ## 恢复工作前
 

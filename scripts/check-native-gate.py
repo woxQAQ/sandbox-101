@@ -14,7 +14,7 @@ import tempfile
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-ENGINE_PACKAGE = "github.com/woxQAQ/sandbox-engine"
+NATIVE_PACKAGE = "github.com/woxQAQ/haven/internal/haven"
 REQUIRED_TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
@@ -109,7 +109,7 @@ def check_positive(logs, result, required):
         reasons = [line for line in skip["output"].splitlines()
                    if not re.match(r"^(=== RUN|[ \t]*--- SKIP)", line)]
         exception = (
-            os.geteuid() == 0 and skip["package"] == ENGINE_PACKAGE
+            os.geteuid() == 0 and skip["package"] == NATIVE_PACKAGE
             and skip["test"] == ROOT_SKIP and len(reasons) == 1
             and ROOT_REASON.fullmatch(reasons[0]) is not None
         )
@@ -118,7 +118,7 @@ def check_positive(logs, result, required):
     require(not any(e["Action"] in ("fail", "build-fail") for e in stream),
             "Go JSON contains a failure")
     for test in required:
-        require(any(e["Action"] == "pass" and e["Package"] == ENGINE_PACKAGE
+        require(any(e["Action"] == "pass" and e["Package"] == NATIVE_PACKAGE
                     and e.get("Test") == test for e in stream),
                 f"missing native pass event: {test}")
 
@@ -221,9 +221,9 @@ def preflight(logs):
         require(mapped[kind] == [[0, 0, 4294967295]],
                 f"merged mapping must cover all valid Linux IDs: {kind}")
     test = "TestActualMergedOCIExplicitSelectionAndVerification"
-    result = capture(logs, "merged-production", [
-        "go", "-C", "engine", "test", "-json", "-run", f"^{test}$",
-        "-count=1", "-timeout=60s", ".",
+    result = capture(logs, "merged-import", [
+        "go", "test", "-json", "-run", f"^{test}$",
+        "-count=1", "-timeout=60s", "./internal/haven",
     ], env={**os.environ, **REQUIRED_ENV})
     check_positive(logs, result, (test,))
 
@@ -248,17 +248,17 @@ def negative(logs):
                 "negative PATH still contains bwrap")
         test = REQUIRED_TESTS[0]
         result = capture(logs, "negative", [
-            go, "-C", "engine", "test", "-json", "-run", f"^{test}$",
-            "-count=1", "-timeout=60s", ".",
+            go, "test", "-json", "-run", f"^{test}$",
+            "-count=1", "-timeout=60s", "./internal/haven",
         ], env={**os.environ, **REQUIRED_ENV, "PATH": str(view)})
         stream = events(result)
         require(result.returncode != 0, "missing bwrap unexpectedly succeeded")
-        require(any(e["Package"] == ENGINE_PACKAGE and e.get("Test") == test
+        require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "output"
                     and MISSING_BWRAP.fullmatch(e.get("Output", "")) is not None
                     for e in stream),
                 "negative command did not report the exact missing-bwrap test diagnostic")
-        require(any(e["Package"] == ENGINE_PACKAGE and e.get("Test") == test
+        require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "fail" for e in stream),
                 "negative command did not execute and fail the selected test")
     finally:

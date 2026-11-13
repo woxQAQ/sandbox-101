@@ -1,5 +1,5 @@
-# Owned by the host deployment, loaded before engined admits network access.
-# engined changes only active_ifaces/active_ips. Do not flush these sets during
+# Owned by the host deployment, loaded before Haven admits network access.
+# Loom changes only active_ifaces/active_ips. Do not flush these sets during
 # daemon restart; existing VMMs and their network resources remain alive.
 table inet sandbox_engine {
     set active_ifaces { type ifname; }
@@ -23,7 +23,7 @@ table inet sandbox_engine {
         ip saddr != @active_ips drop
         ip daddr @protected_ipv4 drop
         # A conservative global packet ceiling is an example deployment quota.
-        # Deploy per-VM tc/HTB bandwidth and connection budgets for production.
+        # Deploy per-VM tc/HTB bandwidth and connection budgets for deployed hosts.
         limit rate over 100000/second burst 200000 packets drop
         accept
     }

@@ -1,0 +1,175 @@
+package loom
+
+import (
+	"bufio"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
+)
+
+type cowRAMMapping struct {
+	GPA        uint64 `json:"gpa"`
+	Size       uint64 `json:"size"`
+	ZoneID     string `json:"zone_id"`
+	VirtioMem  bool   `json:"virtio_mem"`
+	FileOffset uint64 `json:"file_offset"`
+}
+type cowMemoryRange struct {
+	GPA    uint64 `json:"gpa"`
+	Length uint64 `json:"length"`
+}
+
+// These fields mirror the pinned CH MemoryManagerSnapshotData and SnapshotData.
+// Static private RAM snapshots must contain one full range per anonymous region;
+// this excludes every saved-range condition that triggers CH's eager fallback.
+// ValidateCOWTopology rejects saved layouts that permit eager-copy fallback.
+func ValidateCOWTopology(dir string, memoryBytes uint64) error {
+	file, err := os.Open(filepath.Join(dir, "state.json"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, (64<<20)+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > 64<<20 {
+		return Fail(Incompatible, "snapshot state exceeds validation limit")
+	}
+	var snapshot struct {
+		Snapshots map[string]struct {
+			Data *struct {
+				State string `json:"state"`
+			} `json:"snapshot_data"`
+		} `json:"snapshots"`
+	}
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		return Fail(Incompatible, "invalid snapshot state")
+	}
+	manager := snapshot.Snapshots["memory-manager"]
+	if manager.Data == nil {
+		return Fail(Incompatible, "snapshot memory manager state missing")
+	}
+	var state struct {
+		MemoryRanges struct {
+			Data []cowMemoryRange `json:"data"`
+		} `json:"memory_ranges"`
+		Mappings   []cowRAMMapping `json:"guest_ram_mappings"`
+		BootRAM    uint64          `json:"boot_ram"`
+		CurrentRAM uint64          `json:"current_ram"`
+	}
+	if err = json.Unmarshal([]byte(manager.Data.State), &state); err != nil {
+		return Fail(Incompatible, "invalid saved RAM topology")
+	}
+	if state.BootRAM != memoryBytes || state.CurrentRAM != memoryBytes || len(state.Mappings) == 0 ||
+		len(state.Mappings) != len(state.MemoryRanges.Data) {
+		return Fail(Incompatible, "COW requires complete static RAM ranges")
+	}
+	page := uint64(os.Getpagesize())
+	sort.Slice(
+		state.Mappings,
+		func(i, j int) bool { return state.Mappings[i].GPA < state.Mappings[j].GPA },
+	)
+	var total, end uint64
+	for i, mapping := range state.Mappings {
+		if mapping.Size == 0 || mapping.GPA%page != 0 || mapping.Size%page != 0 ||
+			mapping.GPA+mapping.Size < mapping.GPA ||
+			mapping.VirtioMem ||
+			mapping.ZoneID != "mem0" ||
+			mapping.FileOffset != 0 ||
+			(i > 0 && mapping.GPA < end) {
+			return Fail(Incompatible, "unsupported COW RAM region")
+		}
+		saved := state.MemoryRanges.Data[i]
+		if saved.GPA != mapping.GPA || saved.Length != mapping.Size || total+mapping.Size < total {
+			return Fail(Incompatible, "saved range does not cover one private RAM region")
+		}
+		total += mapping.Size
+		end = mapping.GPA + mapping.Size
+	}
+	info, err := os.Stat(filepath.Join(dir, "memory-ranges"))
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || total != memoryBytes || uint64(info.Size()) != total {
+		return Fail(Incompatible, "COW memory file length does not match saved ranges")
+	}
+	return nil
+}
+
+// Verify the actual retained inode is mapped MAP_PRIVATE over every saved byte.
+// An accepted API request alone cannot establish that CH avoided eager copying.
+func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) error {
+	type extent struct{ offset, end uint64 }
+	var extents []extent
+	scanner := bufio.NewScanner(maps)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 {
+			return Fail(ManualRecovery, "invalid process map entry")
+		}
+		inode, err := strconv.ParseUint(fields[4], 10, 64)
+		if err != nil {
+			return err
+		}
+		majorText, minorText, ok := strings.Cut(fields[3], ":")
+		if !ok {
+			return Fail(ManualRecovery, "invalid process map device")
+		}
+		major, err := strconv.ParseUint(majorText, 16, 32)
+		if err != nil {
+			return err
+		}
+		minor, err := strconv.ParseUint(minorText, 16, 32)
+		if err != nil {
+			return err
+		}
+		if inode != backing.Ino || unix.Mkdev(uint32(major), uint32(minor)) != uint64(backing.Dev) {
+			continue
+		}
+		startText, endText, ok := strings.Cut(fields[0], "-")
+		if !ok || fields[1] != "rw-p" {
+			return Fail(Incompatible, "COW backing is not mapped private writable")
+		}
+		start, err := strconv.ParseUint(startText, 16, 64)
+		if err != nil {
+			return err
+		}
+		end, err := strconv.ParseUint(endText, 16, 64)
+		if err != nil {
+			return err
+		}
+		offset, err := strconv.ParseUint(fields[2], 16, 64)
+		if err != nil {
+			return err
+		}
+		if end <= start || end-start > size || offset > size-(end-start) {
+			return Fail(Incompatible, "COW mapping exceeds retained memory file")
+		}
+		extents = append(extents, extent{offset, offset + end - start})
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	sort.Slice(
+		extents,
+		func(i, j int) bool { return extents[i].offset < extents[j].offset },
+	)
+	var covered uint64
+	for _, extent := range extents {
+		if extent.offset != covered {
+			return Fail(Incompatible, "COW memory mappings have gaps or aliases")
+		}
+		covered = extent.end
+	}
+	if size == 0 || covered != size {
+		return Fail(Incompatible, "VMM did not map the complete retained COW backing")
+	}
+	return nil
+}
