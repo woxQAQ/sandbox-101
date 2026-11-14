@@ -39,7 +39,10 @@ func pendingPublishedCaptures(ctx context.Context, q rowsQueryer, source resourc
 		if capture.Status != "succeeded" || capture.State.Phase != "complete" || capture.State.ResumeRequired || capture.Input.Source.OperationID != source.OperationID || capture.Input.Source.Hash != source.Hash || capture.Input.Request.ExpectedInstance != source.State.Witness {
 			return nil, fmt.Errorf("rollback capture user lacks original published generation proof")
 		}
-		refs = append(refs, generationRef{OperationID: id, InputHash: capture.Hash})
+		refs = append(refs, generationRef{
+			OperationID: id,
+			InputHash:   capture.Hash,
+		})
 	}
 	return refs, nil
 }
@@ -72,8 +75,19 @@ func (service *Service) cleanupRollbackCaptures(step lifecycleStep, stop string)
 	for _, ref := range step.Input.Rollback.RawCaptures {
 		role := "raw:" + ref.OperationID
 		if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
-			link := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: role}
-			if _, err := service.admitCaptureCleanup(service.ctx, CaptureCleanupRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":" + role, CaptureOperationID: ref.OperationID, StopOperationID: stop}, link); err != nil {
+			link := &lifecycleAdmission{
+				Parent: Operation{
+					ID: step.OperationID,
+				},
+				Input: step.Input,
+				Role:  role,
+			}
+			if _, err := service.admitCaptureCleanup(service.ctx, CaptureCleanupRequest{
+				TenantID:           step.Input.OwnerTenantID,
+				Key:                step.OperationID + ":" + role,
+				CaptureOperationID: ref.OperationID,
+				StopOperationID:    stop,
+			}, link); err != nil {
 				return err
 			}
 		} else if lookup != nil {

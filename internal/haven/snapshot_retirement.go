@@ -73,7 +73,10 @@ func (service *Service) retireDeletedSnapshot(ctx context.Context, tx *sql.Tx, s
 	if err = service.validateSnapshotPublication(source, snapshot.TenantID, capture); err != nil {
 		return err
 	}
-	for _, path := range []string{snapshot.Dir, snapshotRawPath(source)} {
+	for _, path := range []string{
+		snapshot.Dir,
+		snapshotRawPath(source),
+	} {
 		if _, err = os.Lstat(path); !os.IsNotExist(err) {
 			return fmt.Errorf("snapshot fee retirement physical absence unconfirmed: %v", err)
 		}
@@ -100,14 +103,37 @@ func (service *Service) retireDeletedSnapshot(ctx context.Context, tx *sql.Tx, s
 		args []any
 		want int
 	}{
-		{"SELECT COUNT(*) FROM snapshots WHERE id=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM checkpoints WHERE id=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM reservations WHERE owner=?", []any{"snapshot:" + snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{snapshot.ID, snapshot.TenantID, source.CaptureOperation}, 1},
-		{"SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND status='done' AND body=?", []any{"capture:" + source.CaptureOperation, source.CaptureOperation, encode(capture.Input)}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE kind='snapshot' AND resource_key=?", []any{snapshot.ID}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND storage_mib=? AND sandbox_slots=0 AND source_operation_id=?", []any{snapshot.TenantID, snapshot.ID, snapshot.Manifest.Config.Shape.DiskMiB + snapshot.Manifest.Config.Shape.MemoryMiB, source.CaptureOperation}, 1},
+		{"SELECT COUNT(*) FROM snapshots WHERE id=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM checkpoints WHERE id=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=?", []any{
+			"snapshot:" + snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{
+			snapshot.ID,
+			snapshot.TenantID,
+			source.CaptureOperation,
+		}, 1},
+		{"SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND status='done' AND body=?", []any{
+			"capture:" + source.CaptureOperation,
+			source.CaptureOperation,
+			encode(capture.Input),
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE kind='snapshot' AND resource_key=?", []any{
+			snapshot.ID,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND storage_mib=? AND sandbox_slots=0 AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			snapshot.ID,
+			snapshot.Manifest.Config.Shape.DiskMiB + snapshot.Manifest.Config.Shape.MemoryMiB,
+			source.CaptureOperation,
+		}, 1},
 	}
 	for _, check := range checks {
 		var count int
@@ -119,10 +145,23 @@ func (service *Service) retireDeletedSnapshot(ctx context.Context, tx *sql.Tx, s
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='snapshot' AND holder_id=?", []any{snapshot.Manifest.Config.Image, snapshot.ID}},
-		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND source_operation_id=?", []any{snapshot.TenantID, snapshot.ID, source.CaptureOperation}},
-		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='snapshot_delete'", []any{snapshot.Dir, operation}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='retained'", []any{"snapshot_delete:" + operation, operation}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='snapshot' AND holder_id=?", []any{
+			snapshot.Manifest.Config.Image,
+			snapshot.ID,
+		}},
+		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			snapshot.ID,
+			source.CaptureOperation,
+		}},
+		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='snapshot_delete'", []any{
+			snapshot.Dir,
+			operation,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='retained'", []any{
+			"snapshot_delete:" + operation,
+			operation,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

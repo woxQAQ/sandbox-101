@@ -18,12 +18,22 @@ func rawCleanupFixture(t *testing.T) (*Service, *coldRuntime, captureStep, Captu
 		t.Fatal(err)
 	}
 	capture := awaitCapture(t, service, operation.ID)
-	stopped, err := service.AdmitStop(context.Background(), StopRequest{TenantID: "tenant", Key: "stop", SandboxID: request.SandboxID, ExpectedInstance: request.ExpectedInstance})
+	stopped, err := service.AdmitStop(context.Background(), StopRequest{
+		TenantID:         "tenant",
+		Key:              "stop",
+		SandboxID:        request.SandboxID,
+		ExpectedInstance: request.ExpectedInstance,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	awaitStop(t, service, stopped.ID)
-	return service, backend, capture, CaptureCleanupRequest{TenantID: "tenant", Key: "raw", CaptureOperationID: capture.OperationID, StopOperationID: stopped.ID}
+	return service, backend, capture, CaptureCleanupRequest{
+		TenantID:           "tenant",
+		Key:                "raw",
+		CaptureOperationID: capture.OperationID,
+		StopOperationID:    stopped.ID,
+	}
 }
 
 func awaitRawCleanup(t *testing.T, service *Service, id string) captureCleanupStep {
@@ -95,7 +105,12 @@ func TestHavenPublishedRawCleanup(t *testing.T) {
 }
 
 func TestHavenPublishedRawCleanupRecovery(t *testing.T) {
-	for _, boundary := range []string{"capture_cleanup_receipt", "capture_cleanup_unlinked", "capture_cleanup_files_removed", "capture_cleanup_completion_before_commit"} {
+	for _, boundary := range []string{
+		"capture_cleanup_receipt",
+		"capture_cleanup_unlinked",
+		"capture_cleanup_files_removed",
+		"capture_cleanup_completion_before_commit",
+	} {
 		t.Run(boundary, func(t *testing.T) {
 			service, backend, capture, request := rawCleanupFixture(t)
 			service.opts.Fault = func(point string) error {

@@ -20,11 +20,16 @@ func (service *Service) AdmitRollback(ctx context.Context, principal Principal, 
 	if command.Action != "rollback" || command.SandboxID == "" || command.CheckpointID == "" || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 {
 		return empty, loom.Fail(loom.Invalid, "rollback requires tenant authority, sandbox, checkpoint and key")
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC: mac,
+	}); found || err != nil {
 		return operation, err
 	}
 	guard := service.vmLock("configuration:" + command.SandboxID)
@@ -69,13 +74,50 @@ func (service *Service) AdmitRollback(ctx context.Context, principal Principal, 
 	if err != nil {
 		return empty, err
 	}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID, SnapshotID: checkpoint.SnapshotID, CheckpointID: checkpoint.ID}}
-	input := lifecycleInput{RequestTenantID: principal.TenantID, OwnerTenantID: sandbox.TenantID, Command: sanitizedCommand(command), CheckpointID: checkpoint.ID, Sandbox: sandbox, Settings: settings, Source: generationRef{OperationID: source.OperationID, InputHash: source.Hash}, SourceInstance: source.State.Witness, Rollback: &rollbackInput{RawCaptures: rawCaptures, Checkpoint: checkpoint, Source: snapshot}}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:    sandbox.ID,
+			VMID:         sandbox.VMID,
+			SnapshotID:   checkpoint.SnapshotID,
+			CheckpointID: checkpoint.ID,
+		},
+	}
+	input := lifecycleInput{
+		RequestTenantID: principal.TenantID,
+		OwnerTenantID:   sandbox.TenantID,
+		Command:         sanitizedCommand(command),
+		CheckpointID:    checkpoint.ID,
+		Sandbox:         sandbox,
+		Settings:        settings,
+		Source: generationRef{
+			OperationID: source.OperationID,
+			InputHash:   source.Hash,
+		},
+		SourceInstance: source.State.Witness,
+		Rollback: &rollbackInput{
+			RawCaptures: rawCaptures,
+			Checkpoint:  checkpoint,
+			Source:      snapshot,
+		},
+	}
 	if sandbox.State == "paused" {
 		return service.admitPausedRollback(ctx, parent, input, mac)
 	}
-	admission := &lifecycleAdmission{Parent: parent, Input: input, MAC: mac, Role: "stop"}
-	child, err := service.admitStop(ctx, StopRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":stop", SandboxID: sandbox.ID, ExpectedInstance: sandbox.Instance}, admission)
+	admission := &lifecycleAdmission{
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Role:   "stop",
+	}
+	child, err := service.admitStop(ctx, StopRequest{
+		TenantID:         sandbox.TenantID,
+		Key:              parent.ID + ":stop",
+		SandboxID:        sandbox.ID,
+		ExpectedInstance: sandbox.Instance,
+	}, admission)
 	if child.ID == "" {
 		return empty, err
 	}
@@ -103,7 +145,9 @@ func (service *Service) admitPausedRollback(ctx context.Context, parent Operatio
 	if err != nil {
 		return Operation{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSandbox(ctx, tx, input.Sandbox.ID, input.OwnerTenantID)
 	if err != nil {
 		return Operation{}, err
@@ -149,11 +193,42 @@ func (service *Service) admitPausedRollback(ctx context.Context, parent Operatio
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "succeeded", encode(parent.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, mac}},
-		{"INSERT INTO operation_steps VALUES(?,'lifecycle','rollback',?,?,?,?,'succeeded',?)", []any{parent.ID, digest(payload), payload, current.ID, "", encode(lifecycleState{Phase: "complete", SnapshotID: checkpoint.SnapshotID})}},
-		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='paused' AND body=?", []any{encode(next), current.ID, input.OwnerTenantID, encode(current)}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(desired), current.ID, encode(settings)}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			parent.ID,
+			"tenant",
+			input.RequestTenantID,
+			parent.Key,
+			digest(frozen),
+			frozen,
+			"succeeded",
+			encode(parent.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			parent.ID,
+			mac,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'lifecycle','rollback',?,?,?,?,'succeeded',?)", []any{
+			parent.ID,
+			digest(payload),
+			payload,
+			current.ID,
+			"",
+			encode(lifecycleState{
+				Phase:      "complete",
+				SnapshotID: checkpoint.SnapshotID,
+			}),
+		}},
+		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='paused' AND body=?", []any{
+			encode(next),
+			current.ID,
+			input.OwnerTenantID,
+			encode(current),
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(desired),
+			current.ID,
+			encode(settings),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return Operation{}, err
@@ -164,10 +239,24 @@ func (service *Service) admitPausedRollback(ctx context.Context, parent Operatio
 			q    string
 			args []any
 		}{
-			{"INSERT INTO resource_refs VALUES('snapshot',?,'sleep',?)", []any{checkpoint.SnapshotID, current.ID}},
-			{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{input.OwnerTenantID, checkpoint.SnapshotID, "sleep:" + current.ID}},
-			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{current.SnapshotID, current.ID}},
-			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{input.OwnerTenantID, current.SnapshotID, "sleep:" + current.ID}},
+			{"INSERT INTO resource_refs VALUES('snapshot',?,'sleep',?)", []any{
+				checkpoint.SnapshotID,
+				current.ID,
+			}},
+			{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{
+				input.OwnerTenantID,
+				checkpoint.SnapshotID,
+				"sleep:" + current.ID,
+			}},
+			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{
+				current.SnapshotID,
+				current.ID,
+			}},
+			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+				input.OwnerTenantID,
+				current.SnapshotID,
+				"sleep:" + current.ID,
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return Operation{}, err
@@ -193,8 +282,21 @@ func (service *Service) runRollback(step lifecycleStep) error {
 		return err
 	}
 	if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "restore"); errors.Is(lookup, sql.ErrNoRows) {
-		link := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: "restore"}
-		_, err = service.admitRestore(service.ctx, RestoreRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":restore", SandboxID: step.Input.Sandbox.ID, SnapshotID: step.Input.Rollback.Checkpoint.SnapshotID, ExpectedInstance: step.Input.SourceInstance, StopOperationID: stopped.ChildID}, link)
+		link := &lifecycleAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  "restore",
+		}
+		_, err = service.admitRestore(service.ctx, RestoreRequest{
+			TenantID:         step.Input.OwnerTenantID,
+			Key:              step.OperationID + ":restore",
+			SandboxID:        step.Input.Sandbox.ID,
+			SnapshotID:       step.Input.Rollback.Checkpoint.SnapshotID,
+			ExpectedInstance: step.Input.SourceInstance,
+			StopOperationID:  stopped.ChildID,
+		}, link)
 		if err != nil {
 			return err
 		}

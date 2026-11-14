@@ -45,8 +45,13 @@ func newCA() (tls.Certificate, []byte, error) {
 		return tls.Certificate{}, nil, errors.New("egress: CA generation failed")
 	}
 	return tls.Certificate{
-		Certificate: [][]byte{der},
-		PrivateKey:  key,
-		Leaf:        leaf,
-	}, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
+		Certificate: [][]byte{
+			der,
+		},
+		PrivateKey: key,
+		Leaf:       leaf,
+	}, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	}), nil
 }

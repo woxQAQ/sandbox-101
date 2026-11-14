@@ -11,8 +11,12 @@ import (
 
 func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
-	operation := claimSandbox(t, service, "public-corruption", nil, egress.Policy{Mode: "none"})
-	view, err := service.PublicOperation(context.Background(), Principal{TenantID: "tenant"}, operation.ID)
+	operation := claimSandbox(t, service, "public-corruption", nil, egress.Policy{
+		Mode: "none",
+	})
+	view, err := service.PublicOperation(context.Background(), Principal{
+		TenantID: "tenant",
+	}, operation.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

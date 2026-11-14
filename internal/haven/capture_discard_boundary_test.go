@@ -13,7 +13,14 @@ import (
 
 func TestHavenCaptureDiscardRetainsUncertainObjects(t *testing.T) {
 	parallelLifecycle(t)
-	for _, kind := range []string{"unknown_raw", "unknown_publication", "replaced_raw", "replaced_publication", "reader", "inspection_unknown"} {
+	for _, kind := range []string{
+		"unknown_raw",
+		"unknown_publication",
+		"replaced_raw",
+		"replaced_publication",
+		"reader",
+		"inspection_unknown",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, true)
 			raw := failed.State.Boundary.Path
@@ -50,7 +57,9 @@ func TestHavenCaptureDiscardRetainsUncertainObjects(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = file.Close() }()
+				defer func() {
+					_ = file.Close()
+				}()
 			case "inspection_unknown":
 				backend.inspectError = fmt.Errorf("fixture unknown stopped source")
 			}
@@ -120,10 +129,19 @@ func TestHavenCaptureDiscardReceiptReplacement(t *testing.T) {
 
 func TestHavenCaptureDiscardAdmissionAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
-		{"INSERT", "operations", "1"}, {"INSERT", "operation_steps", "NEW.action='capture_discard'"}, {"UPDATE", "snapshots", "NEW.deleting=1"}, {"UPDATE", "quota_refs", "NEW.holder_kind='cleanup'"}, {"UPDATE", "vms", "NEW.operation_id IS NOT NULL"},
+	for _, write := range []struct {
+		event, table, condition string
+	}{
+		{"INSERT", "operations", "1"},
+		{"INSERT", "operation_steps", "NEW.action='capture_discard'"},
+		{"UPDATE", "snapshots", "NEW.deleting=1"},
+		{"UPDATE", "quota_refs", "NEW.holder_kind='cleanup'"},
+		{"UPDATE", "vms", "NEW.operation_id IS NOT NULL"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture capture admission rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture capture admission rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+mode, func(t *testing.T) {
 				service, _, request, failed := failedCaptureFixture(t, false)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_capture_discard BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
@@ -149,7 +167,10 @@ func TestHavenCaptureDiscardAdmissionAtomicity(t *testing.T) {
 
 func TestHavenCaptureDiscardReceiptAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, mode := range []string{"ABORT,'fixture second receipt rejection'", "IGNORE"} {
+	for _, mode := range []string{
+		"ABORT,'fixture second receipt rejection'",
+		"IGNORE",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, true)
 			statement := fmt.Sprintf("CREATE TRIGGER deny_capture_receipt BEFORE INSERT ON deletion_intents WHEN NEW.path LIKE '%%/snapshots/%%' BEGIN SELECT RAISE(%s); END", mode)
@@ -187,7 +208,14 @@ func TestHavenCaptureDiscardReceiptAtomicity(t *testing.T) {
 
 func TestHavenCaptureDiscardAuthorization(t *testing.T) {
 	parallelLifecycle(t)
-	for _, kind := range []string{"tenant", "instance", "stop", "not_capture", "extra_fee_holder", "snapshot_reader"} {
+	for _, kind := range []string{
+		"tenant",
+		"instance",
+		"stop",
+		"not_capture",
+		"extra_fee_holder",
+		"snapshot_reader",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, false)
 			switch kind {
@@ -248,14 +276,26 @@ func TestHavenCaptureDiscardRejectsUnprovedBoundary(t *testing.T) {
 	if failed.Status != "failed" || failed.State.Boundary != nil {
 		t.Fatal("fixture established missing preparation proof", failed.State)
 	}
-	stop, err := service.AdmitStop(context.Background(), StopRequest{TenantID: request.TenantID, Key: "stop-unproved", SandboxID: request.SandboxID, ExpectedInstance: request.ExpectedInstance})
+	stop, err := service.AdmitStop(context.Background(), StopRequest{
+		TenantID:         request.TenantID,
+		Key:              "stop-unproved",
+		SandboxID:        request.SandboxID,
+		ExpectedInstance: request.ExpectedInstance,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if proof := awaitStop(t, service, stop.ID); proof.Status != "succeeded" {
 		t.Fatal(proof)
 	}
-	discard, err := service.AdmitCaptureDiscard(context.Background(), CaptureDiscardRequest{TenantID: request.TenantID, Key: "discard-unproved", SandboxID: request.SandboxID, FailedOperationID: operation.ID, ExpectedInstance: request.ExpectedInstance, StopOperationID: stop.ID})
+	discard, err := service.AdmitCaptureDiscard(context.Background(), CaptureDiscardRequest{
+		TenantID:          request.TenantID,
+		Key:               "discard-unproved",
+		SandboxID:         request.SandboxID,
+		FailedOperationID: operation.ID,
+		ExpectedInstance:  request.ExpectedInstance,
+		StopOperationID:   stop.ID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

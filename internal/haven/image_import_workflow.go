@@ -131,7 +131,9 @@ func (service *Service) failImageImport(step imageImportStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadImageImport(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -149,9 +151,23 @@ func (service *Service) failImageImport(step imageImportStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='image_import' AND input_hash=? AND status IN ('pending','running')", []any{encode(current.State), step.OperationID, step.Hash}},
-		{"UPDATE operations SET status='failed',body=? WHERE id=? AND status IN ('pending','running')", []any{encode(operationResult{Error: current.State.Error}), step.OperationID}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'image_import',?,'pending',?)", []any{"image_import:" + step.OperationID, step.OperationID, step.Input.Options.Digest, encode(current)}},
+		{"UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='image_import' AND input_hash=? AND status IN ('pending','running')", []any{
+			encode(current.State),
+			step.OperationID,
+			step.Hash,
+		}},
+		{"UPDATE operations SET status='failed',body=? WHERE id=? AND status IN ('pending','running')", []any{
+			encode(operationResult{
+				Error: current.State.Error,
+			}),
+			step.OperationID,
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'image_import',?,'pending',?)", []any{
+			"image_import:" + step.OperationID,
+			step.OperationID,
+			step.Input.Options.Digest,
+			encode(current),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -181,7 +197,9 @@ func (service *Service) completeImageImport(step imageImportStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadImageImport(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -207,14 +225,35 @@ func (service *Service) completeImageImport(step imageImportStep) error {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO images VALUES(?,?)", []any{proof.Manifest.Digest, encode(proof.Manifest)}},
-		{"UPDATE reservations SET owner=? WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{"image:" + proof.Manifest.Digest, "import:" + step.OperationID, remaining}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'image_import',?,'pending',?)", []any{"image_import:" + step.OperationID, step.OperationID, proof.Manifest.Digest, encode(struct {
-			Input imageImportInput
-			State imageImportState
-		}{step.Input, state})}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='image_import' AND input_hash=? AND status IN ('pending','running')", []any{encode(state), step.OperationID, step.Hash}},
-		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{encode(operationResult{ImageDigest: proof.Manifest.Digest}), step.OperationID}},
+		{"INSERT INTO images VALUES(?,?)", []any{
+			proof.Manifest.Digest,
+			encode(proof.Manifest),
+		}},
+		{"UPDATE reservations SET owner=? WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{
+			"image:" + proof.Manifest.Digest,
+			"import:" + step.OperationID,
+			remaining,
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'image_import',?,'pending',?)", []any{
+			"image_import:" + step.OperationID,
+			step.OperationID,
+			proof.Manifest.Digest,
+			encode(struct {
+				Input imageImportInput
+				State imageImportState
+			}{step.Input, state}),
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='image_import' AND input_hash=? AND status IN ('pending','running')", []any{
+			encode(state),
+			step.OperationID,
+			step.Hash,
+		}},
+		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{
+			encode(operationResult{
+				ImageDigest: proof.Manifest.Digest,
+			}),
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

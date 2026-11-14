@@ -50,7 +50,9 @@ func (service *Service) verifyDataNetwork(ctx context.Context, sandbox Sandbox, 
 func (service *Service) repairDataNetwork(sandbox Sandbox, settings sandboxSettings) error {
 	env := map[string]EnvVar{}
 	for name, value := range settings.Env {
-		env[name] = EnvVar{Value: value}
+		env[name] = EnvVar{
+			Value: value,
+		}
 	}
 	service.mu.Lock()
 	for name, descriptor := range settings.Secrets {
@@ -62,12 +64,24 @@ func (service *Service) repairDataNetwork(sandbox Sandbox, settings sandboxSetti
 		guest := false
 		injection := descriptor
 		injection.Hosts = append([]string(nil), descriptor.Hosts...)
-		env[name] = EnvVar{Value: value.Value, Guest: &guest, Inject: &injection}
+		env[name] = EnvVar{
+			Value:  value.Value,
+			Guest:  &guest,
+			Inject: &injection,
+		}
 	}
 	service.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	operation, err := service.AdmitConfigure(ctx, Principal{TenantID: sandbox.TenantID}, "network-revalidate:"+service.epoch+":"+sandbox.ID+":"+settings.Generation, Command{Action: "configure", SandboxID: sandbox.ID, ObservedGeneration: settings.Generation, Env: env, Policy: settings.Policy})
+	operation, err := service.AdmitConfigure(ctx, Principal{
+		TenantID: sandbox.TenantID,
+	}, "network-revalidate:"+service.epoch+":"+sandbox.ID+":"+settings.Generation, Command{
+		Action:             "configure",
+		SandboxID:          sandbox.ID,
+		ObservedGeneration: settings.Generation,
+		Env:                env,
+		Policy:             settings.Policy,
+	})
 	if err != nil {
 		return err
 	}

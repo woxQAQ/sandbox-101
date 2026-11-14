@@ -26,8 +26,12 @@ func encode(value any) []byte {
 	return data
 }
 
-func gcID(id, prefix string) bool                  { return loom.ValidResourceID(id, prefix) }
-func openCaptureDir(path string) (*os.File, error) { return loom.OpenCaptureDir(path) }
+func gcID(id, prefix string) bool {
+	return loom.ValidResourceID(id, prefix)
+}
+func openCaptureDir(path string) (*os.File, error) {
+	return loom.OpenCaptureDir(path)
+}
 func delegateCapture(resource Resource, destination string, uid, gid int) error {
 	return loom.DelegateCapture(resource, destination, uid, gid)
 }

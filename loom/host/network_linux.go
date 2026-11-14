@@ -41,7 +41,10 @@ func hostToolPath() string {
 
 func command(ctx context.Context, name string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, name, args...)
-	c.Env = []string{"PATH=" + hostToolPath(), "LC_ALL=C"}
+	c.Env = []string{
+		"PATH=" + hostToolPath(),
+		"LC_ALL=C",
+	}
 	b, e := c.CombinedOutput()
 	if e != nil {
 		return nil, fmt.Errorf("%s %v: %w: %.4096s", name, args, e, b)
@@ -59,7 +62,10 @@ func netAlias(r Resource) string {
 }
 
 func netIP(ctx context.Context, ns string, args ...string) ([]byte, error) {
-	return command(ctx, "ip", append([]string{"-n", ns}, args...)...)
+	return command(ctx, "ip", append([]string{
+		"-n",
+		ns,
+	}, args...)...)
 }
 
 func (b *CloudHypervisor) networkPrepare(ctx context.Context, r Resource) error {
@@ -90,12 +96,24 @@ func (b *CloudHypervisor) networkPrepare(ctx context.Context, r Resource) error 
 	if _, e := command(ctx, "ip", "link", "set", host, "alias", netAlias(r)); e != nil {
 		return e
 	}
-	for _, args := range [][]string{{"link", "set", peer, "alias", netAlias(r)}, {"tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(int(b.opts.UID))}, {"link", "set", "tap0", "alias", netAlias(r)}, {"link", "set", "tap0", "address", "02:00:00:00:00:01", "mtu", "1500"}, {"link", "set", peer, "mtu", "1500"}, {"addr", "add", "192.168.127.1/30", "dev", "tap0"}, {"addr", "add", peerIP + "/31", "dev", peer}, {"link", "set", "lo", "up"}} {
+	for _, args := range [][]string{
+		{"link", "set", peer, "alias", netAlias(r)},
+		{"tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(int(b.opts.UID))},
+		{"link", "set", "tap0", "alias", netAlias(r)},
+		{"link", "set", "tap0", "address", "02:00:00:00:00:01", "mtu", "1500"},
+		{"link", "set", peer, "mtu", "1500"},
+		{"addr", "add", "192.168.127.1/30", "dev", "tap0"},
+		{"addr", "add", peerIP + "/31", "dev", peer},
+		{"link", "set", "lo", "up"},
+	} {
 		if _, e := netIP(ctx, ns, args...); e != nil {
 			return e
 		}
 	}
-	for _, args := range [][]string{{"link", "set", host, "mtu", "1500"}, {"addr", "add", hostIP + "/31", "dev", host}} {
+	for _, args := range [][]string{
+		{"link", "set", host, "mtu", "1500"},
+		{"addr", "add", hostIP + "/31", "dev", host},
+	} {
 		if _, e := command(ctx, "ip", args...); e != nil {
 			return e
 		}
@@ -295,7 +313,12 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		if err = b.VerifyNetworkPolicy(ctx, r, installed.Policy); err != nil {
 			return err
 		}
-		for _, elem := range []struct{ set, value string }{{"active_ifaces", `"` + host + `"`}, {"active_ips", mapped}} {
+		for _, elem := range []struct {
+			set, value string
+		}{
+			{"active_ifaces", `"` + host + `"`},
+			{"active_ips", mapped},
+		} {
 			// add element is idempotent on supported nft versions; an existing element
 			// is explicitly checked before insertion.
 			if _, x := command(
@@ -342,7 +365,10 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		return err
 	}
 	var errs []error
-	for _, a := range [][]string{{"link", "set", "tap0", "down"}, {"link", "set", peer, "down"}} {
+	for _, a := range [][]string{
+		{"link", "set", "tap0", "down"},
+		{"link", "set", peer, "down"},
+	} {
 		if _, x := netIP(ctx, ns, a...); x != nil {
 			errs = append(errs, x)
 		}
@@ -409,7 +435,12 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 			return api.Fail(api.ManualRecovery, "reused veth name during cleanup")
 		}
 	}
-	for _, elem := range []struct{ set, value string }{{"active_ifaces", `"` + host + `"`}, {"active_ips", mapped}} {
+	for _, elem := range []struct {
+		set, value string
+	}{
+		{"active_ifaces", `"` + host + `"`},
+		{"active_ips", mapped},
+	} {
 		if _, x := command(
 			ctx,
 			"nft",

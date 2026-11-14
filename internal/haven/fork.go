@@ -34,7 +34,10 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 || service.opts.Guest == nil {
 		return empty, loom.Fail(loom.Invalid, "fork requires tenant authority, one source, count 1..32 and key")
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	_, secrets, _, err := splitEnv(command.Env)
@@ -42,7 +45,10 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 		return empty, err
 	}
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac, Secrets: secrets}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC:     mac,
+		Secrets: secrets,
+	}); found || err != nil {
 		if found && err == nil && !terminal(operation.Status) {
 			group, lookup := loadFork(ctx, service.store.db, operation.ID)
 			if lookup != nil {
@@ -58,7 +64,9 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 	if draining {
 		return empty, loom.Fail(loom.Exhausted, "node is draining")
 	}
-	input := forkInput{RequestTenantID: principal.TenantID}
+	input := forkInput{
+		RequestTenantID: principal.TenantID,
+	}
 	if command.CheckpointID != "" {
 		checkpoint, err := service.GetCheckpoint(ctx, principal, command.CheckpointID)
 		if err != nil {
@@ -71,7 +79,11 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 		input.OwnerTenantID = checkpoint.TenantID
 		input.Snapshot = &source
 		input.Checkpoint = &checkpoint
-		input.Template = templateRecord{ID: checkpoint.TemplateID, TenantID: checkpoint.TenantID, Config: source.Snapshot.Manifest.Config}
+		input.Template = templateRecord{
+			ID:       checkpoint.TemplateID,
+			TenantID: checkpoint.TenantID,
+			Config:   source.Snapshot.Manifest.Config,
+		}
 	} else {
 		sandbox, err := ownedSandbox(ctx, service.store.db, principal, command.SandboxID)
 		if err != nil {
@@ -98,7 +110,11 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 				return empty, err
 			}
 			input.Snapshot = &source
-			input.Template = templateRecord{ID: sandbox.Identity.TemplateID, TenantID: sandbox.TenantID, Config: source.Snapshot.Manifest.Config}
+			input.Template = templateRecord{
+				ID:       sandbox.Identity.TemplateID,
+				TenantID: sandbox.TenantID,
+				Config:   source.Snapshot.Manifest.Config,
+			}
 		} else {
 			public, err := service.Get(ctx, principal, sandbox.ID)
 			if err != nil {
@@ -109,7 +125,11 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 				return empty, err
 			}
 			input.Source = &source
-			input.Template = templateRecord{ID: sandbox.Identity.TemplateID, TenantID: sandbox.TenantID, Config: source.Input.Resource.Config}
+			input.Template = templateRecord{
+				ID:       sandbox.Identity.TemplateID,
+				TenantID: sandbox.TenantID,
+				Config:   source.Input.Resource.Config,
+			}
 		}
 	}
 	admission, err := service.prepareClaim(command)
@@ -131,12 +151,22 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 	if err = verifyImageFiles(image, filepath.Join(service.store.directory, "images", image.Digest[7:])); err != nil {
 		return empty, err
 	}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending"}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+	}
 	admission.Settings.Generation = parent.ID
 	input.Command = admission.Command
 	input.Settings = admission.Settings
 	for range command.Count {
-		target := sandboxRecord{ID: newID("sandbox_"), TenantID: input.OwnerTenantID, OperationID: parent.ID, State: "provisioning", Identity: newSandboxIdentity(input.Template, "")}
+		target := sandboxRecord{
+			ID:          newID("sandbox_"),
+			TenantID:    input.OwnerTenantID,
+			OperationID: parent.ID,
+			State:       "provisioning",
+			Identity:    newSandboxIdentity(input.Template, ""),
+		}
 		input.Targets = append(input.Targets, target)
 	}
 	parent.Result.SandboxIDs = forkTargetIDs(input)
@@ -148,9 +178,19 @@ func (service *Service) AdmitFork(ctx context.Context, principal Principal, key 
 	if err != nil {
 		return empty, err
 	}
-	link := &forkAdmission{Parent: parent, Input: input, MAC: mac, Free: free}
+	link := &forkAdmission{
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Free:   free,
+	}
 	if input.Source != nil {
-		child, err := service.admitCapture(ctx, CaptureRequest{TenantID: input.OwnerTenantID, Key: parent.ID + ":capture", SandboxID: input.SourceSandbox.ID, ExpectedInstance: input.Source.State.Witness}, link)
+		child, err := service.admitCapture(ctx, CaptureRequest{
+			TenantID:         input.OwnerTenantID,
+			Key:              parent.ID + ":capture",
+			SandboxID:        input.SourceSandbox.ID,
+			ExpectedInstance: input.Source.State.Witness,
+		}, link)
 		if child.ID == "" {
 			return empty, err
 		}
@@ -183,7 +223,9 @@ func (service *Service) admitForkSnapshot(ctx context.Context, parent *forkAdmis
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.admitForkIntent(ctx, tx, parent); err != nil {
 		return err
 	}
@@ -241,7 +283,9 @@ func (service *Service) admitForkIntent(ctx context.Context, tx *sql.Tx, parent 
 		Request Command
 	}{"fork", input.Command})
 	payload := encode(input)
-	state := forkState{Phase: "admitted"}
+	state := forkState{
+		Phase: "admitted",
+	}
 	if input.Snapshot != nil {
 		state.Phase = "captured"
 		state.Snapshot = input.Snapshot
@@ -250,10 +294,31 @@ func (service *Service) admitForkIntent(ctx context.Context, tx *sql.Tx, parent 
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,'pending',?)", []any{parent.Parent.ID, "tenant", input.RequestTenantID, parent.Parent.Key, digest(frozen), frozen, encode(parent.Parent.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.Parent.ID, parent.MAC}},
-		{"INSERT INTO operation_steps VALUES(?,'fork_group','fork',?,?,?,?,'pending',?)", []any{parent.Parent.ID, digest(payload), payload, parent.Parent.ID, "", encode(state)}},
-		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{input.Template.Config.Image, parent.Parent.ID + ":fork_group"}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,'pending',?)", []any{
+			parent.Parent.ID,
+			"tenant",
+			input.RequestTenantID,
+			parent.Parent.Key,
+			digest(frozen),
+			frozen,
+			encode(parent.Parent.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			parent.Parent.ID,
+			parent.MAC,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'fork_group','fork',?,?,?,?,'pending',?)", []any{
+			parent.Parent.ID,
+			digest(payload),
+			payload,
+			parent.Parent.ID,
+			"",
+			encode(state),
+		}},
+		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{
+			input.Template.Config.Image,
+			parent.Parent.ID + ":fork_group",
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -273,9 +338,19 @@ func pinForkSnapshot(ctx context.Context, tx *sql.Tx, group, tenant, snapshot st
 		q    string
 		args []any
 	}{
-		{"INSERT INTO source_leases VALUES(?,?,'fork_group')", []any{snapshot, group}},
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{snapshot, group + ":fork_group"}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{tenant, snapshot, group + ":fork_group"}},
+		{"INSERT INTO source_leases VALUES(?,?,'fork_group')", []any{
+			snapshot,
+			group,
+		}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{
+			snapshot,
+			group + ":fork_group",
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{
+			tenant,
+			snapshot,
+			group + ":fork_group",
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

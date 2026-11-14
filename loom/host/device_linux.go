@@ -19,7 +19,10 @@ func InternalDeviceCheck() error {
 	if os.Geteuid() == 0 || os.Getegid() == 0 {
 		return fmt.Errorf("device preflight requires the unprivileged VMM identity")
 	}
-	for _, path := range []string{"/dev/kvm", "/dev/net/tun"} {
+	for _, path := range []string{
+		"/dev/kvm",
+		"/dev/net/tun",
+	} {
 		fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
@@ -46,7 +49,9 @@ func (b *CloudHypervisor) checkDeviceIdentity(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "--internal-device-check")
-	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	cmd.Env = []string{
+		"PATH=/usr/bin:/bin",
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid:    b.opts.UID,

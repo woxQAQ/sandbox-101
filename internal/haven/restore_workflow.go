@@ -55,7 +55,9 @@ func (service *Service) runClone(step resourceStep) error {
 			if err != nil {
 				return service.failStep(step, err)
 			}
-			defer func() { _ = boundary.Close() }()
+			defer func() {
+				_ = boundary.Close()
+			}()
 			next := step.State
 			next.Materials = copyRestoreMaterials(boundary.Materials)
 			next.Phase = "restore_candidate_prepared"

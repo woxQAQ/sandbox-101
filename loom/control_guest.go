@@ -30,7 +30,9 @@ func DialGuest(ctx context.Context, socket string, port int) (net.Conn, error) {
 		deadline = d
 	}
 	_ = conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 	defer stop()
 	if _, err = fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
 		_ = conn.Close()
@@ -68,14 +70,23 @@ func GuestControl(ctx context.Context, socket string, port int, id, method strin
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer func() {
+		_ = conn.Close()
+	}()
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 	defer stop()
 	requestParams, err := structpb.NewStruct(params)
 	if err != nil {
 		return nil, err
 	}
-	request := &protocol.Frame{Id: id, Method: method, Params: requestParams, Eof: true}
+	request := &protocol.Frame{
+		Id:     id,
+		Method: method,
+		Params: requestParams,
+		Eof:    true,
+	}
 	if err = protocol.WriteFrame(conn, request); err != nil {
 		return nil, err
 	}

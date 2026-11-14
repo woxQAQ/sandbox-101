@@ -18,7 +18,9 @@ func (service *Service) checkSnapshotDelete(step snapshotDeleteStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSnapshotDelete(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -57,7 +59,9 @@ func (service *Service) snapshotDeleteReceipt(step *snapshotDeleteStep) (loom.De
 	if err != nil {
 		return intent, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSnapshotDelete(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return intent, err
@@ -150,7 +154,9 @@ func (service *Service) markSnapshotRemoved(step *snapshotDeleteStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.snapshotDeleteProof(service.ctx, tx, *step, false); err != nil {
 		return err
 	}
@@ -174,7 +180,9 @@ func (service *Service) completeSnapshotDelete(step snapshotDeleteStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSnapshotDelete(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -190,14 +198,40 @@ func (service *Service) completeSnapshotDelete(step snapshotDeleteStep) error {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM checkpoints WHERE id=? AND tenant=? AND body=?", []any{snapshot.ID, snapshot.TenantID, encode(snapshot)}},
-		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{snapshot.ID, step.OperationID}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{snapshot.TenantID, snapshot.ID, step.OperationID + ":snapshot_delete"}},
-		{"DELETE FROM reservations WHERE owner=?", []any{"snapshot:" + snapshot.ID}},
-		{"DELETE FROM snapshots WHERE id=? AND published=1 AND deleting=1 AND body=?", []any{snapshot.ID, encode(snapshot)}},
-		{"UPDATE cleanup_intents SET status='retained' WHERE id=? AND operation_id=? AND status='pending'", []any{"snapshot_delete:" + step.OperationID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='snapshot_delete' AND input_hash=? AND body=? AND status='running'", []any{encode("complete"), step.OperationID, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"DELETE FROM checkpoints WHERE id=? AND tenant=? AND body=?", []any{
+			snapshot.ID,
+			snapshot.TenantID,
+			encode(snapshot),
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			snapshot.ID,
+			step.OperationID,
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			snapshot.TenantID,
+			snapshot.ID,
+			step.OperationID + ":snapshot_delete",
+		}},
+		{"DELETE FROM reservations WHERE owner=?", []any{
+			"snapshot:" + snapshot.ID,
+		}},
+		{"DELETE FROM snapshots WHERE id=? AND published=1 AND deleting=1 AND body=?", []any{
+			snapshot.ID,
+			encode(snapshot),
+		}},
+		{"UPDATE cleanup_intents SET status='retained' WHERE id=? AND operation_id=? AND status='pending'", []any{
+			"snapshot_delete:" + step.OperationID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='snapshot_delete' AND input_hash=? AND body=? AND status='running'", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

@@ -17,7 +17,9 @@ func (service *Service) failLifecycle(step lifecycleStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadLifecycle(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err

@@ -17,7 +17,9 @@ func (deferredResolver) Resolve(ctx context.Context, _ string) (context.Context,
 	return ctx, nil, nil
 }
 
-type socksRules struct{ b *binding }
+type socksRules struct {
+	b *binding
+}
 
 func (s socksRules) Allow(ctx context.Context, req *socks5.Request) (context.Context, bool) {
 	allowed := req.Command == statute.CommandConnect && len(s.b.secrets) == 0 && s.b.ctx.Err() == nil
@@ -59,7 +61,10 @@ func (b *binding) startSOCKS() {
 			if err != nil {
 				return
 			}
-			b.workers.Go(func() { ; _ = server.ServeConn(c) })
+			b.workers.Go(func() {
+
+				_ = server.ServeConn(c)
+			})
 		}
 	})
 }

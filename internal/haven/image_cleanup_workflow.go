@@ -12,7 +12,9 @@ import (
 func (service *Service) imageCleanupIntents(step imageCleanupStep) ([]loom.DeletionIntent, error) {
 	if step.Input.Cache != nil {
 		intent, err := imageimport.InspectCacheDeletion(service.ctx, service.store.directory, step.Input.Cache.Witness)
-		return []loom.DeletionIntent{intent}, err
+		return []loom.DeletionIntent{
+			intent,
+		}, err
 	}
 	source := step.Input.Source
 	if source == nil || source.State.Boundary == nil || source.Input.Plan == nil {
@@ -50,7 +52,9 @@ func (service *Service) imageCleanupIntents(step imageCleanupStep) ([]loom.Delet
 	if err != nil {
 		return nil, err
 	}
-	intents := []loom.DeletionIntent{work}
+	intents := []loom.DeletionIntent{
+		work,
+	}
 	if !published {
 		var count int
 		if err = service.store.db.QueryRow("SELECT COUNT(*) FROM images WHERE digest=?", source.Input.Options.Digest).Scan(&count); err != nil || count != 0 {
@@ -79,7 +83,9 @@ func (service *Service) saveImageCleanup(step *imageCleanupStep, state imageClea
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if state.Phase == "prepared" {
 		for _, intent := range state.Intents {
 			if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO deletion_intents VALUES(?,?,'image_cleanup',?)", intent.Path, step.OperationID, encode(intent))); err != nil {
@@ -141,7 +147,10 @@ func (service *Service) runImageCleanup(step imageCleanupStep) error {
 		if err != nil {
 			return err
 		}
-		state := imageCleanupState{Phase: "prepared", Intents: intents}
+		state := imageCleanupState{
+			Phase:   "prepared",
+			Intents: intents,
+		}
 		if err = service.saveImageCleanup(&step, state); err != nil {
 			return err
 		}
@@ -179,7 +188,10 @@ func (service *Service) runImageCleanup(step imageCleanupStep) error {
 				return err
 			}
 		}
-		if err := service.saveImageCleanup(&step, imageCleanupState{Phase: "removed", Intents: step.State.Intents}); err != nil {
+		if err := service.saveImageCleanup(&step, imageCleanupState{
+			Phase:   "removed",
+			Intents: step.State.Intents,
+		}); err != nil {
 			return err
 		}
 	}
@@ -208,7 +220,9 @@ func (service *Service) completeImageCleanup(step imageCleanupStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadImageCleanup(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -283,9 +297,21 @@ func (service *Service) completeImageCleanup(step imageCleanupStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status='pending'", []any{"image_cleanup:" + step.OperationID, step.OperationID, step.Input.Kind, step.Input.ResourceID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='image_cleanup' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{encode(state), step.OperationID, step.Hash, encode(step.State)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status='pending'", []any{
+			"image_cleanup:" + step.OperationID,
+			step.OperationID,
+			step.Input.Kind,
+			step.Input.ResourceID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='image_cleanup' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{
+			encode(state),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

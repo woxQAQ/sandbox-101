@@ -1,4 +1,4 @@
-// structfmt expands keyed literals, struct fields and statement blocks, then runs gofmt.
+// structfmt expands keyed and array/slice literals, struct fields and statement blocks, then runs gofmt.
 package main
 
 import (
@@ -90,12 +90,11 @@ func run() error {
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch node := node.(type) {
 			case *ast.CompositeLit:
-				if _, array := node.Type.(*ast.ArrayType); array {
-					return true
-				}
-				for _, item := range node.Elts {
-					if _, keyed := item.(*ast.KeyValueExpr); !keyed {
-						return true
+				if _, array := node.Type.(*ast.ArrayType); !array {
+					for _, item := range node.Elts {
+						if _, keyed := item.(*ast.KeyValueExpr); !keyed {
+							return true
+						}
 					}
 				}
 				expand(layout, node.Elts, node.Rbrace, true)

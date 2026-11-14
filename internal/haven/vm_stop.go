@@ -30,7 +30,9 @@ type (
 )
 
 func loadStop(ctx context.Context, q queryer, id string) (stopStep, error) {
-	step := stopStep{OperationID: id}
+	step := stopStep{
+		OperationID: id,
+	}
 	var input, body []byte
 	var candidate, expected, action string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,candidate_resource_id,expected_instance,action FROM operation_steps WHERE operation_id=? AND step_key='stop'", id).Scan(&step.Hash, &input, &step.Status, &body, &candidate, &expected, &action)
@@ -81,7 +83,9 @@ func (service *Service) admitStop(ctx context.Context, request StopRequest, pare
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -115,8 +119,20 @@ func (service *Service) admitStop(ctx context.Context, request StopRequest, pare
 	if owner != "" || instance != request.ExpectedInstance || !vm.Verified || !vm.AgentReady || vm.Deleting {
 		return empty, fmt.Errorf("stop current ownership changed")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID}}
-	input := stopInput{Request: request, SourceOperation: source.OperationID, SourceHash: source.Hash}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID: sandbox.ID,
+			VMID:      sandbox.VMID,
+		},
+	}
+	input := stopInput{
+		Request:         request,
+		SourceOperation: source.OperationID,
+		SourceHash:      source.Hash,
+	}
 	if link != nil {
 		input.Lifecycle = link.Parent.ID
 	}
@@ -128,9 +144,29 @@ func (service *Service) admitStop(ctx context.Context, request StopRequest, pare
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'stop','stop',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, sandbox.ID, request.ExpectedInstance, encode("admitted")}},
-		{"UPDATE vms SET operation_id=? WHERE id=? AND operation_id IS NULL AND current_instance=? AND state='running'", []any{operation.ID, sandbox.VMID, request.ExpectedInstance}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'stop','stop',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			sandbox.ID,
+			request.ExpectedInstance,
+			encode("admitted"),
+		}},
+		{"UPDATE vms SET operation_id=? WHERE id=? AND operation_id IS NULL AND current_instance=? AND state='running'", []any{
+			operation.ID,
+			sandbox.VMID,
+			request.ExpectedInstance,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
@@ -269,7 +305,9 @@ func (service *Service) runStop(step stopStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadStop(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -288,9 +326,21 @@ func (service *Service) runStop(step stopStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE vms SET state='stopped',operation_id=NULL,body=? WHERE id=? AND operation_id=? AND current_instance=?", []any{encode(vm), source.Candidate, step.OperationID, step.Input.Request.ExpectedInstance}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='stop' AND input_hash=? AND status='running' AND body=?", []any{encode("complete"), step.OperationID, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"UPDATE vms SET state='stopped',operation_id=NULL,body=? WHERE id=? AND operation_id=? AND current_instance=?", []any{
+			encode(vm),
+			source.Candidate,
+			step.OperationID,
+			step.Input.Request.ExpectedInstance,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='stop' AND input_hash=? AND status='running' AND body=?", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

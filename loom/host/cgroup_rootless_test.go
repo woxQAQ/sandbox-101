@@ -62,7 +62,12 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	)
 	rootlessArtifact(t, "cgroup-delegation.txt", []byte(diagnostic))
 	t.Log(diagnostic)
-	for _, need := range []string{"cpu", "memory", "pids", "io"} {
+	for _, need := range []string{
+		"cpu",
+		"memory",
+		"pids",
+		"io",
+	} {
 		found := false
 		for _, available := range controllers {
 			found = found || available == need
@@ -75,9 +80,18 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	r := Resource{
 		VMID:     "bounded",
 		Instance: "kernel-isolation",
-		Config:   api.Config{Shape: api.Shape{VCPUs: 1, MemoryMiB: 64}},
+		Config: api.Config{
+			Shape: api.Shape{
+				VCPUs:     1,
+				MemoryMiB: 64,
+			},
+		},
 	}
-	b := &CloudHypervisor{opts: CloudOptions{CgroupRoot: root}}
+	b := &CloudHypervisor{
+		opts: CloudOptions{
+			CgroupRoot: root,
+		},
+	}
 	scope := b.scope(r)
 	t.Cleanup(func() {
 		if err := os.Remove(scope); err != nil && !os.IsNotExist(err) {
@@ -90,8 +104,12 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	}
 	var applied strings.Builder
 	for file, want := range map[string]string{
-		"memory.max": "201326592", "memory.swap.max": "0", "pids.max": "256",
-		"cpu.max": "max 100000", "cpu.max.burst": "25000", "cpu.weight": "100",
+		"memory.max":      "201326592",
+		"memory.swap.max": "0",
+		"pids.max":        "256",
+		"cpu.max":         "max 100000",
+		"cpu.max.burst":   "25000",
+		"cpu.weight":      "100",
 	} {
 		got := rootlessRead(t, filepath.Join(scope, file))
 		if got != want {

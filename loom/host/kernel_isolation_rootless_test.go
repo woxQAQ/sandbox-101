@@ -37,7 +37,11 @@ func rootlessRun(t *testing.T, mode string) bool {
 		t.Fatal(err)
 	}
 	env := os.Environ()
-	for _, ns := range []string{"user", "net", "mnt"} {
+	for _, ns := range []string{
+		"user",
+		"net",
+		"mnt",
+	} {
 		id, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil {
 			t.Fatal(err)
@@ -76,7 +80,11 @@ func rootlessRun(t *testing.T, mode string) bool {
 
 func rootlessRequireNamespaces(t *testing.T) {
 	t.Helper()
-	for _, ns := range []string{"user", "net", "mnt"} {
+	for _, ns := range []string{
+		"user",
+		"net",
+		"mnt",
+	} {
 		parent := os.Getenv("SANDBOX_KERNEL_PARENT_" + strings.ToUpper(ns))
 		current, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil || parent == "" || current == parent {

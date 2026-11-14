@@ -29,7 +29,12 @@ func requestFrame(t *testing.T, id, method string, params map[string]any) *pb.Fr
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &pb.Frame{Id: id, Method: method, Params: values, Eof: true}
+	return &pb.Frame{
+		Id:     id,
+		Method: method,
+		Params: values,
+		Eof:    true,
+	}
 }
 
 func TestRustAgentThroughSandboxRelay(t *testing.T) {
@@ -40,7 +45,9 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		_ = conn.Close()
+	}()
 	for range 2 {
 		info, err := conn.Call(ctx, "info", map[string]any{}, nil)
 		if err != nil || info["portal"] != "workload" {
@@ -53,11 +60,21 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 		params map[string]any
 		code   string
 	}{
-		{"fs_read", map[string]any{"path": missing}, "not_found"},
-		{"fs_stat", map[string]any{"path": "relative"}, "invalid"},
-		{"proc_kill", map[string]any{"process_id": "absent"}, "not_found"},
-		{"session_rm", map[string]any{"session_id": "absent"}, "not_found"},
-		{"activate", map[string]any{"sandbox_id": "attack"}, "unauthorized"},
+		{"fs_read", map[string]any{
+			"path": missing,
+		}, "not_found"},
+		{"fs_stat", map[string]any{
+			"path": "relative",
+		}, "invalid"},
+		{"proc_kill", map[string]any{
+			"process_id": "absent",
+		}, "not_found"},
+		{"session_rm", map[string]any{
+			"session_id": "absent",
+		}, "not_found"},
+		{"activate", map[string]any{
+			"sandbox_id": "attack",
+		}, "unauthorized"},
 	} {
 		params, err := conn.Call(ctx, test.method, test.params, nil)
 		var failure *sdk.RPCError
@@ -72,15 +89,26 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	}
 	// Frames pass unchanged through Haven; only Rust interprets file operations.
 	path := filepath.Join(t.TempDir(), "binary-file")
-	payload := bytes.Repeat([]byte{0, 1, 2, 0xff}, 50000)
-	first := requestFrame(t, "upload", "fs_write", map[string]any{"path": path})
+	payload := bytes.Repeat([]byte{
+		0,
+		1,
+		2,
+		0xff,
+	}, 50000)
+	first := requestFrame(t, "upload", "fs_write", map[string]any{
+		"path": path,
+	})
 	first.Eof = false
 	if err = conn.Send(first); err != nil {
 		t.Fatal(err)
 	}
 	for offset := 0; offset < len(payload); {
 		end := min(offset+65536, len(payload))
-		if err = conn.Send(&pb.Frame{Id: "upload", Data: payload[offset:end], Eof: end == len(payload)}); err != nil {
+		if err = conn.Send(&pb.Frame{
+			Id:   "upload",
+			Data: payload[offset:end],
+			Eof:  end == len(payload),
+		}); err != nil {
 			t.Fatal(err)
 		}
 		offset = end
@@ -98,16 +126,26 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 		}
 	}
 	var downloaded bytes.Buffer
-	if _, err = conn.Call(ctx, "fs_read", map[string]any{"path": path}, func(frame *pb.Frame) error { _, err := downloaded.Write(frame.Data); return err }); err != nil {
+	if _, err = conn.Call(ctx, "fs_read", map[string]any{
+		"path": path,
+	}, func(frame *pb.Frame) error {
+		_, err := downloaded.Write(frame.Data)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(payload, downloaded.Bytes()) {
 		t.Fatal("streaming file round trip corrupted bytes")
 	}
-	if _, err = conn.Call(ctx, "activate", map[string]any{"sandbox_id": "attack"}, nil); err == nil {
+	if _, err = conn.Call(ctx, "activate", map[string]any{
+		"sandbox_id": "attack",
+	}, nil); err == nil {
 		t.Fatal("tenant stream exposed host administration")
 	}
-	if _, err = service.Execute(ctx, principal, "release", haven.Command{Action: "release", SandboxID: id}); err != nil {
+	if _, err = service.Execute(ctx, principal, "release", haven.Command{
+		Action:    "release",
+		SandboxID: id,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -122,7 +160,10 @@ func TestRustKeyedExecReplayThroughSandboxRelay(t *testing.T) {
 	defer cancel()
 	path := filepath.Join(t.TempDir(), "side-effect")
 	command := "printf 'once\\n' >> '" + path + "'; printf 'saved-out'; printf 'saved-err' >&2"
-	params := map[string]any{"exec_key": "durable-work-step", "command": command}
+	params := map[string]any{
+		"exec_key": "durable-work-step",
+		"command":  command,
+	}
 	for attempt := range 2 {
 		conn, err := client.Connect(ctx, id)
 		if err != nil {
@@ -142,7 +183,10 @@ func TestRustKeyedExecReplayThroughSandboxRelay(t *testing.T) {
 			t.Fatalf("attempt %d: %v %v %q %q", attempt, result, err, stdout.String(), stderr.String())
 		}
 		if attempt == 1 {
-			conflict, err := conn.Call(ctx, "exec", map[string]any{"exec_key": "durable-work-step", "command": "printf changed-input"}, nil)
+			conflict, err := conn.Call(ctx, "exec", map[string]any{
+				"exec_key": "durable-work-step",
+				"command":  "printf changed-input",
+			}, nil)
 			var failure *sdk.RPCError
 			if !errors.As(err, &failure) || failure.Code != "exec_key_conflict" || failure.ResultState != "conflict" || conflict["result_state"] != "conflict" {
 				_ = conn.Close()
@@ -168,13 +212,17 @@ func TestRustRawForwardHalfClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = listener.Close() }()
+	defer func() {
+		_ = listener.Close()
+	}()
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer func() { _ = conn.Close() }()
+		defer func() {
+			_ = conn.Close()
+		}()
 		body, _ := io.ReadAll(conn)
 		_, _ = conn.Write(append(bytes.ToUpper(body), []byte("-after-eof")...))
 	}()
@@ -182,8 +230,12 @@ func TestRustRawForwardHalfClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close() }()
-	if err = conn.Send(requestFrame(t, "forward", "port_forward", map[string]any{"port": listener.Addr().(*net.TCPAddr).Port})); err != nil {
+	defer func() {
+		_ = conn.Close()
+	}()
+	if err = conn.Send(requestFrame(t, "forward", "port_forward", map[string]any{
+		"port": listener.Addr().(*net.TCPAddr).Port,
+	})); err != nil {
 		t.Fatal(err)
 	}
 	ready, err := conn.Receive()
@@ -210,7 +262,9 @@ func TestRustTransportWithLongRuntimePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = connection.Close() }()
+	defer func() {
+		_ = connection.Close()
+	}()
 	result, err := connection.Call(ctx, "info", nil, nil)
 	if err != nil || result["portal"] != "workload" {
 		t.Fatal(result, err)
@@ -242,7 +296,9 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = response.Body.Close() }()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	body, _ := io.ReadAll(response.Body)
 	if response.StatusCode != 200 || string(body) != "preview:/hello" {
 		t.Fatalf("preview: HTTP %d %q", response.StatusCode, body)

@@ -13,11 +13,21 @@ import (
 )
 
 func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
-	for _, change := range []string{"configuration", "configuration_provenance", "unverified_instance", "deadline", "shutdown"} {
+	for _, change := range []string{
+		"configuration",
+		"configuration_provenance",
+		"unverified_instance",
+		"deadline",
+		"shutdown",
+	} {
 		t.Run(change, func(t *testing.T) {
 			service, _, guest, _ := sandboxFixture(t)
-			principal := Principal{TenantID: "tenant"}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+			principal := Principal{
+				TenantID: "tenant",
+			}
+			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				Mode: "none",
+			})
 			waitFixtureWorker(t, service, claim.ID)
 			entered, release := make(chan struct{}), make(chan struct{})
 			guest.before = func(name string, _ loom.Resource) error {
@@ -49,7 +59,18 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			}
 			switch change {
 			case "configuration":
-				if _, err = service.Execute(ctx, principal, "configure", Command{Action: "configure", SandboxID: sandbox.ID, Env: map[string]EnvVar{"REVISION": {Value: "new"}}, Policy: egress.Policy{Mode: "none"}}); err != nil {
+				if _, err = service.Execute(ctx, principal, "configure", Command{
+					Action:    "configure",
+					SandboxID: sandbox.ID,
+					Env: map[string]EnvVar{
+						"REVISION": {
+							Value: "new",
+						},
+					},
+					Policy: egress.Policy{
+						Mode: "none",
+					},
+				}); err != nil {
 					t.Fatal(err)
 				}
 			case "configuration_provenance":

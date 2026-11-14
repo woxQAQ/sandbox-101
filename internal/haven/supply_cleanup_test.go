@@ -9,8 +9,14 @@ import (
 )
 
 func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
-	for _, failed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ready", true: "failed"}[failed], func(t *testing.T) {
+	for _, failed := range []bool{
+		false,
+		true,
+	} {
+		t.Run(map[bool]string{
+			false: "ready",
+			true:  "failed",
+		}[failed], func(t *testing.T) {
 			service, runtime, _ := goldenSupplyFixture(t, 1)
 			if failed {
 				runtime.mu.Lock()
@@ -19,18 +25,31 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.Execute(ctx, Principal{TenantID: "tenant"}, "refill", Command{Action: "refill", TemplateID: "golden"})
+			original, err := service.Execute(ctx, Principal{
+				TenantID: "tenant",
+			}, "refill", Command{
+				Action:     "refill",
+				TemplateID: "golden",
+			})
 			if !failed && err != nil {
 				t.Fatal(err)
 			}
 			if failed && (err == nil || original.Status != "failed") {
 				t.Fatal(original, err)
 			}
-			collector, err := service.AdmitSupplyCleanup(ctx, Principal{Root: true, TenantID: "tenant"}, "refill", SupplyCleanupRequest{OperationID: original.ID})
+			collector, err := service.AdmitSupplyCleanup(ctx, Principal{
+				Root:     true,
+				TenantID: "tenant",
+			}, "refill", SupplyCleanupRequest{
+				OperationID: original.ID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.WaitManagement(ctx, Principal{Root: true, TenantID: "root"}, collector.ID); err != nil {
+			if _, err = service.WaitManagement(ctx, Principal{
+				Root:     true,
+				TenantID: "root",
+			}, collector.ID); err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[collector.ID]
 				service.mu.Unlock()
@@ -52,12 +71,20 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 }
 
 func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
-	for _, boundary := range []string{"supply_cleanup_admitted", "supply_cleanup_completion_before_commit"} {
+	for _, boundary := range []string{
+		"supply_cleanup_admitted",
+		"supply_cleanup_completion_before_commit",
+	} {
 		t.Run(boundary, func(t *testing.T) {
 			service, _, _ := goldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.Execute(ctx, Principal{TenantID: "tenant"}, "refill", Command{Action: "refill", TemplateID: "golden"})
+			original, err := service.Execute(ctx, Principal{
+				TenantID: "tenant",
+			}, "refill", Command{
+				Action:     "refill",
+				TemplateID: "golden",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +94,12 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				}
 				return nil
 			}
-			collector, err := service.AdmitSupplyCleanup(ctx, Principal{Root: true, TenantID: "root"}, "cleanup", SupplyCleanupRequest{OperationID: original.ID})
+			collector, err := service.AdmitSupplyCleanup(ctx, Principal{
+				Root:     true,
+				TenantID: "root",
+			}, "cleanup", SupplyCleanupRequest{
+				OperationID: original.ID,
+			})
 			if collector.ID == "" {
 				t.Fatal(err)
 			}
@@ -75,7 +107,11 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				if !errors.Is(err, ErrInterrupted) {
 					t.Fatal(err)
 				}
-				if _, err = service.AdmitRelease(ctx, ReleaseRequest{TenantID: "tenant", Key: "bypass", SandboxID: original.Result.SandboxID}); err == nil {
+				if _, err = service.AdmitRelease(ctx, ReleaseRequest{
+					TenantID:  "tenant",
+					Key:       "bypass",
+					SandboxID: original.Result.SandboxID,
+				}); err == nil {
 					t.Fatal("raw resource workflow passed collector fence")
 				}
 			} else {
@@ -99,7 +135,10 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				t.Fatal("unproved cleanup freed pool capacity", count, err)
 			}
 			service = reopenCloneService(t, service, service.opts.Backend)
-			if _, err = service.WaitManagement(ctx, Principal{Root: true, TenantID: "root"}, collector.ID); err != nil {
+			if _, err = service.WaitManagement(ctx, Principal{
+				Root:     true,
+				TenantID: "root",
+			}, collector.ID); err != nil {
 				t.Fatal(err)
 			}
 			if err = service.store.db.QueryRow("SELECT COUNT(*) FROM pool_slots").Scan(&count); err != nil || count != 0 {

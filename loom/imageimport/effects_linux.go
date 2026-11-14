@@ -97,7 +97,10 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 		if err != nil {
 			return proof, err
 		}
-		return ImageLayerProof{Bytes: n, Entries: c}, nil
+		return ImageLayerProof{
+			Bytes:   n,
+			Entries: c,
+		}, nil
 	}
 	var cache host.LayerCache
 	if layer.Cached != nil {
@@ -132,7 +135,11 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 	if err != nil {
 		return proof, err
 	}
-	witness := ImageCacheWitness{Path: directory, Directory: loom.IdentityOf(info), Cache: cache}
+	witness := ImageCacheWitness{
+		Path:      directory,
+		Directory: loom.IdentityOf(info),
+		Cache:     cache,
+	}
 	info, err = os.Lstat(filepath.Join(directory, "layer.erofs"))
 	if err != nil {
 		return proof, err
@@ -149,7 +156,12 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 	if err != nil {
 		return proof, err
 	}
-	return ImageLayerProof{Bytes: cache.Bytes, Entries: cache.Entries, Cache: &witness, Artifact: &artifact}, nil
+	return ImageLayerProof{
+		Bytes:    cache.Bytes,
+		Entries:  cache.Entries,
+		Cache:    &witness,
+		Artifact: &artifact,
+	}, nil
 }
 
 func BuildImageImportOutput(ctx context.Context, state, operation string, plan ImageImportPlan, boundary ImageImportBoundary, layers []ImageLayerProof) (ImageImportProof, error) {
@@ -184,12 +196,28 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 	if err != nil {
 		return proof, err
 	}
-	manifest := host.ImageManifest{Format: 2, Layout: host.LayeredEROFSLayout, Digest: plan.Options.Digest, Architecture: runtime.GOARCH, Tools: plan.Tools, Builder: plan.Builder, Files: hashes}
+	manifest := host.ImageManifest{
+		Format:       2,
+		Layout:       host.LayeredEROFSLayout,
+		Digest:       plan.Options.Digest,
+		Architecture: runtime.GOARCH,
+		Tools:        plan.Tools,
+		Builder:      plan.Builder,
+		Files:        hashes,
+	}
 	for _, layer := range plan.Layers {
 		manifest.Layers = append(manifest.Layers, layer.Digest)
 		manifest.DiffIDs = append(manifest.DiffIDs, layer.DiffID)
 	}
-	manifest.Artifacts = append([]host.ImageArtifact{{Role: "fsmeta", Path: filepath.Join("images", name, "fsmeta.erofs"), SHA256: hashes["fsmeta.erofs"], GuestPath: "/sandbox/ro/fsmeta.erofs", Serial: "sandbox-root"}}, artifacts...)
+	manifest.Artifacts = append([]host.ImageArtifact{
+		{
+			Role:      "fsmeta",
+			Path:      filepath.Join("images", name, "fsmeta.erofs"),
+			SHA256:    hashes["fsmeta.erofs"],
+			GuestPath: "/sandbox/ro/fsmeta.erofs",
+			Serial:    "sandbox-root",
+		},
+	}, artifacts...)
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
 		manifest.Format = 3
 		manifest.Layout = host.MergedOCIEROFSLayout
@@ -216,7 +244,11 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 	if err != nil {
 		return proof, err
 	}
-	return ImageImportProof{Manifest: manifest, ManifestSHA256: hash, Synced: true}, ctx.Err()
+	return ImageImportProof{
+		Manifest:       manifest,
+		ManifestSHA256: hash,
+		Synced:         true,
+	}, ctx.Err()
 }
 
 func VerifyImportedImage(ctx context.Context, state, path string, boundary ImageImportBoundary, proof ImageImportProof) error {

@@ -15,7 +15,11 @@ import (
 
 func TestHavenStepAdmissionAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, failure := range []string{"abort-quota", "ignore-version", "before-commit"} {
+	for _, failure := range []string{
+		"abort-quota",
+		"ignore-version",
+		"before-commit",
+	} {
 		t.Run(failure, func(t *testing.T) {
 			var fault func(string) error
 			if failure == "before-commit" {
@@ -39,7 +43,17 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tables := []string{"sandboxes", "operation_steps", "vms", "instances", "resource_versions", "reservations", "quota_resources", "quota_refs", "resource_refs"}
+			tables := []string{
+				"sandboxes",
+				"operation_steps",
+				"vms",
+				"instances",
+				"resource_versions",
+				"reservations",
+				"quota_resources",
+				"quota_refs",
+				"resource_refs",
+			}
 			baseline := map[string]int{}
 			for _, table := range tables {
 				var count int
@@ -48,7 +62,11 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 				}
 				baseline[table] = count
 			}
-			if _, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "atomic", TemplateID: "cold"}); err == nil {
+			if _, err := service.AdmitCold(context.Background(), ColdRequest{
+				TenantID:   "tenant",
+				Key:        "atomic",
+				TemplateID: "cold",
+			}); err == nil {
 				t.Fatal("failed admission reported success")
 			}
 			for _, table := range tables {
@@ -88,11 +106,19 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 			t.Fatal("cold step did not complete", step.State)
 		}
 		coldResponsibility(t, service, operation, true)
-		original, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "committed", TemplateID: "cold"})
+		original, err := service.AdmitCold(context.Background(), ColdRequest{
+			TenantID:   "tenant",
+			Key:        "committed",
+			TemplateID: "cold",
+		})
 		if err != nil || original.ID != operation.ID {
 			t.Fatal("same-key replay lost original admission", err)
 		}
-		if _, err = service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "committed", TemplateID: "changed"}); err == nil {
+		if _, err = service.AdmitCold(context.Background(), ColdRequest{
+			TenantID:   "tenant",
+			Key:        "committed",
+			TemplateID: "changed",
+		}); err == nil {
 			t.Fatal("same key changed its request")
 		}
 	})
@@ -100,7 +126,18 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 
 func TestHavenStepCrashRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"admission_committed", "step_prepare_intent", "effect_prepared", "step_launch_intent", "effect_launched", "step_launched", "step_booted", "step_agent_ready", "completion_before_commit", "step_completed"} {
+	for _, point := range []string{
+		"admission_committed",
+		"step_prepare_intent",
+		"effect_prepared",
+		"step_launch_intent",
+		"effect_launched",
+		"step_launched",
+		"step_booted",
+		"step_agent_ready",
+		"completion_before_commit",
+		"step_completed",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend := coldService(t, func(candidate string) error {
 				if candidate == point {
@@ -150,7 +187,9 @@ func TestHavenStepCrashRecovery(t *testing.T) {
 
 func TestHavenInstanceAtomicCompletion(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ name, event, table, condition string }{
+	for _, write := range []struct {
+		name, event, table, condition string
+	}{
 		{"vm", "UPDATE", "vms", "NEW.state='running'"},
 		{"instance", "UPDATE", "instances", "json_extract(NEW.body,'$.agent_ready')=1"},
 		{"sandbox", "UPDATE", "sandboxes", "json_extract(NEW.body,'$.instance')!=''"},
@@ -161,7 +200,10 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 		{"witness", "UPDATE", "operation_steps", "NEW.status='succeeded'"},
 		{"parent", "UPDATE", "operations", "json_extract(NEW.body,'$.resource_ready')=1"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture completion rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture completion rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.name+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
 				service, backend := coldService(t, nil)
 				statement := fmt.Sprintf("CREATE TRIGGER reject_completion BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
@@ -213,11 +255,19 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	backend.failBoot = false
 	backend.mu.Unlock()
 	service = resumeColdService(t, service, backend)
-	replayed, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "failed", TemplateID: "cold"})
+	replayed, err := service.AdmitCold(context.Background(), ColdRequest{
+		TenantID:   "tenant",
+		Key:        "failed",
+		TemplateID: "cold",
+	})
 	if err != nil || !bytes.Equal(encode(replayed), originalBytes) || backend.count("launch") != 1 {
 		t.Fatal("failed key was re-executed or enriched", err)
 	}
-	if _, err = service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "unproved-delete", SandboxID: failed.Result.SandboxID}); err == nil {
+	if _, err = service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "unproved-delete",
+		SandboxID: failed.Result.SandboxID,
+	}); err == nil {
 		t.Fatal("failed candidate supplied deletion authority")
 	}
 	coldResponsibility(t, service, failed, false)
@@ -236,7 +286,11 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		}
 		return nil
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: current.Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release",
+		SandboxID: current.Result.SandboxID,
+	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatal("cleanup was not paused after its durable admission", err)
 	}
@@ -266,7 +320,11 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err = service.store.db.QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&held); err != nil || held != 64 {
 		t.Fatal("cleanup refunded unrelated unknown allocation", held, err)
 	}
-	cached, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: current.Result.SandboxID})
+	cached, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release",
+		SandboxID: current.Result.SandboxID,
+	})
 	if err != nil || cached.ID != release.ID || cached.Status != "succeeded" {
 		t.Fatal("release terminal result was not replayed", err)
 	}
@@ -274,7 +332,15 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 
 func TestHavenStepReleaseRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"release_admitted", "effect_stopped", "effect_removed", "deletion_intent", "release_unlinked", "effect_files_removed", "release_completion_before_commit"} {
+	for _, point := range []string{
+		"release_admitted",
+		"effect_stopped",
+		"effect_removed",
+		"deletion_intent",
+		"release_unlinked",
+		"effect_files_removed",
+		"release_completion_before_commit",
+	} {
 		t.Run(point, func(t *testing.T) {
 			var armed bool
 			service, backend := coldService(t, func(candidate string) error {
@@ -288,7 +354,11 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 				t.Fatal(step.State)
 			}
 			armed = true
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  "tenant",
+				Key:       "release",
+				SandboxID: claim.Result.SandboxID,
+			})
 			if err != nil && !errors.Is(err, ErrInterrupted) {
 				t.Fatal(err)
 			}
@@ -328,7 +398,11 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 	if cold.Status != "succeeded" {
 		t.Fatal(cold.State)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release",
+		SandboxID: claim.Result.SandboxID,
+	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatal("release was not frozen before side effects", err)
 	}

@@ -62,14 +62,26 @@ func failedCaptureFixture(t *testing.T, final bool) (*Service, *coldRuntime, Cap
 	if failed.Status != "failed" || failed.State.ResumeRequired {
 		t.Fatal("fixture capture did not fail with resumed source", failed.State)
 	}
-	stop, err := service.AdmitStop(context.Background(), StopRequest{TenantID: request.TenantID, Key: "stop-failed-capture", SandboxID: request.SandboxID, ExpectedInstance: request.ExpectedInstance})
+	stop, err := service.AdmitStop(context.Background(), StopRequest{
+		TenantID:         request.TenantID,
+		Key:              "stop-failed-capture",
+		SandboxID:        request.SandboxID,
+		ExpectedInstance: request.ExpectedInstance,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stopped := awaitStop(t, service, stop.ID); stopped.Status != "succeeded" {
 		t.Fatal("fixture source stop failed", stopped)
 	}
-	return service, backend, CaptureDiscardRequest{TenantID: request.TenantID, Key: "discard-capture", SandboxID: request.SandboxID, FailedOperationID: operation.ID, ExpectedInstance: request.ExpectedInstance, StopOperationID: stop.ID}, failed
+	return service, backend, CaptureDiscardRequest{
+		TenantID:          request.TenantID,
+		Key:               "discard-capture",
+		SandboxID:         request.SandboxID,
+		FailedOperationID: operation.ID,
+		ExpectedInstance:  request.ExpectedInstance,
+		StopOperationID:   stop.ID,
+	}, failed
 }
 
 func captureDiscardLiability(t *testing.T, service *Service, failed captureStep, want int) {
@@ -82,7 +94,10 @@ func captureDiscardLiability(t *testing.T, service *Service, failed captureStep,
 
 func TestHavenCaptureDiscard(t *testing.T) {
 	parallelLifecycle(t)
-	for _, final := range []bool{false, true} {
+	for _, final := range []bool{
+		false,
+		true,
+	} {
 		t.Run(fmt.Sprint(final), func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, final)
 			original, err := service.GetOperation(context.Background(), request.TenantID, failed.OperationID)
@@ -125,7 +140,11 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			if err != nil || replay.ID != operation.ID || replay.Status != "succeeded" {
 				t.Fatal("discard same-key replay changed", replay, err)
 			}
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: request.TenantID, Key: "release-source", SandboxID: request.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  request.TenantID,
+				Key:       "release-source",
+				SandboxID: request.SandboxID,
+			})
 			if err != nil {
 				t.Fatal("cleanup did not unblock source release", err)
 			}
@@ -141,7 +160,15 @@ func TestHavenCaptureDiscard(t *testing.T) {
 
 func TestHavenCaptureDiscardRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"capture_discard_admitted", "capture_discard_receipts", "capture_discard_unlinked", "capture_discard_directory_removed", "capture_discard_files_removed", "capture_discard_completion_before_commit", "capture_discard_completed"} {
+	for _, point := range []string{
+		"capture_discard_admitted",
+		"capture_discard_receipts",
+		"capture_discard_unlinked",
+		"capture_discard_directory_removed",
+		"capture_discard_files_removed",
+		"capture_discard_completion_before_commit",
+		"capture_discard_completed",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, true)
 			service.opts.Fault = func(candidate string) error {
@@ -179,14 +206,19 @@ func TestHavenCaptureDiscardRecovery(t *testing.T) {
 
 func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
+	for _, write := range []struct {
+		event, table, condition string
+	}{
 		{"DELETE", "quota_resources", "OLD.kind='pending_storage'"},
 		{"DELETE", "snapshots", "1"},
 		{"DELETE", "reservations", "OLD.owner LIKE 'snapshot:%'"},
 		{"UPDATE", "operation_steps", "NEW.action='capture_discard' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture capture retirement rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture capture retirement rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+mode, func(t *testing.T) {
 				service, backend, request, failed := failedCaptureFixture(t, true)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_capture_retirement BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)

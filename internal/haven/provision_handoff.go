@@ -15,7 +15,12 @@ func (parent *lifecycleAdmission) validateProvisionTarget(_ context.Context, _ *
 	if parent == nil || parent.Input.Command.Action != "resume" || sandbox.State != "paused" || sandbox.VMID != "" || sandbox.Instance != "" || sandbox.SnapshotID != source.Snapshot.ID || holder != "sleep:"+sandbox.ID {
 		return nil, loom.Fail(loom.Conflict, "resume target differs from frozen sleep responsibility")
 	}
-	return &quotaDestination{OperationID: parent.Parent.ID, Kind: "sleep", ID: sandbox.ID, SnapshotID: sandbox.SnapshotID}, nil
+	return &quotaDestination{
+		OperationID: parent.Parent.ID,
+		Kind:        "sleep",
+		ID:          sandbox.ID,
+		SnapshotID:  sandbox.SnapshotID,
+	}, nil
 }
 
 func (parent *warmClaimAdmission) validateProvisionTarget(ctx context.Context, service *Service, tx *sql.Tx, sandbox sandboxRecord, source restoreSource, holder string) (*quotaDestination, error) {

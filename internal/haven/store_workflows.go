@@ -32,7 +32,9 @@ func (state *store) validateWorkflows(database *sql.DB) error {
 	if err = errors.Join(err, rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	service := &Service{store: state}
+	service := &Service{
+		store: state,
+	}
 	for _, item := range entries {
 		if digest(item.input) != item.hash || !json.Valid(item.input) || !json.Valid(item.body) {
 			return fmt.Errorf("invalid durable step encoding: %s/%s", item.operation, item.key)

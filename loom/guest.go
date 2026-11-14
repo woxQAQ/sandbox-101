@@ -57,7 +57,9 @@ func SystemAgent(ctx context.Context, socket, instance string, restore bool) err
 			case <-t.C:
 			}
 		}
-		defer func() { _ = conn.Close() }()
+		defer func() {
+			_ = conn.Close()
+		}()
 		p, err := structpb.NewStruct(params)
 		if err != nil {
 			return err

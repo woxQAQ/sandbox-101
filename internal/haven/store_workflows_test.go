@@ -12,10 +12,15 @@ import (
 
 func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	service, runtime, _ := goldenSupplyFixture(t, 1)
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "refill", Command{Action: "refill", TemplateID: "golden"}); err != nil {
+	if _, err := service.Execute(ctx, principal, "refill", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	service.opts.Fault = func(point string) error {
@@ -24,7 +29,13 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 		}
 		return nil
 	}
-	claim, err := service.AdmitClaim(ctx, principal, "warm", Command{Action: "claim", TemplateID: "golden", Policy: egress.Policy{Mode: "none"}})
+	claim, err := service.AdmitClaim(ctx, principal, "warm", Command{
+		Action:     "claim",
+		TemplateID: "golden",
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +43,9 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFixtureWorker(t, service, claim.ID)
-	if _, err = service.store.db.Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='warm_claim'", encode(warmClaimState{Phase: "unsupported-stage"}), claim.ID); err != nil {
+	if _, err = service.store.db.Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='warm_claim'", encode(warmClaimState{
+		Phase: "unsupported-stage",
+	}), claim.ID); err != nil {
 		t.Fatal(err)
 	}
 	options := service.opts

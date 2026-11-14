@@ -61,8 +61,15 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 		t.Fatalf("wrong pinned hypervisor: %s: %v", version, err)
 	}
 	kvmTool(t, "readelf", "-l", hypervisor)
-	for _, executable := range []string{hypervisor, filepath.Join(guest, "sandbox-agent"), filepath.Join(guest, "sandbox-init")} {
-		for _, args := range [][]string{{"-l", executable}, {"-d", executable}} {
+	for _, executable := range []string{
+		hypervisor,
+		filepath.Join(guest, "sandbox-agent"),
+		filepath.Join(guest, "sandbox-init"),
+	} {
+		for _, args := range [][]string{
+			{"-l", executable},
+			{"-d", executable},
+		} {
 			out := kvmTool(t, "readelf", args...)
 			if bytes.Contains(out, []byte("INTERP")) || bytes.Contains(out, []byte("NEEDED")) {
 				t.Fatalf("KVM fixture executable is not static: %s", executable)
@@ -80,7 +87,9 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	root := dirEntry(".")
 	root.header.Uid, root.header.Gid, root.header.Mode = 0, 0, 0o755
 	root.header.ModTime = time.Unix(1700000001, 123456789)
-	root.header.Xattrs = map[string]string{"user.shared-root": "retained"}
+	root.header.Xattrs = map[string]string{
+		"user.shared-root": "retained",
+	}
 	broaderEntries := []tarEntry{
 		root,
 		cross,
@@ -94,8 +103,13 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 		}
 	}
 	broader := putOCILayer(t, layout, broaderEntries, false)
-	layers := append(append([]ociLayerFixture{base}, meta...), broader)
-	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+	layers := append(append([]ociLayerFixture{
+		base,
+	}, meta...), broader)
+	for _, materialization := range []string{
+		LayeredEROFSLayout,
+		MergedOCIEROFSLayout,
+	} {
 		t.Run(materialization, func(t *testing.T) {
 			dir := filepath.Join(run, materialization)
 			if err := os.Mkdir(dir, 0o700); err != nil {
@@ -209,7 +223,10 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				},
 			)
 			vm.api(t, "vm.create", map[string]any{
-				"cpus": map[string]any{"boot_vcpus": 1, "max_vcpus": 1},
+				"cpus": map[string]any{
+					"boot_vcpus": 1,
+					"max_vcpus":  1,
+				},
 				"memory": map[string]any{
 					"size":      512 << 20,
 					"shared":    false,
@@ -394,7 +411,18 @@ func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLaye
 	defer root.Close()
 	// Resolve links relative to the guest root, never against the host. A
 	// package symlink alone is not a self-contained guest runtime.
-	for _, name := range []string{"usr/lib/systemd/systemd", "bin/sh", "bin/cat", "bin/stat", "bin/id", "bin/readlink", "bin/sync", "bin/dd", "bin/getfattr", "bin/getfacl"} {
+	for _, name := range []string{
+		"usr/lib/systemd/systemd",
+		"bin/sh",
+		"bin/cat",
+		"bin/stat",
+		"bin/id",
+		"bin/readlink",
+		"bin/sync",
+		"bin/dd",
+		"bin/getfattr",
+		"bin/getfacl",
+	} {
 		fd, err := unix.Openat2(int(root.Fd()), name, &unix.OpenHow{
 			Flags:   unix.O_PATH | unix.O_CLOEXEC,
 			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
@@ -523,7 +551,20 @@ func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLaye
 			nil,
 		)
 	}
-	for _, name := range []string{"dev", "proc", "sys", "run", "tmp", "var/lib", "var/log", "etc/systemd/system", "home/sandbox", "workspace", "usr/lib/systemd", "usr/local/libexec"} {
+	for _, name := range []string{
+		"dev",
+		"proc",
+		"sys",
+		"run",
+		"tmp",
+		"var/lib",
+		"var/log",
+		"etc/systemd/system",
+		"home/sandbox",
+		"workspace",
+		"usr/lib/systemd",
+		"usr/local/libexec",
+	} {
 		directory(name)
 	}
 	addFile := func(name string, file *os.File) {
@@ -532,9 +573,19 @@ func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLaye
 		if err != nil {
 			t.Fatal(err)
 		}
-		add(name, &tar.Header{Typeflag: tar.TypeReg, Mode: 0o755, Size: info.Size()}, file)
+		add(name, &tar.Header{
+			Typeflag: tar.TypeReg,
+			Mode:     0o755,
+			Size:     info.Size(),
+		}, file)
 	}
-	for _, executable := range []struct{ name, source string }{{"boot/vmlinux", kernel}, {"boot/initramfs", filepath.Join(guest, "initramfs")}, {"usr/local/libexec/sandbox-agent", filepath.Join(guest, "sandbox-agent")}} {
+	for _, executable := range []struct {
+		name, source string
+	}{
+		{"boot/vmlinux", kernel},
+		{"boot/initramfs", filepath.Join(guest, "initramfs")},
+		{"usr/local/libexec/sandbox-agent", filepath.Join(guest, "sandbox-agent")},
+	} {
 		file, err := os.Open(executable.source)
 		if err != nil {
 			t.Fatal(err)
@@ -616,7 +667,10 @@ func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLaye
 // without booting a VM or consulting a package database.
 func TestKVMRootfsOCI(t *testing.T) {
 	requireEROFS(t)
-	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+	for _, materialization := range []string{
+		LayeredEROFSLayout,
+		MergedOCIEROFSLayout,
+	} {
 		t.Run(materialization, func(t *testing.T) {
 			if materialization == MergedOCIEROFSLayout {
 				requireMergedOCI(t)
@@ -631,7 +685,18 @@ func TestKVMRootfsOCI(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Absolute links must resolve in the guest, not against the host.
-			for _, name := range []string{"usr/lib/systemd/systemd", "bin/sh", "bin/cat", "bin/stat", "bin/id", "bin/readlink", "bin/sync", "bin/dd", "bin/getfattr", "bin/getfacl"} {
+			for _, name := range []string{
+				"usr/lib/systemd/systemd",
+				"bin/sh",
+				"bin/cat",
+				"bin/stat",
+				"bin/id",
+				"bin/readlink",
+				"bin/sync",
+				"bin/dd",
+				"bin/getfattr",
+				"bin/getfacl",
+			} {
 				file := filepath.Join(rootfs, name)
 				if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 					t.Fatal(err)
@@ -640,18 +705,29 @@ func TestKVMRootfsOCI(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"kernel", "initramfs", "sandbox-agent"} {
+			for _, name := range []string{
+				"kernel",
+				"initramfs",
+				"sandbox-agent",
+			} {
 				if err := os.WriteFile(filepath.Join(guest, name), []byte("fixture-"+name), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
 			layer := kvmRuntimeLayer(t, layout, filepath.Join(guest, "kernel"), guest, rootfs)
-			image := putOCIManifest(t, layout, "provider-independent-runtime", []ociLayerFixture{layer})
+			image := putOCIManifest(t, layout, "provider-independent-runtime", []ociLayerFixture{
+				layer,
+			})
 			e := newNativeImageFixture(t)
-			t.Cleanup(func() { e.Close() })
+			t.Cleanup(func() {
+				e.Close()
+			})
 			m, err := e.ImportOCI(context.Background(), ImportOptions{
-				Layout: layout, Digest: image, Materialization: materialization,
-				MaxBytes: 4 << 20, MaxFiles: 1000,
+				Layout:          layout,
+				Digest:          image,
+				Materialization: materialization,
+				MaxBytes:        4 << 20,
+				MaxFiles:        1000,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -696,12 +772,35 @@ func kvmMetadataLayers(t *testing.T, layout string) []ociLayerFixture {
 		return e
 	}
 	regular := entry("fixture/regular", "contents")
-	regular.header.Xattrs = map[string]string{"user.fixture": "retained"}
+	regular.header.Xattrs = map[string]string{
+		"user.fixture": "retained",
+	}
 	setid := entry("fixture/setid", "setid")
 	setid.header.Mode = 0o6755
 	capability := entry("fixture/capability", "capability")
 	capability.header.Xattrs = map[string]string{
-		"security.capability": string([]byte{1, 0, 0, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+		"security.capability": string([]byte{
+			1,
+			0,
+			0,
+			2,
+			0,
+			4,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+		}),
 	}
 	acl := entry("fixture/acl", "acl")
 	// POSIX access ACL: owner rw, named UID1000 r, group r, mask r, other r.
@@ -790,7 +889,10 @@ func kvmMetadataLayers(t *testing.T, layout string) []ociLayerFixture {
 		},
 		false,
 	)
-	return []ociLayerFixture{base, top}
+	return []ociLayerFixture{
+		base,
+		top,
+	}
 }
 
 type kvmMachine struct {
@@ -826,7 +928,10 @@ func kvmStart(t *testing.T, hypervisor, dir string) *kvmMachine {
 		t.Fatal(err)
 	}
 	log.Close()
-	t.Cleanup(func() { vm.stop(); os.RemoveAll(sockets) })
+	t.Cleanup(func() {
+		vm.stop()
+		os.RemoveAll(sockets)
+	})
 	vm.client = &http.Client{
 		Timeout: 45 * time.Second,
 		Transport: &http.Transport{
@@ -968,11 +1073,38 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
 	for _, header := range []*tar.Header{
-		{Name: ".", Typeflag: tar.TypeDir, Mode: 0o750},
-		{Name: "alias", Typeflag: tar.TypeLink, Linkname: "file", Mode: 0o6751},
-		{Name: "file", Typeflag: tar.TypeReg, Size: int64(len(content)), Mode: 0o6751, PAXRecords: map[string]string{"LIBARCHIVE.xattr.user.fixture": base64.RawStdEncoding.EncodeToString(xattr)}},
-		{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "file", Mode: 0o777},
-		{Name: "dangling", Typeflag: tar.TypeSymlink, Linkname: "missing", Mode: 0o777},
+		{
+			Name:     ".",
+			Typeflag: tar.TypeDir,
+			Mode:     0o750,
+		},
+		{
+			Name:     "alias",
+			Typeflag: tar.TypeLink,
+			Linkname: "file",
+			Mode:     0o6751,
+		},
+		{
+			Name:     "file",
+			Typeflag: tar.TypeReg,
+			Size:     int64(len(content)),
+			Mode:     0o6751,
+			PAXRecords: map[string]string{
+				"LIBARCHIVE.xattr.user.fixture": base64.RawStdEncoding.EncodeToString(xattr),
+			},
+		},
+		{
+			Name:     "link",
+			Typeflag: tar.TypeSymlink,
+			Linkname: "file",
+			Mode:     0o777,
+		},
+		{
+			Name:     "dangling",
+			Typeflag: tar.TypeSymlink,
+			Linkname: "missing",
+			Mode:     0o777,
+		},
 	} {
 		header.Uid, header.Gid, header.ModTime, header.Format = 123, 456, mtime, tar.FormatPAX
 		if err := writer.WriteHeader(header); err != nil {
@@ -987,8 +1119,12 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	vm.rpc(t, 2048, "tree_push", map[string]any{"path": "/workspace/tree-original"}, archive.Bytes())
-	_, pulled := vm.rpc(t, 2048, "tree_pull", map[string]any{"path": "/workspace/tree-original"}, nil)
+	vm.rpc(t, 2048, "tree_push", map[string]any{
+		"path": "/workspace/tree-original",
+	}, archive.Bytes())
+	_, pulled := vm.rpc(t, 2048, "tree_pull", map[string]any{
+		"path": "/workspace/tree-original",
+	}, nil)
 	reader := tar.NewReader(strings.NewReader(pulled))
 	found := false
 	for {
@@ -1012,7 +1148,9 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if !found {
 		t.Fatal("actual guest pull omitted regular file")
 	}
-	vm.rpc(t, 2048, "tree_push", map[string]any{"path": "/workspace/tree-copy"}, []byte(pulled))
+	vm.rpc(t, 2048, "tree_push", map[string]any{
+		"path": "/workspace/tree-copy",
+	}, []byte(pulled))
 	vm.exec(t, `set -eu
 export PATH=/bin
 for tree in /workspace/tree-original /workspace/tree-copy; do
@@ -1025,11 +1163,15 @@ for tree in /workspace/tree-original /workspace/tree-copy; do
 done
 printf 'guest-tree-roundtrip-ok\n'
 `)
-	_, copied := vm.rpc(t, 2048, "fs_read", map[string]any{"path": "/workspace/tree-copy/file"}, nil)
+	_, copied := vm.rpc(t, 2048, "fs_read", map[string]any{
+		"path": "/workspace/tree-copy/file",
+	}, nil)
 	if !bytes.Equal([]byte(copied), content) {
 		t.Fatal("binary file changed during guest tree roundtrip")
 	}
-	_, raw := vm.rpc(t, 2048, "fs_read", map[string]any{"path": "/workspace/tree-copy/xattr-value"}, nil)
+	_, raw := vm.rpc(t, 2048, "fs_read", map[string]any{
+		"path": "/workspace/tree-copy/xattr-value",
+	}, nil)
 	if !bytes.Equal([]byte(raw), xattr) {
 		t.Fatal("binary user xattr changed during guest tree roundtrip")
 	}
@@ -1037,7 +1179,9 @@ printf 'guest-tree-roundtrip-ok\n'
 
 func (vm *kvmMachine) exec(t *testing.T, command string) {
 	t.Helper()
-	params, out := vm.rpc(t, 2048, "exec", map[string]any{"command": command}, nil)
+	params, out := vm.rpc(t, 2048, "exec", map[string]any{
+		"command": command,
+	}, nil)
 	if exit, ok := params["exit_code"].(float64); !ok || exit != 0 {
 		t.Fatalf("guest command failed: %v output %q command:\n%s", params, out, command)
 	}
@@ -1052,7 +1196,9 @@ func (vm *kvmMachine) capture(t *testing.T, upper, name string) string {
 	}
 	vm.api(t, "vm.pause", nil)
 	defer vm.api(t, "vm.resume", nil)
-	vm.api(t, "vm.snapshot", map[string]any{"destination_url": "file://" + capture})
+	vm.api(t, "vm.snapshot", map[string]any{
+		"destination_url": "file://" + capture,
+	})
 	if err := loom.CopyFile(upper, filepath.Join(capture, "disk.raw"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1069,7 +1215,10 @@ func kvmRestore(t *testing.T, hypervisor, dir, capture string) *kvmMachine {
 	if err := os.Mkdir(restore, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"config.json", "state.json"} {
+	for _, name := range []string{
+		"config.json",
+		"state.json",
+	} {
 		if err := loom.CopyFile(filepath.Join(capture, name), filepath.Join(restore, name), 0o600); err != nil {
 			t.Fatal(err)
 		}

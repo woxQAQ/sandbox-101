@@ -59,7 +59,13 @@ func failedCloneFixture(t *testing.T, transferred bool) (*Service, *restorableRu
 }
 
 func discardRequest(source resourceStep) DiscardRequest {
-	return DiscardRequest{TenantID: source.Input.TenantID, Key: "discard", SandboxID: source.Input.SandboxID, FailedOperationID: source.OperationID, ExpectedInstance: source.Input.Resource.Instance}
+	return DiscardRequest{
+		TenantID:          source.Input.TenantID,
+		Key:               "discard",
+		SandboxID:         source.Input.SandboxID,
+		FailedOperationID: source.OperationID,
+		ExpectedInstance:  source.Input.Resource.Instance,
+	}
 }
 
 func awaitDiscard(t *testing.T, service *Service, id string) discardStep {
@@ -121,7 +127,11 @@ func discardSucceeded(t *testing.T, service *Service, source resourceStep, disca
 
 func TestHavenDiscardFailedCandidate(t *testing.T) {
 	parallelLifecycle(t)
-	for _, kind := range []string{"cold", "clone-partial", "clone-transferred"} {
+	for _, kind := range []string{
+		"cold",
+		"clone-partial",
+		"clone-transferred",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			var service *Service
 			var backend loom.Backend
@@ -167,7 +177,16 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 
 func TestHavenDiscardCrashRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"discard_admitted", "discard_stop_intent", "discard_effect_stopped", "discard_removed", "discard_deletion_intent", "discard_unlinked", "discard_effect_files_removed", "discard_completion_before_commit"} {
+	for _, point := range []string{
+		"discard_admitted",
+		"discard_stop_intent",
+		"discard_effect_stopped",
+		"discard_removed",
+		"discard_deletion_intent",
+		"discard_unlinked",
+		"discard_effect_files_removed",
+		"discard_completion_before_commit",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, source := failedColdFixture(t)
 			original, err := service.GetOperation(context.Background(), "tenant", source.OperationID)
@@ -203,14 +222,19 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 
 func TestHavenDiscardAtomicRetirement(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
+	for _, write := range []struct {
+		event, table, condition string
+	}{
 		{"DELETE", "quota_resources", "1"},
 		{"DELETE", "vms", "1"},
 		{"UPDATE", "cleanup_intents", "NEW.status='done'"},
 		{"UPDATE", "operation_steps", "NEW.action='discard' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture discard rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture discard rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+"/"+mode, func(t *testing.T) {
 				service, backend, source := failedColdFixture(t)
 				original, err := service.GetOperation(context.Background(), "tenant", source.OperationID)
@@ -245,7 +269,11 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 
 func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 	parallelLifecycle(t)
-	for _, damage := range []string{"foreign-ref", "unknown-file", "replaced-after-receipt"} {
+	for _, damage := range []string{
+		"foreign-ref",
+		"unknown-file",
+		"replaced-after-receipt",
+	} {
 		t.Run(damage, func(t *testing.T) {
 			service, backend, source := failedColdFixture(t)
 			point := "discard_admitted"

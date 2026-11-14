@@ -27,7 +27,10 @@ var _ NetworkPolicyBackend = (*CloudHypervisor)(nil)
 
 func namespaceNFT(ctx context.Context, ns, rules string) error {
 	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns, "nft", "-f", "-")
-	cmd.Env = []string{"PATH=" + hostToolPath(), "LC_ALL=C"}
+	cmd.Env = []string{
+		"PATH=" + hostToolPath(),
+		"LC_ALL=C",
+	}
 	cmd.Stdin = strings.NewReader(rules)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("namespace nft transaction: %w: %.4096s", err, out)

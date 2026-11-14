@@ -34,7 +34,9 @@ type (
 )
 
 func loadImageCleanup(ctx context.Context, q queryer, id string) (imageCleanupStep, error) {
-	step := imageCleanupStep{OperationID: id}
+	step := imageCleanupStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='image_cleanup'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &expected)
@@ -78,7 +80,10 @@ func (service *Service) AdmitImageCleanup(ctx context.Context, principal Princip
 	if key == "" || len(key) > 256 || work == cache || (work && (request.CacheBuilder != "" || request.CacheDiffID != "")) {
 		return empty, loom.Fail(loom.Invalid, "image cleanup requires one exact import or cache")
 	}
-	guard := service.vmLock("node-request:" + string(encode([]string{service.store.identity.Identity, key})))
+	guard := service.vmLock("node-request:" + string(encode([]string{
+		service.store.identity.Identity,
+		key,
+	})))
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := encode(struct {
@@ -96,7 +101,9 @@ func (service *Service) AdmitImageCleanup(ctx context.Context, principal Princip
 		return empty, loom.Fail(loom.Conflict, "artifact producer or collector active")
 	}
 	defer service.artifacts.Unlock()
-	input := imageCleanupInput{RequestTenantID: principal.TenantID}
+	input := imageCleanupInput{
+		RequestTenantID: principal.TenantID,
+	}
 	if request.ImportOperationID != "" {
 		source, err := loadImageImport(ctx, service.store.db, request.ImportOperationID)
 		if err != nil {
@@ -126,7 +133,9 @@ func (service *Service) AdmitImageCleanup(ctx context.Context, principal Princip
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = imageCleanupFence(ctx, tx, input.Kind, input.ResourceID); err != nil {
 		return empty, err
 	}
@@ -161,15 +170,43 @@ func (service *Service) AdmitImageCleanup(ctx context.Context, principal Princip
 			return empty, loom.Fail(loom.Conflict, "image cache has live consumers")
 		}
 	}
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending"}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+	}
 	payload := encode(input)
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "node", service.store.identity.Identity, key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'image_cleanup','image_cleanup',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, input.ResourceID, "", encode(imageCleanupState{Phase: "admitted"})}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,?,?,'pending',?)", []any{"image_cleanup:" + operation.ID, operation.ID, input.Kind, input.ResourceID, payload}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"node",
+			service.store.identity.Identity,
+			key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'image_cleanup','image_cleanup',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			input.ResourceID,
+			"",
+			encode(imageCleanupState{
+				Phase: "admitted",
+			}),
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,?,?,'pending',?)", []any{
+			"image_cleanup:" + operation.ID,
+			operation.ID,
+			input.Kind,
+			input.ResourceID,
+			payload,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err

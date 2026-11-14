@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// Exercise the complete tool on real files, including nested literals, field
-// declarations, statement blocks and comments. Repeated invocations must be stable.
+// Exercise the complete tool on real files, including nested literals, arrays,
+// slices, field declarations, statement blocks and comments. Repeated invocations must be stable.
 func TestFormatterCommand(t *testing.T) {
 	directory := t.TempDir()
 	file := filepath.Join(directory, "input.go")
@@ -43,7 +43,16 @@ func TestFormatterCommand(t *testing.T) {
 	for _, field := range [][]byte{
 		[]byte("\n\tX: 1,"),
 		[]byte("\n\tY: 2,"),
-		[]byte("\n\tX: 3,"),
+		[]byte("\n\t\tX: 3,"),
+		[]byte("[2]int{\n\t15,\n\t16,\n}"),
+		[]byte("[...]string{\n\t\"array\",\n\t\"literal\",\n}"),
+		[]byte("[]int{\n\t17, /* element comment */\n\t18, /* final element */\n}"),
+		[]byte("[5]int{\n\t1: 19,\n\t20,\n\t4: 21,\n}"),
+		[]byte("[][]int{\n\t[]int{\n\t\t22,\n\t\t23,\n\t},\n\t[]int{\n\t\t24,\n\t\t25,\n\t},\n}"),
+		[]byte("[]int{\n\t26, /* slice tail comment */\n}"),
+		[]byte("[]int{}"),
+		[]byte("[0]int{}"),
+		[]byte("Point{27, 28}"),
 		[]byte("/* preserve */"),
 		[]byte("`X:1,Y:2`"),
 		[]byte("type Point struct {\n\tX, Y int\n}"),

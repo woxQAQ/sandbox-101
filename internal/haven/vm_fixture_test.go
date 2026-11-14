@@ -32,11 +32,19 @@ type coldRuntime struct {
 }
 
 func newColdRuntime() *coldRuntime {
-	return &coldRuntime{resources: map[string]loom.Resource{}, observations: map[string]loom.Observation{}, counts: map[string]int{}}
+	return &coldRuntime{
+		resources:    map[string]loom.Resource{},
+		observations: map[string]loom.Observation{},
+		counts:       map[string]int{},
+	}
 }
 
-func (backend *coldRuntime) Compatibility() string                    { return "explicit-cold-fixture" }
-func (backend *coldRuntime) Check(context.Context, loom.Config) error { return nil }
+func (backend *coldRuntime) Compatibility() string {
+	return "explicit-cold-fixture"
+}
+func (backend *coldRuntime) Check(context.Context, loom.Config) error {
+	return nil
+}
 
 func (backend *coldRuntime) effect(name string, resource loom.Resource) error {
 	if backend.before != nil {
@@ -54,7 +62,10 @@ func (backend *coldRuntime) Prepare(ctx context.Context, resource loom.Resource)
 	if err := backend.effect("prepare", resource); err != nil {
 		return err
 	}
-	for _, directory := range []string{filepath.Dir(resource.Disk), filepath.Join(resource.Dir, "capture")} {
+	for _, directory := range []string{
+		filepath.Dir(resource.Disk),
+		filepath.Join(resource.Dir, "capture"),
+	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return err
 		}
@@ -91,12 +102,19 @@ func (backend *coldRuntime) Launch(_ context.Context, resource loom.Resource, _ 
 	if backend.observations[resource.VMID].Alive {
 		return fmt.Errorf("duplicate live launch")
 	}
-	for _, directory := range []string{filepath.Join(resource.RunDir, "io"), filepath.Join(resource.RunDir, "root")} {
+	for _, directory := range []string{
+		filepath.Join(resource.RunDir, "io"),
+		filepath.Join(resource.RunDir, "root"),
+	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return err
 		}
 	}
-	for _, name := range []string{"launch.json", "process.json", "console.log"} {
+	for _, name := range []string{
+		"launch.json",
+		"process.json",
+		"console.log",
+	} {
 		if err := os.WriteFile(filepath.Join(resource.RunDir, name), []byte("owned fixture"), 0o600); err != nil {
 			return err
 		}
@@ -113,11 +131,17 @@ func (backend *coldRuntime) Launch(_ context.Context, resource loom.Resource, _ 
 		return err
 	}
 	defer unix.Close(socket)
-	if err = unix.Bind(socket, &unix.SockaddrUnix{Name: fmt.Sprintf("/proc/self/fd/%d/api.sock", directory)}); err != nil {
+	if err = unix.Bind(socket, &unix.SockaddrUnix{
+		Name: fmt.Sprintf("/proc/self/fd/%d/api.sock", directory),
+	}); err != nil {
 		return err
 	}
 	backend.resources[resource.VMID] = resource
-	backend.observations[resource.VMID] = loom.Observation{Alive: true, PID: 1000 + backend.counts["launch"], StartTime: uint64(backend.counts["launch"])}
+	backend.observations[resource.VMID] = loom.Observation{
+		Alive:     true,
+		PID:       1000 + backend.counts["launch"],
+		StartTime: uint64(backend.counts["launch"]),
+	}
 	return nil
 }
 
@@ -218,7 +242,11 @@ func (backend *coldRuntime) Capture(_ context.Context, resource loom.Resource, d
 	if !observation.Alive || !observation.Paused {
 		return fmt.Errorf("fixture capture requires paused source")
 	}
-	for name, body := range map[string]string{"config.json": "{}", "state.json": "{}", "memory-ranges": "frozen memory"} {
+	for name, body := range map[string]string{
+		"config.json":   "{}",
+		"state.json":    "{}",
+		"memory-ranges": "frozen memory",
+	} {
 		if err = os.WriteFile(filepath.Join(directory, name), []byte(body), 0o600); err != nil {
 			return err
 		}
@@ -240,13 +268,23 @@ func parallelLifecycle(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 	lifecycleTestSlots <- struct{}{}
-	t.Cleanup(func() { <-lifecycleTestSlots })
+	t.Cleanup(func() {
+		<-lifecycleTestSlots
+	})
 }
 
 func coldService(t *testing.T, fault func(string) error) (*Service, *coldRuntime) {
 	t.Helper()
 	backend := newColdRuntime()
-	service, err := Open(Options{StateDir: filepath.Join(t.TempDir(), "state"), Initialize: true, Backend: backend, MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1, Fault: fault})
+	service, err := Open(Options{
+		StateDir:     filepath.Join(t.TempDir(), "state"),
+		Initialize:   true,
+		Backend:      backend,
+		MaxMemoryMiB: 8192,
+		MaxVCPUs:     64,
+		SafetyBytes:  1,
+		Fault:        fault,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,12 +293,22 @@ func coldService(t *testing.T, fault func(string) error) (*Service, *coldRuntime
 			t.Error(err)
 		}
 	})
-	manifest := host.ImageManifest{Format: 1, Layout: "merged-erofs-v1", Digest: "sha256:" + strings.Repeat("a", 64), Architecture: runtime.GOARCH, Files: map[string]string{}}
+	manifest := host.ImageManifest{
+		Format:       1,
+		Layout:       "merged-erofs-v1",
+		Digest:       "sha256:" + strings.Repeat("a", 64),
+		Architecture: runtime.GOARCH,
+		Files:        map[string]string{},
+	}
 	imageDir := filepath.Join(service.store.directory, "images", manifest.Digest[7:])
 	if err = os.MkdirAll(imageDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
+	for _, name := range []string{
+		"kernel",
+		"initramfs",
+		"root.erofs",
+	} {
 		path := filepath.Join(imageDir, name)
 		if err = os.WriteFile(path, []byte(name), 0o444); err != nil {
 			t.Fatal(err)
@@ -273,14 +321,30 @@ func coldService(t *testing.T, fault func(string) error) (*Service, *coldRuntime
 	if err = loom.WriteJSON(filepath.Join(imageDir, "image.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.store.db.Exec("INSERT INTO tenants VALUES(?,?,?)", "tenant", "fixture-hash", encode(tenantRecord{MaxSandboxes: 10, MaxStorageMiB: 4096})); err != nil {
+	if _, err = service.store.db.Exec("INSERT INTO tenants VALUES(?,?,?)", "tenant", "fixture-hash", encode(tenantRecord{
+		MaxSandboxes:  10,
+		MaxStorageMiB: 4096,
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = service.store.db.Exec("INSERT INTO images VALUES(?,?)", manifest.Digest, encode(manifest)); err != nil {
 		t.Fatal(err)
 	}
 	service.opts.Fault = nil
-	_, err = service.AdmitTemplate(context.Background(), Principal{TenantID: "tenant"}, "publish-cold", Command{Action: "template_put", Template: &Template{ID: "cold", Image: manifest.Digest, Shape: loom.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64}}})
+	_, err = service.AdmitTemplate(context.Background(), Principal{
+		TenantID: "tenant",
+	}, "publish-cold", Command{
+		Action: "template_put",
+		Template: &Template{
+			ID:    "cold",
+			Image: manifest.Digest,
+			Shape: loom.Shape{
+				VCPUs:     1,
+				MemoryMiB: 128,
+				DiskMiB:   64,
+			},
+		},
+	})
 	service.opts.Fault = fault
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +354,11 @@ func coldService(t *testing.T, fault func(string) error) (*Service, *coldRuntime
 
 func coldClaim(t *testing.T, service *Service, key string) Operation {
 	t.Helper()
-	operation, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: key, TemplateID: "cold"})
+	operation, err := service.AdmitCold(context.Background(), ColdRequest{
+		TenantID:   "tenant",
+		Key:        key,
+		TemplateID: "cold",
+	})
 	if err != nil && !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}

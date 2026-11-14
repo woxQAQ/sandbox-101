@@ -2,6 +2,8 @@ module github.com/woxQAQ/haven
 
 go 1.26.5
 
+tool github.com/woxQAQ/haven/tools/structfmt
+
 ignore (
 	./bin
 	./build

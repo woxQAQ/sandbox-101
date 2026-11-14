@@ -28,7 +28,9 @@ const (
 	sharedLayerProfile = "erofs-shared-oci-v1;unix-paths;payloads=all-regular-entry-versions;headers=gob-sorted-tar.Header;4096;noinline_data;workers=1;uuid=diff_id;mkfs-time=0;mtime=preserve;fsmeta=go-erofs-metadataonly;whiteouts=before-entries;hardlinks=ordered-deferred;parents=inherit;symlinks=nofollow"
 )
 
-func (m ImageManifest) sharedLayered() bool { return m.Tools["go-erofs"] == sharedEROFSVersion }
+func (m ImageManifest) sharedLayered() bool {
+	return m.Tools["go-erofs"] == sharedEROFSVersion
+}
 
 // The cache keeps every regular entry version, including a version replaced
 // later in the same tar. Headers retain OCI operations separately from payload
@@ -55,7 +57,9 @@ func buildSharedLayerCache(
 	if err != nil {
 		return cached, err
 	}
-	defer func() { _ = os.RemoveAll(stage) }()
+	defer func() {
+		_ = os.RemoveAll(stage)
+	}()
 	normalized := filepath.Join(stage, "payload.tar")
 	if err = normalizeLayerPayloads(input, media, normalized); err != nil {
 		return cached, err
@@ -103,7 +107,11 @@ func buildSharedLayerCache(
 	if err = os.Rename(stage, filepath.Join(parent, diff[7:])); err != nil {
 		return cached, err
 	}
-	for _, dir := range []string{parent, filepath.Dir(parent), state} {
+	for _, dir := range []string{
+		parent,
+		filepath.Dir(parent),
+		state,
+	} {
 		if err = syncDir(dir); err != nil {
 			return cached, err
 		}
@@ -117,21 +125,27 @@ func normalizeLayerPayloads(input, media, output string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	var r io.Reader = f
 	if media == v1.MediaTypeImageLayerGzip || media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
 		g, x := gzip.NewReader(f)
 		if x != nil {
 			return x
 		}
-		defer func() { _ = g.Close() }()
+		defer func() {
+			_ = g.Close()
+		}()
 		r = g
 	}
 	out, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = out.Close() }()
+	defer func() {
+		_ = out.Close()
+	}()
 	tw := tar.NewWriter(out)
 	if err = tw.WriteHeader(
 		&tar.Header{
@@ -193,11 +207,15 @@ func normalizeLayerPayloads(input, media, output string) error {
 	return out.Close()
 }
 
-func payloadName(i int) string { return fmt.Sprintf("data/%08x", i) }
+func payloadName(i int) string {
+	return fmt.Sprintf("data/%08x", i)
+}
 
 type (
-	headerAttribute struct{ Name, Value string }
-	cachedHeader    struct {
+	headerAttribute struct {
+		Name, Value string
+	}
+	cachedHeader struct {
 		Header tar.Header
 		Xattrs []headerAttribute
 		PAX    []headerAttribute
@@ -211,7 +229,9 @@ func sortedHeaderAttributes(m map[string]string) []headerAttribute {
 	}
 	sort.Slice(
 		attrs,
-		func(i, j int) bool { return attrs[i].Name < attrs[j].Name },
+		func(i, j int) bool {
+			return attrs[i].Name < attrs[j].Name
+		},
 	)
 	return attrs
 }
@@ -247,7 +267,9 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -319,7 +341,9 @@ type metadataInfo struct {
 	sys  any
 }
 
-func (i metadataInfo) Name() string { return i.name }
+func (i metadataInfo) Name() string {
+	return i.name
+}
 func (i metadataInfo) Sys() any {
 	if i.sys != nil {
 		return i.sys
@@ -335,14 +359,22 @@ func (i metadataInfo) DataRange() []erofs.DataRange {
 }
 
 func (m metadataFS) Open(n string) (fs.File, error) {
-	return nil, &fs.PathError{Op: "open", Path: n, Err: fs.ErrPermission}
+	return nil, &fs.PathError{
+		Op:   "open",
+		Path: n,
+		Err:  fs.ErrPermission,
+	}
 }
 
 func (m metadataFS) Stat(n string) (fs.FileInfo, error) {
 	if i, ok := m.nodes[n]; ok {
 		return i, nil
 	}
-	return nil, &fs.PathError{Op: "stat", Path: n, Err: fs.ErrNotExist}
+	return nil, &fs.PathError{
+		Op:   "stat",
+		Path: n,
+		Err:  fs.ErrNotExist,
+	}
 }
 
 func (m metadataFS) ReadDir(n string) ([]fs.DirEntry, error) {
@@ -354,12 +386,18 @@ func (m metadataFS) ReadDir(n string) ([]fs.DirEntry, error) {
 	}
 	sort.Slice(
 		entries,
-		func(i, j int) bool { return entries[i].Name() < entries[j].Name() },
+		func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		},
 	)
 	return entries, nil
 }
-func (m metadataFS) BlockSize() uint32    { return 4096 }
-func (m metadataFS) DeviceBlocks() uint64 { return m.blocks }
+func (m metadataFS) BlockSize() uint32 {
+	return 4096
+}
+func (m metadataFS) DeviceBlocks() uint64 {
+	return m.blocks
+}
 
 func currentMetadata(w *erofs.Writer, n string) (fs.FileInfo, error) {
 	info, err := w.Stat(n)
@@ -389,7 +427,9 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	w := erofs.Create(f, erofs.WithBlockSize(4096), erofs.WithBuildTime(0, 0))
 	var reads []imageMount
 	var layers, diffs, devices []string
@@ -402,7 +442,9 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 		if x != nil {
 			return x
 		}
-		defer func() { _ = layer.Close() }()
+		defer func() {
+			_ = layer.Close()
+		}()
 		img, x := erofs.Open(layer)
 		if x != nil {
 			return x
@@ -442,7 +484,9 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 			return x
 		}
 		source := metadataFS{
-			nodes:  map[string]fs.FileInfo{".": root},
+			nodes: map[string]fs.FileInfo{
+				".": root,
+			},
 			blocks: uint64(st.Size() / 4096),
 		}
 		for j, h := range headers {
@@ -458,7 +502,10 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 				return api.Fail(api.Incompatible, "cached OCI payload geometry mismatch")
 			}
 			name := fmt.Sprintf("%s%08x", prefix, j)
-			source.nodes[name] = metadataInfo{FileInfo: info, name: name}
+			source.nodes[name] = metadataInfo{
+				FileInfo: info,
+				name:     name,
+			}
 		}
 		if err = w.CopyFrom(source, erofs.MetadataOnly()); err != nil {
 			return err
@@ -586,7 +633,9 @@ func sharedDirectory(w *erofs.Writer, h tar.Header) error {
 	if err != nil {
 		return err
 	}
-	nodes := map[string]fs.FileInfo{".": root}
+	nodes := map[string]fs.FileInfo{
+		".": root,
+	}
 	for p := path.Dir(n); p != "."; p = path.Dir(p) {
 		info, x := currentMetadata(w, p)
 		if x != nil {
@@ -605,7 +654,9 @@ func sharedDirectory(w *erofs.Writer, h tar.Header) error {
 			Xattrs:  h.Xattrs,
 		},
 	}
-	return w.CopyFrom(metadataFS{nodes: nodes})
+	return w.CopyFrom(metadataFS{
+		nodes: nodes,
+	})
 }
 
 //nolint:staticcheck // Apply the persisted legacy tar type and binary xattr fields without changing cache identity.

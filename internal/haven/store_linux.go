@@ -84,7 +84,9 @@ func openStore(directory string, initialize bool) (*store, error) {
 	if info.Mode().Perm() != 0o700 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
 		return nil, fmt.Errorf("%w: state directory must be owned by this writer and mode 0700", errStoreRecovery)
 	}
-	state := &store{directory: directory}
+	state := &store{
+		directory: directory,
+	}
 	if initialize {
 		entries, err := os.ReadDir(directory)
 		if err != nil {
@@ -99,7 +101,13 @@ func openStore(directory string, initialize bool) (*store, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
-		for _, name := range []string{"haven.db", "writer.lock", "node.key", "store.json", "HEAD.json"} {
+		for _, name := range []string{
+			"haven.db",
+			"writer.lock",
+			"node.key",
+			"store.json",
+			"HEAD.json",
+		} {
 			if err = privateStoreFile(filepath.Join(directory, name)); err != nil {
 				return nil, fmt.Errorf("%w: incomplete store: %v", errStoreRecovery, err)
 			}
@@ -153,7 +161,12 @@ func openStore(directory string, initialize bool) (*store, error) {
 		if _, err = rand.Read(identityBytes); err != nil {
 			return fail(err)
 		}
-		state.identity = storeIdentity{Format: storeFormat, Version: storeVersion, Identity: "store-" + hex.EncodeToString(identityBytes), NodeKeySHA256: keyHash(state.key)}
+		state.identity = storeIdentity{
+			Format:        storeFormat,
+			Version:       storeVersion,
+			Identity:      "store-" + hex.EncodeToString(identityBytes),
+			NodeKeySHA256: keyHash(state.key),
+		}
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		if err != nil {
 			return fail(err)
@@ -194,7 +207,10 @@ func openStore(directory string, initialize bool) (*store, error) {
 	if err != nil {
 		return fail(err)
 	}
-	state.db = &statementDB{DB: database, statements: map[string]*sql.Stmt{}}
+	state.db = &statementDB{
+		DB:         database,
+		statements: map[string]*sql.Stmt{},
+	}
 	state.db.SetMaxOpenConns(1)
 	if initialize {
 		if err = state.initialize(); err != nil {
@@ -241,13 +257,21 @@ func keyHash(key []byte) string {
 }
 
 func storeDSN(path, mode string, immutable bool) string {
-	uri := url.URL{Scheme: "file", Path: path}
+	uri := url.URL{
+		Scheme: "file",
+		Path:   path,
+	}
 	query := uri.Query()
 	query.Set("mode", mode)
 	if immutable {
 		query.Set("immutable", "1")
 	} else if mode == "rw" {
-		for _, pragma := range []string{"busy_timeout(5000)", "journal_mode(WAL)", "synchronous(FULL)", "foreign_keys(ON)"} {
+		for _, pragma := range []string{
+			"busy_timeout(5000)",
+			"journal_mode(WAL)",
+			"synchronous(FULL)",
+			"foreign_keys(ON)",
+		} {
 			query.Add("_pragma", pragma)
 		}
 	}
@@ -260,7 +284,9 @@ func (state *store) initialize() error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = tx.Exec(storeSchema); err != nil {
 		return err
 	}
@@ -271,7 +297,11 @@ func (state *store) initialize() error {
 		return err
 	}
 	for _, table := range epochTables {
-		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+		for _, event := range []string{
+			"INSERT",
+			"UPDATE",
+			"DELETE",
+		} {
 			statement := fmt.Sprintf("CREATE TRIGGER epoch_%s_%s AFTER %s ON %s BEGIN UPDATE store_metadata SET epoch=epoch+1 WHERE singleton=1; END", table, event, event, table)
 			if _, err = tx.Exec(statement); err != nil {
 				return err
@@ -320,7 +350,29 @@ func (state *store) validate(database *sql.DB) error {
 			return fmt.Errorf("required table missing: %s: %v", table, err)
 		}
 	}
-	for _, trigger := range []string{"credential_identity_immutable", "credential_history_retained", "operation_identity_immutable", "operation_terminal_immutable", "operation_history_retained", "step_identity_immutable", "step_terminal_immutable", "step_history_retained", "store_identity_immutable", "deletion_identity_immutable", "snapshot_owner_immutable", "snapshot_owner_retained", "operation_clock_insert", "operation_clock_finish", "operation_clock_identity_immutable", "operation_clock_terminal_immutable", "operation_clock_retained", "publication_immutable", "publication_retained", "journal_immutable", "journal_retained"} {
+	for _, trigger := range []string{
+		"credential_identity_immutable",
+		"credential_history_retained",
+		"operation_identity_immutable",
+		"operation_terminal_immutable",
+		"operation_history_retained",
+		"step_identity_immutable",
+		"step_terminal_immutable",
+		"step_history_retained",
+		"store_identity_immutable",
+		"deletion_identity_immutable",
+		"snapshot_owner_immutable",
+		"snapshot_owner_retained",
+		"operation_clock_insert",
+		"operation_clock_finish",
+		"operation_clock_identity_immutable",
+		"operation_clock_terminal_immutable",
+		"operation_clock_retained",
+		"publication_immutable",
+		"publication_retained",
+		"journal_immutable",
+		"journal_retained",
+	} {
 		var found int
 		if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?", trigger).Scan(&found); err != nil || found != 1 {
 			return fmt.Errorf("required persistence guard missing: %s: %v", trigger, err)
@@ -369,7 +421,10 @@ func (state *store) validateHead(database *sql.DB) error {
 func (state *store) checkpoint() error {
 	state.headMu.Lock()
 	defer state.headMu.Unlock()
-	head := storeHead{Format: storeFormat, Identity: state.identity.Identity}
+	head := storeHead{
+		Format:   storeFormat,
+		Identity: state.identity.Identity,
+	}
 	if err := state.db.QueryRowContext(context.Background(), "SELECT epoch FROM store_metadata WHERE singleton=1").Scan(&head.Epoch); err != nil {
 		return err
 	}

@@ -367,7 +367,9 @@ func (service *Service) markPhase(step *resourceStep, phase string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if step.Action == "cold_start" || step.Action == "clone" || step.Action == "restore" {
 		if _, _, _, err = service.checkProvisionIntent(tx, *step); err != nil {
 			return err
@@ -388,8 +390,14 @@ func (service *Service) markPhase(step *resourceStep, phase string) error {
 		}
 	}
 	if step.Action == "cold_start" && phase == "prepared" {
-		previous := resourceVersion{Resource: step.Input.Resource, DiskIdentity: step.State.DiskIdentity}
-		version := resourceVersion{Resource: step.Input.Resource, DiskIdentity: next.DiskIdentity}
+		previous := resourceVersion{
+			Resource:     step.Input.Resource,
+			DiskIdentity: step.State.DiskIdentity,
+		}
+		version := resourceVersion{
+			Resource:     step.Input.Resource,
+			DiskIdentity: next.DiskIdentity,
+		}
 		if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE resource_versions SET body=? WHERE id=? AND vm_id=? AND operation_id=? AND body=?", encode(version), step.OperationID, step.Candidate, step.OperationID, encode(previous))); err != nil {
 			return err
 		}
@@ -558,7 +566,9 @@ func (service *Service) failStep(step resourceStep, cause error) error {
 	if err != nil {
 		return errors.Join(cause, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadStep(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return errors.Join(cause, err)

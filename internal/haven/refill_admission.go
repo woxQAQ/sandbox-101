@@ -15,7 +15,9 @@ func refillBackoff(ctx context.Context, q rowsQueryer, template string, now time
 	if err != nil {
 		return true, err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		_ = rows.Close()
+	}()
 	failures := 0
 	var latest time.Time
 	for rows.Next() {
@@ -58,11 +60,16 @@ func (service *Service) AdmitRefill(ctx context.Context, principal Principal, ke
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "refill" || command.TemplateID == "" {
 		return empty, loom.Fail(loom.Invalid, "refill requires tenant authority, template and key")
 	}
-	guard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	guard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	guard.Lock()
 	defer guard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC: mac,
+	}); found || err != nil {
 		return operation, err
 	}
 	service.mu.Lock()
@@ -107,15 +114,47 @@ func (service *Service) AdmitRefill(ctx context.Context, principal Principal, ke
 	if err = verifyImageFiles(image, filepath.Join(service.store.directory, "images", image.Digest[7:])); err != nil {
 		return empty, err
 	}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{TemplateID: template.ID, SandboxID: newID("sandbox_"), SnapshotID: template.SnapshotID}}
-	input := supplyInput{CreatedAt: now, RequestTenantID: principal.TenantID, Command: sanitizedCommand(command), Template: template, Source: &source, SandboxID: parent.Result.SandboxID}
-	admission := &supplyAdmission{Parent: parent, Input: input, MAC: mac, Role: "clone"}
-	request := CloneRequest{TenantID: template.TenantID, Key: parent.ID + ":clone", SnapshotID: template.SnapshotID}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			TemplateID: template.ID,
+			SandboxID:  newID("sandbox_"),
+			SnapshotID: template.SnapshotID,
+		},
+	}
+	input := supplyInput{
+		CreatedAt:       now,
+		RequestTenantID: principal.TenantID,
+		Command:         sanitizedCommand(command),
+		Template:        template,
+		Source:          &source,
+		SandboxID:       parent.Result.SandboxID,
+	}
+	admission := &supplyAdmission{
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Role:   "clone",
+	}
+	request := CloneRequest{
+		TenantID:   template.TenantID,
+		Key:        parent.ID + ":clone",
+		SnapshotID: template.SnapshotID,
+	}
 	frozen := encode(struct {
 		Action  string
 		Request CloneRequest
 	}{"clone", request})
-	child, err := service.admitProvision(ctx, template.TenantID, request.Key, frozen, digest(frozen), template, image, &source, nil, &provisionTarget{NewSandboxID: input.SandboxID, Budget: &slotBudget{Kind: "sandbox_slot", Units: 0}, Parent: admission})
+	child, err := service.admitProvision(ctx, template.TenantID, request.Key, frozen, digest(frozen), template, image, &source, nil, &provisionTarget{
+		NewSandboxID: input.SandboxID,
+		Budget: &slotBudget{
+			Kind:  "sandbox_slot",
+			Units: 0,
+		},
+		Parent: admission,
+	})
 	if child.ID == "" {
 		var classified *loom.Error
 		if errors.As(err, &classified) && classified.Code == loom.Exhausted {
@@ -141,7 +180,9 @@ func (service *Service) recordRefillFailure(ctx context.Context, parent Operatio
 	if err != nil {
 		return Operation{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	frozen := encode(struct {
 		Action  string
 		Request Command
@@ -153,9 +194,32 @@ func (service *Service) recordRefillFailure(ctx context.Context, parent Operatio
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "failed", encode(parent.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, mac}},
-		{"INSERT INTO operation_steps VALUES(?,'supply','refill',?,?,?,?,'failed',?)", []any{parent.ID, digest(payload), payload, input.Template.ID, "", encode(supplyState{Phase: "failed", FinishedAt: time.Now().UTC(), Error: parent.Result.Error})}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			parent.ID,
+			"tenant",
+			input.RequestTenantID,
+			parent.Key,
+			digest(frozen),
+			frozen,
+			"failed",
+			encode(parent.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			parent.ID,
+			mac,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'supply','refill',?,?,?,?,'failed',?)", []any{
+			parent.ID,
+			digest(payload),
+			payload,
+			input.Template.ID,
+			"",
+			encode(supplyState{
+				Phase:      "failed",
+				FinishedAt: time.Now().UTC(),
+				Error:      parent.Result.Error,
+			}),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return Operation{}, err

@@ -25,13 +25,23 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 	service, backend := coldService(t, nil)
 	release := make(chan struct{})
 	var unblock sync.Once
-	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
-	closer := &blockingCloseRuntime{coldRuntime: backend, entered: make(chan struct{}), release: release}
+	t.Cleanup(func() {
+		unblock.Do(func() {
+			close(release)
+		})
+	})
+	closer := &blockingCloseRuntime{
+		coldRuntime: backend,
+		entered:     make(chan struct{}),
+		release:     release,
+	}
 	service.opts.Backend = closer
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { result <- service.Close(ctx) }()
+	go func() {
+		result <- service.Close(ctx)
+	}()
 	select {
 	case err := <-result:
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -51,7 +61,9 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 		}
 		t.Fatal("blocked backend finalization released the writer lock", err)
 	}
-	unblock.Do(func() { close(release) })
+	unblock.Do(func() {
+		close(release)
+	})
 	if err := service.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}

@@ -23,21 +23,39 @@ func JSON(w http.ResponseWriter, status int, value any) {
 
 func PublicError(err error) *api.Error {
 	if visible, ok := errors.AsType[*api.Error](err); ok {
-		return &api.Error{Code: visible.Code, Message: visible.Message}
+		return &api.Error{
+			Code:    visible.Code,
+			Message: visible.Message,
+		}
 	}
 	if errors.Is(err, haven.ErrInterrupted) {
-		return &api.Error{Code: api.ErrUnknown, Message: "accepted operation retained for recovery"}
+		return &api.Error{
+			Code:    api.ErrUnknown,
+			Message: "accepted operation retained for recovery",
+		}
 	}
 	if effect, ok := errors.AsType[*loom.Error](err); ok {
-		return &api.Error{Code: api.ErrorCode(effect.Code), Message: effect.Message}
+		return &api.Error{
+			Code:    api.ErrorCode(effect.Code),
+			Message: effect.Message,
+		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return &api.Error{Code: api.ErrNotFound, Message: "not found"}
+		return &api.Error{
+			Code:    api.ErrNotFound,
+			Message: "not found",
+		}
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return &api.Error{Code: api.ErrUnknown, Message: "operation wait ended"}
+		return &api.Error{
+			Code:    api.ErrUnknown,
+			Message: "operation wait ended",
+		}
 	}
-	return &api.Error{Code: api.ErrInternal, Message: "internal service error"}
+	return &api.Error{
+		Code:    api.ErrInternal,
+		Message: "internal service error",
+	}
 }
 
 func Error(w http.ResponseWriter, err error) {

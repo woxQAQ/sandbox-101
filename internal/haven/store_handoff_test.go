@@ -20,12 +20,21 @@ func TestHavenWriterHandoffWithRetainedLockDescriptor(t *testing.T) {
 	if err = service.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	next, err := Open(Options{StateDir: service.store.directory, Backend: backend, MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1})
+	next, err := Open(Options{
+		StateDir:     service.store.directory,
+		Backend:      backend,
+		MaxMemoryMiB: 8192,
+		MaxVCPUs:     64,
+		SafetyBytes:  1,
+	})
 	if err != nil {
 		t.Fatalf("completed close retained writer ownership through another descriptor: %v", err)
 	}
 	defer next.Close(context.Background())
-	if other, err := Open(Options{StateDir: service.store.directory, Backend: backend}); err == nil {
+	if other, err := Open(Options{
+		StateDir: service.store.directory,
+		Backend:  backend,
+	}); err == nil {
 		_ = other.Close(context.Background())
 		t.Fatal("new writer failed to exclude another store opener")
 	}

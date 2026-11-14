@@ -38,7 +38,10 @@ func failedCaptureReferences(ctx context.Context, q rowsQueryer, source resource
 			if capture.State.ResumeRequired || capture.State.Error == "" {
 				return nil, fmt.Errorf("release capture failure has unresolved source resume")
 			}
-			refs = append(refs, generationRef{OperationID: id, InputHash: capture.Hash})
+			refs = append(refs, generationRef{
+				OperationID: id,
+				InputHash:   capture.Hash,
+			})
 		}
 	}
 	return refs, nil
@@ -52,8 +55,21 @@ func (service *Service) runReleaseCaptures(step lifecycleStep) error {
 	for _, ref := range step.Input.CaptureFailures {
 		role := "failed-capture:" + ref.OperationID
 		if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
-			link := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: role}
-			_, err = service.admitCaptureDiscard(service.ctx, CaptureDiscardRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":" + role, SandboxID: step.Input.Sandbox.ID, FailedOperationID: ref.OperationID, ExpectedInstance: step.Input.SourceInstance, StopOperationID: stopped.ChildID}, link)
+			link := &lifecycleAdmission{
+				Parent: Operation{
+					ID: step.OperationID,
+				},
+				Input: step.Input,
+				Role:  role,
+			}
+			_, err = service.admitCaptureDiscard(service.ctx, CaptureDiscardRequest{
+				TenantID:          step.Input.OwnerTenantID,
+				Key:               step.OperationID + ":" + role,
+				SandboxID:         step.Input.Sandbox.ID,
+				FailedOperationID: ref.OperationID,
+				ExpectedInstance:  step.Input.SourceInstance,
+				StopOperationID:   stopped.ChildID,
+			}, link)
 			if err != nil {
 				return err
 			}
@@ -65,8 +81,18 @@ func (service *Service) runReleaseCaptures(step lifecycleStep) error {
 		}
 	}
 	if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
-		link := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: "release"}
-		if _, err = service.admitRelease(service.ctx, ReleaseRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":release", SandboxID: step.Input.Sandbox.ID}, link); err != nil {
+		link := &lifecycleAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  "release",
+		}
+		if _, err = service.admitRelease(service.ctx, ReleaseRequest{
+			TenantID:  step.Input.OwnerTenantID,
+			Key:       step.OperationID + ":release",
+			SandboxID: step.Input.Sandbox.ID,
+		}, link); err != nil {
 			return err
 		}
 	} else if lookup != nil {

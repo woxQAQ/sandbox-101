@@ -30,8 +30,14 @@ func supportedEROFSVersion(s string) bool {
 }
 
 func imageTools(ctx context.Context) (map[string]string, error) {
-	tools := map[string]string{"go-erofs": sharedEROFSVersion}
-	for _, tool := range []string{"bwrap", "mkfs.erofs", "fsck.erofs"} {
+	tools := map[string]string{
+		"go-erofs": sharedEROFSVersion,
+	}
+	for _, tool := range []string{
+		"bwrap",
+		"mkfs.erofs",
+		"fsck.erofs",
+	} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return nil, api.Fail(api.Incompatible, "required OCI tool missing: %s", tool)
 		}
@@ -55,7 +61,9 @@ func supportedLayerMedia(media string) bool {
 		media == "application/vnd.docker.image.rootfs.diff.tar.gzip"
 }
 
-type ImageMount struct{ Host, Guest string }
+type ImageMount struct {
+	Host, Guest string
+}
 
 type imageMount = ImageMount
 
@@ -82,12 +90,21 @@ func runImageTool(ctx context.Context, work string, reads []imageMount, tool str
 }
 
 func imageToolSandbox(work string, reads []imageMount, mapped bool) ([]string, error) {
-	bargs := []string{"--die-with-parent", "--new-session"}
+	bargs := []string{
+		"--die-with-parent",
+		"--new-session",
+	}
 	if mapped {
 		// Keep the enclosing subordinate-ID mapping and its namespace-only
 		// capabilities, so native unpack/chown/xattrs and mkfs see identical IDs.
 		bargs = append(bargs, "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts", "--unshare-cgroup")
-		for _, capability := range []string{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID", "CAP_SETFCAP"} {
+		for _, capability := range []string{
+			"CAP_CHOWN",
+			"CAP_DAC_OVERRIDE",
+			"CAP_FOWNER",
+			"CAP_FSETID",
+			"CAP_SETFCAP",
+		} {
 			bargs = append(bargs, "--cap-add", capability)
 		}
 	} else {
@@ -109,7 +126,12 @@ func imageToolSandbox(work string, reads []imageMount, mapped bool) ([]string, e
 		"--tmpfs",
 		"/tmp",
 	)
-	for _, dir := range []string{"/usr", "/bin", "/lib", "/lib64"} {
+	for _, dir := range []string{
+		"/usr",
+		"/bin",
+		"/lib",
+		"/lib64",
+	} {
 		if _, x := os.Stat(dir); x == nil {
 			bargs = append(bargs, "--ro-bind", dir, dir)
 		}
@@ -120,7 +142,15 @@ func imageToolSandbox(work string, reads []imageMount, mapped bool) ([]string, e
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == "/" {
 			return nil, fmt.Errorf("invalid SANDBOX_IMAGE_TOOL_ROOTS directory: %q", dir)
 		}
-		for _, reserved := range []string{"/proc", "/dev", "/tmp", "/work", "/tools", "/input", "/merged"} {
+		for _, reserved := range []string{
+			"/proc",
+			"/dev",
+			"/tmp",
+			"/work",
+			"/tools",
+			"/input",
+			"/merged",
+		} {
 			if dir == reserved || strings.HasPrefix(dir, reserved+"/") || strings.HasPrefix(reserved, dir+"/") {
 				return nil, fmt.Errorf("tool root %q overlaps sandbox path %q", dir, reserved)
 			}
@@ -152,7 +182,10 @@ type layerCache struct {
 
 func loadLayerCache(state, builder, diff string) (layerCache, error) {
 	var cached layerCache
-	for _, d := range []string{builder, diff} {
+	for _, d := range []string{
+		builder,
+		diff,
+	} {
 		if _, err := shaName(d); err != nil {
 			return cached, err
 		}
@@ -225,7 +258,9 @@ func buildLayerCache(
 	if err != nil {
 		return cached, err
 	}
-	defer func() { _ = os.RemoveAll(stage) }()
+	defer func() {
+		_ = os.RemoveAll(stage)
+	}()
 	args := []string{
 		"--quiet",
 		"--workers=1",
@@ -244,7 +279,9 @@ func buildLayerCache(
 		args = append(args, "--ungzip")
 	}
 	args = append(args, "/work/layer.erofs", "/input.tar")
-	if err = runImageTool(ctx, stage, []imageMount{{input, "/input.tar"}}, "mkfs.erofs", args...); err != nil {
+	if err = runImageTool(ctx, stage, []imageMount{
+		{input, "/input.tar"},
+	}, "mkfs.erofs", args...); err != nil {
 		return cached, err
 	}
 	if err = runImageTool(ctx, stage, nil, "fsck.erofs", "--extract", "/work/layer.erofs"); err != nil {
@@ -270,7 +307,11 @@ func buildLayerCache(
 	if err = os.Rename(stage, dest); err != nil {
 		return cached, err
 	}
-	for _, dir := range []string{parent, filepath.Dir(parent), state} {
+	for _, dir := range []string{
+		parent,
+		filepath.Dir(parent),
+		state,
+	} {
 		if err = syncDir(dir); err != nil {
 			return cached, err
 		}
@@ -318,7 +359,9 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(check) }()
+	defer func() {
+		_ = os.RemoveAll(check)
+	}()
 	args := append(
 		[]string{
 			"--extract=/work/tree",
@@ -334,14 +377,27 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 	if err != nil {
 		return err
 	}
-	defer func() { _ = root.Close() }()
-	for _, required := range []string{"boot/vmlinux", "boot/initramfs", "usr/lib/systemd/systemd", "usr/local/libexec/sandbox-agent", "etc/systemd/system/sysinit.target.wants/sandbox-agent.service"} {
+	defer func() {
+		_ = root.Close()
+	}()
+	for _, required := range []string{
+		"boot/vmlinux",
+		"boot/initramfs",
+		"usr/lib/systemd/systemd",
+		"usr/local/libexec/sandbox-agent",
+		"etc/systemd/system/sysinit.target.wants/sandbox-agent.service",
+	} {
 		st, x := root.Stat(required)
 		if x != nil || !st.Mode().IsRegular() || st.Size() == 0 {
 			return api.Fail(api.Incompatible, "image boot contract missing %s", required)
 		}
 	}
-	for _, item := range []struct{ src, dst string }{{"boot/vmlinux", "kernel"}, {"boot/initramfs", "initramfs"}} {
+	for _, item := range []struct {
+		src, dst string
+	}{
+		{"boot/vmlinux", "kernel"},
+		{"boot/initramfs", "initramfs"},
+	} {
 		st, x := root.Lstat(item.src)
 		if x != nil || !st.Mode().IsRegular() {
 			return api.Fail(api.Incompatible, "boot materials must be regular nonsymlink files")

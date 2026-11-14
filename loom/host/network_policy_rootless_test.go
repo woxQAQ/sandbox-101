@@ -49,7 +49,11 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	}
 	if err := writeJSON(
 		b.opts.HostPolicy,
-		HostPolicy{Version: 1, StorageQuota: true, NetworkQuotas: true},
+		HostPolicy{
+			Version:       1,
+			StorageQuota:  true,
+			NetworkQuotas: true,
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +85,12 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	} {
 		rootlessCommand(t, "ip", args...)
 	}
-	targets := []string{"1.1.1.1", "8.8.8.8", "10.42.0.9", "169.254.169.254"}
+	targets := []string{
+		"1.1.1.1",
+		"8.8.8.8",
+		"10.42.0.9",
+		"169.254.169.254",
+	}
 	for _, ip := range targets {
 		rootlessCommand(t, "ip", "addr", "add", ip+"/32", "dev", "lo")
 	}
@@ -150,8 +159,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	}
 	checkDown()
 	policy := &api.NetworkPolicy{
-		Version:        1,
-		AllowedCIDRs:   []string{"1.1.1.1/32"},
+		Version: 1,
+		AllowedCIDRs: []string{
+			"1.1.1.1/32",
+		},
 		MaxConnections: 64,
 	}
 	rootlessArtifact(t, "network-policy.nft", []byte(renderNetworkPolicy(policy)))
@@ -190,8 +201,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	checkDown()
 	probe(targets[0], false)
 	broad := &api.NetworkPolicy{
-		Version:        1,
-		AllowedCIDRs:   []string{"0.0.0.0/0"},
+		Version: 1,
+		AllowedCIDRs: []string{
+			"0.0.0.0/0",
+		},
 		MaxConnections: 64,
 	}
 	if err := b.InstallNetworkPolicy(ctx, r, broad); err != nil {
@@ -208,8 +221,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	limited := &api.NetworkPolicy{
-		Version:        1,
-		AllowedCIDRs:   []string{"0.0.0.0/0"},
+		Version: 1,
+		AllowedCIDRs: []string{
+			"0.0.0.0/0",
+		},
 		MaxConnections: 2,
 	}
 	if err := b.InstallNetworkPolicy(ctx, r, limited); err != nil {

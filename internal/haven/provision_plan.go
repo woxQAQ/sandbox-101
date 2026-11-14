@@ -17,7 +17,11 @@ import (
 // transaction. A batch commits every destination before dispatching any effect.
 func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenantID, key string, frozen []byte, hash string, template templateRecord, image host.ImageManifest, restore *restoreSource, claim *claimAdmission, target *provisionTarget, free int64) (Operation, error) {
 	var empty Operation
-	request := ColdRequest{TenantID: tenantID, Key: key, TemplateID: template.ID}
+	request := ColdRequest{
+		TenantID:   tenantID,
+		Key:        key,
+		TemplateID: template.ID,
+	}
 	if claim != nil {
 		current, err := loadOwnedTemplate(ctx, tx, tenantID, template.ID)
 		if err != nil {
@@ -80,7 +84,10 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 		return empty, fmt.Errorf("invalid tenant budget")
 	}
 	reuseSlot := target != nil && target.Sandbox.ID != ""
-	budget := slotBudget{Kind: "sandbox_slot", Units: 1}
+	budget := slotBudget{
+		Kind:  "sandbox_slot",
+		Units: 1,
+	}
 	if target != nil && target.Budget != nil {
 		budget = *target.Budget
 	}
@@ -129,7 +136,15 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 	if slot >= 32768 {
 		return empty, loom.Fail(loom.Exhausted, "network address pool exhausted")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: newID("sandbox_"), VMID: newID("vm-")}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID: newID("sandbox_"),
+			VMID:      newID("vm-"),
+		},
+	}
 	if target != nil {
 		if reuseSlot {
 			operation.Result.SandboxID = target.Sandbox.ID
@@ -137,7 +152,13 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 			operation.Result.SandboxID = target.NewSandboxID
 		}
 	}
-	resource := loom.Resource{VMID: operation.Result.VMID, Instance: newID("run-"), Config: template.Config, Slot: slot, NetworkToken: newID("net-")}
+	resource := loom.Resource{
+		VMID:         operation.Result.VMID,
+		Instance:     newID("run-"),
+		Config:       template.Config,
+		Slot:         slot,
+		NetworkToken: newID("net-"),
+	}
 	resource.Dir = filepath.Join(service.store.directory, "vms", resource.VMID)
 	resource.Disk = filepath.Join(resource.Dir, "disks", operation.ID+".raw")
 	resource.RunDir = filepath.Join(resource.Dir, "runs", resource.Instance)
@@ -148,7 +169,18 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 		resource.Disk = filepath.Join(resource.Dir, "versions", operation.ID, "disk.raw")
 		resource.RestoreDir = filepath.Join(resource.Dir, "versions", operation.ID, "restore")
 	}
-	input := stepInput{SlotBudget: budget, DiskKey: resource.VMID, SlotOperation: operation.ID, RuntimeBytes: vmBytes, Resource: resource, Image: image, TemplateID: template.ID, TenantID: request.TenantID, SandboxID: operation.Result.SandboxID, Restore: restore}
+	input := stepInput{
+		SlotBudget:    budget,
+		DiskKey:       resource.VMID,
+		SlotOperation: operation.ID,
+		RuntimeBytes:  vmBytes,
+		Resource:      resource,
+		Image:         image,
+		TemplateID:    template.ID,
+		TenantID:      request.TenantID,
+		SandboxID:     operation.Result.SandboxID,
+		Restore:       restore,
+	}
 	if reuseSlot {
 		current, err := loadSandbox(ctx, tx, target.Sandbox.ID, tenantID)
 		if err != nil {
@@ -187,14 +219,46 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 	if target != nil && target.Identity != nil {
 		identity = *target.Identity
 	}
-	sandbox := sandboxRecord{Identity: identity, SlotAssignment: input.SlotAssignment, ID: input.SandboxID, TenantID: request.TenantID, OperationID: operation.ID, VMID: resource.VMID, State: "provisioning", SourceOperation: operation.ID}
-	vm := vmRecord{Resource: resource}
+	sandbox := sandboxRecord{
+		Identity:        identity,
+		SlotAssignment:  input.SlotAssignment,
+		ID:              input.SandboxID,
+		TenantID:        request.TenantID,
+		OperationID:     operation.ID,
+		VMID:            resource.VMID,
+		State:           "provisioning",
+		SourceOperation: operation.ID,
+	}
+	vm := vmRecord{
+		Resource: resource,
+	}
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, operation.Status, encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,?,?,?,?,?,?,?,?)", []any{operation.ID, "resource", action, digest(encode(input)), encode(input), resource.VMID, "", "pending", encode(stepState{Phase: "admitted"})}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			operation.Status,
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"resource",
+			action,
+			digest(encode(input)),
+			encode(input),
+			resource.VMID,
+			"",
+			"pending",
+			encode(stepState{
+				Phase: "admitted",
+			}),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
@@ -221,10 +285,35 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 		q    string
 		args []any
 	}{
-		{"INSERT INTO vms VALUES(?,?,?,?,?,?)", []any{resource.VMID, slot, "", "creating", operation.ID, encode(vm)}},
-		{"INSERT INTO instances VALUES(?,?,?,?)", []any{resource.Instance, resource.VMID, operation.ID, encode(vm)}},
-		{"INSERT INTO resource_versions VALUES(?,?,?,?,?)", []any{operation.ID, resource.VMID, operation.ID, "resource", encode(resourceVersion{Resource: resource})}},
-		{"INSERT INTO reservations VALUES(?,?,?,?)", []any{"vm:" + resource.VMID, vmBytes, shape.MemoryMiB + 128, shape.VCPUs}},
+		{"INSERT INTO vms VALUES(?,?,?,?,?,?)", []any{
+			resource.VMID,
+			slot,
+			"",
+			"creating",
+			operation.ID,
+			encode(vm),
+		}},
+		{"INSERT INTO instances VALUES(?,?,?,?)", []any{
+			resource.Instance,
+			resource.VMID,
+			operation.ID,
+			encode(vm),
+		}},
+		{"INSERT INTO resource_versions VALUES(?,?,?,?,?)", []any{
+			operation.ID,
+			resource.VMID,
+			operation.ID,
+			"resource",
+			encode(resourceVersion{
+				Resource: resource,
+			}),
+		}},
+		{"INSERT INTO reservations VALUES(?,?,?,?)", []any{
+			"vm:" + resource.VMID,
+			vmBytes,
+			shape.MemoryMiB + 128,
+			shape.VCPUs,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
@@ -248,7 +337,12 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 			return empty, err
 		}
 	}
-	for _, reference := range []struct{ kind, id string }{{"vm", resource.VMID}, {"image", resource.Config.Image}} {
+	for _, reference := range []struct {
+		kind, id string
+	}{
+		{"vm", resource.VMID},
+		{"image", resource.Config.Image},
+	} {
 		if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO resource_refs VALUES(?,?,?,?)", reference.kind, reference.id, "step", operation.ID+":resource")); err != nil {
 			return empty, err
 		}
@@ -258,10 +352,23 @@ func (service *Service) admitProvisionIn(ctx context.Context, tx *sql.Tx, tenant
 			q    string
 			args []any
 		}{
-			{"INSERT INTO reservations VALUES(?,?,0,0)", []any{"restore:" + operation.ID, restoreBytes}},
-			{"INSERT INTO source_leases VALUES(?,?,'resource')", []any{restore.Snapshot.ID, operation.ID}},
-			{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{restore.Snapshot.ID, operation.ID + ":resource"}},
-			{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{tenantID, restore.Snapshot.ID, operation.ID + ":resource"}},
+			{"INSERT INTO reservations VALUES(?,?,0,0)", []any{
+				"restore:" + operation.ID,
+				restoreBytes,
+			}},
+			{"INSERT INTO source_leases VALUES(?,?,'resource')", []any{
+				restore.Snapshot.ID,
+				operation.ID,
+			}},
+			{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{
+				restore.Snapshot.ID,
+				operation.ID + ":resource",
+			}},
+			{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{
+				tenantID,
+				restore.Snapshot.ID,
+				operation.ID + ":resource",
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return empty, err

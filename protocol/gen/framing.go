@@ -47,7 +47,10 @@ func WriteFrame(w io.Writer, f *Frame) error {
 	}
 	var prefix [4]byte
 	binary.BigEndian.PutUint32(prefix[:], uint32(len(payload)))
-	for _, part := range [][]byte{prefix[:], payload} {
+	for _, part := range [][]byte{
+		prefix[:],
+		payload,
+	} {
 		for len(part) > 0 {
 			n, err := w.Write(part)
 			if err != nil {

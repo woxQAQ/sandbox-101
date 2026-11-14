@@ -49,7 +49,9 @@ type transportRuntime struct {
 	listeners    map[string]*net.UnixListener
 }
 
-func (backend *transportRuntime) Compatibility() string { return "rust-transport-host-fixture" }
+func (backend *transportRuntime) Compatibility() string {
+	return "rust-transport-host-fixture"
+}
 func (backend *transportRuntime) Check(_ context.Context, config loom.Config) error {
 	return host.CheckConfig(&config)
 }
@@ -58,7 +60,10 @@ func (backend *transportRuntime) Prepare(ctx context.Context, resource loom.Reso
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for _, directory := range []string{filepath.Dir(resource.Disk), filepath.Join(resource.Dir, "capture")} {
+	for _, directory := range []string{
+		filepath.Dir(resource.Disk),
+		filepath.Join(resource.Dir, "capture"),
+	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return err
 		}
@@ -91,12 +96,19 @@ func (backend *transportRuntime) Launch(ctx context.Context, resource loom.Resou
 	if backend.observations[resource.VMID].Alive {
 		return errors.New("fixture refuses duplicate launch")
 	}
-	for _, directory := range []string{filepath.Join(resource.RunDir, "io"), filepath.Join(resource.RunDir, "root")} {
+	for _, directory := range []string{
+		filepath.Join(resource.RunDir, "io"),
+		filepath.Join(resource.RunDir, "root"),
+	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return err
 		}
 	}
-	for _, name := range []string{"launch.json", "process.json", "console.log"} {
+	for _, name := range []string{
+		"launch.json",
+		"process.json",
+		"console.log",
+	} {
 		if err := os.WriteFile(filepath.Join(resource.RunDir, name), []byte("owned transport fixture"), 0o600); err != nil {
 			return err
 		}
@@ -105,13 +117,19 @@ func (backend *transportRuntime) Launch(ctx context.Context, resource loom.Resou
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(directory) }()
+	defer func() {
+		_ = unix.Close(directory)
+	}()
 	apiSocket, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(apiSocket) }()
-	if err = unix.Bind(apiSocket, &unix.SockaddrUnix{Name: fmt.Sprintf("/proc/self/fd/%d/api.sock", directory)}); err != nil {
+	defer func() {
+		_ = unix.Close(apiSocket)
+	}()
+	if err = unix.Bind(apiSocket, &unix.SockaddrUnix{
+		Name: fmt.Sprintf("/proc/self/fd/%d/api.sock", directory),
+	}); err != nil {
 		return err
 	}
 	socket := filepath.Join(resource.RunDir, "io", "vsock")
@@ -121,7 +139,11 @@ func (backend *transportRuntime) Launch(ctx context.Context, resource loom.Resou
 	}
 	backend.next++
 	backend.resources[resource.VMID] = resource
-	backend.observations[resource.VMID] = loom.Observation{Alive: true, PID: 1000 + backend.next, StartTime: uint64(backend.next)}
+	backend.observations[resource.VMID] = loom.Observation{
+		Alive:     true,
+		PID:       1000 + backend.next,
+		StartTime: uint64(backend.next),
+	}
 	backend.listeners[resource.VMID] = listener
 	go backend.accept(listener)
 	return nil
@@ -244,11 +266,17 @@ func (backend *transportRuntime) close() {
 	}
 }
 
-type transportGuest struct{ haven.LiveGuest }
+type transportGuest struct {
+	haven.LiveGuest
+}
 
-func (transportGuest) Activate(context.Context, loom.Resource, haven.Activation) error { return nil }
+func (transportGuest) Activate(context.Context, loom.Resource, haven.Activation) error {
+	return nil
+}
 
-func (transportGuest) PrepareTemplate(context.Context, loom.Resource) error { return nil }
+func (transportGuest) PrepareTemplate(context.Context, loom.Resource) error {
+	return nil
+}
 
 func closeWrite(conn net.Conn) {
 	if half, ok := conn.(interface{ CloseWrite() error }); ok {
@@ -257,11 +285,23 @@ func closeWrite(conn net.Conn) {
 }
 
 func duplex(left, right net.Conn) {
-	defer func() { _ = left.Close() }()
-	defer func() { _ = right.Close() }()
+	defer func() {
+		_ = left.Close()
+	}()
+	defer func() {
+		_ = right.Close()
+	}()
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(left, right); closeWrite(left); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(right, left); closeWrite(right); done <- struct{}{} }()
+	go func() {
+		_, _ = io.Copy(left, right)
+		closeWrite(left)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(right, left)
+		closeWrite(right)
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
 }
@@ -294,12 +334,22 @@ func privateRoot(t *testing.T) string {
 // operation, resource, receipt, successful result or accounting row.
 func seedFixtureImage(t *testing.T, root string) string {
 	t.Helper()
-	manifest := host.ImageManifest{Format: 1, Layout: "merged-erofs-v1", Digest: "sha256:" + strings.Repeat("a", 64), Architecture: runtime.GOARCH, Files: map[string]string{}}
+	manifest := host.ImageManifest{
+		Format:       1,
+		Layout:       "merged-erofs-v1",
+		Digest:       "sha256:" + strings.Repeat("a", 64),
+		Architecture: runtime.GOARCH,
+		Files:        map[string]string{},
+	}
 	directory := filepath.Join(root, "images", manifest.Digest[7:])
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
+	for _, name := range []string{
+		"kernel",
+		"initramfs",
+		"root.erofs",
+	} {
 		path := filepath.Join(directory, name)
 		if err := os.WriteFile(path, []byte("transport input "+name), 0o444); err != nil {
 			t.Fatal(err)
@@ -357,7 +407,9 @@ func transportFixtureRoot(t *testing.T, longPath bool) (*haven.Service, *sdk.Cli
 		t.Fatal(err)
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- command.Wait() }()
+	go func() {
+		exited <- command.Wait()
+	}()
 	t.Cleanup(func() {
 		_ = command.Process.Signal(syscall.SIGTERM)
 		select {
@@ -368,7 +420,10 @@ func transportFixtureRoot(t *testing.T, longPath bool) (*haven.Service, *sdk.Cli
 		}
 	})
 	ready := make(chan string, 1)
-	go func() { line, _ := bufio.NewReader(stdout).ReadString('\n'); ready <- line }()
+	go func() {
+		line, _ := bufio.NewReader(stdout).ReadString('\n')
+		ready <- line
+	}()
 	select {
 	case line := <-ready:
 		if !strings.HasPrefix(line, "ready ") {
@@ -377,9 +432,23 @@ func transportFixtureRoot(t *testing.T, longPath bool) (*haven.Service, *sdk.Cli
 	case <-time.After(10 * time.Second):
 		t.Fatal("Rust fixture did not become ready")
 	}
-	backend := &transportRuntime{workload: filepath.Join(guestDir, "workload.sock"), resources: map[string]loom.Resource{}, observations: map[string]loom.Observation{}, listeners: map[string]*net.UnixListener{}}
+	backend := &transportRuntime{
+		workload:     filepath.Join(guestDir, "workload.sock"),
+		resources:    map[string]loom.Resource{},
+		observations: map[string]loom.Observation{},
+		listeners:    map[string]*net.UnixListener{},
+	}
 	t.Cleanup(backend.close)
-	options := haven.Options{StateDir: root, Initialize: true, Backend: backend, Guest: transportGuest{}, RootToken: "integration-root-token", MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1}
+	options := haven.Options{
+		StateDir:     root,
+		Initialize:   true,
+		Backend:      backend,
+		Guest:        transportGuest{},
+		RootToken:    "integration-root-token",
+		MaxMemoryMiB: 8192,
+		MaxVCPUs:     64,
+		SafetyBytes:  1,
+	}
 	bootstrap, err := haven.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -400,15 +469,41 @@ func transportFixtureRoot(t *testing.T, longPath bool) (*haven.Service, *sdk.Cli
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err = service.PutTenant(ctx, haven.Principal{Root: true}, haven.Tenant{ID: "transport", Token: "transport-token", MaxSandboxes: 10, MaxStorageMiB: 4096})
+	_, err = service.PutTenant(ctx, haven.Principal{
+		Root: true,
+	}, haven.Tenant{
+		ID:            "transport",
+		Token:         "transport-token",
+		MaxSandboxes:  10,
+		MaxStorageMiB: 4096,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := haven.Principal{TenantID: "transport"}
-	if _, err = service.Execute(ctx, principal, "template", haven.Command{Action: "template_put", Template: &haven.Template{ID: "fixture", Image: image, Shape: loom.Shape{VCPUs: 1, MemoryMiB: 128, DiskMiB: 64}}}); err != nil {
+	principal := haven.Principal{
+		TenantID: "transport",
+	}
+	if _, err = service.Execute(ctx, principal, "template", haven.Command{
+		Action: "template_put",
+		Template: &haven.Template{
+			ID:    "fixture",
+			Image: image,
+			Shape: loom.Shape{
+				VCPUs:     1,
+				MemoryMiB: 128,
+				DiskMiB:   64,
+			},
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	operation, err := service.Execute(ctx, principal, "claim", haven.Command{Action: "claim", TemplateID: "fixture", Policy: egress.Policy{Mode: "none"}})
+	operation, err := service.Execute(ctx, principal, "claim", haven.Command{
+		Action:     "claim",
+		TemplateID: "fixture",
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

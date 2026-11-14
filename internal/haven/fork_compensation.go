@@ -43,11 +43,26 @@ func (service *Service) retireForkBranches(step forkStep) error {
 			if err != nil {
 				return err
 			}
-			parent := &forkCleanupAdmission{Group: step, Index: index}
+			parent := &forkCleanupAdmission{
+				Group: step,
+				Index: index,
+			}
 			if source.Status == "failed" {
-				_, err = service.admitDiscard(service.ctx, DiscardRequest{TenantID: target.TenantID, Key: step.OperationID + ":discard:" + target.ID, SandboxID: target.ID, FailedOperationID: source.OperationID, ExpectedInstance: source.Input.Resource.Instance}, parent)
+				_, err = service.admitDiscard(service.ctx, DiscardRequest{
+					TenantID:          target.TenantID,
+					Key:               step.OperationID + ":discard:" + target.ID,
+					SandboxID:         target.ID,
+					FailedOperationID: source.OperationID,
+					ExpectedInstance:  source.Input.Resource.Instance,
+				}, parent)
 			} else {
-				_, err = service.admitLifecycle(service.ctx, Principal{Root: true, TenantID: target.TenantID}, step.OperationID+":release:"+target.ID, Command{Action: "release", SandboxID: target.ID}, parent)
+				_, err = service.admitLifecycle(service.ctx, Principal{
+					Root:     true,
+					TenantID: target.TenantID,
+				}, step.OperationID+":release:"+target.ID, Command{
+					Action:    "release",
+					SandboxID: target.ID,
+				}, parent)
 			}
 			if err != nil {
 				return err
@@ -110,9 +125,21 @@ func retireForkDiscard(ctx context.Context, tx *sql.Tx, step forkStep, index int
 		q    string
 		args []any
 	}{
-		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{target.ID, source.OperationID}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(desired), target.ID, encode(settings)}},
-		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='terminated' AND body=?", []any{encode(next), target.ID, target.TenantID, encode(sandbox)}},
+		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+			target.ID,
+			source.OperationID,
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(desired),
+			target.ID,
+			encode(settings),
+		}},
+		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='terminated' AND body=?", []any{
+			encode(next),
+			target.ID,
+			target.TenantID,
+			encode(sandbox),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

@@ -30,7 +30,9 @@ func (service *Service) Maintain(ctx context.Context) error {
 	if draining {
 		return nil
 	}
-	templates, err := service.Templates(ctx, Principal{Root: true})
+	templates, err := service.Templates(ctx, Principal{
+		Root: true,
+	})
 	if err != nil {
 		return err
 	}
@@ -58,7 +60,13 @@ func (service *Service) Maintain(ctx context.Context) error {
 		if blocked {
 			continue
 		}
-		_, err = service.AdmitRefill(ctx, Principal{Root: true, TenantID: template.TenantID}, "refill:"+newID(""), Command{Action: "refill", TemplateID: template.ID})
+		_, err = service.AdmitRefill(ctx, Principal{
+			Root:     true,
+			TenantID: template.TenantID,
+		}, "refill:"+newID(""), Command{
+			Action:     "refill",
+			TemplateID: template.ID,
+		})
 		if err != nil && !isEffectCode(err, loom.Exhausted) && !isEffectCode(err, loom.Conflict) {
 			failures = append(failures, err)
 		}

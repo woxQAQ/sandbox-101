@@ -12,14 +12,22 @@ import (
 
 // ManagementClient speaks only the local protocol. Socket possession and kernel
 // peer credentials establish administrator authority at the daemon.
-type ManagementClient struct{ client *Client }
+type ManagementClient struct {
+	client *Client
+}
 
 func NewManagement(socket string) *ManagementClient {
 	client := New("http://haven.local", "")
-	client.HTTP.Transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
-	}}
-	return &ManagementClient{client: client}
+	client.HTTP.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{
+				Timeout: 5 * time.Second,
+			}).DialContext(ctx, "unix", socket)
+		},
+	}
+	return &ManagementClient{
+		client: client,
+	}
 }
 
 func (client *ManagementClient) Status(ctx context.Context) (api.NodeStatus, error) {

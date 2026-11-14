@@ -69,7 +69,9 @@ func (service *Service) admitPausedRelease(ctx context.Context, parent Operation
 	if err != nil {
 		return Operation{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSandbox(ctx, tx, input.Sandbox.ID, input.OwnerTenantID)
 	if err != nil {
 		return Operation{}, err
@@ -124,16 +126,67 @@ func (service *Service) admitPausedRelease(ctx context.Context, parent Operation
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "succeeded", encode(parent.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, mac}},
-		{"INSERT INTO operation_steps VALUES(?,'lifecycle','release',?,?,?,?,'succeeded',?)", []any{parent.ID, digest(payload), payload, current.ID, "", encode(lifecycleState{Phase: "complete", SnapshotID: current.SnapshotID})}},
-		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{current.SnapshotID, current.ID}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{input.OwnerTenantID, current.SnapshotID, "sleep:" + current.ID}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{input.OwnerTenantID, current.ID, "sleep:" + current.ID}},
-		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=1 AND storage_mib=0 AND source_operation_id=?", []any{input.OwnerTenantID, current.ID, source.Input.SlotOperation}},
-		{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state='paused' AND body=?", []any{encode(next), current.ID, input.OwnerTenantID, encode(current)}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(desired), current.ID, encode(settings)}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{"sleep:" + parent.ID, parent.ID, current.SnapshotID, encode(snapshot)}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			parent.ID,
+			"tenant",
+			input.RequestTenantID,
+			parent.Key,
+			digest(frozen),
+			frozen,
+			"succeeded",
+			encode(parent.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			parent.ID,
+			mac,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'lifecycle','release',?,?,?,?,'succeeded',?)", []any{
+			parent.ID,
+			digest(payload),
+			payload,
+			current.ID,
+			"",
+			encode(lifecycleState{
+				Phase:      "complete",
+				SnapshotID: current.SnapshotID,
+			}),
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{
+			current.SnapshotID,
+			current.ID,
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+			input.OwnerTenantID,
+			current.SnapshotID,
+			"sleep:" + current.ID,
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+			input.OwnerTenantID,
+			current.ID,
+			"sleep:" + current.ID,
+		}},
+		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=1 AND storage_mib=0 AND source_operation_id=?", []any{
+			input.OwnerTenantID,
+			current.ID,
+			source.Input.SlotOperation,
+		}},
+		{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state='paused' AND body=?", []any{
+			encode(next),
+			current.ID,
+			input.OwnerTenantID,
+			encode(current),
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(desired),
+			current.ID,
+			encode(settings),
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{
+			"sleep:" + parent.ID,
+			parent.ID,
+			current.SnapshotID,
+			encode(snapshot),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return Operation{}, err
@@ -195,9 +248,21 @@ func (service *Service) retireSupersededLifecycle(tx *sql.Tx, step lifecycleStep
 			q    string
 			args []any
 		}{
-			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{sleepSnapshot, step.Input.Sandbox.ID}},
-			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{step.Input.OwnerTenantID, sleepSnapshot, "sleep:" + step.Input.Sandbox.ID}},
-			{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{"sleep:" + step.OperationID, step.OperationID, sleepSnapshot, encode(source)}},
+			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{
+				sleepSnapshot,
+				step.Input.Sandbox.ID,
+			}},
+			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+				step.Input.OwnerTenantID,
+				sleepSnapshot,
+				"sleep:" + step.Input.Sandbox.ID,
+			}},
+			{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{
+				"sleep:" + step.OperationID,
+				step.OperationID,
+				sleepSnapshot,
+				encode(source),
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -210,7 +275,9 @@ func (service *Service) retireSupersededLifecycle(tx *sql.Tx, step lifecycleStep
 		}
 	}
 	if !terminal(prior.Status) {
-		if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{Phase: "superseded"}), id, prior.Hash)); err != nil {
+		if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{
+			Phase: "superseded",
+		}), id, prior.Hash)); err != nil {
 			return err
 		}
 	}

@@ -108,7 +108,11 @@ func putOCIBlob(t *testing.T, layout string, b []byte, media string) v1.Descript
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return v1.Descriptor{MediaType: media, Digest: d, Size: int64(len(b))}
+	return v1.Descriptor{
+		MediaType: media,
+		Digest:    d,
+		Size:      int64(len(b)),
+	}
 }
 
 type ociLayerFixture struct {
@@ -140,12 +144,23 @@ func putOCILayer(t *testing.T, layout string, entries []tarEntry, compressed boo
 func putOCIManifest(t *testing.T, layout, variant string, layers []ociLayerFixture) string {
 	t.Helper()
 	cfg := v1.Image{
-		Platform: v1.Platform{Architecture: runtime.GOARCH, OS: "linux"},
-		Config:   v1.ImageConfig{Labels: map[string]string{"fixture": variant}},
-		RootFS:   v1.RootFS{Type: "layers"},
+		Platform: v1.Platform{
+			Architecture: runtime.GOARCH,
+			OS:           "linux",
+		},
+		Config: v1.ImageConfig{
+			Labels: map[string]string{
+				"fixture": variant,
+			},
+		},
+		RootFS: v1.RootFS{
+			Type: "layers",
+		},
 	}
 	manifest := v1.Manifest{
-		Versioned: specs.Versioned{SchemaVersion: 2},
+		Versioned: specs.Versioned{
+			SchemaVersion: 2,
+		},
 		MediaType: v1.MediaTypeImageManifest,
 	}
 	for _, layer := range layers {
@@ -156,14 +171,20 @@ func putOCIManifest(t *testing.T, layout, variant string, layers []ociLayerFixtu
 	manifest.Config = putOCIBlob(t, layout, b, v1.MediaTypeImageConfig)
 	b, _ = json.Marshal(manifest)
 	desc := putOCIBlob(t, layout, b, v1.MediaTypeImageManifest)
-	if err := writeJSON(filepath.Join(layout, "oci-layout"), v1.ImageLayout{Version: "1.0.0"}); err != nil {
+	if err := writeJSON(filepath.Join(layout, "oci-layout"), v1.ImageLayout{
+		Version: "1.0.0",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(
 		filepath.Join(layout, "index.json"),
 		v1.Index{
-			Versioned: specs.Versioned{SchemaVersion: 2},
-			Manifests: []v1.Descriptor{desc},
+			Versioned: specs.Versioned{
+				SchemaVersion: 2,
+			},
+			Manifests: []v1.Descriptor{
+				desc,
+			},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -223,7 +244,9 @@ func importFixture(t *testing.T) (*nativeImageFixture, string, []ociLayerFixture
 	}
 	image := putOCIManifest(t, layout, "first", layers)
 	e := newNativeImageFixture(t)
-	t.Cleanup(func() { e.Close() })
+	t.Cleanup(func() {
+		e.Close()
+	})
 	m, err := e.ImportOCI(
 		context.Background(),
 		ImportOptions{
@@ -255,7 +278,10 @@ func extractManifest(t *testing.T, e *nativeImageFixture, m ImageManifest) strin
 		"--preserve-perms",
 	}
 	for i, b := range bindings {
-		reads = append(reads, imageMount{Host: b.HostPath, Guest: b.GuestPath})
+		reads = append(reads, imageMount{
+			Host:  b.HostPath,
+			Guest: b.GuestPath,
+		})
 		if i != 0 {
 			args = append(args, "--device="+b.GuestPath)
 		}
@@ -271,13 +297,22 @@ func TestActualLayeredEROFSImportAndExtraction(t *testing.T) {
 	t.Parallel()
 	e, _, _, m := importFixture(t)
 	root := extractManifest(t, e, m)
-	for name, want := range map[string]string{"override": "top", "opaque/new": "new child", "boot/vmlinux": "kernel-fixture"} {
+	for name, want := range map[string]string{
+		"override":     "top",
+		"opaque/new":   "new child",
+		"boot/vmlinux": "kernel-fixture",
+	} {
 		got, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil || string(got) != want {
 			t.Fatalf("%s: %q %v", name, got, err)
 		}
 	}
-	for _, name := range []string{"removed", "opaque/old", ".wh.removed", "opaque/.wh..wh..opq"} {
+	for _, name := range []string{
+		"removed",
+		"opaque/old",
+		".wh.removed",
+		"opaque/.wh..wh..opq",
+	} {
 		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
 			t.Fatalf("whiteout/opaque not applied: %s %v", name, err)
 		}
@@ -310,7 +345,10 @@ func TestActualLayeredEROFSImportAndExtraction(t *testing.T) {
 		arg != "sandbox.data_serials=sandbox-data-0000,sandbox-data-0001" {
 		t.Fatalf("kernel parameter: %q %v", arg, err)
 	}
-	for name, want := range map[string]string{"kernel": "kernel-fixture", "initramfs": "initramfs-fixture"} {
+	for name, want := range map[string]string{
+		"kernel":    "kernel-fixture",
+		"initramfs": "initramfs-fixture",
+	} {
 		got, err := os.ReadFile(filepath.Join(filepath.Dir(meta), name))
 		if err != nil || string(got) != want {
 			t.Fatalf("extracted %s: %q %v", name, got, err)
@@ -408,15 +446,33 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 	e, _, _, original := importFixture(t)
 	dir := filepath.Join(e.opts.StateDir, "images", original.Digest[7:])
 	for name, mutate := range map[string]func(*ImageManifest){
-		"format":           func(m *ImageManifest) { m.Format = 1 },
-		"layout":           func(m *ImageManifest) { m.Layout = "merged-erofs-v1" },
-		"builder":          func(m *ImageManifest) { m.Builder = "sha256:" + strings.Repeat("0", 64) },
-		"missing artifact": func(m *ImageManifest) { m.Artifacts = m.Artifacts[:2] },
-		"wrong order":      func(m *ImageManifest) { m.Artifacts[1], m.Artifacts[2] = m.Artifacts[2], m.Artifacts[1] },
-		"wrong serial":     func(m *ImageManifest) { m.Artifacts[1].Serial = "sandbox-data-0001" },
-		"wrong hash":       func(m *ImageManifest) { m.Artifacts[1].SHA256 = "sha256:" + strings.Repeat("0", 64) },
-		"extra file":       func(m *ImageManifest) { m.Files["ignored"] = m.Files["kernel"] },
-		"wrong receipt":    func(m *ImageManifest) { m.Artifacts[1].CacheSHA256 = m.Files["kernel"] },
+		"format": func(m *ImageManifest) {
+			m.Format = 1
+		},
+		"layout": func(m *ImageManifest) {
+			m.Layout = "merged-erofs-v1"
+		},
+		"builder": func(m *ImageManifest) {
+			m.Builder = "sha256:" + strings.Repeat("0", 64)
+		},
+		"missing artifact": func(m *ImageManifest) {
+			m.Artifacts = m.Artifacts[:2]
+		},
+		"wrong order": func(m *ImageManifest) {
+			m.Artifacts[1], m.Artifacts[2] = m.Artifacts[2], m.Artifacts[1]
+		},
+		"wrong serial": func(m *ImageManifest) {
+			m.Artifacts[1].Serial = "sandbox-data-0001"
+		},
+		"wrong hash": func(m *ImageManifest) {
+			m.Artifacts[1].SHA256 = "sha256:" + strings.Repeat("0", 64)
+		},
+		"extra file": func(m *ImageManifest) {
+			m.Files["ignored"] = m.Files["kernel"]
+		},
+		"wrong receipt": func(m *ImageManifest) {
+			m.Artifacts[1].CacheSHA256 = m.Files["kernel"]
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := cloneImageManifest(t, original)
@@ -455,7 +511,10 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 func TestActualLayerOrderAndBackendLimit(t *testing.T) {
 	t.Parallel()
 	e, layout, layers, first := importFixture(t)
-	reversed := []ociLayerFixture{layers[1], layers[0]}
+	reversed := []ociLayerFixture{
+		layers[1],
+		layers[0],
+	}
 	image := putOCIManifest(t, layout, "reversed", reversed)
 	m, err := e.ImportOCI(
 		context.Background(),
@@ -518,7 +577,11 @@ func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 	t.Parallel()
 	e, layout, layers, m := importFixture(t)
 	dir := filepath.Join(e.opts.StateDir, "images", m.Digest[7:])
-	for _, rel := range []string{m.Artifacts[0].Path, m.Artifacts[1].Path, filepath.Join(filepath.Dir(m.Artifacts[1].Path), "layer.json")} {
+	for _, rel := range []string{
+		m.Artifacts[0].Path,
+		m.Artifacts[1].Path,
+		filepath.Join(filepath.Dir(m.Artifacts[1].Path), "layer.json"),
+	} {
 		file := filepath.Join(e.opts.StateDir, rel)
 		moved := file + ".saved"
 		if err := os.Rename(file, moved); err != nil {
@@ -611,7 +674,9 @@ func TestLegacyNativeLayeredSubsetRemainsFrozen(t *testing.T) {
 					Name:     "file",
 					Typeflag: tar.TypeReg,
 					Mode:     0o644,
-					Xattrs:   map[string]string{"trusted.overlay.opaque": "y"},
+					Xattrs: map[string]string{
+						"trusted.overlay.opaque": "y",
+					},
 				},
 			},
 		},

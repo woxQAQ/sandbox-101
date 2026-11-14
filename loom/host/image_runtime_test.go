@@ -4,9 +4,18 @@ import "testing"
 
 func TestRestoreDisksPreserveFsmetaDeviceTableOrder(t *testing.T) {
 	bindings := []ImageBinding{
-		{GuestPath: "/sandbox/ro/fsmeta.erofs", Serial: "sandbox-root"},
-		{GuestPath: "/sandbox/ro/data-0000.erofs", Serial: "sandbox-data-0000"},
-		{GuestPath: "/sandbox/ro/data-0001.erofs", Serial: "sandbox-data-0001"},
+		{
+			GuestPath: "/sandbox/ro/fsmeta.erofs",
+			Serial:    "sandbox-root",
+		},
+		{
+			GuestPath: "/sandbox/ro/data-0000.erofs",
+			Serial:    "sandbox-data-0000",
+		},
+		{
+			GuestPath: "/sandbox/ro/data-0001.erofs",
+			Serial:    "sandbox-data-0001",
+		},
 	}
 	disks := cloudDisks(bindings)
 	if len(disks) != 4 || disks[0].ID != "root" || disks[1].ID != "data-0000" || disks[2].ID != "data-0001" ||
@@ -14,7 +23,14 @@ func TestRestoreDisksPreserveFsmetaDeviceTableOrder(t *testing.T) {
 		disks[3].ReadOnly {
 		t.Fatal("runtime block roles do not preserve fsmeta device order")
 	}
-	for _, name := range []string{"valid", "swapped", "missing", "writable", "serial", "path"} {
+	for _, name := range []string{
+		"valid",
+		"swapped",
+		"missing",
+		"writable",
+		"serial",
+		"path",
+	} {
 		t.Run(name, func(t *testing.T) {
 			saved := append([]cloudDisk(nil), disks...)
 			switch name {

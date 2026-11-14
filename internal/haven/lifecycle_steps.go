@@ -50,7 +50,9 @@ type (
 )
 
 func loadLifecycle(ctx context.Context, q queryer, id string) (lifecycleStep, error) {
-	step := lifecycleStep{OperationID: id}
+	step := lifecycleStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, instance string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='lifecycle'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &instance)
@@ -132,10 +134,35 @@ func (service *Service) admitLifecycleLink(ctx context.Context, tx *sql.Tx, admi
 			q    string
 			args []any
 		}{
-			{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "pending", encode(parent.Result)}},
-			{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, admission.MAC}},
-			{"INSERT INTO operation_steps VALUES(?,'lifecycle',?,?,?,?,?,'pending',?)", []any{parent.ID, input.Command.Action, digest(payload), payload, input.Sandbox.ID, input.Sandbox.Instance, encode(lifecycleState{Phase: "admitted"})}},
-			{"INSERT INTO configuration_fences VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id", []any{current.ID, parent.ID}},
+			{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+				parent.ID,
+				"tenant",
+				input.RequestTenantID,
+				parent.Key,
+				digest(frozen),
+				frozen,
+				"pending",
+				encode(parent.Result),
+			}},
+			{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+				parent.ID,
+				admission.MAC,
+			}},
+			{"INSERT INTO operation_steps VALUES(?,'lifecycle',?,?,?,?,?,'pending',?)", []any{
+				parent.ID,
+				input.Command.Action,
+				digest(payload),
+				payload,
+				input.Sandbox.ID,
+				input.Sandbox.Instance,
+				encode(lifecycleState{
+					Phase: "admitted",
+				}),
+			}},
+			{"INSERT INTO configuration_fences VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id", []any{
+				current.ID,
+				parent.ID,
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -199,7 +226,9 @@ func (service *Service) completeResourceLink(parent, role string, link resourceL
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, status, err := loadResourceLink(service.ctx, tx, parent, role)
 	if err != nil {
 		return err
@@ -211,7 +240,19 @@ func (service *Service) completeResourceLink(parent, role string, link resourceL
 		return nil
 	}
 	var childStatus string
-	key := map[string]string{"cold_start": "resource", "release": "resource", "clone": "resource", "restore": "resource", "lifecycle": "lifecycle", "capture_discard": "capture_discard", "capture_cleanup": "capture_cleanup", "capture": "capture", "snapshot_delete": "snapshot_delete", "discard": "discard", "stop": "stop"}[link.Kind]
+	key := map[string]string{
+		"cold_start":      "resource",
+		"release":         "resource",
+		"clone":           "resource",
+		"restore":         "resource",
+		"lifecycle":       "lifecycle",
+		"capture_discard": "capture_discard",
+		"capture_cleanup": "capture_cleanup",
+		"capture":         "capture",
+		"snapshot_delete": "snapshot_delete",
+		"discard":         "discard",
+		"stop":            "stop",
+	}[link.Kind]
 	if key == "" {
 		return fmt.Errorf("unsupported resource link kind %q", link.Kind)
 	}

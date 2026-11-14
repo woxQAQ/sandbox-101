@@ -37,7 +37,13 @@ type Sandbox struct {
 }
 
 func newSandboxIdentity(template templateRecord, source string) sandboxIdentity {
-	return sandboxIdentity{TemplateID: template.ID, Shape: template.Config.Shape, Epoch: newID("epoch-"), CreatedAt: time.Now().UTC(), ProvisionSource: source}
+	return sandboxIdentity{
+		TemplateID:      template.ID,
+		Shape:           template.Config.Shape,
+		Epoch:           newID("epoch-"),
+		CreatedAt:       time.Now().UTC(),
+		ProvisionSource: source,
+	}
 }
 
 func ownedSandbox(ctx context.Context, q queryer, principal Principal, id string) (sandboxRecord, error) {
@@ -98,7 +104,29 @@ func getSandbox(ctx context.Context, q queryer, principal Principal, id string) 
 			return Sandbox{}, lookup
 		}
 	}
-	return Sandbox{Epoch: record.Identity.Epoch, CreatedAt: record.Identity.CreatedAt, ProvisionSource: record.Identity.ProvisionSource, LastError: record.LastError, ID: record.ID, TenantID: record.TenantID, State: state, VMID: record.VMID, Instance: record.Instance, SnapshotID: record.SnapshotID, TemplateID: record.Identity.TemplateID, Shape: record.Identity.Shape, Deadline: settings.Deadline, PausedUntil: settings.PausedUntil, TTLSeconds: settings.TTLSeconds, OnExpire: settings.OnExpire, AutoRenew: settings.AutoRenew, Env: settings.Env, Policy: settings.Policy, RequiresSecrets: len(settings.Secrets) > 0, OperationID: operationID}, nil
+	return Sandbox{
+		Epoch:           record.Identity.Epoch,
+		CreatedAt:       record.Identity.CreatedAt,
+		ProvisionSource: record.Identity.ProvisionSource,
+		LastError:       record.LastError,
+		ID:              record.ID,
+		TenantID:        record.TenantID,
+		State:           state,
+		VMID:            record.VMID,
+		Instance:        record.Instance,
+		SnapshotID:      record.SnapshotID,
+		TemplateID:      record.Identity.TemplateID,
+		Shape:           record.Identity.Shape,
+		Deadline:        settings.Deadline,
+		PausedUntil:     settings.PausedUntil,
+		TTLSeconds:      settings.TTLSeconds,
+		OnExpire:        settings.OnExpire,
+		AutoRenew:       settings.AutoRenew,
+		Env:             settings.Env,
+		Policy:          settings.Policy,
+		RequiresSecrets: len(settings.Secrets) > 0,
+		OperationID:     operationID,
+	}, nil
 }
 
 func (service *Service) Submit(ctx context.Context, principal Principal, key string, command Command) (Operation, error) {
@@ -215,7 +243,11 @@ func (service *Service) Execute(ctx context.Context, principal Principal, key st
 	}
 	return service.Wait(ctx, principal, operation.ID)
 }
-func (service *Service) Drain() { service.mu.Lock(); service.draining = true; service.mu.Unlock() }
+func (service *Service) Drain() {
+	service.mu.Lock()
+	service.draining = true
+	service.mu.Unlock()
+}
 
 type Tenant struct {
 	ID            string `json:"id"`
@@ -228,7 +260,10 @@ func (service *Service) PutTenant(ctx context.Context, principal Principal, tena
 	if !principal.Root || tenant.ID == "" || tenant.Token == "" || tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 {
 		return Tenant{}, loom.Fail(loom.Invalid, "tenant administration requires root, token and finite budgets")
 	}
-	record := tenantRecord{MaxSandboxes: tenant.MaxSandboxes, MaxStorageMiB: tenant.MaxStorageMiB}
+	record := tenantRecord{
+		MaxSandboxes:  tenant.MaxSandboxes,
+		MaxStorageMiB: tenant.MaxStorageMiB,
+	}
 	service.admission.Lock()
 	defer service.admission.Unlock()
 	if err := service.checkAdmissionOpen(); err != nil {

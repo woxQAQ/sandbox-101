@@ -11,7 +11,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-type shortWriter struct{ bytes.Buffer }
+type shortWriter struct {
+	bytes.Buffer
+}
 
 func (w *shortWriter) Write(p []byte) (int, error) {
 	if len(p) > 1 {
@@ -23,7 +25,9 @@ func (w *shortWriter) Write(p []byte) (int, error) {
 func TestFramingBackToBackAndShortWrites(t *testing.T) {
 	params, _ := structpb.NewStruct(
 		map[string]any{
-			"env":       map[string]any{"X": "y"},
+			"env": map[string]any{
+				"X": "y",
+			},
 			"exit_code": float64(0),
 		},
 	)
@@ -31,8 +35,12 @@ func TestFramingBackToBackAndShortWrites(t *testing.T) {
 		Id:     "one",
 		Method: "exec",
 		Params: params,
-		Data:   []byte{0, 1, 2},
-		Eof:    true,
+		Data: []byte{
+			0,
+			1,
+			2,
+		},
+		Eof: true,
 	}
 	var wire shortWriter
 	for range 2 {
@@ -53,7 +61,15 @@ func TestFramingBackToBackAndShortWrites(t *testing.T) {
 
 func TestGoldenWireMatchesRust(t *testing.T) {
 	want, _ := hex.DecodeString("0000000f0a0161120470696e67220200012801")
-	frame := &Frame{Id: "a", Method: "ping", Data: []byte{0, 1}, Eof: true}
+	frame := &Frame{
+		Id:     "a",
+		Method: "ping",
+		Data: []byte{
+			0,
+			1,
+		},
+		Eof: true,
+	}
 	var wire bytes.Buffer
 	if err := WriteFrame(&wire, frame); err != nil {
 		t.Fatal(err)
@@ -64,12 +80,21 @@ func TestGoldenWireMatchesRust(t *testing.T) {
 }
 
 func TestInvalidAndTruncatedFrames(t *testing.T) {
-	for _, wire := range [][]byte{{0, 0}, {0, 0, 0, 2, 0}, {0, 0, 0, 0}, {0, 128, 0, 1}, {0, 0, 0, 1, 255}} {
+	for _, wire := range [][]byte{
+		{0, 0},
+		{0, 0, 0, 2, 0},
+		{0, 0, 0, 0},
+		{0, 128, 0, 1},
+		{0, 0, 0, 1, 255},
+	} {
 		if _, err := ReadFrame(bytes.NewReader(wire)); err == nil {
 			t.Fatalf("accepted invalid wire %x", wire)
 		}
 	}
-	if err := WriteFrame(io.Discard, &Frame{Id: "huge", Data: make([]byte, MaxFrameSize)}); err == nil {
+	if err := WriteFrame(io.Discard, &Frame{
+		Id:   "huge",
+		Data: make([]byte, MaxFrameSize),
+	}); err == nil {
 		t.Fatal("accepted oversized encoded frame")
 	}
 }

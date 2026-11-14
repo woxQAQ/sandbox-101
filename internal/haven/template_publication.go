@@ -130,9 +130,24 @@ func (service *Service) publishTemplate(ctx context.Context, tx *sql.Tx, step su
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{desired.Config.Image, step.OperationID + ":supply"}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{encode(supplyState{FinishedAt: time.Now().UTC(), Phase: "complete", SnapshotID: snapshot}), step.OperationID, step.Hash, encode(step.State)}},
-		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{encode(result), step.OperationID}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			desired.Config.Image,
+			step.OperationID + ":supply",
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{
+			encode(supplyState{
+				FinishedAt: time.Now().UTC(),
+				Phase:      "complete",
+				SnapshotID: snapshot,
+			}),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
+		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{
+			encode(result),
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

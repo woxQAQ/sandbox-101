@@ -38,7 +38,9 @@ type (
 )
 
 func loadSupplyCleanup(ctx context.Context, q queryer, id string) (supplyCleanupStep, error) {
-	step := supplyCleanupStep{OperationID: id}
+	step := supplyCleanupStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='supply_cleanup'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &expected)
@@ -76,7 +78,10 @@ func (service *Service) AdmitSupplyCleanup(ctx context.Context, principal Princi
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || !loom.ValidResourceID(request.OperationID, "op-") {
 		return empty, loom.Fail(loom.Invalid, "supply cleanup requires management authority, original operation and key")
 	}
-	requestGuard := service.vmLock("node-request:" + string(encode([]string{service.store.identity.Identity, key})))
+	requestGuard := service.vmLock("node-request:" + string(encode([]string{
+		service.store.identity.Identity,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	frozen := encode(struct {
@@ -108,7 +113,9 @@ func (service *Service) AdmitSupplyCleanup(ctx context.Context, principal Princi
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	original, err = loadSupply(ctx, tx, request.OperationID)
 	if err != nil {
 		return empty, err
@@ -148,7 +155,12 @@ func (service *Service) AdmitSupplyCleanup(ctx context.Context, principal Princi
 	if settings != 0 || sandbox.SlotAssignment != nil || sandbox.SourceOperation != source.OperationID || sandbox.VMID != source.Candidate {
 		return empty, loom.Fail(loom.Conflict, "raw cleanup cannot bypass sandbox ownership")
 	}
-	input := supplyCleanupInput{RequestTenantID: principal.TenantID, Request: request, Original: original, Source: source}
+	input := supplyCleanupInput{
+		RequestTenantID: principal.TenantID,
+		Request:         request,
+		Original:        original,
+		Source:          source,
+	}
 	if released, status, lookup := loadResourceLink(ctx, tx, original.OperationID, "release"); lookup == nil && status == "succeeded" {
 		receipt, err := loadStep(ctx, tx, released.ChildID)
 		if err != nil {
@@ -157,7 +169,10 @@ func (service *Service) AdmitSupplyCleanup(ctx context.Context, principal Princi
 		if receipt.Status != "succeeded" || receipt.State.Phase != "complete" || receipt.Input.SourceOperation != source.OperationID || receipt.Candidate != source.Candidate || sandbox.State != "terminated" {
 			return empty, loom.Fail(loom.ManualRecovery, "supply original retirement receipt changed")
 		}
-		input.Retired = &generationRef{OperationID: receipt.OperationID, InputHash: receipt.Hash}
+		input.Retired = &generationRef{
+			OperationID: receipt.OperationID,
+			InputHash:   receipt.Hash,
+		}
 	} else if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
 		return empty, lookup
 	}
@@ -204,16 +219,48 @@ func (service *Service) AdmitSupplyCleanup(ctx context.Context, principal Princi
 		}
 		input.Pool = &pool
 	}
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: source.Candidate}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID: sandbox.ID,
+			VMID:      source.Candidate,
+		},
+	}
 	payload := encode(input)
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "node", service.store.identity.Identity, key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'supply_cleanup','supply_cleanup',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, source.Candidate, source.Input.Resource.Instance, encode("admitted")}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'supply_cleanup',?,'pending',?)", []any{"supply_cleanup:" + operation.ID, operation.ID, source.Candidate, payload}},
-		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{source.Input.Resource.Config.Image, operation.ID + ":supply_cleanup"}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"node",
+			service.store.identity.Identity,
+			key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'supply_cleanup','supply_cleanup',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			source.Candidate,
+			source.Input.Resource.Instance,
+			encode("admitted"),
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'supply_cleanup',?,'pending',?)", []any{
+			"supply_cleanup:" + operation.ID,
+			operation.ID,
+			source.Candidate,
+			payload,
+		}},
+		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{
+			source.Input.Resource.Config.Image,
+			operation.ID + ":supply_cleanup",
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err

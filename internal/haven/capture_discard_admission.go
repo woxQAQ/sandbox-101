@@ -36,7 +36,9 @@ func (service *Service) admitCaptureDiscard(ctx context.Context, request Capture
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -54,8 +56,21 @@ func (service *Service) admitCaptureDiscard(ctx context.Context, request Capture
 	if err != nil {
 		return empty, err
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: request.SandboxID, VMID: source.Input.Source.Candidate, SnapshotID: source.Input.Snapshot.ID}}
-	input := captureDiscardInput{Request: request, Source: source, StopHash: stop.Hash}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:  request.SandboxID,
+			VMID:       source.Input.Source.Candidate,
+			SnapshotID: source.Input.Snapshot.ID,
+		},
+	}
+	input := captureDiscardInput{
+		Request:  request,
+		Source:   source,
+		StopHash: stop.Hash,
+	}
 	if link != nil {
 		input.Lifecycle = link.Parent.ID
 	}
@@ -63,7 +78,13 @@ func (service *Service) admitCaptureDiscard(ctx context.Context, request Capture
 		return empty, err
 	}
 	payload := encode(input)
-	step := captureDiscardStep{OperationID: operation.ID, Hash: digest(payload), Input: input, Phase: "admitted", Status: "pending"}
+	step := captureDiscardStep{
+		OperationID: operation.ID,
+		Hash:        digest(payload),
+		Input:       input,
+		Phase:       "admitted",
+		Status:      "pending",
+	}
 	if err = service.captureDiscardProof(ctx, tx, step, true); err != nil {
 		return empty, err
 	}
@@ -71,13 +92,48 @@ func (service *Service) admitCaptureDiscard(ctx context.Context, request Capture
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'capture_discard','capture_discard',?,?,?,?,'pending',?)", []any{operation.ID, step.Hash, payload, source.Input.Snapshot.ID, request.ExpectedInstance, encode(step.Phase)}},
-		{"UPDATE snapshots SET deleting=1 WHERE id=? AND published=0 AND deleting=0", []any{source.Input.Snapshot.ID}},
-		{"UPDATE vms SET operation_id=? WHERE id=? AND operation_id IS NULL AND state='stopped' AND current_instance=?", []any{operation.ID, source.Input.Source.Candidate, request.ExpectedInstance}},
-		{"UPDATE quota_refs SET holder_kind='cleanup',holder_id=? WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{operation.ID + ":capture_discard", request.TenantID, source.OperationID + ":capture", source.OperationID + ":capture"}},
-		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND status='blocked'", []any{"capture:" + source.OperationID, source.OperationID}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{"capture_discard:" + operation.ID, operation.ID, source.Input.Snapshot.ID, encode(input)}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'capture_discard','capture_discard',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			step.Hash,
+			payload,
+			source.Input.Snapshot.ID,
+			request.ExpectedInstance,
+			encode(step.Phase),
+		}},
+		{"UPDATE snapshots SET deleting=1 WHERE id=? AND published=0 AND deleting=0", []any{
+			source.Input.Snapshot.ID,
+		}},
+		{"UPDATE vms SET operation_id=? WHERE id=? AND operation_id IS NULL AND state='stopped' AND current_instance=?", []any{
+			operation.ID,
+			source.Input.Source.Candidate,
+			request.ExpectedInstance,
+		}},
+		{"UPDATE quota_refs SET holder_kind='cleanup',holder_id=? WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			operation.ID + ":capture_discard",
+			request.TenantID,
+			source.OperationID + ":capture",
+			source.OperationID + ":capture",
+		}},
+		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND status='blocked'", []any{
+			"capture:" + source.OperationID,
+			source.OperationID,
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'snapshot',?,'pending',?)", []any{
+			"capture_discard:" + operation.ID,
+			operation.ID,
+			source.Input.Snapshot.ID,
+			encode(input),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err

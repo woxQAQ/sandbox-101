@@ -34,7 +34,9 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 	data, err := io.ReadAll(io.LimitReader(file, (64<<20)+1))
 	if err != nil {
 		return err
@@ -74,7 +76,9 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 	page := uint64(os.Getpagesize())
 	sort.Slice(
 		state.Mappings,
-		func(i, j int) bool { return state.Mappings[i].GPA < state.Mappings[j].GPA },
+		func(i, j int) bool {
+			return state.Mappings[i].GPA < state.Mappings[j].GPA
+		},
 	)
 	var total, end uint64
 	for i, mapping := range state.Mappings {
@@ -106,7 +110,9 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 // Verify the actual retained inode is mapped MAP_PRIVATE over every saved byte.
 // An accepted API request alone cannot establish that CH avoided eager copying.
 func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) error {
-	type extent struct{ offset, end uint64 }
+	type extent struct {
+		offset, end uint64
+	}
 	var extents []extent
 	scanner := bufio.NewScanner(maps)
 	for scanner.Scan() {
@@ -159,7 +165,9 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 	}
 	sort.Slice(
 		extents,
-		func(i, j int) bool { return extents[i].offset < extents[j].offset },
+		func(i, j int) bool {
+			return extents[i].offset < extents[j].offset
+		},
 	)
 	var covered uint64
 	for _, extent := range extents {

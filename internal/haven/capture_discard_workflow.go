@@ -14,7 +14,10 @@ import (
 
 func captureDiscardPaths(step captureDiscardStep) []string {
 	source := step.Input.Source
-	return []string{filepath.Join(source.Input.Source.Input.Resource.Dir, "capture", source.OperationID), source.Input.Snapshot.Dir}
+	return []string{
+		filepath.Join(source.Input.Source.Input.Resource.Dir, "capture", source.OperationID),
+		source.Input.Snapshot.Dir,
+	}
 }
 
 func (service *Service) checkCaptureDiscard(step captureDiscardStep) error {
@@ -24,7 +27,9 @@ func (service *Service) checkCaptureDiscard(step captureDiscardStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadCaptureDiscard(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -96,7 +101,9 @@ func (service *Service) captureDiscardReceipts(step *captureDiscardStep) ([]loom
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadCaptureDiscard(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return nil, err
@@ -202,7 +209,9 @@ func (service *Service) markCaptureDiscardRemoved(step *captureDiscardStep) erro
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.captureDiscardProof(service.ctx, tx, *step, false); err != nil {
 		return err
 	}
@@ -226,7 +235,9 @@ func (service *Service) completeCaptureDiscard(step captureDiscardStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadCaptureDiscard(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -244,28 +255,67 @@ func (service *Service) completeCaptureDiscard(step captureDiscardStep) error {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{snapshot.TenantID, source.OperationID + ":capture", step.OperationID + ":capture_discard"}},
-		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND source_operation_id=?", []any{snapshot.TenantID, source.OperationID + ":capture", source.OperationID}},
-		{"DELETE FROM reservations WHERE owner=?", []any{"snapshot:" + snapshot.ID}},
-		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{resource.Candidate, source.OperationID}},
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{resource.Input.Resource.Config.Image, source.OperationID}},
-		{"DELETE FROM snapshots WHERE id=? AND published=0 AND deleting=1 AND body=?", []any{snapshot.ID, encode(snapshot)}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{"capture:" + source.OperationID, source.OperationID}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{"capture_discard:" + step.OperationID, step.OperationID}},
-		{"UPDATE vms SET operation_id=NULL WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'", []any{resource.Candidate, step.OperationID, step.Input.Request.ExpectedInstance}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			snapshot.TenantID,
+			source.OperationID + ":capture",
+			step.OperationID + ":capture_discard",
+		}},
+		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			source.OperationID + ":capture",
+			source.OperationID,
+		}},
+		{"DELETE FROM reservations WHERE owner=?", []any{
+			"snapshot:" + snapshot.ID,
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			resource.Candidate,
+			source.OperationID,
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			resource.Input.Resource.Config.Image,
+			source.OperationID,
+		}},
+		{"DELETE FROM snapshots WHERE id=? AND published=0 AND deleting=1 AND body=?", []any{
+			snapshot.ID,
+			encode(snapshot),
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{
+			"capture:" + source.OperationID,
+			source.OperationID,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{
+			"capture_discard:" + step.OperationID,
+			step.OperationID,
+		}},
+		{"UPDATE vms SET operation_id=NULL WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'", []any{
+			resource.Candidate,
+			step.OperationID,
+			step.Input.Request.ExpectedInstance,
+		}},
 	}
 	for _, path := range captureDiscardPaths(step) {
 		statements = append(statements, struct {
 			q    string
 			args []any
-		}{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='capture_discard'", []any{path, step.OperationID}})
+		}{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='capture_discard'", []any{
+			path,
+			step.OperationID,
+		}})
 	}
 	statements = append(statements, []struct {
 		q    string
 		args []any
 	}{
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='capture_discard' AND input_hash=? AND body=? AND status='running'", []any{encode("complete"), step.OperationID, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='capture_discard' AND input_hash=? AND body=? AND status='running'", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	}...)
 	for _, statement := range statements {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {

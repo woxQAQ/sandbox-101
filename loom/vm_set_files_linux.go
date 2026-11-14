@@ -26,8 +26,16 @@ func InspectVMSetDeletion(ctx context.Context, stateRoot string, members []VMDel
 		return empty, nil, fmt.Errorf("empty VM deletion set")
 	}
 	first := members[0].Resource
-	directories := map[string]bool{".": true, "capture": true, "runs": true}
-	files := map[string]os.FileMode{"network.json": 0, "network-policy.json": 0, "network-removing.json": 0}
+	directories := map[string]bool{
+		".":       true,
+		"capture": true,
+		"runs":    true,
+	}
+	files := map[string]os.FileMode{
+		"network.json":          0,
+		"network-policy.json":   0,
+		"network-removing.json": 0,
+	}
 	fixed := map[string]FileIdentity{}
 	addFixed := func(path string, identity FileIdentity) error {
 		if old, ok := fixed[path]; ok && old != identity {
@@ -47,7 +55,11 @@ func InspectVMSetDeletion(ctx context.Context, stateRoot string, members []VMDel
 		directories[run] = true
 		directories[run+"/root"] = true
 		directories[run+"/io"] = true
-		for _, name := range []string{"launch.json", "console.log", "process.json"} {
+		for _, name := range []string{
+			"launch.json",
+			"console.log",
+			"process.json",
+		} {
 			files[run+"/"+name] = 0
 		}
 		files[run+"/io/api.sock"] = os.ModeSocket
@@ -125,7 +137,11 @@ func InspectVMSetDeletion(ctx context.Context, stateRoot string, members []VMDel
 		if err := addFixed(relative, boundary.Parent); err != nil {
 			return empty, nil, err
 		}
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+		for _, name := range []string{
+			"config.json",
+			"state.json",
+			"memory-ranges",
+		} {
 			files[relative+"/ch/"+name] = 0
 		}
 	}

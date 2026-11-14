@@ -37,7 +37,9 @@ func (service *Service) admitDiscard(ctx context.Context, request DiscardRequest
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -71,14 +73,26 @@ func (service *Service) admitDiscard(ctx context.Context, request DiscardRequest
 	if owner != source.OperationID || vm.Deleting || vm.Verified || vm.AgentReady || source.Candidate != sandbox.VMID || current != "" && !expectedCurrentInstance(source, current) {
 		return empty, loom.Fail(loom.ManualRecovery, "discard candidate no longer belongs to failed intent")
 	}
-	input := discardInput{Request: request, Source: source, CurrentInstance: current}
+	input := discardInput{
+		Request:         request,
+		Source:          source,
+		CurrentInstance: current,
+	}
 	if _, err = service.discardSource(ctx, tx, input); err != nil {
 		return empty, err
 	}
 	if _, err = service.generationHistory(ctx, tx, source); err != nil {
 		return empty, err
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: source.Candidate}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID: sandbox.ID,
+			VMID:      source.Candidate,
+		},
+	}
 	if err = service.admitResourceParent(ctx, tx, parent, operation, "discard", source.Candidate, hash); err != nil {
 		return empty, err
 	}
@@ -90,23 +104,70 @@ func (service *Service) admitDiscard(ctx context.Context, request DiscardRequest
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'discard','discard',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, source.Candidate, request.ExpectedInstance, encode(discardState{Phase: "admitted"})}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'vm',?,'pending',?)", []any{"discard:" + operation.ID, operation.ID, source.Candidate, payload}},
-		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND resource_kind='vm' AND resource_id=? AND status='blocked'", []any{"blocked:" + source.OperationID, source.OperationID, source.Candidate}},
-		{"UPDATE vms SET operation_id=?,body=? WHERE id=? AND operation_id=? AND current_instance=?", []any{operation.ID, encode(vm), source.Candidate, source.OperationID, current}},
-		{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state!='terminated'", []any{encode(sandbox), sandbox.ID, request.TenantID}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'discard','discard',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			source.Candidate,
+			request.ExpectedInstance,
+			encode(discardState{
+				Phase: "admitted",
+			}),
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'vm',?,'pending',?)", []any{
+			"discard:" + operation.ID,
+			operation.ID,
+			source.Candidate,
+			payload,
+		}},
+		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND resource_kind='vm' AND resource_id=? AND status='blocked'", []any{
+			"blocked:" + source.OperationID,
+			source.OperationID,
+			source.Candidate,
+		}},
+		{"UPDATE vms SET operation_id=?,body=? WHERE id=? AND operation_id=? AND current_instance=?", []any{
+			operation.ID,
+			encode(vm),
+			source.Candidate,
+			source.OperationID,
+			current,
+		}},
+		{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state!='terminated'", []any{
+			encode(sandbox),
+			sandbox.ID,
+			request.TenantID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
 		}
 	}
-	for _, reference := range []struct{ kind, id string }{{"vm", source.Candidate}, {"image", source.Input.Resource.Config.Image}} {
+	for _, reference := range []struct {
+		kind, id string
+	}{
+		{"vm", source.Candidate},
+		{"image", source.Input.Resource.Config.Image},
+	} {
 		if err = requireWrite(tx.ExecContext(ctx, "UPDATE resource_refs SET holder_kind='cleanup',holder_id=? WHERE resource_kind=? AND resource_id=? AND holder_kind='step' AND holder_id=?", operation.ID+":discard", reference.kind, reference.id, source.OperationID+":resource")); err != nil {
 			return empty, err
 		}
 	}
-	for _, quota := range []struct{ kind, key, holderKind, holder string }{{"pending_storage", source.OperationID + ":resource", "engine_dependency", source.OperationID + ":resource"}, {source.Input.SlotBudget.Kind, sandbox.ID, "active_use", "sandbox:" + sandbox.ID}} {
+	for _, quota := range []struct {
+		kind, key, holderKind, holder string
+	}{
+		{"pending_storage", source.OperationID + ":resource", "engine_dependency", source.OperationID + ":resource"},
+		{source.Input.SlotBudget.Kind, sandbox.ID, "active_use", "sandbox:" + sandbox.ID},
+	} {
 		if err = requireWrite(tx.ExecContext(ctx, "UPDATE quota_refs SET holder_kind='cleanup',holder_id=? WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?", operation.ID+":discard", request.TenantID, quota.kind, quota.key, quota.holderKind, quota.holder)); err != nil {
 			return empty, err
 		}

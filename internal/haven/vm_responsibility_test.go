@@ -21,7 +21,11 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	var workers sync.WaitGroup
 	for range 16 {
 		workers.Go(func() {
-			operation, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "concurrent", TemplateID: "cold"})
+			operation, err := service.AdmitCold(context.Background(), ColdRequest{
+				TenantID:   "tenant",
+				Key:        "concurrent",
+				TemplateID: "cold",
+			})
 			if err != nil {
 				t.Error(err)
 				return
@@ -54,7 +58,11 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 		}
 		return nil
 	}
-	operation, err := service.AdmitCold(ctx, ColdRequest{TenantID: "tenant", Key: "cancel-wait", TemplateID: "cold"})
+	operation, err := service.AdmitCold(ctx, ColdRequest{
+		TenantID:   "tenant",
+		Key:        "cancel-wait",
+		TemplateID: "cold",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +76,20 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 
 func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 	parallelLifecycle(t)
-	for _, scenario := range []string{"quota-boundary", "missing-owner", "missing-tenant", "catalog-manifest-mismatch"} {
+	for _, scenario := range []string{
+		"quota-boundary",
+		"missing-owner",
+		"missing-tenant",
+		"catalog-manifest-mismatch",
+	} {
 		t.Run(scenario, func(t *testing.T) {
 			service, backend := coldService(t, nil)
 			switch scenario {
 			case "quota-boundary":
-				_, err := service.store.db.Exec("UPDATE tenants SET body=? WHERE id='tenant'", encode(tenantRecord{MaxSandboxes: 10, MaxStorageMiB: 63}))
+				_, err := service.store.db.Exec("UPDATE tenants SET body=? WHERE id='tenant'", encode(tenantRecord{
+					MaxSandboxes:  10,
+					MaxStorageMiB: 63,
+				}))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -90,7 +106,9 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				manifest.Tools = map[string]string{"unexpected": "fixture"}
+				manifest.Tools = map[string]string{
+					"unexpected": "fixture",
+				}
 				if err = loom.WriteJSON(filepath.Join(service.store.directory, "images", manifest.Digest[7:], "image.json"), manifest); err != nil {
 					t.Fatal(err)
 				}
@@ -99,7 +117,11 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 			if err := service.store.db.QueryRow("SELECT COUNT(*) FROM operation_steps").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.AdmitCold(context.Background(), ColdRequest{TenantID: "tenant", Key: "denied", TemplateID: "cold"}); err == nil {
+			if _, err := service.AdmitCold(context.Background(), ColdRequest{
+				TenantID:   "tenant",
+				Key:        "denied",
+				TemplateID: "cold",
+			}); err == nil {
 				t.Fatal("unproved admission accepted")
 			}
 			var count int
@@ -150,7 +172,9 @@ func TestHavenInstanceRejectsReplacedPreparedDisk(t *testing.T) {
 
 func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
+	for _, write := range []struct {
+		event, table, condition string
+	}{
 		{"DELETE", "quota_refs", "OLD.kind='vm_disk'"},
 		{"DELETE", "quota_resources", "OLD.kind='vm_disk'"},
 		{"DELETE", "instances", "1"},
@@ -160,7 +184,10 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 		{"UPDATE", "operation_steps", "NEW.action='release' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture retirement rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture retirement rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
 				service, backend := coldService(t, nil)
 				claim := coldClaim(t, service, "claim")
@@ -171,7 +198,11 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 				if _, err := service.store.db.Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+				release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+					TenantID:  "tenant",
+					Key:       "release",
+					SandboxID: claim.Result.SandboxID,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -213,7 +244,11 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 	if step := awaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: claim.Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release",
+		SandboxID: claim.Result.SandboxID,
+	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}
@@ -239,7 +274,9 @@ func TestHavenStepShutdownKeepsWriterUntilWorkersExit(t *testing.T) {
 	var once sync.Once
 	backend.before = func(name string, _ loom.Resource) error {
 		if name == "prepare" {
-			once.Do(func() { close(entered) })
+			once.Do(func() {
+				close(entered)
+			})
 			<-release
 		}
 		return nil
@@ -268,7 +305,9 @@ func TestHavenStepShutdownKeepsWriterUntilWorkersExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = resumed.Close(context.Background()) })
+	t.Cleanup(func() {
+		_ = resumed.Close(context.Background())
+	})
 	if step := awaitColdWorker(t, resumed, operation.ID); step.Status != "succeeded" {
 		t.Fatal("shutdown invented an unexecuted terminal failure", step.State)
 	}

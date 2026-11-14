@@ -25,11 +25,18 @@ func (service *Service) ensureDataResume(ctx context.Context, principal Principa
 		if err != nil {
 			return err
 		}
-		operation, err := service.AdmitResume(ctx, Principal{TenantID: sandbox.TenantID}, "auto-resume:"+id+":"+sandbox.SnapshotID+":"+settings.Generation, Command{Action: "resume", SandboxID: id})
+		operation, err := service.AdmitResume(ctx, Principal{
+			TenantID: sandbox.TenantID,
+		}, "auto-resume:"+id+":"+sandbox.SnapshotID+":"+settings.Generation, Command{
+			Action:    "resume",
+			SandboxID: id,
+		})
 		if err != nil {
 			return err
 		}
-		_, err = service.Wait(ctx, Principal{TenantID: sandbox.TenantID}, operation.ID)
+		_, err = service.Wait(ctx, Principal{
+			TenantID: sandbox.TenantID,
+		}, operation.ID)
 		return err
 	case "resuming":
 		lifecycle, err := loadLifecycle(ctx, service.store.db, sandbox.OperationID)
@@ -39,7 +46,9 @@ func (service *Service) ensureDataResume(ctx context.Context, principal Principa
 		if lifecycle.Input.OwnerTenantID != sandbox.TenantID || lifecycle.Input.Sandbox.ID != id || lifecycle.Input.Command.Action != "resume" {
 			return loom.Fail(loom.Conflict, "automatic resume ownership changed")
 		}
-		_, err = service.Wait(ctx, Principal{TenantID: lifecycle.Input.RequestTenantID}, lifecycle.OperationID)
+		_, err = service.Wait(ctx, Principal{
+			TenantID: lifecycle.Input.RequestTenantID,
+		}, lifecycle.OperationID)
 		return err
 	default:
 		return nil

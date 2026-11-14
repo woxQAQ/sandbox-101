@@ -10,7 +10,12 @@ import (
 )
 
 func insertResourceLink(ctx context.Context, tx *sql.Tx, parent, role, instance string, child Operation, kind, candidate, hash string) error {
-	link := resourceLink{ChildID: child.ID, Kind: kind, RequestHash: hash, Candidate: candidate}
+	link := resourceLink{
+		ChildID:     child.ID,
+		Kind:        kind,
+		RequestHash: hash,
+		Candidate:   candidate,
+	}
 	payload := encode(link)
 	return requireWrite(tx.ExecContext(ctx, "INSERT INTO operation_steps VALUES(?,?,'resource_link',?,?,?,?,'pending',?)", parent, "link:"+role, digest(payload), payload, candidate, instance, encode("admitted")))
 }
@@ -85,10 +90,35 @@ func (service *Service) admitSupplyResource(ctx context.Context, tx *sql.Tx, adm
 			q    string
 			args []any
 		}{
-			{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "pending", encode(parent.Result)}},
-			{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, admission.MAC}},
-			{"INSERT INTO operation_steps VALUES(?,'supply',?,?,?,?,?,'pending',?)", []any{parent.ID, input.Command.Action, digest(payload), payload, input.Template.ID, "", encode(supplyState{Phase: "admitted"})}},
-			{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{input.Template.Config.Image, parent.ID + ":supply"}},
+			{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+				parent.ID,
+				"tenant",
+				input.RequestTenantID,
+				parent.Key,
+				digest(frozen),
+				frozen,
+				"pending",
+				encode(parent.Result),
+			}},
+			{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+				parent.ID,
+				admission.MAC,
+			}},
+			{"INSERT INTO operation_steps VALUES(?,'supply',?,?,?,?,?,'pending',?)", []any{
+				parent.ID,
+				input.Command.Action,
+				digest(payload),
+				payload,
+				input.Template.ID,
+				"",
+				encode(supplyState{
+					Phase: "admitted",
+				}),
+			}},
+			{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{
+				input.Template.Config.Image,
+				parent.ID + ":supply",
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -103,7 +133,16 @@ func (service *Service) admitSupplyResource(ctx context.Context, tx *sql.Tx, adm
 			if err != nil {
 				return err
 			}
-			pool := poolReservation{Template: input.Template, SandboxID: input.SandboxID, VMID: child.Result.VMID, Source: generationRef{OperationID: child.ID, InputHash: resource.Hash}, CreatedAt: input.CreatedAt}
+			pool := poolReservation{
+				Template:  input.Template,
+				SandboxID: input.SandboxID,
+				VMID:      child.Result.VMID,
+				Source: generationRef{
+					OperationID: child.ID,
+					InputHash:   resource.Hash,
+				},
+				CreatedAt: input.CreatedAt,
+			}
 			if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO pool_slots VALUES(?,?,?,?,'pending',?)", parent.ID, input.Template.ID, input.Template.Version, child.Result.VMID, encode(pool))); err != nil {
 				return err
 			}

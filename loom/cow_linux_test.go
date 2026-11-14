@@ -11,16 +11,41 @@ import (
 
 func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 	page := uint64(os.Getpagesize())
-	for _, name := range []string{"valid", "missing", "unaligned", "spanning", "overlap", "file-offset", "virtio-mem", "zone", "short-file", "empty"} {
+	for _, name := range []string{
+		"valid",
+		"missing",
+		"unaligned",
+		"spanning",
+		"overlap",
+		"file-offset",
+		"virtio-mem",
+		"zone",
+		"short-file",
+		"empty",
+	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			mappings := []cowRAMMapping{
-				{GPA: 0, Size: page, ZoneID: "mem0"},
-				{GPA: 4 * page, Size: page, ZoneID: "mem0"},
+				{
+					GPA:    0,
+					Size:   page,
+					ZoneID: "mem0",
+				},
+				{
+					GPA:    4 * page,
+					Size:   page,
+					ZoneID: "mem0",
+				},
 			}
 			ranges := []cowMemoryRange{
-				{GPA: 0, Length: page},
-				{GPA: 4 * page, Length: page},
+				{
+					GPA:    0,
+					Length: page,
+				},
+				{
+					GPA:    4 * page,
+					Length: page,
+				},
 			}
 			length := 2 * page
 			switch name {
@@ -42,7 +67,9 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 				ranges = nil
 			}
 			state := map[string]any{
-				"memory_ranges":      map[string]any{"data": ranges},
+				"memory_ranges": map[string]any{
+					"data": ranges,
+				},
 				"guest_ram_mappings": mappings,
 				"boot_ram":           2 * page,
 				"current_ram":        2 * page,
@@ -61,7 +88,9 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 				},
 			}
 			if name == "missing" {
-				snapshot = map[string]any{"snapshots": map[string]any{}}
+				snapshot = map[string]any{
+					"snapshots": map[string]any{},
+				}
 			}
 			if err = WriteJSON(filepath.Join(dir, "state.json"), snapshot); err != nil {
 				t.Fatal(err)
@@ -87,7 +116,12 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 }
 
 func TestCOWActualMappingsRequireCompletePrivateBacking(t *testing.T) {
-	for _, name := range []string{"private", "shared", "partial", "eager-copy"} {
+	for _, name := range []string{
+		"private",
+		"shared",
+		"partial",
+		"eager-copy",
+	} {
 		t.Run(name, func(t *testing.T) {
 			// memfd provides a native file identity even when the test's temporary
 			// directory is overlayfs, whose mmap device can differ from stat.

@@ -6,7 +6,11 @@ import (
 )
 
 func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
-	for _, change := range []string{"vm-owner", "current-instance", "resource-version"} {
+	for _, change := range []string{
+		"vm-owner",
+		"current-instance",
+		"resource-version",
+	} {
 		t.Run(change, func(t *testing.T) {
 			service, backend := coldService(t, func(point string) error {
 				if point == "step_agent_ready" {

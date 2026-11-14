@@ -38,7 +38,9 @@ func AtomicWrite(path string, b []byte, mode os.FileMode) error {
 		return e
 	}
 	name := f.Name()
-	defer func() { _ = os.Remove(name) }()
+	defer func() {
+		_ = os.Remove(name)
+	}()
 	if e = f.Chmod(mode); e == nil {
 		_, e = f.Write(b)
 	}
@@ -71,7 +73,9 @@ func DigestFile(path string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	h := sha256.New()
 	if _, e = io.Copy(h, f); e != nil {
 		return "", e
@@ -99,7 +103,9 @@ func CopyFile(src, dst string, mode os.FileMode) error {
 		return e
 	}
 	in := os.NewFile(uintptr(fd), src)
-	defer func() { _ = in.Close() }()
+	defer func() {
+		_ = in.Close()
+	}()
 	st, e := in.Stat()
 	if e != nil {
 		return e

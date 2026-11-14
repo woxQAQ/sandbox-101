@@ -28,7 +28,9 @@ func deniedResponse(r *http.Request, status int, message string) *http.Response 
 		ProtoMajor: 1,
 		ProtoMinor: 1,
 		Header: http.Header{
-			"Content-Type": []string{"text/plain; charset=utf-8"},
+			"Content-Type": []string{
+				"text/plain; charset=utf-8",
+			},
 		},
 		Body:          io.NopCloser(strings.NewReader(message)),
 		ContentLength: int64(len(message)),
@@ -66,7 +68,9 @@ func (b *binding) startHTTP() {
 			http.Error(w, "egress: absolute proxy URL required", http.StatusBadRequest)
 		},
 	)
-	proxy.ConnectDial = func(string, string) (net.Conn, error) { return nil, ErrDenied }
+	proxy.ConnectDial = func(string, string) (net.Conn, error) {
+		return nil, ErrDenied
+	}
 	proxy.OnRequest().
 		HandleConnect(goproxy.FuncHttpsHandler(func(address string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			host, port, err := authority(address, "")
@@ -76,7 +80,10 @@ func (b *binding) startHTTP() {
 				_ = b.audit("", "CONNECT", "deny", "destination")
 				return goproxy.RejectConnect, address
 			}
-			t := tunnel{host: host, port: port}
+			t := tunnel{
+				host: host,
+				port: port,
+			}
 			return &goproxy.ConnectAction{
 				Action: goproxy.ConnectHijack,
 				Hijack: func(_ *http.Request, client net.Conn, c *goproxy.ProxyCtx) {
@@ -143,7 +150,10 @@ func (b *binding) startHTTP() {
 					}
 					resp.Body = &cancelBody{
 						ReadCloser: resp.Body,
-						done:       func() { stop(); cancel() },
+						done: func() {
+							stop()
+							cancel()
+						},
 					}
 					_ = b.audit(host, safeMethod(req.Method), "allow", "")
 					return resp, nil
@@ -168,10 +178,15 @@ func (b *binding) startHTTP() {
 		IdleTimeout:       b.manager.opts.IdleTimeout,
 		MaxHeaderBytes:    1 << 20,
 		ErrorLog:          discardLogger,
-		BaseContext:       func(net.Listener) context.Context { return b.ctx },
+		BaseContext: func(net.Listener) context.Context {
+			return b.ctx
+		},
 	}
 	b.workers.Go(
-		func() { ; _ = b.server.Serve(guardedListener{b.listeners[0], b}) },
+		func() {
+
+			_ = b.server.Serve(guardedListener{b.listeners[0], b})
+		},
 	)
 }
 
@@ -190,7 +205,17 @@ func stripHopHeaders(h http.Header) {
 			h.Del(strings.TrimSpace(key))
 		}
 	}
-	for _, key := range []string{"Connection", "Proxy-Connection", "Proxy-Authorization", "Proxy-Authenticate", "Keep-Alive", "TE", "Trailer", "Transfer-Encoding", "Upgrade"} {
+	for _, key := range []string{
+		"Connection",
+		"Proxy-Connection",
+		"Proxy-Authorization",
+		"Proxy-Authenticate",
+		"Keep-Alive",
+		"TE",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
 		h.Del(key)
 	}
 }
@@ -201,4 +226,8 @@ type cancelBody struct {
 	done func()
 }
 
-func (b *cancelBody) Close() error { err := b.ReadCloser.Close(); b.done(); return err }
+func (b *cancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
+}

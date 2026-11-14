@@ -13,15 +13,45 @@ import (
 
 // The runtime fixture supplies a complete static RAM topology and sparse file.
 // Actual private mapping and CH behavior remain separate native/KVM boundaries.
-type restorableRuntime struct{ *coldRuntime }
+type restorableRuntime struct {
+	*coldRuntime
+}
 
 func (backend *restorableRuntime) Capture(ctx context.Context, r loom.Resource, directory string) error {
 	if err := backend.coldRuntime.Capture(ctx, r, directory); err != nil {
 		return err
 	}
 	size := r.Config.Shape.MemoryMiB << 20
-	manager := map[string]any{"boot_ram": size, "current_ram": size, "guest_ram_mappings": []any{map[string]any{"gpa": 0, "size": size, "zone_id": "mem0", "virtio_mem": false, "file_offset": 0}}, "memory_ranges": map[string]any{"data": []any{map[string]any{"gpa": 0, "length": size}}}}
-	state := map[string]any{"snapshots": map[string]any{"memory-manager": map[string]any{"snapshot_data": map[string]any{"state": string(encode(manager))}}}}
+	manager := map[string]any{
+		"boot_ram":    size,
+		"current_ram": size,
+		"guest_ram_mappings": []any{
+			map[string]any{
+				"gpa":         0,
+				"size":        size,
+				"zone_id":     "mem0",
+				"virtio_mem":  false,
+				"file_offset": 0,
+			},
+		},
+		"memory_ranges": map[string]any{
+			"data": []any{
+				map[string]any{
+					"gpa":    0,
+					"length": size,
+				},
+			},
+		},
+	}
+	state := map[string]any{
+		"snapshots": map[string]any{
+			"memory-manager": map[string]any{
+				"snapshot_data": map[string]any{
+					"state": string(encode(manager)),
+				},
+			},
+		},
+	}
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), encode(state), 0o600); err != nil {
 		return err
 	}
@@ -57,13 +87,19 @@ func reopenCloneService(t *testing.T, old *Service, backend loom.Backend) *Servi
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = service.Close(context.Background()) })
+	t.Cleanup(func() {
+		_ = service.Close(context.Background())
+	})
 	return service
 }
 
 func admitCloneFixture(t *testing.T, service *Service, snapshot, key string) Operation {
 	t.Helper()
-	operation, err := service.AdmitClone(context.Background(), CloneRequest{TenantID: "tenant", Key: key, SnapshotID: snapshot})
+	operation, err := service.AdmitClone(context.Background(), CloneRequest{
+		TenantID:   "tenant",
+		Key:        key,
+		SnapshotID: snapshot,
+	})
 	if err != nil && !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}
@@ -86,7 +122,22 @@ func cloneLiability(t *testing.T, service *Service, step resourceStep, ready boo
 
 func TestHavenRestoreResponsibility(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"admission_committed", "restore_prepare_intent", "restore_candidate_prepared", "restore_candidate_copied", "restore_candidate_renamed", "restore_candidate_synced", "restore_materials_complete", "restore_resources_ready", "step_launch_intent", "effect_launched", "step_launched", "step_booted", "step_agent_ready", "completion_before_commit"} {
+	for _, point := range []string{
+		"admission_committed",
+		"restore_prepare_intent",
+		"restore_candidate_prepared",
+		"restore_candidate_copied",
+		"restore_candidate_renamed",
+		"restore_candidate_synced",
+		"restore_materials_complete",
+		"restore_resources_ready",
+		"step_launch_intent",
+		"effect_launched",
+		"step_launched",
+		"step_booted",
+		"step_agent_ready",
+		"completion_before_commit",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, source := cloneFixture(t)
 			service.opts.Fault = func(candidate string) error {
@@ -204,13 +255,18 @@ func TestHavenRestoreKeepsRunningWrites(t *testing.T) {
 
 func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
+	for _, write := range []struct {
+		event, table, condition string
+	}{
 		{"INSERT", "backing", "1"},
 		{"DELETE", "source_leases", "1"},
 		{"UPDATE", "quota_refs", "NEW.holder_id LIKE 'backing:%'"},
 		{"UPDATE", "operation_steps", "NEW.action='clone' AND json_extract(NEW.body,'$.backing_ready')=1"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture handoff rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture handoff rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+"/"+mode, func(t *testing.T) {
 				service, backend, source := cloneFixture(t)
 				sql := fmt.Sprintf("CREATE TRIGGER deny_restore_handoff BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)

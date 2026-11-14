@@ -73,7 +73,12 @@ type directEgress struct {
 
 func (manager *directEgress) Bind(ctx context.Context, id, tenant, path string, policy egress.Policy, secrets map[string]egress.Secret) error {
 	if policy.Mode == "direct" {
-		cleanup, err := manager.service.InstallDirect(ctx, egress.Binding{SandboxID: id, TenantID: tenant, VSockPath: path, Mode: "direct"}, policy)
+		cleanup, err := manager.service.InstallDirect(ctx, egress.Binding{
+			SandboxID: id,
+			TenantID:  tenant,
+			VSockPath: path,
+			Mode:      "direct",
+		}, policy)
 		if err != nil {
 			return err
 		}
@@ -114,8 +119,15 @@ func (manager *directEgress) Close() error {
 func directFixture(t *testing.T) (*Service, *directRuntime, *directEgress) {
 	t.Helper()
 	service, backend, guest, proxy := sandboxFixture(t)
-	runtime := &directRuntime{restorableRuntime: &restorableRuntime{backend}, policy: map[string]*loom.NetworkPolicy{}}
-	manager := &directEgress{egressFixture: proxy, service: service, cleanups: map[string]func() error{}}
+	runtime := &directRuntime{
+		restorableRuntime: &restorableRuntime{backend},
+		policy:            map[string]*loom.NetworkPolicy{},
+	}
+	manager := &directEgress{
+		egressFixture: proxy,
+		service:       service,
+		cleanups:      map[string]func() error{},
+	}
 	service.opts.Backend = runtime
 	service.opts.Egress = manager
 	guest.before = func(name string, _ loom.Resource) error {
@@ -129,8 +141,15 @@ func directFixture(t *testing.T) (*Service, *directRuntime, *directEgress) {
 
 func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	service, runtime, manager := directFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	direct := egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.8.8/32"}}
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	direct := egress.Policy{
+		Mode: "direct",
+		AllowedCIDRs: []string{
+			"8.8.8.8/32",
+		},
+	}
 	claim := claimSandbox(t, service, "claim", nil, direct)
 	waitFixtureWorker(t, service, claim.ID)
 	runtime.policyMu.Lock()
@@ -153,14 +172,24 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "none", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: egress.Policy{Mode: "none"}}); err != nil {
+	if _, err := service.Execute(ctx, principal, "none", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	old, err := loadDirectRetirement(ctx, service.store.db, claim.ID)
 	if err != nil || old.Status != "succeeded" {
 		t.Fatal(old, err)
 	}
-	if _, err = service.Execute(ctx, principal, "direct", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: direct}); err != nil {
+	if _, err = service.Execute(ctx, principal, "direct", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy:    direct,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.policyMu.Lock()
@@ -191,15 +220,28 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 
 func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	service, runtime, _ := directFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.8.8/32"}})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "direct",
+		AllowedCIDRs: []string{
+			"8.8.8.8/32",
+		},
+	})
 	waitFixtureWorker(t, service, claim.ID)
 	runtime.policyMu.Lock()
 	runtime.rejectClear = true
 	runtime.policyMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.Execute(ctx, principal, "none", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: egress.Policy{Mode: "none"}})
+	failed, err := service.Execute(ctx, principal, "none", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if err == nil || failed.Status != "failed" {
 		t.Fatal(failed, err)
 	}
@@ -207,7 +249,11 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	if err != nil || retirement.State.Phase != "pending" || retirement.Status != "running" {
 		t.Fatal(retirement, err)
 	}
-	if _, err = service.AdmitRelease(ctx, ReleaseRequest{TenantID: "tenant", Key: "bypass", SandboxID: claim.Result.SandboxID}); err == nil {
+	if _, err = service.AdmitRelease(ctx, ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "bypass",
+		SandboxID: claim.Result.SandboxID,
+	}); err == nil {
 		t.Fatal("resource admission passed unresolved direct retirement")
 	}
 	runtime.policyMu.Lock()
@@ -233,7 +279,13 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	if _, err = service.DataReady(ctx, principal, claim.Result.SandboxID); err == nil {
 		t.Fatal("retirement removed failed configuration fence")
 	}
-	if _, err = service.Execute(ctx, principal, "repair", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: egress.Policy{Mode: "none"}}); err != nil {
+	if _, err = service.Execute(ctx, principal, "repair", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	original, err := service.GetOperation(ctx, "tenant", claim.ID)

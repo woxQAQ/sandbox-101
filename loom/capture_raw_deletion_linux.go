@@ -16,14 +16,25 @@ func InspectPublishedCaptureRawDeletion(ctx context.Context, stateRoot string, r
 		return empty, fmt.Errorf("published capture raw boundary lacks original identity")
 	}
 	files := map[string]os.FileMode{}
-	for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+	for _, name := range []string{
+		"config.json",
+		"state.json",
+		"memory-ranges",
+	} {
 		relative := "ch/" + name
 		files[relative] = 0
 		if digests[relative] == "" {
 			return empty, fmt.Errorf("published capture artifact digest missing")
 		}
 	}
-	intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{Dir: raw}, map[string]bool{".": true, "ch": true}, files, map[string]FileIdentity{".": boundary.Parent})
+	intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{
+		Dir: raw,
+	}, map[string]bool{
+		".":  true,
+		"ch": true,
+	}, files, map[string]FileIdentity{
+		".": boundary.Parent,
+	})
 	if err != nil {
 		return empty, err
 	}

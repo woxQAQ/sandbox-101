@@ -20,6 +20,8 @@ func InspectOwnedArtifactTopology(ctx context.Context, stateRoot, path string, d
 	if !info.IsDir() || IdentityOf(info) != fixed["."] {
 		return empty, fmt.Errorf("artifact root identity changed")
 	}
-	intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{Dir: path}, directories, files, fixed)
+	intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{
+		Dir: path,
+	}, directories, files, fixed)
 	return intent, err
 }

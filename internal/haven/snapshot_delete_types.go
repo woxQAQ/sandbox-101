@@ -27,7 +27,9 @@ type (
 )
 
 func loadSnapshotDelete(ctx context.Context, q queryer, id string) (snapshotDeleteStep, error) {
-	step := snapshotDeleteStep{OperationID: id}
+	step := snapshotDeleteStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT action,input_hash,input,candidate_resource_id,expected_instance,status,body FROM operation_steps WHERE operation_id=? AND step_key='snapshot_delete'", id).Scan(&action, &step.Hash, &payload, &candidate, &expected, &step.Status, &body)
@@ -179,25 +181,67 @@ func (service *Service) snapshotDeleteProof(ctx context.Context, tx *sql.Tx, ste
 		args []any
 		want int
 	}{
-		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{snapshot.ID, snapshot.TenantID, capture.OperationID}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE kind='snapshot' AND resource_key=?", []any{snapshot.ID}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{snapshot.TenantID, snapshot.ID, snapshot.Manifest.Config.Shape.DiskMiB + snapshot.Manifest.Config.Shape.MemoryMiB, capture.OperationID}, 1},
-		{"SELECT COUNT(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=?", []any{snapshot.ID}, len(backings) + 1},
-		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind=? AND holder_id=?", []any{snapshot.TenantID, snapshot.ID, holderKind, holderID}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=?", []any{snapshot.ID}, len(backings) + 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind=? AND holder_id=?", []any{snapshot.ID, physicalHolderKind, physicalHolderID}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='snapshot' AND holder_id=?", []any{snapshot.Manifest.Config.Image, snapshot.ID}, 1},
-		{"SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM warm WHERE snapshot_id=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=?", []any{snapshot.ID}, 0},
-		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{"snapshot:" + snapshot.ID, (2*snapshot.Manifest.Config.Shape.MemoryMiB + snapshot.Manifest.Config.Shape.DiskMiB + 224) << 20}, 1},
+		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{
+			snapshot.ID,
+			snapshot.TenantID,
+			capture.OperationID,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE kind='snapshot' AND resource_key=?", []any{
+			snapshot.ID,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			snapshot.ID,
+			snapshot.Manifest.Config.Shape.DiskMiB + snapshot.Manifest.Config.Shape.MemoryMiB,
+			capture.OperationID,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_refs WHERE kind='snapshot' AND resource_key=?", []any{
+			snapshot.ID,
+		}, len(backings) + 1},
+		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind=? AND holder_id=?", []any{
+			snapshot.TenantID,
+			snapshot.ID,
+			holderKind,
+			holderID,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=?", []any{
+			snapshot.ID,
+		}, len(backings) + 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind=? AND holder_id=?", []any{
+			snapshot.ID,
+			physicalHolderKind,
+			physicalHolderID,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='snapshot' AND holder_id=?", []any{
+			snapshot.Manifest.Config.Image,
+			snapshot.ID,
+		}, 1},
+		{"SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM warm WHERE snapshot_id=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=?", []any{
+			snapshot.ID,
+		}, 0},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{
+			"snapshot:" + snapshot.ID,
+			(2*snapshot.Manifest.Config.Shape.MemoryMiB + snapshot.Manifest.Config.Shape.DiskMiB + 224) << 20,
+		}, 1},
 	}
 	if !admitting {
 		checks = append(checks, struct {
 			q    string
 			args []any
 			want int
-		}{"SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind='snapshot' AND resource_id=? AND status=? AND body=?", []any{"snapshot_delete:" + step.OperationID, step.OperationID, snapshot.ID, cleanupStatus, encode(step.Input)}, 1})
+		}{"SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind='snapshot' AND resource_id=? AND status=? AND body=?", []any{
+			"snapshot_delete:" + step.OperationID,
+			step.OperationID,
+			snapshot.ID,
+			cleanupStatus,
+			encode(step.Input),
+		}, 1})
 		var original struct {
 			Action  string
 			Request SnapshotDeleteRequest

@@ -34,11 +34,16 @@ func (service *Service) admitLifecycle(ctx context.Context, principal Principal,
 	if command.Action != "release" && command.Action != "checkpoint" && command.Action != "pause" {
 		return empty, loom.Fail(loom.Invalid, "unsupported lifecycle action")
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC: mac,
+	}); found || err != nil {
 		return operation, err
 	}
 	guard := service.vmLock("configuration:" + command.SandboxID)
@@ -81,7 +86,19 @@ func (service *Service) admitLifecycle(ctx context.Context, principal Principal,
 			return empty, err
 		}
 	}
-	input := lifecycleInput{PriorFence: priorFence, SourceInstance: source.State.Witness, RequestTenantID: principal.TenantID, OwnerTenantID: sandbox.TenantID, Command: sanitizedCommand(command), Sandbox: sandbox, Settings: settings, Source: generationRef{OperationID: source.OperationID, InputHash: source.Hash}}
+	input := lifecycleInput{
+		PriorFence:      priorFence,
+		SourceInstance:  source.State.Witness,
+		RequestTenantID: principal.TenantID,
+		OwnerTenantID:   sandbox.TenantID,
+		Command:         sanitizedCommand(command),
+		Sandbox:         sandbox,
+		Settings:        settings,
+		Source: generationRef{
+			OperationID: source.OperationID,
+			InputHash:   source.Hash,
+		},
+	}
 	if command.Action == "release" && sandbox.State != "paused" && source.Status == "succeeded" {
 		refs, err := failedCaptureReferences(ctx, service.store.db, source)
 		if err != nil {
@@ -92,27 +109,62 @@ func (service *Service) admitLifecycle(ctx context.Context, principal Principal,
 	if command.Action == "checkpoint" {
 		input.CheckpointID = newID("cp_")
 	}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID, CheckpointID: input.CheckpointID}}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:    sandbox.ID,
+			VMID:         sandbox.VMID,
+			CheckpointID: input.CheckpointID,
+		},
+	}
 	if command.Action == "checkpoint" && sandbox.State == "paused" {
 		return service.admitPausedCheckpoint(ctx, parent, input, mac)
 	}
 	if command.Action == "release" && sandbox.State == "paused" {
 		return service.admitPausedRelease(ctx, parent, input, mac, upper)
 	}
-	admission := &lifecycleAdmission{Upper: upper, Parent: parent, Input: input, MAC: mac, Role: "capture"}
+	admission := &lifecycleAdmission{
+		Upper:  upper,
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Role:   "capture",
+	}
 	var child Operation
 	if command.Action == "release" {
 		admission.Role = "release"
 		if len(input.CaptureFailures) > 0 {
 			admission.Role = "stop"
-			child, err = service.admitStop(ctx, StopRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":stop", SandboxID: sandbox.ID, ExpectedInstance: source.State.Witness}, admission)
+			child, err = service.admitStop(ctx, StopRequest{
+				TenantID:         sandbox.TenantID,
+				Key:              parent.ID + ":stop",
+				SandboxID:        sandbox.ID,
+				ExpectedInstance: source.State.Witness,
+			}, admission)
 		} else if source.Status == "failed" {
-			child, err = service.admitDiscard(ctx, DiscardRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":release", SandboxID: sandbox.ID, FailedOperationID: source.OperationID, ExpectedInstance: source.Input.Resource.Instance}, admission)
+			child, err = service.admitDiscard(ctx, DiscardRequest{
+				TenantID:          sandbox.TenantID,
+				Key:               parent.ID + ":release",
+				SandboxID:         sandbox.ID,
+				FailedOperationID: source.OperationID,
+				ExpectedInstance:  source.Input.Resource.Instance,
+			}, admission)
 		} else {
-			child, err = service.admitRelease(ctx, ReleaseRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":release", SandboxID: sandbox.ID}, admission)
+			child, err = service.admitRelease(ctx, ReleaseRequest{
+				TenantID:  sandbox.TenantID,
+				Key:       parent.ID + ":release",
+				SandboxID: sandbox.ID,
+			}, admission)
 		}
 	} else {
-		child, err = service.admitCapture(ctx, CaptureRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":capture", SandboxID: sandbox.ID, ExpectedInstance: sandbox.Instance}, admission)
+		child, err = service.admitCapture(ctx, CaptureRequest{
+			TenantID:         sandbox.TenantID,
+			Key:              parent.ID + ":capture",
+			SandboxID:        sandbox.ID,
+			ExpectedInstance: sandbox.Instance,
+		}, admission)
 	}
 	if child.ID == "" {
 		return empty, err
@@ -192,7 +244,9 @@ func (service *Service) completeCheckpoint(step lifecycleStep, capture captureSt
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
 		return err
 	}
@@ -203,17 +257,50 @@ func (service *Service) completeCheckpoint(step lifecycleStep, capture captureSt
 	if !reflect.DeepEqual(current, capture) || capture.Status != "succeeded" || capture.State.Phase != "complete" || capture.State.ResumeRequired || !capture.State.ArtifactsSynced {
 		return fmt.Errorf("checkpoint lacks original capture publication")
 	}
-	cp := Checkpoint{TemplateID: capture.Input.Source.Input.TemplateID, ID: step.Input.CheckpointID, TenantID: step.Input.OwnerTenantID, SandboxID: step.Input.Sandbox.ID, SnapshotID: capture.Input.Snapshot.ID, Shape: capture.Input.Source.Input.Resource.Config.Shape, CreatedAt: time.Now().UTC()}
+	cp := Checkpoint{
+		TemplateID: capture.Input.Source.Input.TemplateID,
+		ID:         step.Input.CheckpointID,
+		TenantID:   step.Input.OwnerTenantID,
+		SandboxID:  step.Input.Sandbox.ID,
+		SnapshotID: capture.Input.Snapshot.ID,
+		Shape:      capture.Input.Source.Input.Resource.Config.Shape,
+		CreatedAt:  time.Now().UTC(),
+	}
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO checkpoint_bindings VALUES(?,?,?,?,?)", []any{cp.ID, cp.TenantID, cp.SnapshotID, step.OperationID, encode(cp)}},
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'checkpoint_binding',?)", []any{cp.SnapshotID, cp.ID}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{cp.TenantID, cp.SnapshotID, "checkpoint-binding:" + cp.ID}},
-		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{cp.SandboxID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND status IN ('pending','running') AND input_hash=?", []any{encode(lifecycleState{Phase: "complete", SnapshotID: cp.SnapshotID}), step.OperationID, step.Hash}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"INSERT INTO checkpoint_bindings VALUES(?,?,?,?,?)", []any{
+			cp.ID,
+			cp.TenantID,
+			cp.SnapshotID,
+			step.OperationID,
+			encode(cp),
+		}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'checkpoint_binding',?)", []any{
+			cp.SnapshotID,
+			cp.ID,
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{
+			cp.TenantID,
+			cp.SnapshotID,
+			"checkpoint-binding:" + cp.ID,
+		}},
+		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+			cp.SandboxID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND status IN ('pending','running') AND input_hash=?", []any{
+			encode(lifecycleState{
+				Phase:      "complete",
+				SnapshotID: cp.SnapshotID,
+			}),
+			step.OperationID,
+			step.Hash,
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -235,7 +322,9 @@ func (service *Service) completeReleaseLifecycle(step lifecycleStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
 		return err
 	}
@@ -294,9 +383,20 @@ func (service *Service) completeReleaseLifecycle(step lifecycleStep) error {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{step.Input.Sandbox.ID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND status IN ('pending','running') AND input_hash=?", []any{encode(lifecycleState{Phase: "complete"}), step.OperationID, step.Hash}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+			step.Input.Sandbox.ID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND status IN ('pending','running') AND input_hash=?", []any{
+			encode(lifecycleState{
+				Phase: "complete",
+			}),
+			step.OperationID,
+			step.Hash,
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

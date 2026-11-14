@@ -16,7 +16,9 @@ import (
 // vsock socket. It does not infer readiness or publish sandbox state.
 type LiveGuest struct{}
 
-func guestSocket(resource loom.Resource) string { return filepath.Join(resource.RunDir, "io", "vsock") }
+func guestSocket(resource loom.Resource) string {
+	return filepath.Join(resource.RunDir, "io", "vsock")
+}
 
 func guestControl(ctx context.Context, resource loom.Resource, port int, method string, params map[string]any) (map[string]any, error) {
 	return loom.GuestControl(ctx, guestSocket(resource), port, newID("rpc-"), method, params)
@@ -38,7 +40,14 @@ func (LiveGuest) Activate(ctx context.Context, resource loom.Resource, activatio
 	for key, value := range activation.Env {
 		env[key] = value
 	}
-	_, err := guestControl(ctx, resource, 2046, "activate", map[string]any{"sandbox_id": activation.SandboxID, "hostname": activation.Hostname, "reset_identity": activation.ResetIdentity, "env": env, "network": activation.Network, "ca_pem": activation.CAPEM})
+	_, err := guestControl(ctx, resource, 2046, "activate", map[string]any{
+		"sandbox_id":     activation.SandboxID,
+		"hostname":       activation.Hostname,
+		"reset_identity": activation.ResetIdentity,
+		"env":            env,
+		"network":        activation.Network,
+		"ca_pem":         activation.CAPEM,
+	})
 	return err
 }
 
@@ -57,7 +66,10 @@ func (LiveGuest) Exec(ctx context.Context, resource loom.Resource, key, command 
 	if key == "" {
 		return loom.Fail(loom.Invalid, "warmup requires explicit exec identity")
 	}
-	result, err := guestControl(ctx, resource, 2048, "exec", map[string]any{"exec_key": key, "command": command})
+	result, err := guestControl(ctx, resource, 2048, "exec", map[string]any{
+		"exec_key": key,
+		"command":  command,
+	})
 	if err != nil {
 		var classified *loom.Error
 		if errors.As(err, &classified) && classified.Code != loom.Internal {
@@ -90,11 +102,20 @@ func (client LiveGuest) Forward(ctx context.Context, resource loom.Resource, por
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 	defer stop()
-	params, _ := structpb.NewStruct(map[string]any{"port": port})
+	params, _ := structpb.NewStruct(map[string]any{
+		"port": port,
+	})
 	id := newID("forward-")
-	err = protocol.WriteFrame(conn, &protocol.Frame{Id: id, Method: "port_forward", Params: params, Eof: true})
+	err = protocol.WriteFrame(conn, &protocol.Frame{
+		Id:     id,
+		Method: "port_forward",
+		Params: params,
+		Eof:    true,
+	})
 	if err == nil {
 		var reply *protocol.Frame
 		reply, err = protocol.ReadFrame(conn)

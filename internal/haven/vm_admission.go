@@ -66,7 +66,9 @@ func (service *Service) admitProvision(ctx context.Context, tenantID, key string
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if claim != nil {
 		var previous string
 		lookup := tx.QueryRowContext(ctx, "SELECT c.request_mac FROM operations o JOIN operation_credentials c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?", tenantID, key).Scan(&previous)

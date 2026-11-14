@@ -35,7 +35,9 @@ func (b *CloudHypervisor) verifyCOWMappings(r Resource) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = maps.Close() }()
+	defer func() {
+		_ = maps.Close()
+	}()
 	if err = verifyCOWFileMappings(maps, &backing, uint64(backing.Size)); err != nil {
 		return err
 	}

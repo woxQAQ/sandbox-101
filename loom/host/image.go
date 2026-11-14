@@ -31,7 +31,11 @@ func (m ImageManifest) Verify(dir, digest string) error {
 	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest || m.Architecture != runtime.GOARCH || m.Builder != "" || len(m.Artifacts) != 0 {
 		return api.Fail(api.Incompatible, "image format/platform mismatch")
 	}
-	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
+	for _, name := range []string{
+		"kernel",
+		"initramfs",
+		"root.erofs",
+	} {
 		if _, ok := m.Files[name]; !ok {
 			return api.Fail(api.Incompatible, "image missing %s", name)
 		}

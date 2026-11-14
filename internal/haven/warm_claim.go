@@ -11,7 +11,9 @@ import (
 )
 
 func (service *Service) setWarmClaimPhase(step *warmClaimStep, phase string) error {
-	if err := requireWrite(service.store.db.ExecContext(service.ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(warmClaimState{Phase: phase}), step.OperationID, step.Hash, encode(step.State))); err != nil {
+	if err := requireWrite(service.store.db.ExecContext(service.ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(warmClaimState{
+		Phase: phase,
+	}), step.OperationID, step.Hash, encode(step.State))); err != nil {
 		return err
 	}
 	step.State.Phase = phase
@@ -29,7 +31,9 @@ func (service *Service) seedFallbackActivation(step warmClaimStep, source resour
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	latest, err := loadActivation(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -54,7 +58,17 @@ func (service *Service) seedFallbackActivation(step warmClaimStep, source resour
 	if source.Status != "succeeded" || source.State.Witness == "" || source.Input.SandboxID != step.Input.Pool.SandboxID || source.Input.Restore == nil || source.Input.Restore.Snapshot.ID != step.Input.Restore.Snapshot.ID {
 		return fmt.Errorf("fallback lacks successful frozen clone witness")
 	}
-	input := activationInput{Attempt: "golden", RequestTenantID: step.Input.RequestTenantID, TenantID: step.Input.Pool.Template.TenantID, SandboxID: step.Input.Pool.SandboxID, ResourceOperation: source.OperationID, ResourceHash: source.Hash, ExpectedInstance: source.State.Witness, Settings: step.Input.Settings, ResetIdentity: true}
+	input := activationInput{
+		Attempt:           "golden",
+		RequestTenantID:   step.Input.RequestTenantID,
+		TenantID:          step.Input.Pool.Template.TenantID,
+		SandboxID:         step.Input.Pool.SandboxID,
+		ResourceOperation: source.OperationID,
+		ResourceHash:      source.Hash,
+		ExpectedInstance:  source.State.Witness,
+		Settings:          step.Input.Settings,
+		ResetIdentity:     true,
+	}
 	payload := encode(input)
 	if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO operation_steps VALUES(?,'activation:golden','activate',?,?,?,?,'pending',?)", step.OperationID, digest(payload), payload, source.Candidate, source.State.Witness, encode("admitted"))); err != nil {
 		return err
@@ -95,8 +109,16 @@ func (service *Service) runWarmClaim(step warmClaimStep) (runErr error) {
 	}
 	if step.State.Phase == "warm_failed" {
 		if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "warm_release"); errors.Is(lookup, sql.ErrNoRows) {
-			parent := &warmClaimAdmission{ParentID: step.OperationID, Input: step.Input, Role: "warm_release"}
-			if _, err := service.admitRelease(service.ctx, ReleaseRequest{TenantID: step.Input.Pool.Template.TenantID, Key: step.OperationID + ":warm_release", SandboxID: step.Input.Pool.SandboxID}, parent); err != nil {
+			parent := &warmClaimAdmission{
+				ParentID: step.OperationID,
+				Input:    step.Input,
+				Role:     "warm_release",
+			}
+			if _, err := service.admitRelease(service.ctx, ReleaseRequest{
+				TenantID:  step.Input.Pool.Template.TenantID,
+				Key:       step.OperationID + ":warm_release",
+				SandboxID: step.Input.Pool.SandboxID,
+			}, parent); err != nil {
 				return err
 			}
 		} else if lookup != nil {
@@ -135,15 +157,29 @@ func (service *Service) runWarmClaim(step warmClaimStep) (runErr error) {
 		if err != nil {
 			return err
 		}
-		request := CloneRequest{TenantID: template.TenantID, Key: step.OperationID + ":fallback", SnapshotID: template.SnapshotID}
+		request := CloneRequest{
+			TenantID:   template.TenantID,
+			Key:        step.OperationID + ":fallback",
+			SnapshotID: template.SnapshotID,
+		}
 		frozen := encode(struct {
 			Action  string
 			Request CloneRequest
 		}{"clone", request})
-		parent := &warmClaimAdmission{ParentID: step.OperationID, Input: step.Input, Role: "fallback"}
+		parent := &warmClaimAdmission{
+			ParentID: step.OperationID,
+			Input:    step.Input,
+			Role:     "fallback",
+		}
 		identity := sandbox.Identity
 		identity.ProvisionSource = "golden"
-		if _, err = service.admitProvision(service.ctx, template.TenantID, request.Key, frozen, digest(frozen), template, image, &source, nil, &provisionTarget{Identity: &identity, Sandbox: sandbox, SlotOperation: step.Input.Source.Input.SlotOperation, SlotHolder: "claim:" + step.OperationID, Parent: parent}); err != nil {
+		if _, err = service.admitProvision(service.ctx, template.TenantID, request.Key, frozen, digest(frozen), template, image, &source, nil, &provisionTarget{
+			Identity:      &identity,
+			Sandbox:       sandbox,
+			SlotOperation: step.Input.Source.Input.SlotOperation,
+			SlotHolder:    "claim:" + step.OperationID,
+			Parent:        parent,
+		}); err != nil {
 			return err
 		}
 	} else if lookup != nil {

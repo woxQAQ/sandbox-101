@@ -49,7 +49,9 @@ type forkBranchAdmission struct {
 }
 
 func loadFork(ctx context.Context, q queryer, id string) (forkStep, error) {
-	step := forkStep{OperationID: id}
+	step := forkStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='fork_group'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &expected)
@@ -131,7 +133,9 @@ func (parent *forkBranchAdmission) admitResource(ctx context.Context, service *S
 	}
 	return insertResourceLink(ctx, tx, parent.Group.OperationID, fmt.Sprintf("branch:%d", parent.Index), "", child, kind, candidate, hash)
 }
-func forkSlotHolder(group, sandbox string) string { return "fork:" + group + ":" + sandbox }
+func forkSlotHolder(group, sandbox string) string {
+	return "fork:" + group + ":" + sandbox
+}
 func forkTargetIDs(input forkInput) []string {
 	ids := make([]string, len(input.Targets))
 	for index, target := range input.Targets {
@@ -147,7 +151,9 @@ func (service *Service) saveFork(step *forkStep, state forkState) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='fork_group' AND input_hash=? AND status IN ('pending','running') AND body=?", encode(state), step.OperationID, step.Hash, encode(step.State))); err != nil {
 		return err
 	}
@@ -165,4 +171,6 @@ func (service *Service) forkSecrets(group forkStep) {
 		service.opSecrets[child] = service.opSecrets[group.OperationID]
 	}
 }
-func sameForkTargets(first, second []string) bool { return slices.Equal(first, second) }
+func sameForkTargets(first, second []string) bool {
+	return slices.Equal(first, second)
+}

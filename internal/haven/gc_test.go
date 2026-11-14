@@ -17,7 +17,12 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 	runtime.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	failed, err := service.Execute(ctx, Principal{TenantID: "tenant"}, "refill", Command{Action: "refill", TemplateID: "golden"})
+	failed, err := service.Execute(ctx, Principal{
+		TenantID: "tenant",
+	}, "refill", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	})
 	if err == nil || failed.Status != "failed" {
 		t.Fatal(failed, err)
 	}
@@ -29,14 +34,26 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 	if err = service.store.db.QueryRow("SELECT epoch FROM store_metadata").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.CollectGarbage(ctx, Principal{Root: true, TenantID: "root"}, "", GCOptions{DryRun: true, Budget: 20 * time.Second})
+	report, err := service.CollectGarbage(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "", GCOptions{
+		DryRun: true,
+		Budget: 20 * time.Second,
+	})
 	if err != nil || report.Blocked || len(report.Candidates) != 1 || report.Candidates[0].Kind != "supply" {
 		t.Fatal(report, err)
 	}
 	if err = service.store.db.QueryRow("SELECT epoch FROM store_metadata").Scan(&after); err != nil || before != after {
 		t.Fatal("dry-run changed metadata", before, after, err)
 	}
-	result, err := service.CollectGarbage(ctx, Principal{Root: true, TenantID: "root"}, "gc", GCOptions{Batch: 1, Budget: 20 * time.Second})
+	result, err := service.CollectGarbage(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "gc", GCOptions{
+		Batch:  1,
+		Budget: 20 * time.Second,
+	})
 	if err != nil || len(result.Collected) != 1 {
 		t.Fatal(result, err)
 	}
@@ -51,25 +68,46 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 
 func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	service, _, _, _ := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+	if _, err := service.Execute(ctx, principal, "pause", Command{
+		Action:    "pause",
+		SandboxID: claim.Result.SandboxID,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	paused, err := service.Get(ctx, principal, claim.Result.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	protected, err := service.CollectGarbage(ctx, Principal{Root: true, TenantID: "root"}, "", GCOptions{DryRun: true, Budget: 20 * time.Second})
+	protected, err := service.CollectGarbage(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "", GCOptions{
+		DryRun: true,
+		Budget: 20 * time.Second,
+	})
 	if err != nil || len(protected.Candidates) != 0 {
 		t.Fatal(protected, err)
 	}
-	if _, err = service.Execute(ctx, principal, "release", Command{Action: "release", SandboxID: paused.ID}); err != nil {
+	if _, err = service.Execute(ctx, principal, "release", Command{
+		Action:    "release",
+		SandboxID: paused.ID,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.CollectGarbage(ctx, Principal{Root: true, TenantID: "root"}, "gc", GCOptions{Budget: 20 * time.Second})
+	report, err := service.CollectGarbage(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "gc", GCOptions{
+		Budget: 20 * time.Second,
+	})
 	if err != nil || len(report.Collected) != 1 || report.Collected[0].ID != paused.SnapshotID {
 		t.Fatal(report, err)
 	}

@@ -48,7 +48,9 @@ func TestGuardRejectsSpecialAndMixedAnswers(t *testing.T) {
 		"fe80::1",
 		"ff02::1",
 	}
-	p, err := compilePolicy(Policy{Mode: "relay"}, false)
+	p, err := compilePolicy(Policy{
+		Mode: "relay",
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,11 @@ func TestGuardRejectsSpecialAndMixedAnswers(t *testing.T) {
 			t.Errorf("accepted %s", raw)
 		}
 	}
-	for _, raw := range []string{"8.8.8.8", "::ffff:8.8.8.8", "2606:4700:4700::1111"} {
+	for _, raw := range []string{
+		"8.8.8.8",
+		"::ffff:8.8.8.8",
+		"2606:4700:4700::1111",
+	} {
 		if p.checkIP(netip.MustParseAddr(raw)) != nil {
 			t.Errorf("blocked public address %s", raw)
 		}
@@ -79,7 +85,9 @@ func TestGuardRejectsSpecialAndMixedAnswers(t *testing.T) {
 				return nil, errors.New("unexpected")
 			},
 		},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		nil,
 	)
 	resp, _ := get(t, proxyClient(t, m, b), "http://example.com/")
@@ -96,9 +104,13 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 			Resolver: resolverFunc(
 				func(context.Context, string, string) ([]netip.Addr, error) {
 					if lookups.Add(1) == 1 {
-						return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+						return []netip.Addr{
+							netip.MustParseAddr("8.8.8.8"),
+						}, nil
 					}
-					return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+					return []netip.Addr{
+						netip.MustParseAddr("127.0.0.1"),
+					}, nil
 				},
 			),
 			DialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -106,7 +118,9 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 				return nil, errors.New("unexpected")
 			},
 		},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		nil,
 	)
 	r, _ := get(t, proxyClient(t, m, b), "http://example.com/")
@@ -116,18 +130,26 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 	var reached atomic.Int32
 	up := httptest.NewTLSServer(
 		http.HandlerFunc(
-			func(http.ResponseWriter, *http.Request) { reached.Add(1) },
+			func(http.ResponseWriter, *http.Request) {
+				reached.Add(1)
+			},
 		),
 	)
 	defer up.Close()
 	m2, b2 := newTestManager(
 		t,
-		Options{DialContext: targetDialer(up.Listener.Addr().String(), nil)},
-		Policy{Mode: "relay"},
+		Options{
+			DialContext: targetDialer(up.Listener.Addr().String(), nil),
+		},
+		Policy{
+			Mode: "relay",
+		},
 		map[string]Secret{
 			"key": {
-				Value:  "host-secret",
-				Hosts:  []string{"example.com"},
+				Value: "host-secret",
+				Hosts: []string{
+					"example.com",
+				},
 				Header: "X-Key",
 			},
 		},
@@ -139,7 +161,10 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 }
 
 func TestPrivateCIDRExemptionsAndSecretFormatting(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
+	for _, enabled := range []bool{
+		false,
+		true,
+	} {
 		p, err := compilePolicy(
 			Policy{
 				Mode: "relay",
@@ -157,19 +182,30 @@ func TestPrivateCIDRExemptionsAndSecretFormatting(t *testing.T) {
 		if allowed := p.checkIP(netip.MustParseAddr("10.2.3.4")) == nil; allowed != enabled {
 			t.Fatal("private CIDR opt-in ignored")
 		}
-		for _, raw := range []string{"10.3.3.4", "169.254.169.254", "64:ff9b::808:808"} {
+		for _, raw := range []string{
+			"10.3.3.4",
+			"169.254.169.254",
+			"64:ff9b::808:808",
+		} {
 			if p.checkIP(netip.MustParseAddr(raw)) == nil {
 				t.Fatalf("exempted %s", raw)
 			}
 		}
 	}
 	s := Secret{
-		Value:  "do-not-persist",
-		Hosts:  []string{"example.com"},
+		Value: "do-not-persist",
+		Hosts: []string{
+			"example.com",
+		},
 		Header: "Authorization",
 	}
 	data, _ := json.Marshal(s)
-	for _, out := range []string{string(data), fmt.Sprintf("%v", s), fmt.Sprintf("%+v", s), fmt.Sprintf("%#v", s)} {
+	for _, out := range []string{
+		string(data),
+		fmt.Sprintf("%v", s),
+		fmt.Sprintf("%+v", s),
+		fmt.Sprintf("%#v", s),
+	} {
 		if strings.Contains(out, s.Value) {
 			t.Fatalf("credential serialization leaked: %s", out)
 		}
@@ -189,7 +225,9 @@ func TestRevokeCancelsInFlightNumericDial(t *testing.T) {
 				return nil, ctx.Err()
 			},
 		},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		nil,
 	)
 	client := proxyClient(t, m, b)

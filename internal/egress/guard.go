@@ -191,7 +191,9 @@ func (b *binding) resolve(ctx context.Context, host string) ([]netip.Addr, error
 	}
 	var ips []netip.Addr
 	if ip, err := netip.ParseAddr(host); err == nil {
-		ips = []netip.Addr{ip}
+		ips = []netip.Addr{
+			ip,
+		}
 	} else {
 		var err error
 		ips, err = b.manager.opts.Resolver.LookupNetIP(ctx, "ip", host)
@@ -236,7 +238,10 @@ func (b *binding) dial(ctx context.Context, network, address string) (net.Conn, 
 		if err != nil {
 			continue
 		}
-		t, err := b.track(&idleConn{Conn: c, timeout: b.manager.opts.IdleTimeout}, false)
+		t, err := b.track(&idleConn{
+			Conn:    c,
+			timeout: b.manager.opts.IdleTimeout,
+		}, false)
 		if err != nil {
 			return nil, err
 		}

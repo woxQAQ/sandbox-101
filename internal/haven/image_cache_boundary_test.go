@@ -11,13 +11,21 @@ import (
 )
 
 func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
-	for _, condition := range []string{"reader", "replacement"} {
+	for _, condition := range []string{
+		"reader",
+		"replacement",
+	} {
 		t.Run(condition, func(t *testing.T) {
 			service, _ := failedCachedImport(t)
-			root := Principal{Root: true, TenantID: "root"}
+			root := Principal{
+				Root:     true,
+				TenantID: "root",
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			work, err := service.CollectGarbage(ctx, root, "work", GCOptions{Budget: 15 * time.Second})
+			work, err := service.CollectGarbage(ctx, root, "work", GCOptions{
+				Budget: 15 * time.Second,
+			})
 			if err != nil || len(work.Collected) != 1 {
 				t.Fatal(work, err)
 			}
@@ -37,7 +45,9 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = reader.Close() }()
+				defer func() {
+					_ = reader.Close()
+				}()
 			} else {
 				service.opts.Fault = func(point string) error {
 					if point == "image_cleanup_prepared" {
@@ -46,7 +56,9 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 					return nil
 				}
 			}
-			report, err := service.CollectGarbage(ctx, root, "cache", GCOptions{Budget: 15 * time.Second})
+			report, err := service.CollectGarbage(ctx, root, "cache", GCOptions{
+				Budget: 15 * time.Second,
+			})
 			if err != nil || len(report.Collected) != 0 {
 				t.Fatal(report, err)
 			}
@@ -87,7 +99,9 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if err = os.Chmod(cache.Witness.Path, 0o555); err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = os.Chmod(cache.Witness.Path, 0o700) })
+				t.Cleanup(func() {
+					_ = os.Chmod(cache.Witness.Path, 0o700)
+				})
 				service.opts.Fault = nil
 				if err = service.Reconcile(); err != nil {
 					t.Fatal(err)

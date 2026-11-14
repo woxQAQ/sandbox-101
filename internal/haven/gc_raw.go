@@ -36,14 +36,22 @@ func (service *Service) rawGCCandidates(ctx context.Context) ([]GCItem, []GCItem
 		var owner sql.NullString
 		err = service.store.db.QueryRowContext(ctx, "SELECT state,current_instance,operation_id FROM vms WHERE id=?", source.Candidate).Scan(&state, &instance, &owner)
 		if errors.Is(err, sql.ErrNoRows) {
-			deferred = append(deferred, GCItem{Kind: "raw_capture", ID: id, Reason: "source lacks independent successful reclamation/stop proof"})
+			deferred = append(deferred, GCItem{
+				Kind:   "raw_capture",
+				ID:     id,
+				Reason: "source lacks independent successful reclamation/stop proof",
+			})
 			continue
 		}
 		if err != nil {
 			return nil, nil, err
 		}
 		if state != "stopped" || owner.Valid || instance != source.State.Witness {
-			deferred = append(deferred, GCItem{Kind: "raw_capture", ID: id, Reason: "source remains active or owned"})
+			deferred = append(deferred, GCItem{
+				Kind:   "raw_capture",
+				ID:     id,
+				Reason: "source remains active or owned",
+			})
 			continue
 		}
 		stopRows, err := service.store.db.QueryContext(ctx, "SELECT operation_id FROM operation_steps WHERE step_key='stop' AND status='succeeded' AND candidate_resource_id=? AND expected_instance=? ORDER BY rowid DESC", source.Input.SandboxID, source.State.Witness)
@@ -73,10 +81,20 @@ func (service *Service) rawGCCandidates(ctx context.Context) ([]GCItem, []GCItem
 			}
 		}
 		if selected == "" {
-			deferred = append(deferred, GCItem{Kind: "raw_capture", ID: id, Reason: "original stopped generation witness missing"})
+			deferred = append(deferred, GCItem{
+				Kind:   "raw_capture",
+				ID:     id,
+				Reason: "original stopped generation witness missing",
+			})
 			continue
 		}
-		candidates = append(candidates, GCItem{Kind: "raw_capture", ID: id, TenantID: capture.Input.Request.TenantID, Proof: capture.Hash, OperationID: selected})
+		candidates = append(candidates, GCItem{
+			Kind:        "raw_capture",
+			ID:          id,
+			TenantID:    capture.Input.Request.TenantID,
+			Proof:       capture.Hash,
+			OperationID: selected,
+		})
 	}
 	return candidates, deferred, nil
 }

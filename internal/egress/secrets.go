@@ -161,7 +161,9 @@ func (b *binding) scrubResponse(resp *http.Response) *http.Response {
 	}
 	sort.Slice(
 		values,
-		func(i, j int) bool { return len(values[i]) > len(values[j]) },
+		func(i, j int) bool {
+			return len(values[i]) > len(values[j])
+		},
 	)
 	scrub := func(s string) string {
 		for _, v := range values {
@@ -190,7 +192,9 @@ func (b *binding) scrubResponse(resp *http.Response) *http.Response {
 	resp.Body = &redactingBody{
 		source: resp.Body,
 		values: values,
-		done:   func() { resp.Trailer = nil },
+		done: func() {
+			resp.Trailer = nil
+		},
 	}
 	return resp
 }

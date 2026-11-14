@@ -18,7 +18,9 @@ func (state *store) validatePublications(database *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var body, request, resultBody []byte
 		var id, key, kind, owner, status, created, finished string
@@ -47,7 +49,9 @@ func (state *store) validatePublications(database *sql.DB) error {
 		}
 		ids := result.SandboxIDs
 		if len(ids) == 0 && result.SandboxID != "" {
-			ids = []string{result.SandboxID}
+			ids = []string{
+				result.SandboxID,
+			}
 		}
 		if kind != "tenant" || !terminal(status) || view.ID != id || view.Key != key || view.TenantID != owner || view.Status != status || view.Result.OperationID != id || view.Result.Tokens != nil || !view.CreatedAt.Equal(start) || !view.FinishedAt.Equal(end) || !reflect.DeepEqual(view.Command, command) || !slices.Equal(view.IDs, ids) {
 			return fmt.Errorf("frozen delivery differs from accepted operation %s", id)

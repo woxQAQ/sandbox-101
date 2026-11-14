@@ -25,7 +25,9 @@ type processReceipt struct {
 	BootID    string `json:"boot_id"`
 }
 
-func (b *CloudHypervisor) Events() <-chan struct{} { return b.events }
+func (b *CloudHypervisor) Events() <-chan struct{} {
+	return b.events
+}
 
 func (b *CloudHypervisor) Close() error {
 	var err error
@@ -68,7 +70,10 @@ func (b *CloudHypervisor) watch(pid int) error {
 		b.epoll,
 		unix.EPOLL_CTL_ADD,
 		fd,
-		&unix.EpollEvent{Events: unix.EPOLLIN, Fd: int32(fd)},
+		&unix.EpollEvent{
+			Events: unix.EPOLLIN,
+			Fd:     int32(fd),
+		},
 	); err != nil {
 		_ = unix.Close(fd)
 		return err
@@ -221,7 +226,10 @@ func (b *CloudHypervisor) Inspect(ctx context.Context, r Resource) (Observation,
 	if err != nil {
 		return Observation{}, err
 	}
-	obs := Observation{Alive: alive, Network: netUp}
+	obs := Observation{
+		Alive:   alive,
+		Network: netUp,
+	}
 	if !alive {
 		return obs, nil
 	}
@@ -302,7 +310,9 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 	if err := os.Chown(filepath.Join(r.RunDir, "io"), int(b.opts.UID), int(b.opts.GID)); err != nil {
 		return err
 	}
-	for _, path := range []string{r.Disk} {
+	for _, path := range []string{
+		r.Disk,
+	} {
 		if err := os.Chown(path, int(b.opts.UID), int(b.opts.GID)); err != nil {
 			return err
 		}
@@ -330,14 +340,21 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = scope.Close() }()
+	defer func() {
+		_ = scope.Close()
+	}()
 	log, err := os.OpenFile(filepath.Join(r.RunDir, "console.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = log.Close() }()
+	defer func() {
+		_ = log.Close()
+	}()
 	cmd := exec.Command(exe, "--internal-launch", specPath)
-	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GOMAXPROCS=1"}
+	cmd.Env = []string{
+		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+		"GOMAXPROCS=1",
+	}
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -351,7 +368,9 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 		return api.Fail(api.Incompatible, "isolated CLONE_INTO_CGROUP launcher failed: %v", err)
 	}
 	// Wait only reaps this process. It neither forwards signals nor supervises it.
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+	}()
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(25 * time.Millisecond)
@@ -384,7 +403,9 @@ func (b *CloudHypervisor) Stop(ctx context.Context, r Resource) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(fd) }()
+	defer func() {
+		_ = unix.Close(fd)
+	}()
 	start, _, err := procStart(p.PID)
 	if err != nil {
 		return err
@@ -396,7 +417,12 @@ func (b *CloudHypervisor) Stop(ctx context.Context, r Resource) error {
 	if err = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 		return err
 	}
-	poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	poll := []unix.PollFd{
+		{
+			Fd:     int32(fd),
+			Events: unix.POLLIN,
+		},
+	}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()

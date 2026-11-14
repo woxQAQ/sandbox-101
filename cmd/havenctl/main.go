@@ -108,7 +108,9 @@ func run(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		defer func() { _ = connection.Close() }()
+		defer func() {
+			_ = connection.Close()
+		}()
 		command := args[2]
 		if len(args) > 3 {
 			parts := make([]string, len(args)-2)

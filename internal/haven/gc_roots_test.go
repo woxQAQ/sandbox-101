@@ -13,7 +13,12 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	runtime.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if operation, err := service.Execute(ctx, Principal{TenantID: "tenant"}, "refill", Command{Action: "refill", TemplateID: "golden"}); err == nil || operation.Status != "failed" {
+	if operation, err := service.Execute(ctx, Principal{
+		TenantID: "tenant",
+	}, "refill", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	}); err == nil || operation.Status != "failed" {
 		t.Fatal(operation, err)
 	}
 	if _, err := service.store.db.Exec("INSERT INTO resource_refs VALUES('unknown-resource','private-object','unknown-holder','private-holder')"); err != nil {
@@ -23,7 +28,12 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	if err := service.store.db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.CollectGarbage(ctx, Principal{Root: true, TenantID: "root"}, "gc", GCOptions{Budget: 10 * time.Second})
+	report, err := service.CollectGarbage(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "gc", GCOptions{
+		Budget: 10 * time.Second,
+	})
 	if err != nil || !report.Blocked || len(report.Collected) != 0 {
 		t.Fatal("unknown root did not fence collection", report, err)
 	}

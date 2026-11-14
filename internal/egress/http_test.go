@@ -44,7 +44,9 @@ func TestHTTPSAuditFailureBlocksDialAndRecoveryAllowsNextRequest(t *testing.T) {
 			}
 			return dial(ctx, network, address)
 		},
-		Audit: func(AuditEvent) { legacyCalls.Add(1) },
+		Audit: func(AuditEvent) {
+			legacyCalls.Add(1)
+		},
 		AuditRecord: func(event AuditEvent) error {
 			if event.Action != "inject" {
 				return nil
@@ -56,16 +58,22 @@ func TestHTTPSAuditFailureBlocksDialAndRecoveryAllowsNextRequest(t *testing.T) {
 			persisted.Store(true)
 			return nil
 		},
-	}, Policy{Mode: "relay"}, map[string]Secret{
+	}, Policy{
+		Mode: "relay",
+	}, map[string]Secret{
 		"explicit": {
-			Value:       "Bearer host-explicit-secret",
-			Hosts:       []string{"example.com"},
+			Value: "Bearer host-explicit-secret",
+			Hosts: []string{
+				"example.com",
+			},
 			Header:      "Authorization",
 			Placeholder: "Bearer phantom",
 		},
 		"implicit": {
-			Value:  "host-implicit-secret",
-			Hosts:  []string{"example.com"},
+			Value: "host-implicit-secret",
+			Hosts: []string{
+				"example.com",
+			},
 			Header: "X-API-Key",
 		},
 	})
@@ -118,8 +126,15 @@ func TestHTTPProxyAndHostValidation(t *testing.T) {
 	var dials atomic.Int32
 	m, b := newTestManager(
 		t,
-		Options{DialContext: targetDialer(up.Listener.Addr().String(), &dials)},
-		Policy{Mode: "relay", AllowedHosts: []string{"example.com"}},
+		Options{
+			DialContext: targetDialer(up.Listener.Addr().String(), &dials),
+		},
+		Policy{
+			Mode: "relay",
+			AllowedHosts: []string{
+				"example.com",
+			},
+		},
 		nil,
 	)
 	r, body := get(t, proxyClient(t, m, b), "http://example.com/hello")
@@ -157,7 +172,9 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 				return nil, errors.New("should not dial")
 			},
 		},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		nil,
 	)
 	conn := connectTunnel(t, b.HTTPPath, "example.com:443")
@@ -173,7 +190,10 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(m.CACertPEM())
-	for _, serverName := range []string{"attacker.example.com", "93.184.216.34"} {
+	for _, serverName := range []string{
+		"attacker.example.com",
+		"93.184.216.34",
+	} {
 		t.Run("sni_"+serverName, func(t *testing.T) {
 			// Numeric ServerName omits SNI. A remote alert proves that the proxy
 			// rejected the ClientHello before client certificate verification.
@@ -235,7 +255,9 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 }
 
 func TestRevokeClosesHijackedCONNECT(t *testing.T) {
-	m, b := newTestManager(t, Options{}, Policy{Mode: "relay"}, nil)
+	m, b := newTestManager(t, Options{}, Policy{
+		Mode: "relay",
+	}, nil)
 	conn := connectTunnel(t, b.HTTPPath, "example.com:443")
 	defer conn.Close()
 	if err := m.Revoke("sandbox-1"); err != nil {

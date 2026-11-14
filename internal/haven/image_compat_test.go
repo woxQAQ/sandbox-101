@@ -36,7 +36,12 @@ func requireMergedOCI(t *testing.T) {
 		}
 		if x == nil {
 			var args []string
-			args, err = imageToolSandbox(t.TempDir(), []imageMount{{Host: binary, Guest: "/tools/umoci"}}, true)
+			args, err = imageToolSandbox(t.TempDir(), []imageMount{
+				{
+					Host:  binary,
+					Guest: "/tools/umoci",
+				},
+			}, true)
 			if err == nil {
 				err = runMappedImageTool(context.Background(), append(args, "--", "/tools/umoci", "--version"))
 			}
@@ -62,7 +67,9 @@ func importMergedFixture(t *testing.T, layers ...[]tarEntry) (*nativeImageFixtur
 	}
 	image := putOCIManifest(t, layout, "compat", fixtures)
 	e := newNativeImageFixture(t)
-	t.Cleanup(func() { e.Close() })
+	t.Cleanup(func() {
+		e.Close()
+	})
 	m, err := e.ImportOCI(
 		context.Background(),
 		ImportOptions{
@@ -102,7 +109,16 @@ func extractMergedManifest(t *testing.T, e *nativeImageFixture, m ImageManifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reads := []imageMount{{Host: binary, Guest: "/tools/fsck"}, {Host: sh, Guest: "/tools/sh"}}
+	reads := []imageMount{
+		{
+			Host:  binary,
+			Guest: "/tools/fsck",
+		},
+		{
+			Host:  sh,
+			Guest: "/tools/sh",
+		},
+	}
 	fsckArgs := []string{
 		"--extract=/work/tree",
 		"--xattrs",
@@ -110,7 +126,10 @@ func extractMergedManifest(t *testing.T, e *nativeImageFixture, m ImageManifest)
 		"--preserve-perms",
 	}
 	for i, binding := range bindings {
-		reads = append(reads, imageMount{Host: binding.HostPath, Guest: binding.GuestPath})
+		reads = append(reads, imageMount{
+			Host:  binding.HostPath,
+			Guest: binding.GuestPath,
+		})
 		if i != 0 {
 			fsckArgs = append(fsckArgs, "--device="+binding.GuestPath)
 		}
@@ -169,14 +188,27 @@ func TestActualOCIRejectsInvalidToolRoots(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
 	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(t, layout, "invalid-tool-environment", []ociLayerFixture{layer})
-	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+	image := putOCIManifest(t, layout, "invalid-tool-environment", []ociLayerFixture{
+		layer,
+	})
+	for _, materialization := range []string{
+		LayeredEROFSLayout,
+		MergedOCIEROFSLayout,
+	} {
 		t.Run(materialization, func(t *testing.T) {
-			for _, roots := range []string{"relative/path", "/", "/proc", "/tmp/alternate-tools", "/missing-fixture-tool-root"} {
+			for _, roots := range []string{
+				"relative/path",
+				"/",
+				"/proc",
+				"/tmp/alternate-tools",
+				"/missing-fixture-tool-root",
+			} {
 				t.Run(roots, func(t *testing.T) {
 					t.Setenv("SANDBOX_IMAGE_TOOL_ROOTS", roots)
 					e := newNativeImageFixture(t)
-					t.Cleanup(func() { e.Close() })
+					t.Cleanup(func() {
+						e.Close()
+					})
 					_, err := e.ImportOCI(context.Background(), ImportOptions{
 						Layout:          layout,
 						Digest:          image,
@@ -217,7 +249,9 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 	root.header.Format = tar.FormatPAX
 	root.header.Mode, root.header.Uid, root.header.Gid = 0o751, 42, 43
 	root.header.ModTime = time.Unix(1700000010, 123456789)
-	root.header.Xattrs = map[string]string{"user.root": "root retained"}
+	root.header.Xattrs = map[string]string{
+		"user.root": "root retained",
+	}
 	parent := dirEntry("inherited")
 	parent.header.Format = tar.FormatPAX
 	parent.header.Mode = 0o2750
@@ -242,7 +276,13 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 	for i, entry := range []struct {
 		tag, perm uint16
 		id        uint32
-	}{{1, 6, 0xffffffff}, {2, 4, 333}, {4, 4, 0xffffffff}, {16, 4, 0xffffffff}, {32, 0, 0xffffffff}} {
+	}{
+		{1, 6, 0xffffffff},
+		{2, 4, 333},
+		{4, 4, 0xffffffff},
+		{16, 4, 0xffffffff},
+		{32, 0, 0xffffffff},
+	} {
 		binary.LittleEndian.PutUint16(acl[4+i*8:], entry.tag)
 		binary.LittleEndian.PutUint16(acl[6+i*8:], entry.perm)
 		binary.LittleEndian.PutUint32(acl[8+i*8:], entry.id)
@@ -270,7 +310,11 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 		e, _, m = importMergedFixture(t, base, top)
 	}
 	tree := extractMergedManifest(t, e, m)
-	for name, want := range map[string]string{"target": "cross-layer content", "alias": "cross-layer content", "inherited/new": "new child"} {
+	for name, want := range map[string]string{
+		"target":        "cross-layer content",
+		"alias":         "cross-layer content",
+		"inherited/new": "new child",
+	} {
 		data, err := os.ReadFile(filepath.Join(tree, name))
 		if err != nil || string(data) != want {
 			t.Fatalf("%s: %q %v", name, data, err)
@@ -284,7 +328,13 @@ func testOCIHardlinksAndMetadata(t *testing.T, materialization string) {
 	if err != nil || !os.SameFile(a, b) {
 		t.Fatalf("cross-layer hardlink identity lost: %v", err)
 	}
-	for name, header := range map[string]tar.Header{".": root.header, "inherited": parent.header, "target": file.header, "acl": aclFile.header, "cap-ns": capNS.header} {
+	for name, header := range map[string]tar.Header{
+		".":         root.header,
+		"inherited": parent.header,
+		"target":    file.header,
+		"acl":       aclFile.header,
+		"cap-ns":    capNS.header,
+	} {
 		st, err := os.Stat(filepath.Join(tree, name))
 		if err != nil || st.Mode().Perm() != os.FileMode(header.Mode&0o777) || !st.ModTime().Equal(header.ModTime) {
 			t.Fatalf("%s metadata: %+v %v; expected %+v", name, st, err, header)
@@ -383,13 +433,22 @@ func TestActualMergedOCIWhiteoutOpaqueAndReplacement(t *testing.T) {
 	}
 	e, _, m := importMergedFixture(t, base, top)
 	tree := extractMergedManifest(t, e, m)
-	for name, want := range map[string]string{"replace": "new", "opaque/new": "new child", "removed-again": "same layer"} {
+	for name, want := range map[string]string{
+		"replace":       "new",
+		"opaque/new":    "new child",
+		"removed-again": "same layer",
+	} {
 		got, err := os.ReadFile(filepath.Join(tree, name))
 		if err != nil || string(got) != want {
 			t.Fatalf("%s: %q %v", name, got, err)
 		}
 	}
-	for _, name := range []string{"removed", "opaque/old", ".wh.removed", "opaque/.wh..wh..opq"} {
+	for _, name := range []string{
+		"removed",
+		"opaque/old",
+		".wh.removed",
+		"opaque/.wh..wh..opq",
+	} {
 		if _, err := os.Lstat(filepath.Join(tree, name)); !os.IsNotExist(err) {
 			t.Fatalf("whiteout/opaque not applied: %s %v", name, err)
 		}
@@ -408,7 +467,10 @@ func TestActualMergedOCIWhiteoutOpaqueAndReplacement(t *testing.T) {
 func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 	t.Parallel()
 	e, layout, m := importMergedFixture(t, bootLayerEntries())
-	_, err := e.ImportOCI(context.Background(), ImportOptions{Layout: layout, Digest: m.Digest})
+	_, err := e.ImportOCI(context.Background(), ImportOptions{
+		Layout: layout,
+		Digest: m.Digest,
+	})
 	var apiErr *api.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != api.Conflict {
 		t.Fatalf("digest layout change must conflict: %v", err)
@@ -424,7 +486,9 @@ func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 		t.Fatalf("same layout reimport: %v", err)
 	}
 	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(t, layout, "layered-first", []ociLayerFixture{layer})
+	image := putOCIManifest(t, layout, "layered-first", []ociLayerFixture{
+		layer,
+	})
 	opts := ImportOptions{
 		Layout:   layout,
 		Digest:   image,
@@ -451,7 +515,10 @@ func TestActualMergedOCIOrderedEntries(t *testing.T) {
 			base := append(bootLayerEntries(), fileEntry("target", "base"))
 			e, _, m := importMergedFixture(t, base, entries)
 			tree := extractMergedManifest(t, e, m)
-			for _, name := range []string{"target", "alias"} {
+			for _, name := range []string{
+				"target",
+				"alias",
+			} {
 				data, err := os.ReadFile(filepath.Join(tree, name))
 				if err != nil || string(data) != "last" {
 					t.Fatalf("%s: %q %v", name, data, err)
@@ -471,7 +538,9 @@ func TestActualMergedOCIForwardHardlinkRefusal(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
 	entries := append(bootLayerEntries(), hardEntry("alias", "target"), fileEntry("target", "data"))
-	image := putOCIManifest(t, layout, "forward", []ociLayerFixture{putOCILayer(t, layout, entries, false)})
+	image := putOCIManifest(t, layout, "forward", []ociLayerFixture{
+		putOCILayer(t, layout, entries, false),
+	})
 	e := newNativeImageFixture(t)
 	defer e.Close()
 	_, err := e.ImportOCI(
@@ -521,7 +590,10 @@ func TestActualMergedOCISymlinkHardlinkAndConfinement(t *testing.T) {
 	}
 	e, _, m := importMergedFixture(t, base, top)
 	tree := extractMergedManifest(t, e, m)
-	for _, name := range []string{"sym", "alias"} {
+	for _, name := range []string{
+		"sym",
+		"alias",
+	} {
 		link, err := os.Readlink(filepath.Join(tree, name))
 		if err != nil || link != "/guest/target" {
 			t.Fatalf("%s symlink: %q %v", name, link, err)
@@ -544,18 +616,63 @@ func TestActualMergedOCISymlinkHardlinkAndConfinement(t *testing.T) {
 
 func TestMergedOCIPreflight(t *testing.T) {
 	for name, header := range map[string]*tar.Header{
-		"traversal":         {Name: "../escape", Typeflag: tar.TypeReg},
-		"absolute":          {Name: "/absolute", Typeflag: tar.TypeReg},
-		"empty component":   {Name: "bad//path", Typeflag: tar.TypeReg},
-		"device":            {Name: "device", Typeflag: tar.TypeChar},
-		"fifo":              {Name: "pipe", Typeflag: tar.TypeFifo},
-		"hardlink escape":   {Name: "alias", Typeflag: tar.TypeLink, Linkname: "../outside"},
-		"absolute hardlink": {Name: "alias", Typeflag: tar.TypeLink, Linkname: "/outside"},
-		"whiteout data":     {Name: ".wh.victim", Typeflag: tar.TypeReg, Size: 1},
-		"whiteout parent":   {Name: ".wh...", Typeflag: tar.TypeReg},
-		"nondirectory root": {Name: ".", Typeflag: tar.TypeReg},
-		"overlay xattr":     {Name: "file", Typeflag: tar.TypeReg, Xattrs: map[string]string{"user.overlay.opaque": "y"}},
-		"unknown pax":       {Name: "file", Typeflag: tar.TypeReg, PAXRecords: map[string]string{"vendor.ignored": "x"}},
+		"traversal": {
+			Name:     "../escape",
+			Typeflag: tar.TypeReg,
+		},
+		"absolute": {
+			Name:     "/absolute",
+			Typeflag: tar.TypeReg,
+		},
+		"empty component": {
+			Name:     "bad//path",
+			Typeflag: tar.TypeReg,
+		},
+		"device": {
+			Name:     "device",
+			Typeflag: tar.TypeChar,
+		},
+		"fifo": {
+			Name:     "pipe",
+			Typeflag: tar.TypeFifo,
+		},
+		"hardlink escape": {
+			Name:     "alias",
+			Typeflag: tar.TypeLink,
+			Linkname: "../outside",
+		},
+		"absolute hardlink": {
+			Name:     "alias",
+			Typeflag: tar.TypeLink,
+			Linkname: "/outside",
+		},
+		"whiteout data": {
+			Name:     ".wh.victim",
+			Typeflag: tar.TypeReg,
+			Size:     1,
+		},
+		"whiteout parent": {
+			Name:     ".wh...",
+			Typeflag: tar.TypeReg,
+		},
+		"nondirectory root": {
+			Name:     ".",
+			Typeflag: tar.TypeReg,
+		},
+		"overlay xattr": {
+			Name:     "file",
+			Typeflag: tar.TypeReg,
+			Xattrs: map[string]string{
+				"user.overlay.opaque": "y",
+			},
+		},
+		"unknown pax": {
+			Name:     "file",
+			Typeflag: tar.TypeReg,
+			PAXRecords: map[string]string{
+				"vendor.ignored": "x",
+			},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			file, diff := layerFixture(t, header)
@@ -564,8 +681,15 @@ func TestMergedOCIPreflight(t *testing.T) {
 			}
 		})
 	}
-	file, diff := layerFixture(t, &tar.Header{Name: "file", Typeflag: tar.TypeReg, Size: 1024})
-	for name, limits := range map[string][2]int64{"bytes": {100, 100}, "files": {1 << 20, 0}} {
+	file, diff := layerFixture(t, &tar.Header{
+		Name:     "file",
+		Typeflag: tar.TypeReg,
+		Size:     1024,
+	})
+	for name, limits := range map[string][2]int64{
+		"bytes": {100, 100},
+		"files": {1 << 20, 0},
+	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := validateLayerFor(
 				file,
@@ -596,7 +720,9 @@ func TestActualMergedOCIExplicitSelectionAndVerification(t *testing.T) {
 	requireMergedOCI(t)
 	layout := t.TempDir()
 	entries := append(bootLayerEntries(), dirEntry("."))
-	layers := []ociLayerFixture{putOCILayer(t, layout, entries, true)}
+	layers := []ociLayerFixture{
+		putOCILayer(t, layout, entries, true),
+	}
 	image := putOCIManifest(t, layout, "explicit", layers)
 	e := newNativeImageFixture(t)
 	defer e.Close()
@@ -619,16 +745,40 @@ func TestActualMergedOCIExplicitSelectionAndVerification(t *testing.T) {
 	}
 	dir := filepath.Join(e.opts.StateDir, "images", image[7:])
 	for name, mutate := range map[string]func(*ImageManifest){
-		"format":          func(m *ImageManifest) { m.Format = 1 },
-		"legacy identity": func(m *ImageManifest) { m.Layout = "merged-erofs-v1" },
-		"builder":         func(m *ImageManifest) { m.Builder = imageBuilder(m.Tools) },
-		"umoci version":   func(m *ImageManifest) { m.Tools["umoci"] = "umoci version 0.5.0" },
-		"erofs version":   func(m *ImageManifest) { m.Tools["mkfs.erofs"] = "mkfs.erofs 1.9.5" },
-		"missing file":    func(m *ImageManifest) { delete(m.Files, "root.erofs") },
-		"extra file":      func(m *ImageManifest) { m.Files["ignored"] = m.Files["kernel"] },
-		"wrong hash":      func(m *ImageManifest) { m.Files["root.erofs"] = m.Files["kernel"] },
-		"extra device":    func(m *ImageManifest) { m.Artifacts = []ImageArtifact{{Role: "layer"}} },
-		"invalid diff":    func(m *ImageManifest) { m.DiffIDs[0] = "sha256:bad" },
+		"format": func(m *ImageManifest) {
+			m.Format = 1
+		},
+		"legacy identity": func(m *ImageManifest) {
+			m.Layout = "merged-erofs-v1"
+		},
+		"builder": func(m *ImageManifest) {
+			m.Builder = imageBuilder(m.Tools)
+		},
+		"umoci version": func(m *ImageManifest) {
+			m.Tools["umoci"] = "umoci version 0.5.0"
+		},
+		"erofs version": func(m *ImageManifest) {
+			m.Tools["mkfs.erofs"] = "mkfs.erofs 1.9.5"
+		},
+		"missing file": func(m *ImageManifest) {
+			delete(m.Files, "root.erofs")
+		},
+		"extra file": func(m *ImageManifest) {
+			m.Files["ignored"] = m.Files["kernel"]
+		},
+		"wrong hash": func(m *ImageManifest) {
+			m.Files["root.erofs"] = m.Files["kernel"]
+		},
+		"extra device": func(m *ImageManifest) {
+			m.Artifacts = []ImageArtifact{
+				{
+					Role: "layer",
+				},
+			}
+		},
+		"invalid diff": func(m *ImageManifest) {
+			m.DiffIDs[0] = "sha256:bad"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := cloneImageManifest(t, original)
@@ -675,7 +825,10 @@ func TestActualMergedOCIExplicitSelectionAndVerification(t *testing.T) {
 func TestActualMergedOCIUnpublishedDestinationGuard(t *testing.T) {
 	t.Parallel()
 	requireMergedOCI(t)
-	for _, kind := range []string{"other layout", "dangling symlink"} {
+	for _, kind := range []string{
+		"other layout",
+		"dangling symlink",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			layout := t.TempDir()
 			image := putOCIManifest(
@@ -729,7 +882,15 @@ func TestActualMergedOCIUnpublishedDestinationGuard(t *testing.T) {
 func TestActualMergedOCIInvalidInputsDoNotPublish(t *testing.T) {
 	t.Parallel()
 	requireMergedOCI(t)
-	for _, kind := range []string{"diff_id", "layer checksum", "layer size", "config size", "resource bound", "symlink boot", "unmapped owner"} {
+	for _, kind := range []string{
+		"diff_id",
+		"layer checksum",
+		"layer size",
+		"config size",
+		"resource bound",
+		"symlink boot",
+		"unmapped owner",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			layout := t.TempDir()
 			entries := bootLayerEntries()
@@ -761,7 +922,9 @@ func TestActualMergedOCIInvalidInputsDoNotPublish(t *testing.T) {
 			if kind == "layer size" {
 				layer.descriptor.Size++
 			}
-			image := putOCIManifest(t, layout, kind, []ociLayerFixture{layer})
+			image := putOCIManifest(t, layout, kind, []ociLayerFixture{
+				layer,
+			})
 			if kind == "config size" {
 				file, err := blob(layout, image)
 				if err != nil {

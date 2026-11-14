@@ -12,13 +12,34 @@ import (
 // bytes remain unpublished; their pinned private directories and fixed names can
 // authorize an exact deletion receipt after all known runtime instances exit.
 func InspectFailedVMDeletion(ctx context.Context, stateRoot string, resource Resource, operation string, diskIdentity *FileIdentity, materials *RestoreMaterials) (DeletionIntent, []string, error) {
-	empty := DeletionIntent{Format: 1, Path: resource.Dir, Dir: true, Nodes: map[string]FileIdentity{}}
+	empty := DeletionIntent{
+		Format: 1,
+		Path:   resource.Dir,
+		Dir:    true,
+		Nodes:  map[string]FileIdentity{},
+	}
 	if !ValidResourceID(operation, "op-") || !ValidResourceID(resource.VMID, "vm-") || !ValidResourceID(resource.Instance, "run-") || resource.Dir != filepath.Join(stateRoot, "vms", resource.VMID) || resource.RunDir != filepath.Join(resource.Dir, "runs", resource.Instance) {
 		return empty, nil, fmt.Errorf("failed candidate paths differ from frozen intent")
 	}
 	run := "runs/" + resource.Instance
-	directories := map[string]bool{".": true, "capture": true, "runs": true, run: true, run + "/root": true, run + "/io": true}
-	files := map[string]os.FileMode{"network.json": 0, "network-policy.json": 0, "network-removing.json": 0, run + "/launch.json": 0, run + "/console.log": 0, run + "/process.json": 0, run + "/io/api.sock": os.ModeSocket, run + "/io/vsock": os.ModeSocket}
+	directories := map[string]bool{
+		".":           true,
+		"capture":     true,
+		"runs":        true,
+		run:           true,
+		run + "/root": true,
+		run + "/io":   true,
+	}
+	files := map[string]os.FileMode{
+		"network.json":          0,
+		"network-policy.json":   0,
+		"network-removing.json": 0,
+		run + "/launch.json":    0,
+		run + "/console.log":    0,
+		run + "/process.json":   0,
+		run + "/io/api.sock":    os.ModeSocket,
+		run + "/io/vsock":       os.ModeSocket,
+	}
 	fixed := map[string]FileIdentity{}
 	if resource.RestoreDir == "" {
 		disk := "disks/" + operation + ".raw"

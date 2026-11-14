@@ -54,7 +54,9 @@ func (service *Service) Templates(ctx context.Context, principal Principal) ([]a
 	if err != nil {
 		return nil, err
 	}
-	type owned struct{ id, owner string }
+	type owned struct {
+		id, owner string
+	}
 	ids := []owned{}
 	for rows.Next() {
 		var item owned

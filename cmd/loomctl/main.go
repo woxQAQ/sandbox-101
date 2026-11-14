@@ -61,14 +61,26 @@ func run(arguments []string) error {
 	if len(args) != 1 {
 		return errors.New("management commands take options before the command")
 	}
-	request := api.ManagementRequest{Key: cfg.Key}
+	request := api.ManagementRequest{
+		Key: cfg.Key,
+	}
 	switch args[0] {
 	case "import":
 		request.Action = "import"
-		request.Import = &api.ImageImport{Layout: cfg.OCILayout, Digest: cfg.Digest, Materialization: cfg.Materialization, MaxBytes: cfg.MaxBytes, MaxFiles: cfg.MaxFiles}
+		request.Import = &api.ImageImport{
+			Layout:          cfg.OCILayout,
+			Digest:          cfg.Digest,
+			Materialization: cfg.Materialization,
+			MaxBytes:        cfg.MaxBytes,
+			MaxFiles:        cfg.MaxFiles,
+		}
 	case "gc":
 		request.Action = "gc"
-		request.GC = &api.GCOptions{DryRun: cfg.DryRun, Batch: cfg.GCBatch, Budget: cfg.GCBudget}
+		request.GC = &api.GCOptions{
+			DryRun: cfg.DryRun,
+			Batch:  cfg.GCBatch,
+			Budget: cfg.GCBudget,
+		}
 	case "supply-cleanup":
 		request.Action = "supply_cleanup"
 		request.OperationID = cfg.SourceOperation

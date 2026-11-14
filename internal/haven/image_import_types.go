@@ -42,7 +42,9 @@ type imageImportStep struct {
 }
 
 func loadImageImport(ctx context.Context, q queryer, id string) (imageImportStep, error) {
-	step := imageImportStep{OperationID: id}
+	step := imageImportStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='image_import'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &expected)
@@ -75,7 +77,9 @@ func (service *Service) saveImageImport(step *imageImportStep, phase string) err
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='image_import' AND input_hash=? AND status IN ('pending','running')", encode(step.State), step.OperationID, step.Hash)); err != nil {
 		return err
 	}
@@ -115,7 +119,10 @@ func (service *Service) saveImageImport(step *imageImportStep, phase string) err
 			if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO reservations VALUES(?,?,0,0)", owner, cache.PhysicalBytes)); err != nil {
 				return err
 			}
-			if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO image_caches VALUES(?,?,?)", cache.Cache.Builder, cache.Cache.DiffID, encode(imageCacheRecord{Witness: *cache, SourceOperation: step.OperationID}))); err != nil {
+			if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO image_caches VALUES(?,?,?)", cache.Cache.Builder, cache.Cache.DiffID, encode(imageCacheRecord{
+				Witness:         *cache,
+				SourceOperation: step.OperationID,
+			}))); err != nil {
 				return err
 			}
 		} else {

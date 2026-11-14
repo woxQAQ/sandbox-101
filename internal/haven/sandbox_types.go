@@ -28,7 +28,9 @@ type (
 	}
 )
 
-func (value EnvVar) isSecret() bool { return value.Guest != nil && !*value.Guest }
+func (value EnvVar) isSecret() bool {
+	return value.Guest != nil && !*value.Guest
+}
 
 // Command retains the sandbox API's intent fields. Only sanitized values may
 // enter a durable request; a node-keyed MAC compares complete secret-bearing

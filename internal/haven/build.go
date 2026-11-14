@@ -25,7 +25,9 @@ func (service *Service) supplyCandidate(step supplyStep, source resourceStep) er
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSupply(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -80,7 +82,9 @@ func (service *Service) runBuild(step supplyStep) error {
 			return err
 		}
 		if step.Input.Template.Warmup != "" {
-			if err = service.setSupplyState(&step, supplyState{Phase: "warmup_inflight"}); err != nil {
+			if err = service.setSupplyState(&step, supplyState{
+				Phase: "warmup_inflight",
+			}); err != nil {
 				return err
 			}
 			if err = service.fault("build_warmup_intent"); err != nil {
@@ -90,7 +94,9 @@ func (service *Service) runBuild(step supplyStep) error {
 				return err
 			}
 		}
-		if err = service.setSupplyState(&step, supplyState{Phase: "warmup_done"}); err != nil {
+		if err = service.setSupplyState(&step, supplyState{
+			Phase: "warmup_done",
+		}); err != nil {
 			return err
 		}
 		if err = service.fault("build_warmup_done"); err != nil {
@@ -111,13 +117,21 @@ func (service *Service) runBuild(step supplyStep) error {
 		if !observed.Alive || !observed.Booted || observed.Network {
 			return loom.Fail(loom.Conflict, "build source network/readiness verification failed")
 		}
-		if err = service.opts.Guest.Activate(service.ctx, source.Input.Resource, Activation{SandboxID: "template-" + step.Input.Template.ID, Hostname: "sandbox-template", ResetIdentity: true, Env: map[string]string{}, Network: "none"}); err != nil {
+		if err = service.opts.Guest.Activate(service.ctx, source.Input.Resource, Activation{
+			SandboxID:     "template-" + step.Input.Template.ID,
+			Hostname:      "sandbox-template",
+			ResetIdentity: true,
+			Env:           map[string]string{},
+			Network:       "none",
+		}); err != nil {
 			return err
 		}
 		if err = service.opts.Guest.PrepareTemplate(service.ctx, source.Input.Resource); err != nil {
 			return err
 		}
-		if err = service.setSupplyState(&step, supplyState{Phase: "prepared"}); err != nil {
+		if err = service.setSupplyState(&step, supplyState{
+			Phase: "prepared",
+		}); err != nil {
 			return err
 		}
 		if err = service.fault("build_prepared"); err != nil {
@@ -128,8 +142,19 @@ func (service *Service) runBuild(step supplyStep) error {
 		if step.State.Phase != "prepared" {
 			return fmt.Errorf("build capture outside prepared phase")
 		}
-		parent := &supplyAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: "capture"}
-		if _, err = service.admitCapture(service.ctx, CaptureRequest{TenantID: step.Input.Template.TenantID, Key: step.OperationID + ":capture", SandboxID: step.Input.SandboxID, ExpectedInstance: source.State.Witness}, parent); err != nil {
+		parent := &supplyAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  "capture",
+		}
+		if _, err = service.admitCapture(service.ctx, CaptureRequest{
+			TenantID:         step.Input.Template.TenantID,
+			Key:              step.OperationID + ":capture",
+			SandboxID:        step.Input.SandboxID,
+			ExpectedInstance: source.State.Witness,
+		}, parent); err != nil {
 			return err
 		}
 	} else if lookup != nil {
@@ -144,8 +169,18 @@ func (service *Service) runBuild(step supplyStep) error {
 		return err
 	}
 	if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
-		parent := &supplyAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: "release"}
-		if _, err = service.admitRelease(service.ctx, ReleaseRequest{TenantID: step.Input.Template.TenantID, Key: step.OperationID + ":release", SandboxID: step.Input.SandboxID}, parent); err != nil {
+		parent := &supplyAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  "release",
+		}
+		if _, err = service.admitRelease(service.ctx, ReleaseRequest{
+			TenantID:  step.Input.Template.TenantID,
+			Key:       step.OperationID + ":release",
+			SandboxID: step.Input.SandboxID,
+		}, parent); err != nil {
 			return err
 		}
 	} else if lookup != nil {
@@ -155,7 +190,10 @@ func (service *Service) runBuild(step supplyStep) error {
 		return err
 	}
 	if step.State.Phase != "retired" {
-		if err = service.setSupplyState(&step, supplyState{Phase: "retired", SnapshotID: capture.Input.Snapshot.ID}); err != nil {
+		if err = service.setSupplyState(&step, supplyState{
+			Phase:      "retired",
+			SnapshotID: capture.Input.Snapshot.ID,
+		}); err != nil {
 			return err
 		}
 	}
@@ -165,7 +203,9 @@ func (service *Service) runBuild(step supplyStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.publishTemplate(service.ctx, tx, step, capture.Input.Snapshot.ID); err != nil {
 		return err
 	}

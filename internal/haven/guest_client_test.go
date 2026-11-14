@@ -45,7 +45,9 @@ func TestHavenGuestStructuredFailuresAndKeyedFence(t *testing.T) {
 		{"exec", "", loom.Unknown},
 	} {
 		t.Run(scenario.method+"/"+scenario.code, func(t *testing.T) {
-			resource := loom.Resource{RunDir: t.TempDir()}
+			resource := loom.Resource{
+				RunDir: t.TempDir(),
+			}
 			if err := os.Mkdir(filepath.Join(resource.RunDir, "io"), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -90,11 +92,19 @@ func TestHavenGuestStructuredFailuresAndKeyedFence(t *testing.T) {
 					if scenario.method == "exec" && (request.Params.AsMap()["exec_key"] != "same-key" || request.Params.AsMap()["command"] != "true") {
 						return fmt.Errorf("keyed execution identity changed")
 					}
-					params, err := structpb.NewStruct(map[string]any{"error_code": scenario.code})
+					params, err := structpb.NewStruct(map[string]any{
+						"error_code": scenario.code,
+					})
 					if err != nil {
 						return err
 					}
-					return protocol.WriteFrame(conn, &protocol.Frame{Id: request.Id, Method: request.Method, Params: params, Error: "private guest/agent/src/system.rs:42:7", Eof: true})
+					return protocol.WriteFrame(conn, &protocol.Frame{
+						Id:     request.Id,
+						Method: request.Method,
+						Params: params,
+						Error:  "private guest/agent/src/system.rs:42:7",
+						Eof:    true,
+					})
 				}()
 			}()
 			client := LiveGuest{}

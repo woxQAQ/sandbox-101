@@ -32,8 +32,14 @@ type cloudDisk struct {
 
 func cloudDisks(bindings []ImageBinding) []cloudDisk {
 	limiter := map[string]any{
-		"bandwidth": map[string]any{"size": 64 << 20, "refill_time": 100},
-		"ops":       map[string]any{"size": 1000, "refill_time": 100},
+		"bandwidth": map[string]any{
+			"size":        64 << 20,
+			"refill_time": 100,
+		},
+		"ops": map[string]any{
+			"size":        1000,
+			"refill_time": 100,
+		},
 	}
 	disks := make([]cloudDisk, 0, len(bindings)+1)
 	for i, binding := range bindings {

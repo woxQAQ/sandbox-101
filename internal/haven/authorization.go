@@ -39,7 +39,9 @@ func (state *store) commandMAC(principal Principal, command Command) string {
 	return role + ":" + state.sign("sandbox-command-v1", string(encode(principal)), string(encode(command)))
 }
 
-func tokenHash(token string) string { return digest([]byte(token)) }
+func tokenHash(token string) string {
+	return digest([]byte(token))
+}
 func (service *Service) Authenticate(ctx context.Context, token string) (Principal, error) {
 	return service.authenticateToken(ctx, token, false)
 }
@@ -55,12 +57,17 @@ func (service *Service) authenticateToken(ctx context.Context, token string, ret
 		return Principal{}, loom.Fail(loom.NotFound, "not found")
 	}
 	if service.opts.RootToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(service.opts.RootToken)) == 1 {
-		return Principal{TenantID: "root", Root: true}, nil
+		return Principal{
+			TenantID: "root",
+			Root:     true,
+		}, nil
 	}
 	var tenant string
 	err := service.store.db.QueryRowContext(ctx, "SELECT id FROM tenants WHERE token_hash=?", tokenHash(token)).Scan(&tenant)
 	if err == nil {
-		return Principal{TenantID: tenant}, nil
+		return Principal{
+			TenantID: tenant,
+		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, err
@@ -73,7 +80,9 @@ func (service *Service) authenticateToken(ctx context.Context, token string, ret
 	if err != nil {
 		return Principal{}, err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var body []byte
 		var sandbox sandboxRecord
@@ -84,7 +93,10 @@ func (service *Service) authenticateToken(ctx context.Context, token string, ret
 			return Principal{}, err
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(service.sandboxToken(sandbox))) == 1 {
-			return Principal{TenantID: sandbox.TenantID, SandboxID: sandbox.ID}, nil
+			return Principal{
+				TenantID:  sandbox.TenantID,
+				SandboxID: sandbox.ID,
+			}, nil
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -114,7 +126,12 @@ func splitEnv(env map[string]EnvVar) (map[string]string, map[string]egress.Secre
 				return nil, nil, nil, loom.Fail(loom.Invalid, "host credential requires authorized injection")
 			}
 			descriptors[key] = *value.Inject
-			secrets[key] = egress.Secret{Value: value.Value, Hosts: append([]string(nil), value.Inject.Hosts...), Header: value.Inject.Header, Placeholder: value.Inject.Placeholder}
+			secrets[key] = egress.Secret{
+				Value:       value.Value,
+				Hosts:       append([]string(nil), value.Inject.Hosts...),
+				Header:      value.Inject.Header,
+				Placeholder: value.Inject.Placeholder,
+			}
 			if value.Inject.Placeholder != "" {
 				visible[key] = value.Inject.Placeholder
 			}
@@ -161,7 +178,11 @@ func directNetworkPolicy(policy egress.Policy) (*loom.NetworkPolicy, error) {
 		}
 		seen[prefix] = true
 	}
-	result := &loom.NetworkPolicy{Version: 1, AllowedCIDRs: append([]string(nil), policy.AllowedCIDRs...), MaxConnections: limit}
+	result := &loom.NetworkPolicy{
+		Version:        1,
+		AllowedCIDRs:   append([]string(nil), policy.AllowedCIDRs...),
+		MaxConnections: limit,
+	}
 	return result, host.ValidateNetworkPolicy(result)
 }
 
@@ -199,7 +220,18 @@ func (service *Service) prepareClaim(command Command) (*claimAdmission, error) {
 	if onExpire != "kill" && onExpire != "pause" {
 		return nil, loom.Fail(loom.Invalid, "on_expire must be kill or pause")
 	}
-	return &claimAdmission{Command: sanitizedCommand(command), Settings: sandboxSettings{Env: env, Policy: policy, Secrets: descriptors, TTLSeconds: ttl, OnExpire: onExpire, AutoRenew: command.AutoRenew}, Secrets: secrets}, nil
+	return &claimAdmission{
+		Command: sanitizedCommand(command),
+		Settings: sandboxSettings{
+			Env:        env,
+			Policy:     policy,
+			Secrets:    descriptors,
+			TTLSeconds: ttl,
+			OnExpire:   onExpire,
+			AutoRenew:  command.AutoRenew,
+		},
+		Secrets: secrets,
+	}, nil
 }
 
 func (service *Service) credentialsMatch(operation string, admission *claimAdmission) error {

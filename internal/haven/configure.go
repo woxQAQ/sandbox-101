@@ -19,11 +19,17 @@ func (service *Service) AdmitConfigure(ctx context.Context, principal Principal,
 	if err != nil {
 		return empty, err
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	retry := &claimAdmission{MAC: mac, Secrets: secrets}
+	retry := &claimAdmission{
+		MAC:     mac,
+		Secrets: secrets,
+	}
 	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, retry); found || err != nil {
 		return operation, err
 	}
@@ -88,7 +94,9 @@ func (service *Service) admitConfiguration(ctx context.Context, principal Princi
 	if err != nil {
 		return empty, noResource, false, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	sandbox, err := ownedSandbox(ctx, tx, principal, command.SandboxID)
 	if err != nil {
 		return empty, noResource, false, err
@@ -155,9 +163,27 @@ func (service *Service) admitConfiguration(ctx context.Context, principal Princi
 		}
 		return cached, noResource, false, err
 	}
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID, ResourceReady: true}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:     sandbox.ID,
+			VMID:          sandbox.VMID,
+			ResourceReady: true,
+		},
+	}
 	settings.Settings.Generation = operation.ID
-	input := activationInput{RequestTenantID: principal.TenantID, TenantID: sandbox.TenantID, SandboxID: sandbox.ID, ResourceOperation: source.OperationID, ResourceHash: source.Hash, ExpectedInstance: sandbox.Instance, Settings: settings.Settings, ResetIdentity: false}
+	input := activationInput{
+		RequestTenantID:   principal.TenantID,
+		TenantID:          sandbox.TenantID,
+		SandboxID:         sandbox.ID,
+		ResourceOperation: source.OperationID,
+		ResourceHash:      source.Hash,
+		ExpectedInstance:  sandbox.Instance,
+		Settings:          settings.Settings,
+		ResetIdentity:     false,
+	}
 	if sandbox.State != "paused" {
 		input.PreviousSettings = &old
 	}
@@ -166,9 +192,24 @@ func (service *Service) admitConfiguration(ctx context.Context, principal Princi
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", principal.TenantID, key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{operation.ID, mac}},
-		{"INSERT INTO configuration_fences VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id", []any{sandbox.ID, operation.ID}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			principal.TenantID,
+			key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			operation.ID,
+			mac,
+		}},
+		{"INSERT INTO configuration_fences VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id", []any{
+			sandbox.ID,
+			operation.ID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, noResource, false, err
@@ -180,10 +221,26 @@ func (service *Service) admitConfiguration(ctx context.Context, principal Princi
 			q    string
 			args []any
 		}{
-			{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(settings.Settings), sandbox.ID, encode(old)}},
-			{"INSERT INTO operation_steps VALUES(?,'configuration','configure_paused',?,?,?,?,'succeeded',?)", []any{operation.ID, digest(payload), payload, sandbox.ID, sandbox.Instance, encode("complete")}},
-			{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{sandbox.ID, operation.ID}},
-			{"UPDATE operations SET status='succeeded' WHERE id=? AND status='pending'", []any{operation.ID}},
+			{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+				encode(settings.Settings),
+				sandbox.ID,
+				encode(old),
+			}},
+			{"INSERT INTO operation_steps VALUES(?,'configuration','configure_paused',?,?,?,?,'succeeded',?)", []any{
+				operation.ID,
+				digest(payload),
+				payload,
+				sandbox.ID,
+				sandbox.Instance,
+				encode("complete"),
+			}},
+			{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+				sandbox.ID,
+				operation.ID,
+			}},
+			{"UPDATE operations SET status='succeeded' WHERE id=? AND status='pending'", []any{
+				operation.ID,
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return empty, noResource, false, err

@@ -20,7 +20,9 @@ func (service *Service) releaseGenerationSet(step resourceStep) ([]resourceStep,
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.releaseProof(tx, step); err != nil {
 		return nil, err
 	}
@@ -175,7 +177,10 @@ func (service *Service) deletionIntent(step resourceStep) (loom.DeletionIntent, 
 		}
 		if proof := step.Input.RestoreMaterials; proof != nil {
 			version, _ := filepath.Rel(step.Input.Resource.Dir, filepath.Dir(step.Input.Resource.RestoreDir))
-			fixed := map[string]loom.FileIdentity{version: proof.Version, version + "/restore": proof.Restore}
+			fixed := map[string]loom.FileIdentity{
+				version:              proof.Version,
+				version + "/restore": proof.Restore,
+			}
 			for _, name := range loom.RestoreFileNames() {
 				relative := version + "/restore/" + name
 				if name == "disk.raw" {
@@ -218,7 +223,9 @@ func (service *Service) deletionIntent(step resourceStep) (loom.DeletionIntent, 
 	if err != nil {
 		return intent, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.releaseProof(tx, step); err != nil {
 		return intent, err
 	}
@@ -241,7 +248,9 @@ func (service *Service) completeRelease(step resourceStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadStep(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err

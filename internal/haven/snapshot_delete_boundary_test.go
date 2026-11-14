@@ -10,10 +10,22 @@ import (
 
 func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
-		{"DELETE", "checkpoints", "1"}, {"DELETE", "snapshots", "1"}, {"DELETE", "reservations", "OLD.owner LIKE 'snapshot:%'"}, {"DELETE", "quota_resources", "OLD.kind='snapshot'"}, {"DELETE", "deletion_intents", "1"}, {"DELETE", "resource_refs", "OLD.holder_kind='snapshot'"}, {"UPDATE", "operation_steps", "NEW.action='snapshot_delete' AND NEW.status='succeeded'"}, {"UPDATE", "operations", "NEW.status='succeeded'"},
+	for _, write := range []struct {
+		event, table, condition string
+	}{
+		{"DELETE", "checkpoints", "1"},
+		{"DELETE", "snapshots", "1"},
+		{"DELETE", "reservations", "OLD.owner LIKE 'snapshot:%'"},
+		{"DELETE", "quota_resources", "OLD.kind='snapshot'"},
+		{"DELETE", "deletion_intents", "1"},
+		{"DELETE", "resource_refs", "OLD.holder_kind='snapshot'"},
+		{"UPDATE", "operation_steps", "NEW.action='snapshot_delete' AND NEW.status='succeeded'"},
+		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture snapshot retirement rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture snapshot retirement rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+mode, func(t *testing.T) {
 				fixture := snapshotDeleteFixture(t, 0)
 				service := fixture.service
@@ -48,7 +60,10 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 
 func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 	parallelLifecycle(t)
-	for _, mode := range []string{"ABORT,'fixture backing fee rejection'", "IGNORE"} {
+	for _, mode := range []string{
+		"ABORT,'fixture backing fee rejection'",
+		"IGNORE",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := snapshotDeleteFixture(t, 1)
 			service := fixture.service
@@ -60,7 +75,11 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			clone := fixture.clones[0]
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-last-backing", SandboxID: clone.Result.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  "tenant",
+				Key:       "release-last-backing",
+				SandboxID: clone.Result.SandboxID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,7 +109,14 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 
 func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 	parallelLifecycle(t)
-	for _, kind := range []string{"unknown", "replaced", "missing", "corrupt", "reader", "raw_reappeared"} {
+	for _, kind := range []string{
+		"unknown",
+		"replaced",
+		"missing",
+		"corrupt",
+		"reader",
+		"raw_reappeared",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			fixture := snapshotDeleteFixture(t, 0)
 			service := fixture.service
@@ -131,7 +157,9 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = file.Close() }()
+				defer func() {
+					_ = file.Close()
+				}()
 			case "raw_reappeared":
 				capture, err := loadCapture(context.Background(), service.store.db, fixture.capture.ID)
 				if err != nil {
@@ -157,10 +185,18 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 
 func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
-		{"INSERT", "operations", "1"}, {"UPDATE", "snapshots", "NEW.deleting=1"}, {"UPDATE", "resource_refs", "NEW.holder_kind='cleanup'"}, {"UPDATE", "quota_refs", "NEW.holder_kind='cleanup'"},
+	for _, write := range []struct {
+		event, table, condition string
+	}{
+		{"INSERT", "operations", "1"},
+		{"UPDATE", "snapshots", "NEW.deleting=1"},
+		{"UPDATE", "resource_refs", "NEW.holder_kind='cleanup'"},
+		{"UPDATE", "quota_refs", "NEW.holder_kind='cleanup'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture snapshot admission rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture snapshot admission rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+mode, func(t *testing.T) {
 				fixture := snapshotDeleteFixture(t, 0)
 				service := fixture.service
@@ -168,7 +204,11 @@ func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
 				if _, err := service.store.db.Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "tenant", Key: "delete-denied", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+				if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+					TenantID:   "tenant",
+					Key:        "delete-denied",
+					SnapshotID: fixture.capture.Result.SnapshotID,
+				}); err == nil {
 					t.Fatal("snapshot admission denial ignored")
 				}
 				var operations, deleting int
@@ -185,7 +225,11 @@ func TestHavenSnapshotDeleteFence(t *testing.T) {
 	parallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 0)
 	service := fixture.service
-	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "foreign", Key: "foreign-delete", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+		TenantID:   "foreign",
+		Key:        "foreign-delete",
+		SnapshotID: fixture.capture.Result.SnapshotID,
+	}); err == nil {
 		t.Fatal("foreign snapshot deletion accepted")
 	}
 	service.opts.Fault = func(point string) error {
@@ -195,10 +239,18 @@ func TestHavenSnapshotDeleteFence(t *testing.T) {
 		return nil
 	}
 	operation := admitSnapshotDeleteFixture(t, fixture)
-	if _, err := service.AdmitClone(context.Background(), CloneRequest{TenantID: "tenant", Key: "clone-tombstone", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+	if _, err := service.AdmitClone(context.Background(), CloneRequest{
+		TenantID:   "tenant",
+		Key:        "clone-tombstone",
+		SnapshotID: fixture.capture.Result.SnapshotID,
+	}); err == nil {
 		t.Fatal("new reader crossed deleting fence")
 	}
-	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "tenant", Key: "second-delete", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+		TenantID:   "tenant",
+		Key:        "second-delete",
+		SnapshotID: fixture.capture.Result.SnapshotID,
+	}); err == nil {
 		t.Fatal("second collector crossed deleting fence")
 	}
 	fixture.service = reopenCloneService(t, service, fixture.backend)
@@ -223,7 +275,11 @@ func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
 	if err := service.store.db.QueryRow("SELECT COUNT(*) FROM source_leases WHERE operation_id=?", leased.ID).Scan(&leases); err != nil || leases != 1 {
 		t.Fatal("fixture did not retain source lease", leases, err)
 	}
-	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "tenant", Key: "delete-leased", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+	if _, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+		TenantID:   "tenant",
+		Key:        "delete-leased",
+		SnapshotID: fixture.capture.Result.SnapshotID,
+	}); err == nil {
 		t.Fatal("snapshot deleted with unresolved source lease")
 	}
 	snapshotDeleteCost(t, fixture, 192)
@@ -247,7 +303,11 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 		service.mu.Unlock()
 		t.Fatal(step.Phase, reason)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-other-backing", SandboxID: fixture.clones[0].Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release-other-backing",
+		SandboxID: fixture.clones[0].Result.SandboxID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +315,13 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 		t.Fatal(step.State)
 	}
 	snapshotDeleteCost(t, fixture, 192)
-	discard, err := service.AdmitDiscard(context.Background(), DiscardRequest{TenantID: "tenant", Key: "discard-last-backing", SandboxID: failedOperation.Result.SandboxID, FailedOperationID: failedOperation.ID, ExpectedInstance: failed.Input.Resource.Instance})
+	discard, err := service.AdmitDiscard(context.Background(), DiscardRequest{
+		TenantID:          "tenant",
+		Key:               "discard-last-backing",
+		SandboxID:         failedOperation.Result.SandboxID,
+		FailedOperationID: failedOperation.ID,
+		ExpectedInstance:  failed.Input.Resource.Instance,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +353,9 @@ func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 	// Model loss of all directory entries after the exact receipt committed. The
 	// still-open inode remains real material even though pathname lookup is absent.
 	if err = os.RemoveAll(step.Input.Source.Snapshot.Dir); err != nil {

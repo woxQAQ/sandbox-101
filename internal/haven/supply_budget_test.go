@@ -7,7 +7,20 @@ import (
 )
 
 func TestHavenSupplySlotBudgets(t *testing.T) {
-	for _, budget := range []slotBudget{{Kind: "sandbox_slot", Units: 1}, {Kind: "build_slot", Units: 1}, {Kind: "sandbox_slot", Units: 0}} {
+	for _, budget := range []slotBudget{
+		{
+			Kind:  "sandbox_slot",
+			Units: 1,
+		},
+		{
+			Kind:  "build_slot",
+			Units: 1,
+		},
+		{
+			Kind:  "sandbox_slot",
+			Units: 0,
+		},
+	} {
 		t.Run(fmt.Sprintf("%s-%d", budget.Kind, budget.Units), func(t *testing.T) {
 			service, _ := coldService(t, nil)
 			ctx := context.Background()
@@ -19,12 +32,18 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := ColdRequest{TenantID: "tenant", Key: "supply", TemplateID: "cold"}
+			request := ColdRequest{
+				TenantID:   "tenant",
+				Key:        "supply",
+				TemplateID: "cold",
+			}
 			frozen := encode(struct {
 				Action  string
 				Request ColdRequest
 			}{"claim", request})
-			operation, err := service.admitProvision(ctx, "tenant", request.Key, frozen, digest(frozen), template, image, nil, nil, &provisionTarget{Budget: &budget})
+			operation, err := service.admitProvision(ctx, "tenant", request.Key, frozen, digest(frozen), template, image, nil, nil, &provisionTarget{
+				Budget: &budget,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -36,7 +55,11 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err = service.store.db.QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != budget.Units {
 				t.Fatal(slots, err)
 			}
-			release, err := service.AdmitRelease(ctx, ReleaseRequest{TenantID: "tenant", Key: "release", SandboxID: operation.Result.SandboxID})
+			release, err := service.AdmitRelease(ctx, ReleaseRequest{
+				TenantID:  "tenant",
+				Key:       "release",
+				SandboxID: operation.Result.SandboxID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

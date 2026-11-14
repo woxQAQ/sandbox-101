@@ -45,7 +45,13 @@ func (service *Service) cleanupGenerations(ctx context.Context, tx *sql.Tx, sour
 func generationDeletionMembers(generations []resourceStep) []loom.VMDeletionMember {
 	members := make([]loom.VMDeletionMember, 0, len(generations))
 	for _, generation := range generations {
-		members = append(members, loom.VMDeletionMember{Resource: generation.Input.Resource, DiskIdentity: generation.State.DiskIdentity, Materials: generation.State.Materials, Unpublished: generation.Status == "failed", OperationID: generation.OperationID})
+		members = append(members, loom.VMDeletionMember{
+			Resource:     generation.Input.Resource,
+			DiskIdentity: generation.State.DiskIdentity,
+			Materials:    generation.State.Materials,
+			Unpublished:  generation.Status == "failed",
+			OperationID:  generation.OperationID,
+		})
 	}
 	return members
 }
@@ -62,24 +68,48 @@ func (service *Service) retireGeneration(ctx context.Context, tx *sql.Tx, genera
 				q    string
 				args []any
 			}{
-				{"DELETE FROM backing WHERE path=? AND vm_id=? AND digest=?", []any{filepath.Join(generation.Input.Resource.RestoreDir, "memory-ranges"), generation.Candidate, source.Manifest.Files["ch/memory-ranges"]}},
-				{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='backing' AND holder_id=?", []any{source.ID, generation.Input.BackingHolder}},
-				{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{generation.Input.TenantID, source.ID, "backing:" + generation.Input.BackingHolder}},
+				{"DELETE FROM backing WHERE path=? AND vm_id=? AND digest=?", []any{
+					filepath.Join(generation.Input.Resource.RestoreDir, "memory-ranges"),
+					generation.Candidate,
+					source.Manifest.Files["ch/memory-ranges"],
+				}},
+				{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='backing' AND holder_id=?", []any{
+					source.ID,
+					generation.Input.BackingHolder,
+				}},
+				{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+					generation.Input.TenantID,
+					source.ID,
+					"backing:" + generation.Input.BackingHolder,
+				}},
 			}
 		} else {
 			statements = []struct {
 				q    string
 				args []any
 			}{
-				{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?", []any{source.ID, generation.OperationID, generation.Key}},
-				{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{source.ID, generation.OperationID + ":resource"}},
-				{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{generation.Input.TenantID, source.ID, generation.OperationID + ":resource"}},
+				{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?", []any{
+					source.ID,
+					generation.OperationID,
+					generation.Key,
+				}},
+				{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+					source.ID,
+					generation.OperationID + ":resource",
+				}},
+				{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+					generation.Input.TenantID,
+					source.ID,
+					generation.OperationID + ":resource",
+				}},
 			}
 		}
 		statements = append(statements, struct {
 			q    string
 			args []any
-		}{"DELETE FROM reservations WHERE owner=?", []any{"restore:" + generation.OperationID}})
+		}{"DELETE FROM reservations WHERE owner=?", []any{
+			"restore:" + generation.OperationID,
+		}})
 		for _, statement := range statements {
 			if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -93,8 +123,17 @@ func (service *Service) retireGeneration(ctx context.Context, tx *sql.Tx, genera
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_versions WHERE id=? AND vm_id=? AND operation_id=? AND step_key=?", []any{generation.OperationID, generation.Candidate, generation.OperationID, generation.Key}},
-		{"DELETE FROM instances WHERE id=? AND vm_id=? AND operation_id=?", []any{generation.Input.Resource.Instance, generation.Candidate, generation.OperationID}},
+		{"DELETE FROM resource_versions WHERE id=? AND vm_id=? AND operation_id=? AND step_key=?", []any{
+			generation.OperationID,
+			generation.Candidate,
+			generation.OperationID,
+			generation.Key,
+		}},
+		{"DELETE FROM instances WHERE id=? AND vm_id=? AND operation_id=?", []any{
+			generation.Input.Resource.Instance,
+			generation.Candidate,
+			generation.OperationID,
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

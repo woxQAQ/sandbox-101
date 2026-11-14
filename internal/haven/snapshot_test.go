@@ -21,7 +21,12 @@ func captureReady(t *testing.T, service *Service, key string) (Operation, Captur
 	if source.Status != "succeeded" {
 		t.Fatal(source.State)
 	}
-	request := CaptureRequest{TenantID: "tenant", Key: key, SandboxID: claim.Result.SandboxID, ExpectedInstance: source.State.Witness}
+	request := CaptureRequest{
+		TenantID:         "tenant",
+		Key:              key,
+		SandboxID:        claim.Result.SandboxID,
+		ExpectedInstance: source.State.Witness,
+	}
 	operation, err := service.AdmitCapture(context.Background(), request)
 	if err != nil && !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
@@ -77,7 +82,20 @@ func capturePublished(t *testing.T, service *Service, step captureStep, want boo
 
 func TestHavenSnapshotDurability(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"capture_admitted", "capture_prepared", "pause_intent", "paused", "captured", "source_resumed", "capture_copied", "capture_materialized", "artifacts_synced", "publish_intent", "capture_completion_before_commit", "capture_completed"} {
+	for _, point := range []string{
+		"capture_admitted",
+		"capture_prepared",
+		"pause_intent",
+		"paused",
+		"captured",
+		"source_resumed",
+		"capture_copied",
+		"capture_materialized",
+		"artifacts_synced",
+		"publish_intent",
+		"capture_completion_before_commit",
+		"capture_completed",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend := coldService(t, func(candidate string) error {
 				if candidate == point {
@@ -117,7 +135,14 @@ func TestHavenSnapshotDurability(t *testing.T) {
 
 func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 	parallelLifecycle(t)
-	for _, damage := range []string{"truncate-disk", "zero-memory", "missing-memory", "staging-inode", "missing-checksums", "missing-boundary"} {
+	for _, damage := range []string{
+		"truncate-disk",
+		"zero-memory",
+		"missing-memory",
+		"staging-inode",
+		"missing-checksums",
+		"missing-boundary",
+	} {
 		t.Run(damage, func(t *testing.T) {
 			service, backend := coldService(t, func(point string) error {
 				if point == "capture_materialized" {
@@ -179,7 +204,9 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 
 func TestHavenSnapshotAtomicPublication(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
+	for _, write := range []struct {
+		event, table, condition string
+	}{
 		{"UPDATE", "snapshots", "NEW.published=1"},
 		{"INSERT", "checkpoints", "1"},
 		{"INSERT", "quota_resources", "NEW.kind='snapshot'"},
@@ -188,7 +215,10 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 		{"UPDATE", "operation_steps", "NEW.action='snapshot' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture publication rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture publication rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
 				service, backend := coldService(t, nil)
 				claim := coldClaim(t, service, "source")
@@ -200,7 +230,12 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 				if _, err := service.store.db.Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				operation, err := service.AdmitCapture(context.Background(), CaptureRequest{TenantID: "tenant", Key: "capture", SandboxID: claim.Result.SandboxID, ExpectedInstance: source.State.Witness})
+				operation, err := service.AdmitCapture(context.Background(), CaptureRequest{
+					TenantID:         "tenant",
+					Key:              "capture",
+					SandboxID:        claim.Result.SandboxID,
+					ExpectedInstance: source.State.Witness,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -233,10 +268,18 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 		service, backend := coldService(t, nil)
 		claim := coldClaim(t, service, "source")
 		source := awaitColdWorker(t, service, claim.ID)
-		if _, err := service.store.db.Exec("UPDATE tenants SET body=? WHERE id='tenant'", encode(tenantRecord{MaxSandboxes: 10, MaxStorageMiB: 255})); err != nil {
+		if _, err := service.store.db.Exec("UPDATE tenants SET body=? WHERE id='tenant'", encode(tenantRecord{
+			MaxSandboxes:  10,
+			MaxStorageMiB: 255,
+		})); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := service.AdmitCapture(context.Background(), CaptureRequest{TenantID: "tenant", Key: "exhausted", SandboxID: claim.Result.SandboxID, ExpectedInstance: source.State.Witness}); err == nil {
+		if _, err := service.AdmitCapture(context.Background(), CaptureRequest{
+			TenantID:         "tenant",
+			Key:              "exhausted",
+			SandboxID:        claim.Result.SandboxID,
+			ExpectedInstance: source.State.Witness,
+		}); err == nil {
 			t.Fatal("capture exceeded tenant quota")
 		}
 		if backend.count("pause") != 0 {
@@ -250,7 +293,12 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 		if _, err := service.store.db.Exec("CREATE TRIGGER deny_capture_owner BEFORE INSERT ON snapshot_owners BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := service.AdmitCapture(context.Background(), CaptureRequest{TenantID: "tenant", Key: "deny", SandboxID: claim.Result.SandboxID, ExpectedInstance: source.State.Witness}); err == nil {
+		if _, err := service.AdmitCapture(context.Background(), CaptureRequest{
+			TenantID:         "tenant",
+			Key:              "deny",
+			SandboxID:        claim.Result.SandboxID,
+			ExpectedInstance: source.State.Witness,
+		}); err == nil {
 			t.Fatal("ignored owner registration was accepted")
 		}
 		var snapshots int

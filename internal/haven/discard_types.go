@@ -38,7 +38,9 @@ type (
 )
 
 func loadDiscard(ctx context.Context, query queryer, operation string) (discardStep, error) {
-	step := discardStep{OperationID: operation}
+	step := discardStep{
+		OperationID: operation,
+	}
 	var input, body []byte
 	var action, candidate, expected string
 	err := query.QueryRowContext(ctx, "SELECT action,input_hash,input,candidate_resource_id,expected_instance,status,body FROM operation_steps WHERE operation_id=? AND step_key='discard'", operation).Scan(&action, &step.Hash, &input, &candidate, &expected, &step.Status, &body)
@@ -157,7 +159,10 @@ func (service *Service) discardSource(ctx context.Context, tx *sql.Tx, input dis
 	if err = json.Unmarshal(versionBody, &version); err != nil {
 		return vm, err
 	}
-	if !reflect.DeepEqual(version, resourceVersion{Resource: source.Input.Resource, DiskIdentity: source.State.DiskIdentity}) {
+	if !reflect.DeepEqual(version, resourceVersion{
+		Resource:     source.Input.Resource,
+		DiskIdentity: source.State.DiskIdentity,
+	}) {
 		return vm, fmt.Errorf("discard version differs from failed intent")
 	}
 	if source.Input.Restore != nil {
@@ -214,7 +219,10 @@ func (service *Service) discardProof(ctx context.Context, tx *sql.Tx, step disca
 	for _, cleanup := range []struct {
 		id, operation, status string
 		input                 any
-	}{{"blocked:" + source.OperationID, source.OperationID, "transferred", source.Input}, {"discard:" + step.OperationID, step.OperationID, "pending", input}} {
+	}{
+		{"blocked:" + source.OperationID, source.OperationID, "transferred", source.Input},
+		{"discard:" + step.OperationID, step.OperationID, "pending", input},
+	} {
 		if err = tx.QueryRowContext(ctx, "SELECT body FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind='vm' AND resource_id=? AND status=?", cleanup.id, cleanup.operation, source.Candidate, cleanup.status).Scan(&body); err != nil {
 			return vm, err
 		}
@@ -242,35 +250,77 @@ func (service *Service) discardProof(ctx context.Context, tx *sql.Tx, step disca
 		args []any
 		want int
 	}{
-		{"SELECT COUNT(*) FROM backing WHERE vm_id=?", []any{source.Candidate}, expectedBacking},
-		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{source.Candidate}, len(generations)},
-		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{source.Candidate}, len(generations)},
-		{"SELECT COUNT(*) FROM warm WHERE vm_id=?", []any{source.Candidate}, 0},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{source.Candidate}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{source.Candidate, step.OperationID + ":discard"}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{source.Input.Resource.Config.Image, step.OperationID + ":discard"}, 1},
-		{"SELECT COUNT(*) FROM cleanup_intents WHERE resource_kind='vm' AND resource_id=? AND status!='done'", []any{source.Candidate}, 2},
-		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{"vm:" + source.Candidate, vmBytes, shape.MemoryMiB + 128, shape.VCPUs}, 1},
+		{"SELECT COUNT(*) FROM backing WHERE vm_id=?", []any{
+			source.Candidate,
+		}, expectedBacking},
+		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{
+			source.Candidate,
+		}, len(generations)},
+		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{
+			source.Candidate,
+		}, len(generations)},
+		{"SELECT COUNT(*) FROM warm WHERE vm_id=?", []any{
+			source.Candidate,
+		}, 0},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{
+			source.Candidate,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			source.Candidate,
+			step.OperationID + ":discard",
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			source.Input.Resource.Config.Image,
+			step.OperationID + ":discard",
+		}, 1},
+		{"SELECT COUNT(*) FROM cleanup_intents WHERE resource_kind='vm' AND resource_id=? AND status!='done'", []any{
+			source.Candidate,
+		}, 2},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{
+			"vm:" + source.Candidate,
+			vmBytes,
+			shape.MemoryMiB + 128,
+			shape.VCPUs,
+		}, 1},
 	}
 	for _, quota := range []struct {
 		kind, key, operation string
 		slots, storage       int64
-	}{{"pending_storage", source.OperationID + ":resource", source.OperationID, 0, shape.DiskMiB}, {source.Input.SlotBudget.Kind, sandbox.ID, source.Input.SlotOperation, source.Input.SlotBudget.Units, 0}} {
+	}{
+		{"pending_storage", source.OperationID + ":resource", source.OperationID, 0, shape.DiskMiB},
+		{source.Input.SlotBudget.Kind, sandbox.ID, source.Input.SlotOperation, source.Input.SlotBudget.Units, 0},
+	} {
 		checks = append(checks, struct {
 			q    string
 			args []any
 			want int
-		}{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=? AND source_operation_id=?", []any{input.Request.TenantID, quota.kind, quota.key, quota.slots, quota.storage, quota.operation}, 1})
+		}{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=? AND source_operation_id=?", []any{
+			input.Request.TenantID,
+			quota.kind,
+			quota.key,
+			quota.slots,
+			quota.storage,
+			quota.operation,
+		}, 1})
 		checks = append(checks, struct {
 			q    string
 			args []any
 			want int
-		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?", []any{input.Request.TenantID, quota.kind, quota.key}, 1})
+		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?", []any{
+			input.Request.TenantID,
+			quota.kind,
+			quota.key,
+		}, 1})
 		checks = append(checks, struct {
 			q    string
 			args []any
 			want int
-		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{input.Request.TenantID, quota.kind, quota.key, step.OperationID + ":discard"}, 1})
+		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			input.Request.TenantID,
+			quota.kind,
+			quota.key,
+			step.OperationID + ":discard",
+		}, 1})
 	}
 	for _, check := range checks {
 		var n int

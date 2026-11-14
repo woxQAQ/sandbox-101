@@ -15,11 +15,16 @@ func (service *Service) AdmitTemplate(ctx context.Context, principal Principal, 
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Template == nil || (command.Action != "template_put" && command.Action != "template_build") {
 		return empty, loom.Fail(loom.Invalid, "template requires tenant authority, specification and key")
 	}
-	guard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	guard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	guard.Lock()
 	defer guard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC: mac,
+	}); found || err != nil {
 		return operation, err
 	}
 	spec := *command.Template
@@ -42,7 +47,10 @@ func (service *Service) AdmitTemplate(ctx context.Context, principal Principal, 
 	if command.Action == "template_put" && spec.SnapshotID == "" && spec.TargetWarm != 0 {
 		return empty, loom.Fail(loom.Invalid, "cold template cannot reserve warm instances")
 	}
-	config := loom.Config{Image: spec.Image, Shape: spec.Shape}
+	config := loom.Config{
+		Image: spec.Image,
+		Shape: spec.Shape,
+	}
 	if err := host.CheckConfig(&config); err != nil {
 		return empty, err
 	}
@@ -78,24 +86,64 @@ func (service *Service) AdmitTemplate(ctx context.Context, principal Principal, 
 	if previous != nil && previous.TenantID != spec.TenantID {
 		return empty, loom.Fail(loom.Conflict, "template owner cannot change")
 	}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{TemplateID: spec.ID}}
-	desired := templateRecord{ID: spec.ID, TenantID: spec.TenantID, Config: config, SnapshotID: spec.SnapshotID, TargetWarm: spec.TargetWarm, Warmup: spec.Warmup, State: "ready", Version: parent.ID}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			TemplateID: spec.ID,
+		},
+	}
+	desired := templateRecord{
+		ID:         spec.ID,
+		TenantID:   spec.TenantID,
+		Config:     config,
+		SnapshotID: spec.SnapshotID,
+		TargetWarm: spec.TargetWarm,
+		Warmup:     spec.Warmup,
+		State:      "ready",
+		Version:    parent.ID,
+	}
 	frozenCommand := sanitizedCommand(command)
 	frozenCommand.Template = &spec
-	input := supplyInput{RequesterRoot: principal.Root, CreatedAt: time.Now().UTC(), RequestTenantID: principal.TenantID, Command: frozenCommand, Template: desired, Previous: previous, Source: source}
+	input := supplyInput{
+		RequesterRoot:   principal.Root,
+		CreatedAt:       time.Now().UTC(),
+		RequestTenantID: principal.TenantID,
+		Command:         frozenCommand,
+		Template:        desired,
+		Previous:        previous,
+		Source:          source,
+	}
 	if command.Action == "template_put" {
 		return service.admitTemplatePut(ctx, parent, input, mac)
 	}
 	input.Template.State = "building"
 	input.SandboxID = newID("sandbox_")
 	parent.Result.SandboxID = input.SandboxID
-	link := &supplyAdmission{Parent: parent, Input: input, MAC: mac, Role: "cold"}
-	request := ColdRequest{TenantID: spec.TenantID, Key: parent.ID + ":cold", TemplateID: spec.ID}
+	link := &supplyAdmission{
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Role:   "cold",
+	}
+	request := ColdRequest{
+		TenantID:   spec.TenantID,
+		Key:        parent.ID + ":cold",
+		TemplateID: spec.ID,
+	}
 	frozen := encode(struct {
 		Action  string
 		Request ColdRequest
 	}{"claim", request})
-	child, err := service.admitProvision(ctx, spec.TenantID, request.Key, frozen, digest(frozen), input.Template, image, nil, nil, &provisionTarget{NewSandboxID: input.SandboxID, Budget: &slotBudget{Kind: "build_slot", Units: 1}, Parent: link})
+	child, err := service.admitProvision(ctx, spec.TenantID, request.Key, frozen, digest(frozen), input.Template, image, nil, nil, &provisionTarget{
+		NewSandboxID: input.SandboxID,
+		Budget: &slotBudget{
+			Kind:  "build_slot",
+			Units: 1,
+		},
+		Parent: link,
+	})
 	if child.ID == "" {
 		return empty, err
 	}
@@ -117,7 +165,9 @@ func (service *Service) admitTemplatePut(ctx context.Context, parent Operation, 
 	if err != nil {
 		return Operation{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	frozen := encode(struct {
 		Action  string
 		Request Command
@@ -127,10 +177,34 @@ func (service *Service) admitTemplatePut(ctx context.Context, parent Operation, 
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{parent.ID, "tenant", input.RequestTenantID, parent.Key, digest(frozen), frozen, "pending", encode(parent.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{parent.ID, mac}},
-		{"INSERT INTO operation_steps VALUES(?,'supply','template_put',?,?,?,?,'pending',?)", []any{parent.ID, digest(payload), payload, input.Template.ID, "", encode(supplyState{Phase: "admitted"})}},
-		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{input.Template.Config.Image, parent.ID + ":supply"}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			parent.ID,
+			"tenant",
+			input.RequestTenantID,
+			parent.Key,
+			digest(frozen),
+			frozen,
+			"pending",
+			encode(parent.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			parent.ID,
+			mac,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'supply','template_put',?,?,?,?,'pending',?)", []any{
+			parent.ID,
+			digest(payload),
+			payload,
+			input.Template.ID,
+			"",
+			encode(supplyState{
+				Phase: "admitted",
+			}),
+		}},
+		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{
+			input.Template.Config.Image,
+			parent.ID + ":supply",
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return Operation{}, err
@@ -139,7 +213,15 @@ func (service *Service) admitTemplatePut(ctx context.Context, parent Operation, 
 	if err = service.reserveTemplateIntent(ctx, tx, parent, input); err != nil {
 		return Operation{}, err
 	}
-	if err = service.publishTemplate(ctx, tx, supplyStep{OperationID: parent.ID, Hash: digest(payload), Status: "pending", Input: input, State: supplyState{Phase: "admitted"}}, input.Template.SnapshotID); err != nil {
+	if err = service.publishTemplate(ctx, tx, supplyStep{
+		OperationID: parent.ID,
+		Hash:        digest(payload),
+		Status:      "pending",
+		Input:       input,
+		State: supplyState{
+			Phase: "admitted",
+		},
+	}, input.Template.SnapshotID); err != nil {
 		return Operation{}, err
 	}
 	if err = service.fault("template_publication_before_commit"); err != nil {

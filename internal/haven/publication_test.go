@@ -11,10 +11,14 @@ import (
 
 func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	service, backend, guest, _ := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	operation := claimSandbox(t, service, "public-claim", nil, egress.Policy{Mode: "none"})
+	operation := claimSandbox(t, service, "public-claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	original, err := service.PublicOperation(ctx, principal, operation.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -29,9 +33,27 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	frozen := encode(original)
 	var releaseID string
 	for _, command := range []Command{
-		{Action: "configure", SandboxID: operation.Result.SandboxID, Env: map[string]EnvVar{"VISIBLE": {Value: "new-policy"}}, Policy: egress.Policy{Mode: "none"}},
-		{Action: "renew", SandboxID: operation.Result.SandboxID, TTLSeconds: 120},
-		{Action: "release", SandboxID: operation.Result.SandboxID},
+		{
+			Action:    "configure",
+			SandboxID: operation.Result.SandboxID,
+			Env: map[string]EnvVar{
+				"VISIBLE": {
+					Value: "new-policy",
+				},
+			},
+			Policy: egress.Policy{
+				Mode: "none",
+			},
+		},
+		{
+			Action:     "renew",
+			SandboxID:  operation.Result.SandboxID,
+			TTLSeconds: 120,
+		},
+		{
+			Action:    "release",
+			SandboxID: operation.Result.SandboxID,
+		},
 	} {
 		changed, changeErr := service.Execute(ctx, principal, "public-"+command.Action, command)
 		if changeErr != nil {
@@ -58,18 +80,29 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	if view, err := service.PublicOperation(ctx, retired, releaseID); err != nil || view.Result.Tokens != nil {
 		t.Fatal("retired capability cannot read its release without minting new tokens", view, err)
 	}
-	if _, err = service.PublicOperation(ctx, Principal{TenantID: "other"}, operation.ID); err == nil {
+	if _, err = service.PublicOperation(ctx, Principal{
+		TenantID: "other",
+	}, operation.ID); err == nil {
 		t.Fatal("foreign operation visible")
 	}
 	directory := service.store.directory
 	if err = service.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(Options{StateDir: directory, Backend: backend, Guest: guest, MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1})
+	reopened, err := Open(Options{
+		StateDir:     directory,
+		Backend:      backend,
+		Guest:        guest,
+		MaxMemoryMiB: 8192,
+		MaxVCPUs:     64,
+		SafetyBytes:  1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	t.Cleanup(func() {
+		_ = reopened.Close(context.Background())
+	})
 	current, err := reopened.PublicOperation(ctx, principal, operation.ID)
 	if err != nil || !bytes.Equal(frozen, encode(current)) {
 		t.Fatal("reopen recomputed terminal result", current, err)
@@ -81,14 +114,24 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 
 func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	service, _, _, proxy := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	operation := claimSandbox(t, service, "claim-before-publication-fault", nil, egress.Policy{Mode: "relay"})
+	operation := claimSandbox(t, service, "claim-before-publication-fault", nil, egress.Policy{
+		Mode: "relay",
+	})
 	if _, err := service.store.db.Exec(`CREATE TRIGGER reject_public_delivery BEFORE INSERT ON operation_publications BEGIN SELECT RAISE(ABORT,'publication blocked'); END`); err != nil {
 		t.Fatal(err)
 	}
-	configure, err := service.AdmitConfigure(ctx, principal, "configure-publication-fault", Command{Action: "configure", SandboxID: operation.Result.SandboxID, Policy: egress.Policy{Mode: "relay"}})
+	configure, err := service.AdmitConfigure(ctx, principal, "configure-publication-fault", Command{
+		Action:    "configure",
+		SandboxID: operation.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "relay",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +154,13 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err = service.store.db.Exec("DROP TRIGGER reject_public_delivery"); err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := service.Execute(ctx, principal, "configure-after-publication-fault", Command{Action: "configure", SandboxID: operation.Result.SandboxID, Policy: egress.Policy{Mode: "relay"}})
+	repaired, err := service.Execute(ctx, principal, "configure-after-publication-fault", Command{
+		Action:    "configure",
+		SandboxID: operation.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "relay",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

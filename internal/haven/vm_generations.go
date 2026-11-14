@@ -31,7 +31,9 @@ func (service *Service) generationHistory(ctx context.Context, tx *sql.Tx, step 
 }
 
 func (service *Service) generationHistoryAt(ctx context.Context, tx *sql.Tx, step resourceStep, holderKind, holderID string) ([]resourceStep, error) {
-	seen := map[string]bool{step.OperationID: true}
+	seen := map[string]bool{
+		step.OperationID: true,
+	}
 	var history []resourceStep
 	for index, reference := range step.Input.Ancestors {
 		if seen[reference.OperationID] {
@@ -75,7 +77,10 @@ func (service *Service) verifyGenerationAt(ctx context.Context, tx *sql.Tx, sour
 	if err := json.Unmarshal(body, &version); err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(version, resourceVersion{Resource: source.Input.Resource, DiskIdentity: source.State.DiskIdentity}) {
+	if !reflect.DeepEqual(version, resourceVersion{
+		Resource:     source.Input.Resource,
+		DiskIdentity: source.State.DiskIdentity,
+	}) {
 		return fmt.Errorf("retained version identity changed")
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT body FROM instances WHERE id=? AND vm_id=? AND operation_id=?", source.State.Witness, source.Candidate, source.OperationID).Scan(&body); err != nil {

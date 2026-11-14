@@ -28,7 +28,9 @@ func PeerContext(ctx context.Context, conn net.Conn) context.Context {
 	}
 	var peer *unix.Ucred
 	var peerErr error
-	if err = raw.Control(func(fd uintptr) { peer, peerErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) }); err != nil || peerErr != nil || peer == nil {
+	if err = raw.Control(func(fd uintptr) {
+		peer, peerErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil || peerErr != nil || peer == nil {
 		return ctx
 	}
 	if peer.Uid != 0 && peer.Uid != uint32(os.Geteuid()) {
@@ -36,7 +38,10 @@ func PeerContext(ctx context.Context, conn net.Conn) context.Context {
 	}
 	return context.WithValue(ctx, peerKey{}, true)
 }
-func Authorized(ctx context.Context) bool { value, _ := ctx.Value(peerKey{}).(bool); return value }
+func Authorized(ctx context.Context) bool {
+	value, _ := ctx.Value(peerKey{}).(bool)
+	return value
+}
 
 type Listener struct {
 	*net.UnixListener
@@ -87,7 +92,10 @@ func Open(path string) (*Listener, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	socket, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	socket, err := net.ListenUnix("unix", &net.UnixAddr{
+		Name: path,
+		Net:  "unix",
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +109,11 @@ func Open(path string) (*Listener, error) {
 		_ = socket.Close()
 		return nil, err
 	}
-	return &Listener{UnixListener: socket, path: path, identity: identity}, nil
+	return &Listener{
+		UnixListener: socket,
+		path:         path,
+		identity:     identity,
+	}, nil
 }
 
 func (listener *Listener) Close() error {

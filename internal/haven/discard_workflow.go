@@ -20,12 +20,16 @@ func (service *Service) markDiscard(step *discardStep, phase string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	vm, err := service.discardProof(service.ctx, tx, *step)
 	if err != nil {
 		return err
 	}
-	next := discardState{Phase: phase}
+	next := discardState{
+		Phase: phase,
+	}
 	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='discard' AND input_hash=? AND status IN ('pending','running') AND body=?", encode(next), step.OperationID, step.Hash, encode(step.State))); err != nil {
 		return err
 	}
@@ -54,7 +58,9 @@ func (service *Service) discardGenerationSet(step discardStep) ([]resourceStep, 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.discardProof(service.ctx, tx, step); err != nil {
 		return nil, err
 	}
@@ -274,7 +280,9 @@ func (service *Service) discardDeletion(step discardStep) (loom.DeletionIntent, 
 	if err != nil {
 		return intent, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.discardProof(service.ctx, tx, step); err != nil {
 		return intent, err
 	}
@@ -297,7 +305,9 @@ func (service *Service) completeDiscard(step discardStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadDiscard(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -319,7 +329,10 @@ func (service *Service) completeDiscard(step discardStep) error {
 	quotas := []struct {
 		kind, key, operation string
 		slots, storage       int64
-	}{{"pending_storage", source.OperationID + ":resource", source.OperationID, 0, source.Input.Resource.Config.Shape.DiskMiB}, {source.Input.SlotBudget.Kind, input.Request.SandboxID, source.Input.SlotOperation, source.Input.SlotBudget.Units, 0}}
+	}{
+		{"pending_storage", source.OperationID + ":resource", source.OperationID, 0, source.Input.Resource.Config.Shape.DiskMiB},
+		{source.Input.SlotBudget.Kind, input.Request.SandboxID, source.Input.SlotOperation, source.Input.SlotBudget.Units, 0},
+	}
 	for _, generation := range generations[:len(generations)-1] {
 		quotas = append(quotas, struct {
 			kind, key, operation string
@@ -353,20 +366,50 @@ func (service *Service) completeDiscard(step discardStep) error {
 			return err
 		}
 	}
-	next := discardState{Phase: "complete"}
+	next := discardState{
+		Phase: "complete",
+	}
 	statements := []struct {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{source.Candidate, step.OperationID + ":discard"}},
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{source.Input.Resource.Config.Image, step.OperationID + ":discard"}},
-		{"DELETE FROM reservations WHERE owner=?", []any{"vm:" + source.Candidate}},
-		{"DELETE FROM vms WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'", []any{source.Candidate, step.OperationID, input.CurrentInstance}},
-		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='discard'", []any{source.Input.Resource.Dir, step.OperationID}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{"blocked:" + source.OperationID, source.OperationID}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{"discard:" + step.OperationID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='discard' AND input_hash=? AND body=? AND status='running'", []any{encode(next), step.OperationID, step.Hash, encode(step.State)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			source.Candidate,
+			step.OperationID + ":discard",
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			source.Input.Resource.Config.Image,
+			step.OperationID + ":discard",
+		}},
+		{"DELETE FROM reservations WHERE owner=?", []any{
+			"vm:" + source.Candidate,
+		}},
+		{"DELETE FROM vms WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'", []any{
+			source.Candidate,
+			step.OperationID,
+			input.CurrentInstance,
+		}},
+		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='discard'", []any{
+			source.Input.Resource.Dir,
+			step.OperationID,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{
+			"blocked:" + source.OperationID,
+			source.OperationID,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{
+			"discard:" + step.OperationID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='discard' AND input_hash=? AND body=? AND status='running'", []any{
+			encode(next),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	}
 	for _, statement := range statements {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {

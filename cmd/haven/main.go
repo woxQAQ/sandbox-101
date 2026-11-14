@@ -33,7 +33,9 @@ func main() {
 		os.Exit(1)
 	}
 }
-func output(value any) error { return json.NewEncoder(os.Stdout).Encode(value) }
+func output(value any) error {
+	return json.NewEncoder(os.Stdout).Encode(value)
+}
 func run(args []string) (result error) {
 	if len(args) == 2 && args[0] == "--internal-launch" {
 		return host.InternalLaunch(args[1])
@@ -73,7 +75,9 @@ func run(args []string) (result error) {
 		if err := haven.AcknowledgeRecovery(ctx, cfg.StateDir, cfg.RecoveryNote); err != nil {
 			return err
 		}
-		return output(map[string]bool{"reviewed": true})
+		return output(map[string]bool{
+			"reviewed": true,
+		})
 	case "doctor":
 		status, err := haven.InspectState(ctx, cfg.StateDir)
 		if err != nil {
@@ -106,11 +110,32 @@ func run(args []string) (result error) {
 	if cfg.MaxVCPUs == 0 {
 		cfg.MaxVCPUs = runtime.NumCPU()
 	}
-	backend := host.NewCloudHypervisor(host.CloudOptions{Binary: cfg.CloudHypervisor, BuildReceipt: cfg.BuildReceipt, CgroupRoot: cfg.CgroupRoot, HostPolicy: cfg.HostPolicy, UID: uint32(cfg.VMMUID), GID: uint32(cfg.VMMGID), IOMax: cfg.IOMax})
-	defer func() { _ = backend.Close() }()
+	backend := host.NewCloudHypervisor(host.CloudOptions{
+		Binary:       cfg.CloudHypervisor,
+		BuildReceipt: cfg.BuildReceipt,
+		CgroupRoot:   cfg.CgroupRoot,
+		HostPolicy:   cfg.HostPolicy,
+		UID:          uint32(cfg.VMMUID),
+		GID:          uint32(cfg.VMMGID),
+		IOMax:        cfg.IOMax,
+	})
+	defer func() {
+		_ = backend.Close()
+	}()
 	service, err := haven.Open(haven.Options{
-		Context: ctx, StateDir: cfg.StateDir, Initialize: cfg.Init, Backend: backend, Guest: haven.LiveGuest{}, RootToken: token,
-		MaxMemoryMiB: cfg.MaxMemoryMiB, MaxVCPUs: cfg.MaxVCPUs, SafetyBytes: cfg.StorageMarginBytes, MaxTTL: cfg.MaxTTL, PausedTTL: cfg.PausedTTL, MaxWarm: cfg.MaxWarm, Interval: cfg.MaintenanceInterval,
+		Context:      ctx,
+		StateDir:     cfg.StateDir,
+		Initialize:   cfg.Init,
+		Backend:      backend,
+		Guest:        haven.LiveGuest{},
+		RootToken:    token,
+		MaxMemoryMiB: cfg.MaxMemoryMiB,
+		MaxVCPUs:     cfg.MaxVCPUs,
+		SafetyBytes:  cfg.StorageMarginBytes,
+		MaxTTL:       cfg.MaxTTL,
+		PausedTTL:    cfg.PausedTTL,
+		MaxWarm:      cfg.MaxWarm,
+		Interval:     cfg.MaintenanceInterval,
 		EgressFactory: func(service *haven.Service) (haven.Egress, string, error) {
 			manager, err := egress.New(egress.Options{
 				PrepareSocket: func(binding egress.Binding, path string, info os.FileInfo) error {
@@ -148,14 +173,35 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 	if err != nil {
 		return err
 	}
-	defer func() { _ = local.Close() }()
+	defer func() {
+		_ = local.Close()
+	}()
 	business, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = business.Close() }()
-	httpServer := &http.Server{Handler: httpapi.New(service), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
-	localServer := &http.Server{Handler: management.New(service), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 << 10, ConnContext: localuds.PeerContext, BaseContext: func(net.Listener) context.Context { return ctx }}
+	defer func() {
+		_ = business.Close()
+	}()
+	httpServer := &http.Server{
+		Handler:           httpapi.New(service),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+	localServer := &http.Server{
+		Handler:           management.New(service),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+		ConnContext:       localuds.PeerContext,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
 	done := make(chan error, 2)
 	go func() {
 		if cfg.TLSCert != "" {
@@ -164,10 +210,15 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 			done <- httpServer.Serve(business)
 		}
 	}()
-	go func() { done <- localServer.Serve(local) }()
+	go func() {
+		done <- localServer.Serve(local)
+	}()
 	workCtx, stopWork := context.WithCancel(ctx)
 	workDone := make(chan struct{})
-	go func() { defer close(workDone); maintain(workCtx, cfg, service) }()
+	go func() {
+		defer close(workDone)
+		maintain(workCtx, cfg, service)
+	}()
 	slog.Info("Haven listening", "http", business.Addr().String(), "management", cfg.Socket, "state", cfg.StateDir)
 	var serveErr error
 	select {
@@ -217,7 +268,12 @@ func maintain(ctx context.Context, cfg config.Daemon, service *haven.Service) {
 			return
 		case <-ticker.C:
 		case now := <-collect:
-			_, err := service.CollectGarbage(ctx, haven.Principal{Root: true, TenantID: "node-admin"}, "gc:"+now.UTC().Format(time.RFC3339Nano), haven.GCOptions{Batch: cfg.GCBatch})
+			_, err := service.CollectGarbage(ctx, haven.Principal{
+				Root:     true,
+				TenantID: "node-admin",
+			}, "gc:"+now.UTC().Format(time.RFC3339Nano), haven.GCOptions{
+				Batch: cfg.GCBatch,
+			})
 			if err != nil && ctx.Err() == nil {
 				slog.Warn("Haven collection deferred", "error", err)
 			}

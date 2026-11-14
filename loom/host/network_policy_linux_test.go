@@ -13,16 +13,30 @@ func TestNetworkPolicyRulesDefaultDenyAndSharedBudget(t *testing.T) {
 		!strings.Contains(baseline, "hook forward priority filter; policy drop") {
 		t.Fatalf("baseline permits forwarding: %s", baseline)
 	}
-	p := &loom.NetworkPolicy{Version: 1, AllowedCIDRs: []string{"1.1.1.1/32"}, MaxConnections: 256}
-	p.AllowedCIDRs = []string{"0.0.0.0/0"}
+	p := &loom.NetworkPolicy{
+		Version: 1,
+		AllowedCIDRs: []string{
+			"1.1.1.1/32",
+		},
+		MaxConnections: 256,
+	}
+	p.AllowedCIDRs = []string{
+		"0.0.0.0/0",
+	}
 	rules := renderNetworkPolicy(p)
 	for _, required := range []string{
-		"type ipv4_addr", "meta nfproto != ipv4 drop", "ct state invalid drop",
-		"ip daddr @denied drop", "ip daddr != @allowed drop",
-		"meta l4proto != { tcp, udp, icmp } drop", "ct count over 256 drop",
-		"ct direction reply", "ct original ip daddr @denied drop",
+		"type ipv4_addr",
+		"meta nfproto != ipv4 drop",
+		"ct state invalid drop",
+		"ip daddr @denied drop",
+		"ip daddr != @allowed drop",
+		"meta l4proto != { tcp, udp, icmp } drop",
+		"ct count over 256 drop",
+		"ct direction reply",
+		"ct original ip daddr @denied drop",
 		"ct original ip daddr @allowed meta l4proto { tcp, udp, icmp } jump budget",
-		"hook input priority filter; policy drop", "hook output priority filter; policy drop",
+		"hook input priority filter; policy drop",
+		"hook output priority filter; policy drop",
 	} {
 		if !strings.Contains(rules, required) {
 			t.Errorf("missing %q in rules:\n%s", required, rules)
@@ -75,7 +89,13 @@ func TestNetworkPolicyRulesHashDetectsEnforcementChanges(t *testing.T) {
 			t.Fatalf("enforcement change not detected: %s %v", changed, err)
 		}
 	}
-	for _, invalid := range []string{"{", `{}`, `{"nftables":[]}`, `{"nftables":[{"metainfo":{}}]}`, `{"nftables":[{"rule":null}]}`} {
+	for _, invalid := range []string{
+		"{",
+		`{}`,
+		`{"nftables":[]}`,
+		`{"nftables":[{"metainfo":{}}]}`,
+		`{"nftables":[{"rule":null}]}`,
+	} {
 		if _, err := networkRulesHash([]byte(invalid)); err == nil {
 			t.Fatalf("accepted missing or unknown rules: %s", invalid)
 		}

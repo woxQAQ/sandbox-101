@@ -27,7 +27,10 @@ func (service *Service) AdmitImageImport(ctx context.Context, principal Principa
 	if err != nil {
 		return empty, err
 	}
-	guard := service.vmLock("node-request:" + string(encode([]string{service.store.identity.Identity, key})))
+	guard := service.vmLock("node-request:" + string(encode([]string{
+		service.store.identity.Identity,
+		key,
+	})))
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := encode(struct {
@@ -46,7 +49,11 @@ func (service *Service) AdmitImageImport(ctx context.Context, principal Principa
 	if err = ctx.Err(); err != nil {
 		return empty, err
 	}
-	input := imageImportInput{RequestTenantID: principal.TenantID, Options: options, Target: filepath.Join(service.store.directory, "images", options.Digest[7:])}
+	input := imageImportInput{
+		RequestTenantID: principal.TenantID,
+		Options:         options,
+		Target:          filepath.Join(service.store.directory, "images", options.Digest[7:]),
+	}
 	existing, err := loadImage(ctx, service.store.db, options.Digest)
 	if err == nil {
 		if existing.Layout != options.Materialization {
@@ -78,10 +85,18 @@ func (service *Service) AdmitImageImport(ctx context.Context, principal Principa
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending"}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+	}
 	input.Work = filepath.Join(service.store.directory, "imports", operation.ID)
-	state := imageImportState{Phase: "admitted"}
+	state := imageImportState{
+		Phase: "admitted",
+	}
 	if input.Existing != nil {
 		current, err := loadImage(ctx, tx, options.Digest)
 		if err != nil {
@@ -118,8 +133,25 @@ func (service *Service) AdmitImageImport(ctx context.Context, principal Principa
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "node", service.store.identity.Identity, key, hash, frozen, operation.Status, encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'image_import','image_import',?,?,?,? ,?,?)", []any{operation.ID, digest(payload), payload, options.Digest, "", operation.Status, encode(state)}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"node",
+			service.store.identity.Identity,
+			key,
+			hash,
+			frozen,
+			operation.Status,
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'image_import','image_import',?,?,?,? ,?,?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			options.Digest,
+			"",
+			operation.Status,
+			encode(state),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err

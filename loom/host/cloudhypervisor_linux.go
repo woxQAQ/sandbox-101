@@ -82,7 +82,9 @@ func NewCloudHypervisor(opts CloudOptions) *CloudHypervisor {
 	return b
 }
 
-func (b *CloudHypervisor) RequiresImageCatalog() bool { return true }
+func (b *CloudHypervisor) RequiresImageCatalog() bool {
+	return true
+}
 
 func (b *CloudHypervisor) Compatibility() string {
 	var r BuildReceipt
@@ -100,7 +102,10 @@ func (b *CloudHypervisor) checkHostPolicy(ctx context.Context) error {
 	if p.Version != 1 || !p.StorageQuota || !p.NetworkQuotas {
 		return api.Fail(api.Incompatible, "storage and network quota deployment acknowledgement missing")
 	}
-	for _, set := range []string{"active_ifaces", "active_ips"} {
+	for _, set := range []string{
+		"active_ifaces",
+		"active_ips",
+	} {
 		if _, err := command(ctx, "nft", "list", "set", "inet", "sandbox_engine", set); err != nil {
 			return api.Fail(api.Incompatible, "host admission set missing: %v", err)
 		}
@@ -119,7 +124,12 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 	if os.Geteuid() != 0 {
 		return api.Fail(api.Incompatible, "real backend requires root for namespace/cgroup setup")
 	}
-	for _, tool := range []string{"ip", "nft", "mkfs.ext4", "sysctl"} {
+	for _, tool := range []string{
+		"ip",
+		"nft",
+		"mkfs.ext4",
+		"sysctl",
+	} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return api.Fail(api.Incompatible, "required host tool missing: %s", tool)
 		}
@@ -144,7 +154,10 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 	if err != nil || len(libs) != 0 {
 		return api.Fail(api.Incompatible, "CH must be statically linked for the restricted root")
 	}
-	for _, dev := range []string{"/dev/kvm", "/dev/net/tun"} {
+	for _, dev := range []string{
+		"/dev/kvm",
+		"/dev/net/tun",
+	} {
 		fd, x := unix.Open(dev, unix.O_RDWR|unix.O_CLOEXEC, 0)
 		if x != nil {
 			return api.Fail(api.Incompatible, "required device %s: %v", dev, x)
@@ -177,7 +190,12 @@ func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
 	if err != nil {
 		return api.Fail(api.Incompatible, "delegated cgroup v2 root required: %v", err)
 	}
-	for _, need := range []string{"cpu", "memory", "io", "pids"} {
+	for _, need := range []string{
+		"cpu",
+		"memory",
+		"io",
+		"pids",
+	} {
 		if !strings.Contains(string(controllers), need) {
 			return api.Fail(api.Incompatible, "cgroup controller %s not enabled", need)
 		}

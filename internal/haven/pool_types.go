@@ -54,7 +54,10 @@ func (service *Service) verifyReadyWarm(ctx context.Context, tx *sql.Tx, id stri
 	if err != nil {
 		return pool, source, err
 	}
-	if source.Hash != pool.Source.InputHash || source.Status != "succeeded" || source.State.Witness != pool.Instance || source.Candidate != pool.VMID || source.Input.SandboxID != pool.SandboxID || source.Input.TenantID != pool.Template.TenantID || source.Input.SlotBudget != (slotBudget{Kind: "sandbox_slot", Units: 0}) || source.Input.Restore == nil || source.Input.Restore.Snapshot.ID != pool.Template.SnapshotID || !sameConfig(source.Input.Resource.Config, pool.Template.Config) {
+	if source.Hash != pool.Source.InputHash || source.Status != "succeeded" || source.State.Witness != pool.Instance || source.Candidate != pool.VMID || source.Input.SandboxID != pool.SandboxID || source.Input.TenantID != pool.Template.TenantID || source.Input.SlotBudget != (slotBudget{
+		Kind:  "sandbox_slot",
+		Units: 0,
+	}) || source.Input.Restore == nil || source.Input.Restore.Snapshot.ID != pool.Template.SnapshotID || !sameConfig(source.Input.Resource.Config, pool.Template.Config) {
 		return pool, source, fmt.Errorf("warm resource birth proof differs from refill")
 	}
 	link, linked, err := loadResourceLink(ctx, tx, id, "clone")
@@ -80,13 +83,34 @@ func (service *Service) verifyReadyWarm(ctx context.Context, tx *sql.Tx, id stri
 		args []any
 		want int
 	}{
-		{"SELECT COUNT(*) FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?", []any{pool.VMID, pool.Template.ID, pool.Template.SnapshotID}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{pool.VMID}, 2},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='warm' AND holder_id=?", []any{pool.VMID, id}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?", []any{pool.Template.TenantID, pool.SandboxID, source.Input.SlotOperation}, 1},
-		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{pool.Template.TenantID, pool.SandboxID, "sandbox:" + pool.SandboxID}, 1},
-		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{pool.VMID}, 1},
-		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{pool.VMID}, 1},
+		{"SELECT COUNT(*) FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?", []any{
+			pool.VMID,
+			pool.Template.ID,
+			pool.Template.SnapshotID,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{
+			pool.VMID,
+		}, 2},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='warm' AND holder_id=?", []any{
+			pool.VMID,
+			id,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?", []any{
+			pool.Template.TenantID,
+			pool.SandboxID,
+			source.Input.SlotOperation,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+			pool.Template.TenantID,
+			pool.SandboxID,
+			"sandbox:" + pool.SandboxID,
+		}, 1},
+		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{
+			pool.VMID,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{
+			pool.VMID,
+		}, 1},
 	}
 	for _, check := range checks {
 		if err = tx.QueryRowContext(ctx, check.q, check.args...).Scan(&count); err != nil || count != check.want {

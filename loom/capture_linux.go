@@ -71,7 +71,9 @@ func PrepareCapture(r Resource, operation string) (*CaptureBoundary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = root.Close() }()
+	defer func() {
+		_ = root.Close()
+	}()
 	if err = privateCaptureDir(root, 0o711); err != nil {
 		return nil, err
 	}
@@ -79,7 +81,9 @@ func PrepareCapture(r Resource, operation string) (*CaptureBoundary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = parent.Close() }()
+	defer func() {
+		_ = parent.Close()
+	}()
 	if err = privateCaptureDir(parent, 0o711); err != nil {
 		return nil, err
 	}
@@ -87,16 +91,25 @@ func PrepareCapture(r Resource, operation string) (*CaptureBoundary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = ch.Close() }()
+	defer func() {
+		_ = ch.Close()
+	}()
 	stage, err := CaptureChild(parent, "publication", 0o700)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = stage.Close() }()
+	defer func() {
+		_ = stage.Close()
+	}()
 	if err = privateCaptureDir(stage, 0o700); err != nil {
 		return nil, err
 	}
-	for _, f := range []*os.File{ch, stage, parent, root} {
+	for _, f := range []*os.File{
+		ch,
+		stage,
+		parent,
+		root,
+	} {
 		if err = f.Sync(); err != nil {
 			return nil, err
 		}
@@ -145,7 +158,9 @@ func DelegateCapture(r Resource, dst string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = parent.Close() }()
+	defer func() {
+		_ = parent.Close()
+	}()
 	if err = privateCaptureDir(parent, 0o711); err != nil {
 		return err
 	}
@@ -153,7 +168,9 @@ func DelegateCapture(r Resource, dst string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = ch.Close() }()
+	defer func() {
+		_ = ch.Close()
+	}()
 	if err = ch.Chown(uid, gid); err != nil {
 		return err
 	}
@@ -170,12 +187,16 @@ func MaterializeCapture(c *CaptureBoundary, memoryMiB int64) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = parent.Close() }()
+	defer func() {
+		_ = parent.Close()
+	}()
 	stage, err := CaptureChild(parent, "publication", 0o700)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = stage.Close() }()
+	defer func() {
+		_ = stage.Close()
+	}()
 	st, err := stage.Stat()
 	if err != nil {
 		return err
@@ -187,7 +208,9 @@ func MaterializeCapture(c *CaptureBoundary, memoryMiB int64) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = source.Close() }()
+	defer func() {
+		_ = source.Close()
+	}()
 	names, err := source.Readdirnames(4)
 	if err != nil && err != io.EOF {
 		return err
@@ -204,7 +227,9 @@ func MaterializeCapture(c *CaptureBoundary, memoryMiB int64) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = dest.Close() }()
+	defer func() {
+		_ = dest.Close()
+	}()
 	remaining := (memoryMiB << 20) + (80 << 20)
 	for _, name := range names {
 		limit, ok := limits[name]

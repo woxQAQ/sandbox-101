@@ -82,15 +82,53 @@ func isEffectCode(err error, code loom.Code) bool {
 }
 
 func wireSandbox(value Sandbox) api.Sandbox {
-	return api.Sandbox{ID: value.ID, TenantID: value.TenantID, State: value.State, VMID: value.VMID, Instance: value.Instance, SnapshotID: value.SnapshotID, TemplateID: value.TemplateID, ProvisionSource: value.ProvisionSource, Shape: api.Shape(value.Shape), Deadline: value.Deadline, PausedUntil: value.PausedUntil, TTLSeconds: value.TTLSeconds, OnExpire: value.OnExpire, AutoRenew: value.AutoRenew, Policy: api.Policy(value.Policy), RequiresSecrets: value.RequiresSecrets, ResumeAttempt: value.ResumeAttempt, Epoch: value.Epoch, OperationID: value.OperationID, LastError: value.LastError, CreatedAt: value.CreatedAt}
+	return api.Sandbox{
+		ID:              value.ID,
+		TenantID:        value.TenantID,
+		State:           value.State,
+		VMID:            value.VMID,
+		Instance:        value.Instance,
+		SnapshotID:      value.SnapshotID,
+		TemplateID:      value.TemplateID,
+		ProvisionSource: value.ProvisionSource,
+		Shape:           api.Shape(value.Shape),
+		Deadline:        value.Deadline,
+		PausedUntil:     value.PausedUntil,
+		TTLSeconds:      value.TTLSeconds,
+		OnExpire:        value.OnExpire,
+		AutoRenew:       value.AutoRenew,
+		Policy:          api.Policy(value.Policy),
+		RequiresSecrets: value.RequiresSecrets,
+		ResumeAttempt:   value.ResumeAttempt,
+		Epoch:           value.Epoch,
+		OperationID:     value.OperationID,
+		LastError:       value.LastError,
+		CreatedAt:       value.CreatedAt,
+	}
 }
 
 func wireTemplate(value templateRecord) api.Template {
-	return api.Template{ID: value.ID, TenantID: value.TenantID, Image: value.Config.Image, Shape: api.Shape(value.Config.Shape), SnapshotID: value.SnapshotID, State: value.State, TargetWarm: value.TargetWarm, Warmup: value.Warmup}
+	return api.Template{
+		ID:         value.ID,
+		TenantID:   value.TenantID,
+		Image:      value.Config.Image,
+		Shape:      api.Shape(value.Config.Shape),
+		SnapshotID: value.SnapshotID,
+		State:      value.State,
+		TargetWarm: value.TargetWarm,
+		Warmup:     value.Warmup,
+	}
 }
 
 func wireCheckpoint(value Checkpoint) api.Checkpoint {
-	return api.Checkpoint{ID: value.ID, TenantID: value.TenantID, SandboxID: value.SandboxID, SnapshotID: value.SnapshotID, Shape: api.Shape(value.Shape), CreatedAt: value.CreatedAt}
+	return api.Checkpoint{
+		ID:         value.ID,
+		TenantID:   value.TenantID,
+		SandboxID:  value.SandboxID,
+		SnapshotID: value.SnapshotID,
+		Shape:      api.Shape(value.Shape),
+		CreatedAt:  value.CreatedAt,
+	}
 }
 
 func acceptedCommand(request []byte) (api.Command, error) {
@@ -145,7 +183,9 @@ func projectOperation(ctx context.Context, q queryer, id string) (api.Operation,
 	out.SnapshotID = result.SnapshotID
 	out.IDs = append([]string(nil), result.SandboxIDs...)
 	if len(out.IDs) == 0 && result.SandboxID != "" {
-		out.IDs = []string{result.SandboxID}
+		out.IDs = []string{
+			result.SandboxID,
+		}
 	}
 	out.Result.OperationID = id
 	if !terminal(out.Status) {
@@ -167,7 +207,10 @@ func projectOperation(ctx context.Context, q queryer, id string) (api.Operation,
 		if message == "refill admission exhausted" {
 			code = api.ErrExhausted
 		}
-		out.Error = &api.Error{Code: code, Message: message}
+		out.Error = &api.Error{
+			Code:    code,
+			Message: message,
+		}
 	}
 	if out.Command.Action == "fork" && out.Status == "succeeded" {
 		group, err := loadFork(ctx, q, id)
@@ -187,7 +230,9 @@ func projectOperation(ctx context.Context, q queryer, id string) (api.Operation,
 		}
 	} else if out.Command.Action != "checkpoint" && out.Command.Action != "delete_checkpoint" {
 		for _, sandboxID := range out.IDs {
-			sandbox, err := getSandbox(ctx, q, Principal{Root: true}, sandboxID)
+			sandbox, err := getSandbox(ctx, q, Principal{
+				Root: true,
+			}, sandboxID)
 			if err == nil {
 				view := wireSandbox(sandbox)
 				if out.Command.Action == "fork" {
@@ -240,11 +285,15 @@ func (service *Service) PublicOperation(ctx context.Context, principal Principal
 	}
 	// Status and its frozen publication share one SQLite read snapshot. Async
 	// completion between these reads must never look like lost history.
-	tx, err := service.store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := service.store.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly: true,
+	})
 	if err != nil {
 		return api.Operation{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	var credential, status string
 	if err = tx.QueryRowContext(ctx, "SELECT c.request_mac,o.status FROM operations o JOIN operation_credentials c ON c.operation_id=o.id WHERE o.id=? AND o.scope_kind='tenant'", id).Scan(&credential, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -285,7 +334,10 @@ func (service *Service) PublicOperation(ctx context.Context, principal Principal
 			if out.Result.Tokens == nil {
 				out.Result.Tokens = make(map[string]string)
 			}
-			out.Result.Tokens[sandbox.ID] = service.sandboxToken(sandboxRecord{TenantID: sandbox.TenantID, ID: sandbox.ID})
+			out.Result.Tokens[sandbox.ID] = service.sandboxToken(sandboxRecord{
+				TenantID: sandbox.TenantID,
+				ID:       sandbox.ID,
+			})
 		}
 	}
 	return out, nil

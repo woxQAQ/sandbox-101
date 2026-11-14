@@ -17,7 +17,9 @@ func (service *Service) saveConfigurationIntent(step *activationStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadActivation(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err

@@ -37,7 +37,9 @@ func (service *Service) blockActivationGuarded(step activationStep, source resou
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadActivation(ctx, tx, step.OperationID)
 	if err != nil {
 		return errors.Join(cleanupErr, err)

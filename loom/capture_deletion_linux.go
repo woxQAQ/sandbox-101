@@ -20,11 +20,21 @@ func InspectCaptureDeletion(ctx context.Context, stateRoot string, r Resource, o
 		return nil, fmt.Errorf("capture preparation identity changed")
 	}
 	var intents []DeletionIntent
-	for _, path := range []string{raw, final} {
-		directories := map[string]bool{".": true, "ch": true}
+	for _, path := range []string{
+		raw,
+		final,
+	} {
+		directories := map[string]bool{
+			".":  true,
+			"ch": true,
+		}
 		files := map[string]os.FileMode{}
 		fixed := map[string]FileIdentity{}
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+		for _, name := range []string{
+			"config.json",
+			"state.json",
+			"memory-ranges",
+		} {
 			files["ch/"+name] = 0
 		}
 		if path == raw {
@@ -32,7 +42,11 @@ func InspectCaptureDeletion(ctx context.Context, stateRoot string, r Resource, o
 			directories["publication/ch"] = true
 			files["publication/disk.raw"] = 0
 			files["publication/manifest.json"] = 0
-			for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+			for _, name := range []string{
+				"config.json",
+				"state.json",
+				"memory-ranges",
+			} {
 				files["publication/ch/"+name] = 0
 			}
 			if boundary != nil {
@@ -51,7 +65,9 @@ func InspectCaptureDeletion(ctx context.Context, stateRoot string, r Resource, o
 				return nil, fmt.Errorf("existing capture directory lacks preparation proof: %v", err)
 			}
 		}
-		intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{Dir: path}, directories, files, fixed)
+		intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{
+			Dir: path,
+		}, directories, files, fixed)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +82,10 @@ func VerifyCaptureDeletion(intents []DeletionIntent, raw, final string, boundary
 	if len(intents) != 2 {
 		return fmt.Errorf("capture deletion requires both destinations")
 	}
-	for index, path := range []string{raw, final} {
+	for index, path := range []string{
+		raw,
+		final,
+	} {
 		intent := intents[index]
 		if intent.Format != 1 || !intent.Dir || intent.Path != path {
 			return fmt.Errorf("capture deletion receipt destination changed")

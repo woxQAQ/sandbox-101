@@ -164,5 +164,8 @@ func (service *Service) AdmitClone(ctx context.Context, request CloneRequest) (O
 	if err = verifyImageFiles(image, filepath.Join(service.store.directory, "images", image.Digest[7:])); err != nil {
 		return empty, err
 	}
-	return service.admitProvision(ctx, request.TenantID, request.Key, frozen, hash, templateRecord{TenantID: request.TenantID, Config: config}, image, &source, nil, nil)
+	return service.admitProvision(ctx, request.TenantID, request.Key, frozen, hash, templateRecord{
+		TenantID: request.TenantID,
+		Config:   config,
+	}, image, &source, nil, nil)
 }

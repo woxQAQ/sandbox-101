@@ -13,9 +13,16 @@ import (
 
 func TestHavenBackupRecoveryFence(t *testing.T) {
 	service, _, _, _ := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	root := Principal{Root: true, TenantID: "root"}
-	running := claimSandbox(t, service, "running", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	root := Principal{
+		Root:     true,
+		TenantID: "root",
+	}
+	running := claimSandbox(t, service, "running", nil, egress.Policy{
+		Mode: "none",
+	})
 	service.opts.Fault = func(point string) error {
 		if point == "admission_committed" {
 			return ErrInterrupted
@@ -24,7 +31,14 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pending, err := service.AdmitClaim(ctx, principal, "pending", Command{Action: "claim", TemplateID: "cold", TTLSeconds: 60, Policy: egress.Policy{Mode: "none"}})
+	pending, err := service.AdmitClaim(ctx, principal, "pending", Command{
+		Action:     "claim",
+		TemplateID: "cold",
+		TTLSeconds: 60,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if !errors.Is(err, ErrInterrupted) || pending.ID == "" {
 		t.Fatal(pending, err)
 	}
@@ -63,8 +77,13 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = reviewed.Close(context.Background()) })
-	for _, operation := range []Operation{running, pending} {
+	t.Cleanup(func() {
+		_ = reviewed.Close(context.Background())
+	})
+	for _, operation := range []Operation{
+		running,
+		pending,
+	} {
 		copy, err := reviewed.GetOperation(ctx, "tenant", operation.ID)
 		if err != nil || !reflect.DeepEqual(copy, operation) {
 			t.Fatal("backup changed committed result or pending identity", copy, operation, err)
@@ -77,7 +96,14 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	if err = reviewed.store.db.QueryRow("SELECT COUNT(*) FROM reservations WHERE owner LIKE 'vm:%'").Scan(&count); err != nil || count != 2 {
 		t.Fatal("resource responsibility missing from unified backup", count, err)
 	}
-	if _, err = reviewed.AdmitClaim(ctx, principal, "new", Command{Action: "claim", TemplateID: "cold", TTLSeconds: 60, Policy: egress.Policy{Mode: "none"}}); err == nil {
+	if _, err = reviewed.AdmitClaim(ctx, principal, "new", Command{
+		Action:     "claim",
+		TemplateID: "cold",
+		TTLSeconds: 60,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err == nil {
 		t.Fatal("review granted new resource authority")
 	}
 	if _, err = reviewed.DataReady(ctx, principal, running.Result.SandboxID); err == nil {

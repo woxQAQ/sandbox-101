@@ -39,10 +39,14 @@ func mitmBoundsFixture(t *testing.T) (*Manager, Binding, *atomic.Int32, *atomic.
 				injections.Add(1)
 			}
 		},
-	}, Policy{Mode: "relay"}, map[string]Secret{
+	}, Policy{
+		Mode: "relay",
+	}, map[string]Secret{
 		"TOKEN": {
-			Value:  "host-only-test-value",
-			Hosts:  []string{"example.com"},
+			Value: "host-only-test-value",
+			Hosts: []string{
+				"example.com",
+			},
 			Header: "Authorization",
 		},
 	})
@@ -67,7 +71,11 @@ func expectMITMHeaderRejection(t *testing.T, r *bufio.Reader) {
 
 func TestMITMHeaderBounds(t *testing.T) {
 	const oversized = testMITMHeaderBytes + 16*1024
-	for _, kind := range []string{"request_line", "single_header", "aggregate_headers"} {
+	for _, kind := range []string{
+		"request_line",
+		"single_header",
+		"aggregate_headers",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			m, b, dials, injections := mitmBoundsFixture(t)
 			conn := mitmClient(t, m, b)
@@ -183,7 +191,10 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 		RootCAs:     pool,
 		IdleTimeout: 30 * time.Second,
 		DialContext: targetDialer(up.Listener.Addr().String(), &dials),
-	}, Policy{Mode: "relay", MaxConnections: 1}, nil)
+	}, Policy{
+		Mode:           "relay",
+		MaxConnections: 1,
+	}, nil)
 	conn := mitmClient(t, m, b)
 	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
 	if _, err := fmt.Fprintf(
@@ -286,8 +297,19 @@ func waitMITMInboundClosed(t *testing.T, b *binding) {
 }
 
 func TestMITMRevokeClosesParser(t *testing.T) {
-	for _, stage := range []string{"header", "body", "idle", "handshake", "half_close_read", "half_close_write", "upstream_upgrade"} {
-		for _, operation := range []string{"revoke", "close"} {
+	for _, stage := range []string{
+		"header",
+		"body",
+		"idle",
+		"handshake",
+		"half_close_read",
+		"half_close_write",
+		"upstream_upgrade",
+	} {
+		for _, operation := range []string{
+			"revoke",
+			"close",
+		} {
 			t.Run(stage+"/"+operation, func(t *testing.T) {
 				bodyStarted := make(chan struct{})
 				up := httptest.NewTLSServer(
@@ -316,13 +338,18 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 				m, b := newTestManager(t, Options{
 					RootCAs:     pool,
 					DialContext: targetDialer(up.Listener.Addr().String(), nil),
-				}, Policy{Mode: "relay", MaxConnections: 1}, nil)
+				}, Policy{
+					Mode:           "relay",
+					MaxConnections: 1,
+				}, nil)
 				active := m.bindings[b.SandboxID]
 				var conn net.Conn
 				if stage == "handshake" {
 					conn = connectTunnel(t, b.HTTPPath, "example.com:443")
 					defer conn.Close()
-					_, _ = conn.Write([]byte{0x16})
+					_, _ = conn.Write([]byte{
+						0x16,
+					})
 				} else {
 					secure := mitmClient(t, m, b)
 					conn = secure

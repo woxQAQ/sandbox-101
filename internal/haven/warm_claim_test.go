@@ -11,13 +11,21 @@ import (
 )
 
 func TestHavenWarmClaimAndFallback(t *testing.T) {
-	for _, fallback := range []bool{false, true} {
+	for _, fallback := range []bool{
+		false,
+		true,
+	} {
 		t.Run(fmt.Sprint(fallback), func(t *testing.T) {
 			service, runtime, guest := goldenSupplyFixture(t, 1)
-			principal := Principal{TenantID: "tenant"}
+			principal := Principal{
+				TenantID: "tenant",
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			refill, err := service.Execute(ctx, principal, "refill", Command{Action: "refill", TemplateID: "golden"})
+			refill, err := service.Execute(ctx, principal, "refill", Command{
+				Action:     "refill",
+				TemplateID: "golden",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -32,7 +40,13 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 					return nil
 				}
 			}
-			claimed, err := service.Execute(ctx, principal, "claim", Command{Action: "claim", TemplateID: "golden", Policy: egress.Policy{Mode: "none"}})
+			claimed, err := service.Execute(ctx, principal, "claim", Command{
+				Action:     "claim",
+				TemplateID: "golden",
+				Policy: egress.Policy{
+					Mode: "none",
+				},
+			})
 			if err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[claimed.ID]
@@ -57,7 +71,10 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 			if err = service.store.db.QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM warm),(SELECT COUNT(*) FROM source_leases)").Scan(&slots, &storage, &pool, &warm, &leases); err != nil || slots != 1 || storage != 256 || pool != 0 || warm != 0 || leases != 0 {
 				t.Fatal(slots, storage, pool, warm, leases, err)
 			}
-			released, err := service.Execute(ctx, principal, "release", Command{Action: "release", SandboxID: sandbox.ID})
+			released, err := service.Execute(ctx, principal, "release", Command{
+				Action:    "release",
+				SandboxID: sandbox.ID,
+			})
 			if err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[released.ID]

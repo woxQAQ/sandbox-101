@@ -50,8 +50,15 @@ func TestSystemAgentWaitsForGuestVsockListener(t *testing.T) {
 			}
 			frame, err := protocol.ReadFrame(reader)
 			if err == nil {
-				params, _ := structpb.NewStruct(map[string]any{"protocol": 1, "portal": "system"})
-				err = protocol.WriteFrame(conn, &protocol.Frame{Id: frame.Id, Params: params, Eof: true})
+				params, _ := structpb.NewStruct(map[string]any{
+					"protocol": 1,
+					"portal":   "system",
+				})
+				err = protocol.WriteFrame(conn, &protocol.Frame{
+					Id:     frame.Id,
+					Params: params,
+					Eof:    true,
+				})
 			}
 			conn.Close()
 			done <- err

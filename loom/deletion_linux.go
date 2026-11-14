@@ -76,9 +76,14 @@ func DigestFileContext(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 	hash := sha256.New()
-	if _, err = io.Copy(hash, contextReader{Reader: file, ctx: ctx}); err != nil {
+	if _, err = io.Copy(hash, contextReader{
+		Reader: file,
+		ctx:    ctx,
+	}); err != nil {
 		return "", err
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
@@ -94,9 +99,13 @@ func OwnedFiles(ctx context.Context, stateRoot, path string, allowed map[string]
 		return nil, err
 	}
 	if !directory {
-		return []string{path}, nil
+		return []string{
+			path,
+		}, nil
 	}
-	directories := map[string]bool{".": true}
+	directories := map[string]bool{
+		".": true,
+	}
 	for relative := range allowed {
 		if filepath.IsAbs(relative) || filepath.Clean(relative) != relative || relative == ".." || strings.HasPrefix(relative, "../") {
 			return nil, fmt.Errorf("unsafe deletion allowlist")
@@ -239,7 +248,12 @@ func checkLocalReaderIdentities(inodes map[string]bool, paths []string) error {
 }
 
 func InspectDeletion(ctx context.Context, path string, files []string, directory bool) (DeletionIntent, error) {
-	intent := DeletionIntent{Format: 1, Path: path, Dir: directory, Nodes: map[string]FileIdentity{}}
+	intent := DeletionIntent{
+		Format: 1,
+		Path:   path,
+		Dir:    directory,
+		Nodes:  map[string]FileIdentity{},
+	}
 	if directory {
 		err := filepath.WalkDir(path, func(current string, entry os.DirEntry, err error) error {
 			if err != nil {
@@ -342,7 +356,9 @@ func RemoveDeletionFile(ctx context.Context, stateRoot string, intent DeletionIn
 	if err != nil {
 		return err
 	}
-	defer func() { _ = root.Close() }()
+	defer func() {
+		_ = root.Close()
+	}()
 	relative, _ := filepath.Rel(stateRoot, path)
 	if err = root.Remove(relative); err != nil && !os.IsNotExist(err) {
 		return err
@@ -375,7 +391,9 @@ func RemoveDeletionDirectories(ctx context.Context, stateRoot string, intent Del
 		if err != nil {
 			return err
 		}
-		defer func() { _ = root.Close() }()
+		defer func() {
+			_ = root.Close()
+		}()
 		for _, directory := range slices.Backward(directories) {
 			if err = ValidatePath(ctx, stateRoot, directory, true); err != nil {
 				return err

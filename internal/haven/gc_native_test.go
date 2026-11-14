@@ -20,16 +20,26 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	fixture, layout, layers, published := importFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	root := Principal{Root: true, TenantID: "root"}
+	root := Principal{
+		Root:     true,
+		TenantID: "root",
+	}
 	orphan := putOCILayer(t, layout, append(bootLayerEntries(), fileEntry("orphan", "data")), false)
-	orphanImage := putOCIManifest(t, layout, "failed-cache-owner", []ociLayerFixture{orphan})
+	orphanImage := putOCIManifest(t, layout, "failed-cache-owner", []ociLayerFixture{
+		orphan,
+	})
 	fixture.service.opts.Fault = func(point string) error {
 		if point == "image_import_layer_saved" {
 			return errors.New("known native import abort")
 		}
 		return nil
 	}
-	if _, err := fixture.ImportOCI(ctx, ImportOptions{Layout: layout, Digest: orphanImage, MaxBytes: 4 << 20, MaxFiles: 1000}); err == nil {
+	if _, err := fixture.ImportOCI(ctx, ImportOptions{
+		Layout:   layout,
+		Digest:   orphanImage,
+		MaxBytes: 4 << 20,
+		MaxFiles: 1000,
+	}); err == nil {
 		t.Fatal("missing failed import")
 	}
 	fixture.service.opts.Fault = nil
@@ -39,23 +49,35 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	work := fixture.importWork(t, published.Digest)
-	if _, err := fixture.service.CollectGarbage(ctx, root, "native-dry", GCOptions{DryRun: true, Budget: 20 * time.Second}); err != nil {
+	if _, err := fixture.service.CollectGarbage(ctx, root, "native-dry", GCOptions{
+		DryRun: true,
+		Budget: 20 * time.Second,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{orphanPath, unknown, work} {
+	for _, path := range []string{
+		orphanPath,
+		unknown,
+		work,
+	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatal("dry run removed resource", path, err)
 		}
 	}
 	var deferred []GCItem
 	for index := range 3 {
-		report, err := fixture.service.CollectGarbage(ctx, root, string(rune('a'+index)), GCOptions{Budget: 20 * time.Second})
+		report, err := fixture.service.CollectGarbage(ctx, root, string(rune('a'+index)), GCOptions{
+			Budget: 20 * time.Second,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		deferred = append(deferred, report.Deferred...)
 	}
-	for _, path := range []string{orphanPath, work} {
+	for _, path := range []string{
+		orphanPath,
+		work,
+	} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatal("owned resource not reclaimed", path, err)
 		}
@@ -79,14 +101,21 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Go(func() {
-			_, err := fixture.ImportOCI(ctx, ImportOptions{Layout: layout, Digest: second, MaxBytes: 4 << 20, MaxFiles: 1000})
+			_, err := fixture.ImportOCI(ctx, ImportOptions{
+				Layout:   layout,
+				Digest:   second,
+				MaxBytes: 4 << 20,
+				MaxFiles: 1000,
+			})
 			if err != nil {
 				t.Error(err)
 			}
 		})
 	}
 	for index := range 10 {
-		_, err := fixture.service.CollectGarbage(ctx, root, "concurrent-"+string(rune('a'+index)), GCOptions{Budget: 20 * time.Second})
+		_, err := fixture.service.CollectGarbage(ctx, root, "concurrent-"+string(rune('a'+index)), GCOptions{
+			Budget: 20 * time.Second,
+		})
 		var effect *loom.Error
 		if err != nil && (!errors.As(err, &effect) || effect.Code != loom.Conflict) {
 			t.Error(err)

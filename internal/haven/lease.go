@@ -16,11 +16,16 @@ func (service *Service) AdmitRenew(ctx context.Context, principal Principal, key
 	if command.Action != "renew" || command.SandboxID == "" || principal.TenantID == "" || key == "" || len(key) > 256 || (principal.SandboxID != "" && principal.SandboxID != command.SandboxID) {
 		return empty, loom.Fail(loom.Invalid, "renew requires scoped sandbox and key")
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC: mac,
+	}); found || err != nil {
 		return operation, err
 	}
 	guard := service.vmLock("configuration:" + command.SandboxID)
@@ -35,7 +40,9 @@ func (service *Service) AdmitRenew(ctx context.Context, principal Principal, key
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	sandbox, err := ownedSandbox(ctx, tx, principal, command.SandboxID)
 	if err != nil {
 		return empty, err
@@ -82,7 +89,15 @@ func (service *Service) AdmitRenew(ctx context.Context, principal Principal, key
 	default:
 		return empty, loom.Fail(loom.Conflict, "sandbox state cannot renew")
 	}
-	operation := Operation{ID: newID("op-"), Key: key, Status: "succeeded", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "succeeded",
+		Result: operationResult{
+			SandboxID: sandbox.ID,
+			VMID:      sandbox.VMID,
+		},
+	}
 	frozen := encode(struct {
 		Action  string
 		Request Command
@@ -95,10 +110,33 @@ func (service *Service) AdmitRenew(ctx context.Context, principal Principal, key
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", principal.TenantID, key, digest(frozen), frozen, "succeeded", encode(operation.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{operation.ID, mac}},
-		{"INSERT INTO operation_steps VALUES(?,'lease','renew',?,?,?,?,'succeeded',?)", []any{operation.ID, digest(input), input, sandbox.ID, sandbox.Instance, encode("complete")}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(next), sandbox.ID, encode(settings)}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			principal.TenantID,
+			key,
+			digest(frozen),
+			frozen,
+			"succeeded",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			operation.ID,
+			mac,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'lease','renew',?,?,?,?,'succeeded',?)", []any{
+			operation.ID,
+			digest(input),
+			input,
+			sandbox.ID,
+			sandbox.Instance,
+			encode("complete"),
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(next),
+			sandbox.ID,
+			encode(settings),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
@@ -152,7 +190,13 @@ func (service *Service) Reap(ctx context.Context) error {
 	}
 	var failures []error
 	for _, item := range pending {
-		_, err := service.AdmitLifecycle(ctx, Principal{TenantID: item.tenant}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), Command{Action: item.action, SandboxID: item.id, LeaseDeadline: item.deadline})
+		_, err := service.AdmitLifecycle(ctx, Principal{
+			TenantID: item.tenant,
+		}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), Command{
+			Action:        item.action,
+			SandboxID:     item.id,
+			LeaseDeadline: item.deadline,
+		})
 		if err != nil {
 			failures = append(failures, fmt.Errorf("expire %s: %w", item.id, err))
 		}

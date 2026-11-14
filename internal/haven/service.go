@@ -98,7 +98,22 @@ func Open(opts Options) (*Service, error) {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	service := &Service{epoch: newID("daemon-"), opSecrets: map[string]map[string]egress.Secret{}, secrets: map[string]map[string]egress.Secret{}, bindings: map[string]string{}, connections: map[string]map[net.Conn]struct{}{}, opts: opts, store: state, ctx: ctx, cancel: cancel, locks: map[string]*sync.Mutex{}, active: map[string]bool{}, lastErrors: map[string]error{}, stopped: make(chan struct{}), capture: make(chan struct{}, 1)}
+	service := &Service{
+		epoch:       newID("daemon-"),
+		opSecrets:   map[string]map[string]egress.Secret{},
+		secrets:     map[string]map[string]egress.Secret{},
+		bindings:    map[string]string{},
+		connections: map[string]map[net.Conn]struct{}{},
+		opts:        opts,
+		store:       state,
+		ctx:         ctx,
+		cancel:      cancel,
+		locks:       map[string]*sync.Mutex{},
+		active:      map[string]bool{},
+		lastErrors:  map[string]error{},
+		stopped:     make(chan struct{}),
+		capture:     make(chan struct{}, 1),
+	}
 	if opts.EgressFactory != nil {
 		service.opts.Egress, service.opts.CAPEM, err = opts.EgressFactory(service)
 		if err != nil {

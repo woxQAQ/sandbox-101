@@ -41,8 +41,12 @@ type Secret struct {
 	Placeholder string   `json:"placeholder,omitempty"`
 }
 
-func (Secret) String() string   { return "egress.Secret{redacted}" }
-func (Secret) GoString() string { return "egress.Secret{redacted}" }
+func (Secret) String() string {
+	return "egress.Secret{redacted}"
+}
+func (Secret) GoString() string {
+	return "egress.Secret{redacted}"
+}
 
 // Binding contains public activation metadata only, never secret material.
 type Binding struct {
@@ -144,7 +148,10 @@ func New(opts Options) (*Manager, error) {
 		return nil, errors.New("egress: invalid timeout")
 	}
 	if opts.DialContext == nil {
-		d := &net.Dialer{Timeout: opts.DialTimeout, KeepAlive: 30 * time.Second}
+		d := &net.Dialer{
+			Timeout:   opts.DialTimeout,
+			KeepAlive: 30 * time.Second,
+		}
 		opts.DialContext = d.DialContext
 	}
 	if opts.RootCAs != nil {
@@ -164,7 +171,9 @@ func New(opts Options) (*Manager, error) {
 
 // CACertPEM returns only the public CA certificate. Install it in the guest
 // trust store before exposing the proxy. Its private key never leaves Manager.
-func (m *Manager) CACertPEM() []byte { return append([]byte(nil), m.caPEM...) }
+func (m *Manager) CACertPEM() []byte {
+	return append([]byte(nil), m.caPEM...)
+}
 
 // Bind is synchronous: success means both relay sockets, or direct host rules,
 // are installed. ctx covers installation, not the lifetime of the binding.
@@ -228,7 +237,10 @@ func (m *Manager) Bind(
 			return errors.New("egress: absolute clean vsock path required")
 		}
 		b.info.HTTPPath, b.info.SOCKSPath = vsockPath+"_2049", vsockPath+"_2050"
-		for _, path := range []string{b.info.HTTPPath, b.info.SOCKSPath} {
+		for _, path := range []string{
+			b.info.HTTPPath,
+			b.info.SOCKSPath,
+		} {
 			ln, err := b.listenUnix(path)
 			if err != nil {
 				_ = b.close()
@@ -407,7 +419,11 @@ func (b *binding) track(c net.Conn, inbound bool) (*trackedConn, error) {
 		_ = c.Close()
 		return nil, errors.New("egress: connection limit")
 	}
-	t := &trackedConn{Conn: c, b: b, inbound: inbound}
+	t := &trackedConn{
+		Conn:    c,
+		b:       b,
+		inbound: inbound,
+	}
 	b.conns[t] = struct{}{}
 	if inbound {
 		b.inbound++
@@ -489,7 +505,10 @@ func (l guardedListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		t, err := l.b.track(&idleConn{Conn: c, timeout: l.b.manager.opts.IdleTimeout}, true)
+		t, err := l.b.track(&idleConn{
+			Conn:    c,
+			timeout: l.b.manager.opts.IdleTimeout,
+		}, true)
 		if err == nil {
 			return t, nil
 		}

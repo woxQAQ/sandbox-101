@@ -14,7 +14,9 @@ func (service *Service) markPauseCaptured(step *lifecycleStep, capture captureSt
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.lifecycleProof(service.ctx, tx, *step); err != nil {
 		return err
 	}
@@ -26,14 +28,29 @@ func (service *Service) markPauseCaptured(step *lifecycleStep, capture captureSt
 		return fmt.Errorf("pause lacks original published capture")
 	}
 	snapshot := capture.Input.Snapshot
-	next := lifecycleState{Phase: "captured", SnapshotID: snapshot.ID}
+	next := lifecycleState{
+		Phase:      "captured",
+		SnapshotID: snapshot.ID,
+	}
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'sleep',?)", []any{snapshot.ID, step.Input.Sandbox.ID}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{step.Input.OwnerTenantID, snapshot.ID, "sleep:" + step.Input.Sandbox.ID}},
-		{"UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{encode(next), step.OperationID, step.Hash, encode(step.State)}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'sleep',?)", []any{
+			snapshot.ID,
+			step.Input.Sandbox.ID,
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'active_use',?)", []any{
+			step.Input.OwnerTenantID,
+			snapshot.ID,
+			"sleep:" + step.Input.Sandbox.ID,
+		}},
+		{"UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{
+			encode(next),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -125,8 +142,18 @@ func (service *Service) runPause(step lifecycleStep) error {
 		return err
 	}
 	if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "release"); lookup == sql.ErrNoRows {
-		admission := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: "release"}
-		if _, err = service.admitRelease(service.ctx, ReleaseRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":release", SandboxID: step.Input.Sandbox.ID}, admission); err != nil {
+		admission := &lifecycleAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  "release",
+		}
+		if _, err = service.admitRelease(service.ctx, ReleaseRequest{
+			TenantID:  step.Input.OwnerTenantID,
+			Key:       step.OperationID + ":release",
+			SandboxID: step.Input.Sandbox.ID,
+		}, admission); err != nil {
 			return err
 		}
 	} else if lookup != nil {
@@ -145,7 +172,9 @@ func (service *Service) completePause(step lifecycleStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
 		return err
 	}
@@ -192,11 +221,30 @@ func (service *Service) completePause(step lifecycleStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE sandboxes SET state='paused',body=? WHERE id=? AND tenant=? AND state='terminated' AND body=?", []any{encode(sandbox), sandbox.ID, sandbox.TenantID, encode(oldSandbox)}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(settings), sandbox.ID, encode(step.Input.Settings)}},
-		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{sandbox.ID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND body=? AND status='running'", []any{encode(next), step.OperationID, step.Hash, encode(step.State)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"UPDATE sandboxes SET state='paused',body=? WHERE id=? AND tenant=? AND state='terminated' AND body=?", []any{
+			encode(sandbox),
+			sandbox.ID,
+			sandbox.TenantID,
+			encode(oldSandbox),
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(settings),
+			sandbox.ID,
+			encode(step.Input.Settings),
+		}},
+		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+			sandbox.ID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND body=? AND status='running'", []any{
+			encode(next),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

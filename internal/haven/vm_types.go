@@ -213,4 +213,6 @@ func loadSandbox(ctx context.Context, query queryer, id, tenant string) (sandbox
 	return sandbox, nil
 }
 
-func terminal(status string) bool { return status == "succeeded" || status == "failed" }
+func terminal(status string) bool {
+	return status == "succeeded" || status == "failed"
+}

@@ -27,10 +27,15 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
+func (e *Error) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
 
 func Fail(code Code, format string, args ...any) error {
-	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
+	return &Error{
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+	}
 }
 
 type Shape struct {

@@ -271,7 +271,14 @@ func (service *Service) openData(ctx context.Context, principal Principal, id st
 		_ = conn.Close()
 		return nil, err
 	}
-	tracked := &admittedConnection{Conn: conn, service: service, sandbox: id, instance: sandbox.Instance, generation: settings.Generation, done: make(chan struct{})}
+	tracked := &admittedConnection{
+		Conn:       conn,
+		service:    service,
+		sandbox:    id,
+		instance:   sandbox.Instance,
+		generation: settings.Generation,
+		done:       make(chan struct{}),
+	}
 	service.mu.Lock()
 	if service.closing || service.store.reviewed {
 		service.mu.Unlock()
@@ -320,7 +327,14 @@ func (service *Service) AttachData(ctx context.Context, principal Principal, id 
 	if err != nil {
 		return nil, err
 	}
-	tracked := &admittedConnection{Conn: conn, service: service, sandbox: id, instance: up.instance, generation: up.generation, done: make(chan struct{})}
+	tracked := &admittedConnection{
+		Conn:       conn,
+		service:    service,
+		sandbox:    id,
+		instance:   up.instance,
+		generation: up.generation,
+		done:       make(chan struct{}),
+	}
 	service.mu.Lock()
 	if service.closing || service.store.reviewed {
 		service.mu.Unlock()

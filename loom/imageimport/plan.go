@@ -120,7 +120,13 @@ func ReadImageImportPlan(ctx context.Context, state string, options ImageImportO
 		}
 		builder = host.MergedOCIBuilder(tools)
 	}
-	plan = ImageImportPlan{Options: options, ConfigDigest: manifest.Config.Digest.String(), ConfigSize: manifest.Config.Size, Tools: tools, Builder: builder}
+	plan = ImageImportPlan{
+		Options:      options,
+		ConfigDigest: manifest.Config.Digest.String(),
+		ConfigSize:   manifest.Config.Size,
+		Tools:        tools,
+		Builder:      builder,
+	}
 	var compressed int64
 	for index, layer := range manifest.Layers {
 		if layer.Size < 0 || !host.SupportedLayerMedia(layer.MediaType) {
@@ -137,7 +143,12 @@ func ReadImageImportPlan(ctx context.Context, state string, options ImageImportO
 		if _, err = host.SHAName(diff); err != nil {
 			return plan, err
 		}
-		entry := ImageImportLayer{Digest: layer.Digest.String(), DiffID: diff, MediaType: layer.MediaType, Size: layer.Size}
+		entry := ImageImportLayer{
+			Digest:    layer.Digest.String(),
+			DiffID:    diff,
+			MediaType: layer.MediaType,
+			Size:      layer.Size,
+		}
 		if options.Materialization == host.LayeredEROFSLayout {
 			cache, err := host.LoadLayerCache(state, builder, diff)
 			if err == nil {
@@ -192,7 +203,12 @@ func PrepareImageImport(state, operation string) (ImageImportBoundary, error) {
 		return boundary, err
 	}
 	boundary.Work = loom.IdentityOf(info)
-	for _, relative := range []string{"input", "input/blobs", "input/blobs/sha256", "output"} {
+	for _, relative := range []string{
+		"input",
+		"input/blobs",
+		"input/blobs/sha256",
+		"output",
+	} {
 		if err = os.Mkdir(filepath.Join(work, relative), 0o700); err != nil {
 			return boundary, err
 		}
@@ -212,7 +228,9 @@ func VerifyImageImportBoundary(state, operation string, boundary ImageImportBoun
 	if boundary.Path != filepath.Join(state, "imports", operation) || !loom.ValidResourceID(operation, "op-") {
 		return loom.Fail(loom.Invalid, "import boundary path changed")
 	}
-	for path, want := range map[string]loom.FileIdentity{boundary.Path: boundary.Work} {
+	for path, want := range map[string]loom.FileIdentity{
+		boundary.Path: boundary.Work,
+	} {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err

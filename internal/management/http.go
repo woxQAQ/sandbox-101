@@ -17,7 +17,10 @@ func New(service *haven.Service) http.Handler {
 			httpwire.Error(w, api.Fail(api.ErrForbidden, "local administrator peer required"))
 			return
 		}
-		principal := haven.Principal{Root: true, TenantID: "node-admin"}
+		principal := haven.Principal{
+			Root:     true,
+			TenantID: "node-admin",
+		}
 		switch {
 		case r.URL.Path == "/v1/status" && r.Method == http.MethodGet:
 			value, err := service.Status(r.Context(), principal)

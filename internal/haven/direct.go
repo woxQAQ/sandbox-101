@@ -32,7 +32,9 @@ type (
 )
 
 func loadDirectRetirement(ctx context.Context, q queryer, id string) (directRetirementStep, error) {
-	step := directRetirementStep{OperationID: id}
+	step := directRetirementStep{
+		OperationID: id,
+	}
 	var input, body []byte
 	var candidate, expected, action string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,candidate_resource_id,expected_instance,action FROM operation_steps WHERE operation_id=? AND step_key='direct_retirement'", id).Scan(&step.Hash, &input, &step.Status, &body, &candidate, &expected, &action)
@@ -58,7 +60,12 @@ func armDirectRetirement(ctx context.Context, tx *sql.Tx, activation activationS
 	if policy == nil {
 		return nil
 	}
-	input := directRetirementInput{Source: source, ActivationHash: activation.Hash, ActivationKey: activation.Key, Policy: policy}
+	input := directRetirementInput{
+		Source:         source,
+		ActivationHash: activation.Hash,
+		ActivationKey:  activation.Key,
+		Policy:         policy,
+	}
 	payload := encode(input)
 	if existing, err := loadDirectRetirement(ctx, tx, activation.OperationID); err == nil {
 		if existing.Hash != digest(payload) || existing.State.Phase != "armed" || terminal(existing.Status) {
@@ -68,7 +75,9 @@ func armDirectRetirement(ctx context.Context, tx *sql.Tx, activation activationS
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err := requireWrite(tx.ExecContext(ctx, "INSERT INTO operation_steps VALUES(?,'direct_retirement','direct_retirement',?,?,?,?,'pending',?)", activation.OperationID, digest(payload), payload, source.Candidate, source.State.Witness, encode(directRetirementState{Phase: "armed"}))); err != nil {
+	if err := requireWrite(tx.ExecContext(ctx, "INSERT INTO operation_steps VALUES(?,'direct_retirement','direct_retirement',?,?,?,?,'pending',?)", activation.OperationID, digest(payload), payload, source.Candidate, source.State.Witness, encode(directRetirementState{
+		Phase: "armed",
+	}))); err != nil {
 		return err
 	}
 	return requireWrite(tx.ExecContext(ctx, "INSERT INTO cleanup_intents VALUES(?,?,'direct_policy',?,'armed',?)", "direct_policy:"+activation.OperationID, activation.OperationID, source.Candidate, payload))
@@ -88,7 +97,10 @@ func completeDirectReplacement(ctx context.Context, tx *sql.Tx, oldOperation, ne
 	if old.Input.Source.Candidate != vm || old.Input.Source.State.Witness != instance || old.State.Phase != "armed" {
 		return fmt.Errorf("direct policy replacement has unresolved prior retirement")
 	}
-	state := directRetirementState{Phase: "replaced", RetiredBy: newOperation}
+	state := directRetirementState{
+		Phase:     "replaced",
+		RetiredBy: newOperation,
+	}
 	if err = requireWrite(tx.ExecContext(ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status='pending'", encode(state), old.OperationID, old.Hash, encode(old.State))); err != nil {
 		return err
 	}
@@ -183,7 +195,9 @@ func (service *Service) retireDirect(ctx context.Context, operation string) erro
 			}
 		}
 		if err == nil && step.State.Phase == "armed" {
-			next := directRetirementState{Phase: "pending"}
+			next := directRetirementState{
+				Phase: "pending",
+			}
 			err = requireWrite(tx.ExecContext(ctx, "UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status='pending'", encode(next), operation, step.Hash, encode(step.State)))
 			if err == nil {
 				err = requireWrite(tx.ExecContext(ctx, "UPDATE cleanup_intents SET status='pending' WHERE id=? AND operation_id=? AND resource_kind='direct_policy' AND status='armed'", "direct_policy:"+operation, operation))
@@ -236,7 +250,9 @@ func (service *Service) retireDirect(ctx context.Context, operation string) erro
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadDirectRetirement(ctx, tx, operation)
 	if err != nil {
 		return err
@@ -248,9 +264,24 @@ func (service *Service) retireDirect(ctx context.Context, operation string) erro
 		q    string
 		args []any
 	}{
-		{"DELETE FROM network_policies WHERE vm_id=? AND instance=? AND operation_id=? AND body=?", []any{resource.VMID, resource.Instance, operation, encode(step.Input.Policy)}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind='direct_policy' AND status='pending'", []any{"direct_policy:" + operation, operation}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status='running'", []any{encode(directRetirementState{Phase: "complete"}), operation, step.Hash, encode(step.State)}},
+		{"DELETE FROM network_policies WHERE vm_id=? AND instance=? AND operation_id=? AND body=?", []any{
+			resource.VMID,
+			resource.Instance,
+			operation,
+			encode(step.Input.Policy),
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind='direct_policy' AND status='pending'", []any{
+			"direct_policy:" + operation,
+			operation,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status='running'", []any{
+			encode(directRetirementState{
+				Phase: "complete",
+			}),
+			operation,
+			step.Hash,
+			encode(step.State),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err

@@ -13,8 +13,12 @@ import (
 
 func TestHavenReleaseFailedCapture(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	runtime.before = func(name string, _ loom.Resource) error {
 		if name == "capture" {
 			return fmt.Errorf("explicit capture failure")
@@ -23,7 +27,10 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.Execute(ctx, principal, "checkpoint", Command{Action: "checkpoint", SandboxID: claim.Result.SandboxID})
+	failed, err := service.Execute(ctx, principal, "checkpoint", Command{
+		Action:    "checkpoint",
+		SandboxID: claim.Result.SandboxID,
+	})
 	if err == nil || failed.Status != "failed" {
 		t.Fatal(failed, err)
 	}
@@ -35,7 +42,10 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released, err := service.Execute(ctx, principal, "release", Command{Action: "release", SandboxID: claim.Result.SandboxID})
+	released, err := service.Execute(ctx, principal, "release", Command{
+		Action:    "release",
+		SandboxID: claim.Result.SandboxID,
+	})
 	if err != nil {
 		service.mu.Lock()
 		reason := service.lastErrors[released.ID]
@@ -53,13 +63,23 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 }
 
 func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
-	for _, boundary := range []string{"paused", "boot", "rollback"} {
+	for _, boundary := range []string{
+		"paused",
+		"boot",
+		"rollback",
+	} {
 		t.Run(boundary, func(t *testing.T) {
 			service, runtime, _, _ := sandboxFixture(t)
 			if boundary == "rollback" {
-				service.opts.Backend = &generationRuntime{restorableRuntime: &restorableRuntime{runtime}, known: map[string]loom.Resource{}, states: map[string]loom.Observation{}}
+				service.opts.Backend = &generationRuntime{
+					restorableRuntime: &restorableRuntime{runtime},
+					known:             map[string]loom.Resource{},
+					states:            map[string]loom.Observation{},
+				}
 			}
-			principal := Principal{TenantID: "tenant"}
+			principal := Principal{
+				TenantID: "tenant",
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if boundary == "boot" {
@@ -67,7 +87,13 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				runtime.failBoot = true
 				runtime.mu.Unlock()
 			}
-			claim, err := service.AdmitClaim(ctx, principal, "claim", Command{Action: "claim", TemplateID: "cold", Policy: egress.Policy{Mode: "none"}})
+			claim, err := service.AdmitClaim(ctx, principal, "claim", Command{
+				Action:     "claim",
+				TemplateID: "cold",
+				Policy: egress.Policy{
+					Mode: "none",
+				},
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,12 +102,18 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				t.Fatal(claimErr)
 			}
 			if boundary == "paused" {
-				if _, err = service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+				if _, err = service.Execute(ctx, principal, "pause", Command{
+					Action:    "pause",
+					SandboxID: claim.Result.SandboxID,
+				}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if boundary == "rollback" {
-				checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{Action: "checkpoint", SandboxID: claim.Result.SandboxID})
+				checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{
+					Action:    "checkpoint",
+					SandboxID: claim.Result.SandboxID,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -91,11 +123,18 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 					}
 					return nil
 				}
-				if _, err = service.Execute(ctx, principal, "rollback", Command{Action: "rollback", SandboxID: claim.Result.SandboxID, CheckpointID: checkpoint.Result.CheckpointID}); err == nil {
+				if _, err = service.Execute(ctx, principal, "rollback", Command{
+					Action:       "rollback",
+					SandboxID:    claim.Result.SandboxID,
+					CheckpointID: checkpoint.Result.CheckpointID,
+				}); err == nil {
 					t.Fatal("rollback unexpectedly succeeded")
 				}
 			}
-			released, err := service.Execute(ctx, principal, "release", Command{Action: "release", SandboxID: claim.Result.SandboxID})
+			released, err := service.Execute(ctx, principal, "release", Command{
+				Action:    "release",
+				SandboxID: claim.Result.SandboxID,
+			})
 			if err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[released.ID]
@@ -115,20 +154,37 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 }
 
 func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
-	for _, state := range []string{"running", "paused"} {
+	for _, state := range []string{
+		"running",
+		"paused",
+	} {
 		t.Run(state, func(t *testing.T) {
 			service, runtime, _, _ := sandboxFixture(t)
-			service.opts.Backend = &generationRuntime{restorableRuntime: &restorableRuntime{runtime}, known: map[string]loom.Resource{}, states: map[string]loom.Observation{}}
-			principal := Principal{TenantID: "tenant"}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+			service.opts.Backend = &generationRuntime{
+				restorableRuntime: &restorableRuntime{runtime},
+				known:             map[string]loom.Resource{},
+				states:            map[string]loom.Observation{},
+			}
+			principal := Principal{
+				TenantID: "tenant",
+			}
+			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				Mode: "none",
+			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{Action: "checkpoint", SandboxID: claim.Result.SandboxID})
+			checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{
+				Action:    "checkpoint",
+				SandboxID: claim.Result.SandboxID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if state == "paused" {
-				if _, err = service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+				if _, err = service.Execute(ctx, principal, "pause", Command{
+					Action:    "pause",
+					SandboxID: claim.Result.SandboxID,
+				}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -136,7 +192,11 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rollback, err := service.Execute(ctx, principal, "rollback", Command{Action: "rollback", SandboxID: before.ID, CheckpointID: checkpoint.Result.CheckpointID})
+			rollback, err := service.Execute(ctx, principal, "rollback", Command{
+				Action:       "rollback",
+				SandboxID:    before.ID,
+				CheckpointID: checkpoint.Result.CheckpointID,
+			})
 			if err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[rollback.ID]
@@ -167,16 +227,35 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
 	service.opts.Backend = &restorableRuntime{runtime}
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{Action: "checkpoint", SandboxID: claim.Result.SandboxID})
+	checkpoint, err := service.Execute(ctx, principal, "checkpoint", Command{
+		Action:    "checkpoint",
+		SandboxID: claim.Result.SandboxID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, actor := range []Principal{principal, {Root: true, TenantID: "root"}} {
-		fork, err := service.Execute(ctx, actor, "fork", Command{Action: "fork", CheckpointID: checkpoint.Result.CheckpointID, Policy: egress.Policy{Mode: "none"}})
+	for _, actor := range []Principal{
+		principal,
+		{
+			Root:     true,
+			TenantID: "root",
+		},
+	} {
+		fork, err := service.Execute(ctx, actor, "fork", Command{
+			Action:       "fork",
+			CheckpointID: checkpoint.Result.CheckpointID,
+			Policy: egress.Policy{
+				Mode: "none",
+			},
+		})
 		if err != nil {
 			service.mu.Lock()
 			reason := service.lastErrors[fork.ID]
@@ -188,7 +267,15 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 			t.Fatal(sandbox, err)
 		}
 	}
-	if _, err = service.AdmitFork(ctx, Principal{TenantID: "other"}, "fork", Command{Action: "fork", CheckpointID: checkpoint.Result.CheckpointID, Policy: egress.Policy{Mode: "none"}}); err == nil {
+	if _, err = service.AdmitFork(ctx, Principal{
+		TenantID: "other",
+	}, "fork", Command{
+		Action:       "fork",
+		CheckpointID: checkpoint.Result.CheckpointID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err == nil {
 		t.Fatal("foreign tenant fork accepted")
 	}
 	var slots int
@@ -198,15 +285,25 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 }
 
 func TestHavenResumeFailurePreservesSleep(t *testing.T) {
-	for _, boundary := range []string{"boot", "activate"} {
+	for _, boundary := range []string{
+		"boot",
+		"activate",
+	} {
 		t.Run(boundary, func(t *testing.T) {
 			service, runtime, guest, _ := sandboxFixture(t)
 			service.opts.Backend = &restorableRuntime{runtime}
-			principal := Principal{TenantID: "tenant"}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+			principal := Principal{
+				TenantID: "tenant",
+			}
+			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				Mode: "none",
+			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if _, err := service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+			if _, err := service.Execute(ctx, principal, "pause", Command{
+				Action:    "pause",
+				SandboxID: claim.Result.SandboxID,
+			}); err != nil {
 				t.Fatal(err)
 			}
 			before, err := service.Get(ctx, principal, claim.Result.SandboxID)
@@ -225,7 +322,10 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 					return nil
 				}
 			}
-			failed, err := service.Execute(ctx, principal, "resume", Command{Action: "resume", SandboxID: before.ID})
+			failed, err := service.Execute(ctx, principal, "resume", Command{
+				Action:    "resume",
+				SandboxID: before.ID,
+			})
 			if err == nil || failed.Status != "failed" {
 				t.Fatal(failed, err)
 			}
@@ -261,17 +361,27 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 func TestHavenDataResumeConverges(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
 	service.opts.Backend = &restorableRuntime{runtime}
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+	if _, err := service.Execute(ctx, principal, "pause", Command{
+		Action:    "pause",
+		SandboxID: claim.Result.SandboxID,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	completed := make(chan error, 8)
 	for range 8 {
 		go func() {
-			sandbox, err := service.DataReady(ctx, Principal{TenantID: "tenant", SandboxID: claim.Result.SandboxID}, claim.Result.SandboxID)
+			sandbox, err := service.DataReady(ctx, Principal{
+				TenantID:  "tenant",
+				SandboxID: claim.Result.SandboxID,
+			}, claim.Result.SandboxID)
 			if err == nil && sandbox.State != "running" {
 				err = fmt.Errorf("unexpected state %s", sandbox.State)
 			}
@@ -292,18 +402,28 @@ func TestHavenDataResumeConverges(t *testing.T) {
 func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
 	service.opts.Backend = &restorableRuntime{runtime}
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "pause", Command{Action: "pause", SandboxID: claim.Result.SandboxID}); err != nil {
+	if _, err := service.Execute(ctx, principal, "pause", Command{
+		Action:    "pause",
+		SandboxID: claim.Result.SandboxID,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := service.Get(ctx, principal, claim.Result.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := service.Execute(ctx, principal, "resume", Command{Action: "resume", SandboxID: before.ID})
+	resumed, err := service.Execute(ctx, principal, "resume", Command{
+		Action:    "resume",
+		SandboxID: before.ID,
+	})
 	if err != nil {
 		service.mu.Lock()
 		reason := service.lastErrors[resumed.ID]
@@ -321,24 +441,39 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 }
 
 func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
-	for _, action := range []string{"checkpoint", "pause", "release"} {
+	for _, action := range []string{
+		"checkpoint",
+		"pause",
+		"release",
+	} {
 		t.Run(action, func(t *testing.T) {
 			service, _, _, _ := sandboxFixture(t)
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
-			operation, err := service.Submit(context.Background(), Principal{TenantID: "tenant"}, action, Command{Action: action, SandboxID: claim.Result.SandboxID})
+			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				Mode: "none",
+			})
+			operation, err := service.Submit(context.Background(), Principal{
+				TenantID: "tenant",
+			}, action, Command{
+				Action:    action,
+				SandboxID: claim.Result.SandboxID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			result, err := service.Wait(ctx, Principal{TenantID: "tenant"}, operation.ID)
+			result, err := service.Wait(ctx, Principal{
+				TenantID: "tenant",
+			}, operation.ID)
 			if err != nil {
 				service.mu.Lock()
 				reason := service.lastErrors[operation.ID]
 				service.mu.Unlock()
 				t.Fatal("lifecycle failed", action, result, reason, err)
 			}
-			sandbox, err := service.Get(ctx, Principal{TenantID: "tenant"}, claim.Result.SandboxID)
+			sandbox, err := service.Get(ctx, Principal{
+				TenantID: "tenant",
+			}, claim.Result.SandboxID)
 			if err != nil {
 				t.Fatal(err)
 			}

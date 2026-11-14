@@ -23,7 +23,12 @@ type Error struct {
 	Cause   error     `json:"-"`
 }
 
-func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
+func (e *Error) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
 func Fail(code ErrorCode, format string, args ...any) error {
-	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
+	return &Error{
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+	}
 }

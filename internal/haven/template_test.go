@@ -15,15 +15,25 @@ func goldenSupplyFixture(t *testing.T, target int) (*Service, *coldRuntime, *wor
 	t.Helper()
 	service, runtime, guest, _ := sandboxFixture(t)
 	service.opts.Backend = &restorableRuntime{runtime}
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	cold, err := service.GetTemplate(context.Background(), principal, "cold")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	spec := Template{ID: "golden", Image: cold.Image, Shape: cold.Shape, TargetWarm: target}
-	if _, err = service.Execute(ctx, principal, "build", Command{Action: "template_build", Template: &spec}); err != nil {
+	spec := Template{
+		ID:         "golden",
+		Image:      cold.Image,
+		Shape:      cold.Shape,
+		TargetWarm: target,
+	}
+	if _, err = service.Execute(ctx, principal, "build", Command{
+		Action:   "template_build",
+		Template: &spec,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return service, runtime, guest
@@ -31,10 +41,15 @@ func goldenSupplyFixture(t *testing.T, target int) (*Service, *coldRuntime, *wor
 
 func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 	service, runtime, _ := goldenSupplyFixture(t, 1)
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	refill, err := service.Execute(ctx, principal, "refill", Command{Action: "refill", TemplateID: "golden"})
+	refill, err := service.Execute(ctx, principal, "refill", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	})
 	if err != nil {
 		service.mu.Lock()
 		reason := service.lastErrors[refill.ID]
@@ -48,7 +63,10 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 	runtime.mu.Lock()
 	launches := runtime.counts["launch"]
 	runtime.mu.Unlock()
-	exhausted, err := service.AdmitRefill(ctx, principal, "full", Command{Action: "refill", TemplateID: "golden"})
+	exhausted, err := service.AdmitRefill(ctx, principal, "full", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	})
 	if err != nil || exhausted.Status != "failed" {
 		t.Fatal(exhausted, err)
 	}
@@ -59,7 +77,10 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 		t.Fatal("full pool launched another resource")
 	}
 	service = reopenCloneService(t, service, service.opts.Backend)
-	if _, err = service.AdmitRefill(ctx, principal, "backoff", Command{Action: "refill", TemplateID: "golden"}); err == nil {
+	if _, err = service.AdmitRefill(ctx, principal, "backoff", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	}); err == nil {
 		t.Fatal("durable failure backoff reset after restart")
 	}
 }
@@ -71,7 +92,12 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 	runtime.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.Execute(ctx, Principal{TenantID: "tenant"}, "refill", Command{Action: "refill", TemplateID: "golden"})
+	failed, err := service.Execute(ctx, Principal{
+		TenantID: "tenant",
+	}, "refill", Command{
+		Action:     "refill",
+		TemplateID: "golden",
+	})
 	if err == nil || failed.Status != "failed" {
 		t.Fatal(failed, err)
 	}
@@ -97,12 +123,24 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 		}
 		return nil
 	}
-	cold, err := service.GetTemplate(context.Background(), Principal{TenantID: "tenant"}, "cold")
+	cold, err := service.GetTemplate(context.Background(), Principal{
+		TenantID: "tenant",
+	}, "cold")
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := Template{ID: "golden", Image: cold.Image, Shape: cold.Shape, Warmup: "printf fixture"}
-	operation, err := service.AdmitTemplate(context.Background(), Principal{TenantID: "tenant"}, "build", Command{Action: "template_build", Template: &spec})
+	spec := Template{
+		ID:     "golden",
+		Image:  cold.Image,
+		Shape:  cold.Shape,
+		Warmup: "printf fixture",
+	}
+	operation, err := service.AdmitTemplate(context.Background(), Principal{
+		TenantID: "tenant",
+	}, "build", Command{
+		Action:   "template_build",
+		Template: &spec,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +161,9 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	service = reopenCloneService(t, service, service.opts.Backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	failed, err := service.Wait(ctx, Principal{TenantID: "tenant"}, operation.ID)
+	failed, err := service.Wait(ctx, Principal{
+		TenantID: "tenant",
+	}, operation.ID)
 	if err == nil || failed.Status != "failed" || executions.Load() != 0 {
 		t.Fatal(fmt.Sprint(failed), err, executions.Load())
 	}
@@ -136,15 +176,25 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	service, runtime, _, _ := sandboxFixture(t)
 	service.opts.Backend = &restorableRuntime{runtime}
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cold, err := service.GetTemplate(ctx, principal, "cold")
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := Template{ID: "golden", Image: cold.Image, Shape: cold.Shape, Warmup: "printf fixture"}
-	operation, err := service.Execute(ctx, principal, "build", Command{Action: "template_build", Template: &spec})
+	spec := Template{
+		ID:     "golden",
+		Image:  cold.Image,
+		Shape:  cold.Shape,
+		Warmup: "printf fixture",
+	}
+	operation, err := service.Execute(ctx, principal, "build", Command{
+		Action:   "template_build",
+		Template: &spec,
+	})
 	if err != nil {
 		service.mu.Lock()
 		reason := service.lastErrors[operation.ID]
@@ -159,7 +209,13 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	if err = service.store.db.QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&vms, &slots, &storage); err != nil || vms != 0 || slots != 0 || storage != 192 {
 		t.Fatal(vms, slots, storage, err)
 	}
-	claim, err := service.Execute(ctx, principal, "golden-claim", Command{Action: "claim", TemplateID: "golden", Policy: egress.Policy{Mode: "none"}})
+	claim, err := service.Execute(ctx, principal, "golden-claim", Command{
+		Action:     "claim",
+		TemplateID: "golden",
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil {
 		t.Fatal(claim, err)
 	}
@@ -171,27 +227,47 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 
 func TestHavenTemplatePutOwnerAndReplay(t *testing.T) {
 	service, _, _, _ := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
+	principal := Principal{
+		TenantID: "tenant",
+	}
 	ctx := context.Background()
 	cold, err := service.GetTemplate(ctx, principal, "cold")
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := Template{ID: "new-cold", Image: cold.Image, Shape: cold.Shape}
-	first, err := service.AdmitTemplate(ctx, principal, "put", Command{Action: "template_put", Template: &spec})
+	spec := Template{
+		ID:    "new-cold",
+		Image: cold.Image,
+		Shape: cold.Shape,
+	}
+	first, err := service.AdmitTemplate(ctx, principal, "put", Command{
+		Action:   "template_put",
+		Template: &spec,
+	})
 	if err != nil || first.Status != "succeeded" {
 		t.Fatal(first, err)
 	}
-	replay, err := service.AdmitTemplate(ctx, principal, "put", Command{Action: "template_put", Template: &spec})
+	replay, err := service.AdmitTemplate(ctx, principal, "put", Command{
+		Action:   "template_put",
+		Template: &spec,
+	})
 	if err != nil || replay.ID != first.ID {
 		t.Fatal(replay, err)
 	}
-	if _, err = service.GetTemplate(ctx, Principal{TenantID: "other"}, spec.ID); err == nil {
+	if _, err = service.GetTemplate(ctx, Principal{
+		TenantID: "other",
+	}, spec.ID); err == nil {
 		t.Fatal("foreign template visible")
 	}
 	foreign := spec
 	foreign.TenantID = "other"
-	if _, err = service.AdmitTemplate(ctx, Principal{Root: true, TenantID: "root"}, "foreign-put", Command{Action: "template_put", Template: &foreign}); err == nil {
+	if _, err = service.AdmitTemplate(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "foreign-put", Command{
+		Action:   "template_put",
+		Template: &foreign,
+	}); err == nil {
 		t.Fatal("root reassigned permanent tenant owner")
 	}
 }

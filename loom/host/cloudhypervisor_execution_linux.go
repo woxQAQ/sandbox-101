@@ -41,7 +41,11 @@ func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 	if err := image.Verify(r.ImageDir, r.Config.Image); err != nil {
 		return err
 	}
-	for _, dir := range []string{r.Dir, filepath.Dir(r.Disk), filepath.Join(r.Dir, "capture")} {
+	for _, dir := range []string{
+		r.Dir,
+		filepath.Dir(r.Disk),
+		filepath.Join(r.Dir, "capture"),
+	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
@@ -97,7 +101,9 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tap.Close() }()
+	defer func() {
+		_ = tap.Close()
+	}()
 	if restore {
 		if obs.Configured {
 			return api.Fail(api.ManualRecovery, "partially loaded restore state requires inspection before retry")
@@ -114,11 +120,15 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 				map[string]any{
 					"id":      "net0",
 					"num_fds": 1,
-					"fds":     []int{int(tap.Fd())},
+					"fds": []int{
+						int(tap.Fd()),
+					},
 				},
 			},
 		}
-		if _, err = b.api(ctx, r, "PUT", "vm.restore", body, []int{int(tap.Fd())}); err != nil {
+		if _, err = b.api(ctx, r, "PUT", "vm.restore", body, []int{
+			int(tap.Fd()),
+		}); err != nil {
 			return err
 		}
 		if err = b.verifyCOWMappings(r); err != nil {
@@ -163,9 +173,15 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 			"cid":    3,
 			"socket": "/run/vsock",
 		},
-		"rng":     map[string]any{"src": "/dev/urandom"},
-		"console": map[string]any{"mode": "Tty"},
-		"serial":  map[string]any{"mode": "Null"},
+		"rng": map[string]any{
+			"src": "/dev/urandom",
+		},
+		"console": map[string]any{
+			"mode": "Tty",
+		},
+		"serial": map[string]any{
+			"mode": "Null",
+		},
 	}
 	if !obs.Configured {
 		if _, err = b.api(ctx, r, "PUT", "vm.create", body, nil); err != nil {
@@ -221,7 +237,9 @@ func (b *CloudHypervisor) ensureColdNetwork(ctx context.Context, r Resource, tap
 		"offload_ufo":  false,
 		"offload_csum": false,
 	}
-	_, err = b.api(ctx, r, "PUT", "vm.add-net", network, []int{int(tap.Fd())})
+	_, err = b.api(ctx, r, "PUT", "vm.add-net", network, []int{
+		int(tap.Fd()),
+	})
 	return err
 }
 
@@ -230,7 +248,16 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 	if err := readJSON(filepath.Join(r.RestoreDir, "config.json"), &cfg); err != nil {
 		return err
 	}
-	for _, k := range []string{"devices", "user_devices", "vdpa", "balloon", "pvmemcontrol", "memory_zones", "platform", "landlock_rules"} {
+	for _, k := range []string{
+		"devices",
+		"user_devices",
+		"vdpa",
+		"balloon",
+		"pvmemcontrol",
+		"memory_zones",
+		"platform",
+		"landlock_rules",
+	} {
 		if v := cfg[k]; len(v) > 0 && string(v) != "null" && string(v) != "[]" && string(v) != "false" {
 			return api.Fail(api.Incompatible, "unapproved COW device/configuration %s", k)
 		}
@@ -336,7 +363,9 @@ func (b *CloudHypervisor) api(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		_ = conn.Close()
+	}()
 	deadline, _ := ctx.Deadline()
 	_ = conn.SetDeadline(deadline)
 	var body []byte
@@ -374,7 +403,9 @@ func (b *CloudHypervisor) api(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	out, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err

@@ -29,7 +29,11 @@ func (state *store) readOnlyProbe() (*sql.DB, func() error, error) {
 			return nil, nil, err
 		}
 		target := filepath.Join(temporary, "haven.db")
-		for _, suffix := range []string{"", "-wal", "-shm"} {
+		for _, suffix := range []string{
+			"",
+			"-wal",
+			"-shm",
+		} {
 			if err = loom.CopyFile(path+suffix, target+suffix, 0o600); err != nil {
 				return nil, nil, errors.Join(err, os.RemoveAll(temporary))
 			}

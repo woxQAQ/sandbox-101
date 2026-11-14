@@ -11,8 +11,15 @@ import (
 
 func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	service, runtime, _ := directFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	policy := egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.8.8/32"}}
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	policy := egress.Policy{
+		Mode: "direct",
+		AllowedCIDRs: []string{
+			"8.8.8.8/32",
+		},
+	}
 	claim := claimSandbox(t, service, "claim", nil, policy)
 	waitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -43,14 +50,28 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerPolicy := egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.4.4/32"}}
-	if _, err = service.Execute(ctx, principal, "newer", Command{Action: "configure", SandboxID: before.ID, Policy: newerPolicy}); err != nil {
+	newerPolicy := egress.Policy{
+		Mode: "direct",
+		AllowedCIDRs: []string{
+			"8.8.4.4/32",
+		},
+	}
+	if _, err = service.Execute(ctx, principal, "newer", Command{
+		Action:    "configure",
+		SandboxID: before.ID,
+		Policy:    newerPolicy,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.policyMu.Lock()
 	count := len(runtime.events)
 	runtime.policyMu.Unlock()
-	if _, err = service.AdmitConfigure(ctx, principal, "stale-observer", Command{Action: "configure", SandboxID: before.ID, ObservedGeneration: settings.Generation, Policy: policy}); err == nil {
+	if _, err = service.AdmitConfigure(ctx, principal, "stale-observer", Command{
+		Action:             "configure",
+		SandboxID:          before.ID,
+		ObservedGeneration: settings.Generation,
+		Policy:             policy,
+	}); err == nil {
 		t.Fatal("stale observer superseded current policy")
 	}
 	runtime.policyMu.Lock()
@@ -67,8 +88,15 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 
 func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	service, runtime, manager := directFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.8.8/32"}})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "direct",
+		AllowedCIDRs: []string{
+			"8.8.8.8/32",
+		},
+	})
 	waitFixtureWorker(t, service, claim.ID)
 	service.opts.Fault = func(point string) error {
 		if point == "direct_retirement_effect" {
@@ -78,7 +106,13 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.Execute(ctx, principal, "none", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: egress.Policy{Mode: "none"}}); err == nil {
+	if _, err := service.Execute(ctx, principal, "none", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err == nil {
 		t.Fatal("interrupted policy retirement became success")
 	}
 	before, err := loadDirectRetirement(ctx, service.store.db, claim.ID)
@@ -109,7 +143,13 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err = service.Execute(ctx, principal, "repair", Command{Action: "configure", SandboxID: claim.Result.SandboxID, Policy: egress.Policy{Mode: "none"}}); err != nil {
+	if _, err = service.Execute(ctx, principal, "repair", Command{
+		Action:    "configure",
+		SandboxID: claim.Result.SandboxID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	original, err := service.GetOperation(ctx, "tenant", claim.ID)
@@ -119,18 +159,47 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 }
 
 func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
-	for _, kind := range []string{"hostname", "host_credential"} {
+	for _, kind := range []string{
+		"hostname",
+		"host_credential",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			service, runtime, _ := directFixture(t)
-			policy := egress.Policy{Mode: "direct", AllowedCIDRs: []string{"8.8.8.8/32"}}
+			policy := egress.Policy{
+				Mode: "direct",
+				AllowedCIDRs: []string{
+					"8.8.8.8/32",
+				},
+			}
 			var env map[string]EnvVar
 			if kind == "hostname" {
-				policy.AllowedHosts = []string{"unused.invalid"}
+				policy.AllowedHosts = []string{
+					"unused.invalid",
+				}
 			} else {
 				guest := false
-				env = map[string]EnvVar{"PRIVATE": {Value: "unused-fixture-value", Guest: &guest, Inject: &Injection{Hosts: []string{"unused.invalid"}, Header: "Authorization", Placeholder: "unused-placeholder"}}}
+				env = map[string]EnvVar{
+					"PRIVATE": {
+						Value: "unused-fixture-value",
+						Guest: &guest,
+						Inject: &Injection{
+							Hosts: []string{
+								"unused.invalid",
+							},
+							Header:      "Authorization",
+							Placeholder: "unused-placeholder",
+						},
+					},
+				}
 			}
-			if _, err := service.AdmitClaim(context.Background(), Principal{TenantID: "tenant"}, "claim", Command{Action: "claim", TemplateID: "cold", Env: env, Policy: policy}); err == nil {
+			if _, err := service.AdmitClaim(context.Background(), Principal{
+				TenantID: "tenant",
+			}, "claim", Command{
+				Action:     "claim",
+				TemplateID: "cold",
+				Env:        env,
+				Policy:     policy,
+			}); err == nil {
 				t.Fatal("unsafe direct input admitted")
 			}
 			if runtime.count("launch") != 0 {

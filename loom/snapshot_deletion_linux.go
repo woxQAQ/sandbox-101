@@ -29,8 +29,15 @@ func InspectSnapshotDeletion(ctx context.Context, stateRoot, id string, publicat
 	if IdentityOf(info) != publication {
 		return empty, fmt.Errorf("snapshot deletion publication inode changed")
 	}
-	allowed := map[string]string{"manifest.json": ""}
-	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
+	allowed := map[string]string{
+		"manifest.json": "",
+	}
+	for _, name := range []string{
+		"ch/config.json",
+		"ch/state.json",
+		"ch/memory-ranges",
+		"disk.raw",
+	} {
 		if files[name] == "" {
 			return empty, fmt.Errorf("snapshot artifact digest missing")
 		}
@@ -54,7 +61,14 @@ func VerifySnapshotDeletion(intent DeletionIntent, path string, publication File
 	if intent.Format != 1 || !intent.Dir || intent.Path != path || intent.Nodes["."] != publication {
 		return fmt.Errorf("snapshot deletion receipt differs from publication identity")
 	}
-	for _, name := range []string{"ch", "ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw", "manifest.json"} {
+	for _, name := range []string{
+		"ch",
+		"ch/config.json",
+		"ch/state.json",
+		"ch/memory-ranges",
+		"disk.raw",
+		"manifest.json",
+	} {
 		if intent.Nodes[name].Inode == 0 {
 			return fmt.Errorf("snapshot deletion receipt lacks published artifact")
 		}

@@ -97,7 +97,9 @@ func (service *Service) finishResumeFailure(step lifecycleStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadLifecycle(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -118,7 +120,10 @@ func (service *Service) finishResumeFailure(step lifecycleStep) error {
 	if err = requireWrite(tx.ExecContext(service.ctx, "DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", sandbox.ID, step.OperationID)); err != nil {
 		return err
 	}
-	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{Phase: "failed", SnapshotID: sandbox.SnapshotID}), step.OperationID, step.Hash)); err != nil {
+	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{
+		Phase:      "failed",
+		SnapshotID: sandbox.SnapshotID,
+	}), step.OperationID, step.Hash)); err != nil {
 		return err
 	}
 	var status string
@@ -150,11 +155,27 @@ func (service *Service) compensateResumeCandidate(step lifecycleStep, candidate 
 	}
 	_, _, err := loadResourceLink(service.ctx, service.store.db, step.OperationID, role)
 	if errors.Is(err, sql.ErrNoRows) {
-		admission := &lifecycleAdmission{Parent: Operation{ID: step.OperationID}, Input: step.Input, Role: role}
+		admission := &lifecycleAdmission{
+			Parent: Operation{
+				ID: step.OperationID,
+			},
+			Input: step.Input,
+			Role:  role,
+		}
 		if kind == "discard" {
-			_, err = service.admitDiscard(service.ctx, DiscardRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":discard", SandboxID: step.Input.Sandbox.ID, FailedOperationID: candidate.OperationID, ExpectedInstance: candidate.Input.Resource.Instance}, admission)
+			_, err = service.admitDiscard(service.ctx, DiscardRequest{
+				TenantID:          step.Input.OwnerTenantID,
+				Key:               step.OperationID + ":discard",
+				SandboxID:         step.Input.Sandbox.ID,
+				FailedOperationID: candidate.OperationID,
+				ExpectedInstance:  candidate.Input.Resource.Instance,
+			}, admission)
 		} else {
-			_, err = service.admitRelease(service.ctx, ReleaseRequest{TenantID: step.Input.OwnerTenantID, Key: step.OperationID + ":compensate", SandboxID: step.Input.Sandbox.ID}, admission)
+			_, err = service.admitRelease(service.ctx, ReleaseRequest{
+				TenantID:  step.Input.OwnerTenantID,
+				Key:       step.OperationID + ":compensate",
+				SandboxID: step.Input.Sandbox.ID,
+			}, admission)
 		}
 	}
 	if err != nil {

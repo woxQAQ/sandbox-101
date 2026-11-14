@@ -12,7 +12,9 @@ import (
 )
 
 func (service *Service) proxyResource(ctx context.Context, binding egress.Binding) (loom.Resource, error) {
-	sandbox, err := service.Get(ctx, Principal{Root: true}, binding.SandboxID)
+	sandbox, err := service.Get(ctx, Principal{
+		Root: true,
+	}, binding.SandboxID)
 	if err != nil {
 		return loom.Resource{}, err
 	}
@@ -51,7 +53,9 @@ func (service *Service) PrepareProxySocket(ctx context.Context, binding egress.B
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(peer) }()
+	defer func() {
+		_ = unix.Close(peer)
+	}()
 	var identity unix.Stat_t
 	if err = unix.Fstat(peer, &identity); err != nil {
 		return err
@@ -64,7 +68,9 @@ func (service *Service) PrepareProxySocket(ctx context.Context, binding egress.B
 		return err
 	}
 	anchor := os.NewFile(uintptr(fd), "proxy-socket")
-	defer func() { _ = anchor.Close() }()
+	defer func() {
+		_ = anchor.Close()
+	}()
 	actual, err := anchor.Stat()
 	if err != nil {
 		return err

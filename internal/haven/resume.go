@@ -20,11 +20,17 @@ func (service *Service) AdmitResume(ctx context.Context, principal Principal, ke
 	service.mu.Lock()
 	credentials := service.secrets[command.SandboxID]
 	service.mu.Unlock()
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := service.store.commandMAC(principal, command)
-	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{MAC: mac, Secrets: credentials}); found || err != nil {
+	if operation, found, err := service.existingSandboxOperation(ctx, principal, key, &claimAdmission{
+		MAC:     mac,
+		Secrets: credentials,
+	}); found || err != nil {
 		return operation, err
 	}
 	guard := service.vmLock("configuration:" + command.SandboxID)
@@ -68,15 +74,52 @@ func (service *Service) AdmitResume(ctx context.Context, principal Principal, ke
 	if err = verifyImageFiles(image, filepath.Join(service.store.directory, "images", image.Digest[7:])); err != nil {
 		return empty, err
 	}
-	input := lifecycleInput{RequestTenantID: principal.TenantID, OwnerTenantID: sandbox.TenantID, Command: sanitizedCommand(command), Sandbox: sandbox, Settings: settings, Source: generationRef{OperationID: prior.OperationID, InputHash: prior.Hash}, SourceInstance: prior.State.Witness}
-	parent := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, SnapshotID: sandbox.SnapshotID}}
-	admission := &lifecycleAdmission{Parent: parent, Input: input, MAC: mac, Role: "clone"}
-	request := CloneRequest{TenantID: sandbox.TenantID, Key: parent.ID + ":clone", SnapshotID: sandbox.SnapshotID}
+	input := lifecycleInput{
+		RequestTenantID: principal.TenantID,
+		OwnerTenantID:   sandbox.TenantID,
+		Command:         sanitizedCommand(command),
+		Sandbox:         sandbox,
+		Settings:        settings,
+		Source: generationRef{
+			OperationID: prior.OperationID,
+			InputHash:   prior.Hash,
+		},
+		SourceInstance: prior.State.Witness,
+	}
+	parent := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:  sandbox.ID,
+			SnapshotID: sandbox.SnapshotID,
+		},
+	}
+	admission := &lifecycleAdmission{
+		Parent: parent,
+		Input:  input,
+		MAC:    mac,
+		Role:   "clone",
+	}
+	request := CloneRequest{
+		TenantID:   sandbox.TenantID,
+		Key:        parent.ID + ":clone",
+		SnapshotID: sandbox.SnapshotID,
+	}
 	frozen := encode(struct {
 		Action  string
 		Request CloneRequest
 	}{"clone", request})
-	child, err := service.admitProvision(ctx, sandbox.TenantID, request.Key, frozen, digest(frozen), templateRecord{ID: prior.Input.TemplateID, TenantID: sandbox.TenantID, Config: source.Snapshot.Manifest.Config}, image, &source, nil, &provisionTarget{SlotHolder: "sleep:" + sandbox.ID, Sandbox: sandbox, SlotOperation: prior.Input.SlotOperation, Parent: admission})
+	child, err := service.admitProvision(ctx, sandbox.TenantID, request.Key, frozen, digest(frozen), templateRecord{
+		ID:       prior.Input.TemplateID,
+		TenantID: sandbox.TenantID,
+		Config:   source.Snapshot.Manifest.Config,
+	}, image, &source, nil, &provisionTarget{
+		SlotHolder:    "sleep:" + sandbox.ID,
+		Sandbox:       sandbox,
+		SlotOperation: prior.Input.SlotOperation,
+		Parent:        admission,
+	})
 	if child.ID == "" {
 		return empty, err
 	}
@@ -98,7 +141,9 @@ func (service *Service) restoreActivation(step lifecycleStep, child resourceStep
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = loadActivation(service.ctx, tx, step.OperationID); err == nil {
 		return nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -124,14 +169,34 @@ func (service *Service) restoreActivation(step lifecycleStep, child resourceStep
 	settings.Instance = ""
 	settings.Deadline = time.Time{}
 	settings.PausedUntil = time.Time{}
-	input := activationInput{RequestTenantID: step.Input.RequestTenantID, TenantID: step.Input.OwnerTenantID, SandboxID: step.Input.Sandbox.ID, ResourceOperation: child.OperationID, ResourceHash: child.Hash, ExpectedInstance: child.State.Witness, Settings: settings, ResetIdentity: false}
+	input := activationInput{
+		RequestTenantID:   step.Input.RequestTenantID,
+		TenantID:          step.Input.OwnerTenantID,
+		SandboxID:         step.Input.Sandbox.ID,
+		ResourceOperation: child.OperationID,
+		ResourceHash:      child.Hash,
+		ExpectedInstance:  child.State.Witness,
+		Settings:          settings,
+		ResetIdentity:     false,
+	}
 	payload := encode(input)
 	for _, statement := range []struct {
 		q    string
 		args []any
 	}{
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(settings), input.SandboxID, encode(step.Input.Settings)}},
-		{"INSERT INTO operation_steps VALUES(?,'activation','activate',?,?,?,?,'pending',?)", []any{step.OperationID, digest(payload), payload, child.Candidate, child.State.Witness, encode("admitted")}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(settings),
+			input.SandboxID,
+			encode(step.Input.Settings),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'activation','activate',?,?,?,?,'pending',?)", []any{
+			step.OperationID,
+			digest(payload),
+			payload,
+			child.Candidate,
+			child.State.Witness,
+			encode("admitted"),
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

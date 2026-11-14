@@ -78,7 +78,20 @@ func InternalLaunch(specPath string) error {
 	if err = unix.Mount("tmpfs", s.Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=16m"); err != nil {
 		return err
 	}
-	for _, d := range []string{"boot", "images", "sandbox/ro", "disks", "run", "capture", "restore", "dev", "dev/net", "proc", "tmp", "bin"} {
+	for _, d := range []string{
+		"boot",
+		"images",
+		"sandbox/ro",
+		"disks",
+		"run",
+		"capture",
+		"restore",
+		"dev",
+		"dev/net",
+		"proc",
+		"tmp",
+		"bin",
+	} {
 		if err = os.MkdirAll(filepath.Join(s.Root, d), 0o755); err != nil {
 			return err
 		}
@@ -144,7 +157,11 @@ func InternalLaunch(specPath string) error {
 		}
 	}
 	if s.Resource.RestoreDir != "" {
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+		for _, name := range []string{
+			"config.json",
+			"state.json",
+			"memory-ranges",
+		} {
 			if err = bind(filepath.Join(s.Resource.RestoreDir, name), "restore/"+name, true); err != nil {
 				return err
 			}
@@ -210,7 +227,10 @@ func InternalLaunch(specPath string) error {
 			"--seccomp",
 			"true",
 		},
-		[]string{"PATH=/bin", "RUST_BACKTRACE=1"},
+		[]string{
+			"PATH=/bin",
+			"RUST_BACKTRACE=1",
+		},
 	)
 }
 

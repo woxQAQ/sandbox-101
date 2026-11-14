@@ -50,7 +50,10 @@ func (service *Service) reconcileBindings() error {
 		guard.Unlock()
 		if rebind {
 			bindingCtx, cancel := context.WithTimeout(service.ctx, 10*time.Second)
-			_, lookup = service.waitRestartBinding(bindingCtx, Sandbox{ID: id, TenantID: tenant}, settings)
+			_, lookup = service.waitRestartBinding(bindingCtx, Sandbox{
+				ID:       id,
+				TenantID: tenant,
+			}, settings)
 			cancel()
 		}
 		if lookup != nil {
@@ -65,11 +68,23 @@ func (service *Service) reconcileBindings() error {
 func (service *Service) waitRestartBinding(ctx context.Context, sandbox Sandbox, settings sandboxSettings) (Operation, error) {
 	env := map[string]EnvVar{}
 	for name, value := range settings.Env {
-		env[name] = EnvVar{Value: value}
+		env[name] = EnvVar{
+			Value: value,
+		}
 	}
-	operation, err := service.AdmitConfigure(ctx, Principal{TenantID: sandbox.TenantID}, "rebind:"+service.epoch+":"+sandbox.ID+":"+settings.Generation, Command{Action: "configure", SandboxID: sandbox.ID, ObservedGeneration: settings.Generation, Env: env, Policy: settings.Policy})
+	operation, err := service.AdmitConfigure(ctx, Principal{
+		TenantID: sandbox.TenantID,
+	}, "rebind:"+service.epoch+":"+sandbox.ID+":"+settings.Generation, Command{
+		Action:             "configure",
+		SandboxID:          sandbox.ID,
+		ObservedGeneration: settings.Generation,
+		Env:                env,
+		Policy:             settings.Policy,
+	})
 	if err != nil {
 		return operation, err
 	}
-	return service.Wait(ctx, Principal{TenantID: sandbox.TenantID}, operation.ID)
+	return service.Wait(ctx, Principal{
+		TenantID: sandbox.TenantID,
+	}, operation.ID)
 }

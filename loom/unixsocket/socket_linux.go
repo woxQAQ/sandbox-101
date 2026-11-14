@@ -29,7 +29,9 @@ func Dial(ctx context.Context, path string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = directory.Close() }()
+	defer func() {
+		_ = directory.Close()
+	}()
 	return (&net.Dialer{}).DialContext(ctx, "unix", short)
 }
 
@@ -40,8 +42,13 @@ func Listen(path string) (*net.UnixListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = directory.Close() }()
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: short, Net: "unix"})
+	defer func() {
+		_ = directory.Close()
+	}()
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{
+		Name: short,
+		Net:  "unix",
+	})
 	if err != nil {
 		return nil, err
 	}

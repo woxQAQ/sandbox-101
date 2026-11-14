@@ -55,14 +55,20 @@ func (b *binding) listenUnix(path string) (net.Listener, error) {
 		_ = ln.Close()
 		return nil, errors.New("egress: cannot identify proxy socket")
 	}
-	owned := &ownedListener{Listener: ln, path: path, info: info}
+	owned := &ownedListener{
+		Listener: ln,
+		path:     path,
+		info:     info,
+	}
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		_ = owned.Close()
 		return nil, errors.New("egress: cannot open proxy socket identity")
 	}
 	anchor := os.NewFile(uintptr(fd), "proxy-socket")
-	defer func() { _ = anchor.Close() }()
+	defer func() {
+		_ = anchor.Close()
+	}()
 	current, err := anchor.Stat()
 	if err != nil || current.Mode()&os.ModeSocket == 0 || !os.SameFile(info, current) {
 		_ = owned.Close()

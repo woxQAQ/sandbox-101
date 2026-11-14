@@ -92,7 +92,11 @@ func (m ImageManifest) validateLayered() error {
 	if len(m.Files) != 3 {
 		return bad()
 	}
-	for _, file := range []string{"kernel", "initramfs", "fsmeta.erofs"} {
+	for _, file := range []string{
+		"kernel",
+		"initramfs",
+		"fsmeta.erofs",
+	} {
 		if _, err = shaName(m.Files[file]); err != nil {
 			return bad()
 		}
@@ -109,7 +113,12 @@ func (m ImageManifest) validateLayered() error {
 	}
 	for i, diff := range m.DiffIDs {
 		a := m.Artifacts[i+1]
-		for _, value := range []string{diff, m.Layers[i], a.SHA256, a.CacheSHA256} {
+		for _, value := range []string{
+			diff,
+			m.Layers[i],
+			a.SHA256,
+			a.CacheSHA256,
+		} {
 			if _, err = shaName(value); err != nil {
 				return bad()
 			}
@@ -132,7 +141,10 @@ func (m ImageManifest) verifyLayered(dir, want string) error {
 		filepath.Base(filepath.Dir(dir)) != "images" {
 		return api.Fail(api.Incompatible, "image directory does not match manifest")
 	}
-	for _, p := range []string{filepath.Dir(dir), dir} {
+	for _, p := range []string{
+		filepath.Dir(dir),
+		dir,
+	} {
 		st, err := os.Lstat(p)
 		if err != nil {
 			return err
@@ -222,7 +234,9 @@ func erofsSuper(file string) ([]byte, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
@@ -246,7 +260,9 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 	if err != nil {
 		return err
 	}
-	bad := func() error { return api.Fail(api.Incompatible, "EROFS device_table/order/block identity mismatch") }
+	bad := func() error {
+		return api.Fail(api.Incompatible, "EROFS device_table/order/block identity mismatch")
+	}
 	// The materializer never emits 48-bit, compressed or alternate-block layouts.
 	features := binary.LittleEndian.Uint32(sb[80:])
 	if features&0x8 == 0 || features & ^uint32(0xc) != 0 || int(binary.LittleEndian.Uint16(sb[86:])) != len(layers) ||
@@ -261,7 +277,9 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	mapped := uint64(size / 4096)
 	for i, layer := range layers {
 		lsb, layerSize, x := erofsSuper(layer)

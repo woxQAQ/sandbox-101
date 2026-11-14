@@ -51,11 +51,19 @@ func TestMicroVMLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	prefix := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
-	shape := api.Shape{VCPUs: 1, MemoryMiB: microVMMemoryMiB(t), DiskMiB: 512}
+	shape := api.Shape{
+		VCPUs:     1,
+		MemoryMiB: microVMMemoryMiB(t),
+		DiskMiB:   512,
+	}
 	_, err = client.PutTemplate(
 		ctx,
 		prefix+"-template",
-		api.Template{ID: prefix, Image: image, Shape: shape},
+		api.Template{
+			ID:    prefix,
+			Image: image,
+			Shape: shape,
+		},
 		false,
 	)
 	if err != nil {
@@ -70,7 +78,9 @@ func TestMicroVMLifecycle(t *testing.T) {
 				cleanup,
 				id,
 				prefix+"-cleanup-"+id,
-				api.Command{Action: "release"},
+				api.Command{
+					Action: "release",
+				},
 			); err != nil {
 				t.Errorf("cleanup %s: %v", id, err)
 			}
@@ -83,9 +93,13 @@ func TestMicroVMLifecycle(t *testing.T) {
 			Action:     "claim",
 			TemplateID: prefix,
 			TTLSeconds: 600,
-			Policy:     api.Policy{Mode: "none"},
+			Policy: api.Policy{
+				Mode: "none",
+			},
 			Env: map[string]api.EnvVar{
-				"CLAIM_ENV": {Value: "source"},
+				"CLAIM_ENV": {
+					Value: "source",
+				},
 			},
 		},
 	)
@@ -127,13 +141,18 @@ func TestMicroVMLifecycle(t *testing.T) {
 	if _, err = conn.Call(
 		ctx,
 		"exec",
-		map[string]any{"session_id": sessionID, "command": "STATE=checkpoint"},
+		map[string]any{
+			"session_id": sessionID,
+			"command":    "STATE=checkpoint",
+		},
 		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
 	conn.Close()
-	checkpoint, err := client.Change(ctx, source.ID, prefix+"-checkpoint", api.Command{Action: "checkpoint"})
+	checkpoint, err := client.Change(ctx, source.ID, prefix+"-checkpoint", api.Command{
+		Action: "checkpoint",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,13 +174,19 @@ func TestMicroVMLifecycle(t *testing.T) {
 		api.Command{
 			Action: "fork",
 			Count:  2,
-			Env:    map[string]api.EnvVar{"CLAIM_ENV": {Value: "branch"}},
+			Env: map[string]api.EnvVar{
+				"CLAIM_ENV": {
+					Value: "branch",
+				},
+			},
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := map[string]bool{originalIdentity: true}
+	seen := map[string]bool{
+		originalIdentity: true,
+	}
 	for _, branch := range forked.Sandboxes {
 		ids = append(ids, branch.ID)
 		identity := run(branch.ID, "cat /etc/machine-id")
@@ -173,7 +198,9 @@ func TestMicroVMLifecycle(t *testing.T) {
 			t.Fatal("branch environment was not replaced")
 		}
 	}
-	paused, err := client.Change(ctx, source.ID, prefix+"-pause", api.Command{Action: "pause"})
+	paused, err := client.Change(ctx, source.ID, prefix+"-pause", api.Command{
+		Action: "pause",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +246,10 @@ func TestMicroVMLifecycle(t *testing.T) {
 			"session_id": sessionID,
 			"command":    "printf '%s' \"$STATE\"",
 		},
-		func(f *pb.Frame) error { _, err := restored.Write(f.Data); return err },
+		func(f *pb.Frame) error {
+			_, err := restored.Write(f.Data)
+			return err
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +271,9 @@ func TestMicroVMLifecycle(t *testing.T) {
 	if run(source.ID, "cat /etc/machine-id") != originalIdentity {
 		t.Fatal("rollback changed guest identity")
 	}
-	if _, err = client.Change(ctx, source.ID, prefix+"-pause-again", api.Command{Action: "pause"}); err != nil {
+	if _, err = client.Change(ctx, source.ID, prefix+"-pause-again", api.Command{
+		Action: "pause",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := engine.ListVMs(ctx)
@@ -252,7 +284,9 @@ func TestMicroVMLifecycle(t *testing.T) {
 		ctx,
 		source.ID,
 		prefix+"-zero-wake-release",
-		api.Command{Action: "release"},
+		api.Command{
+			Action: "release",
+		},
 	); err != nil {
 		t.Fatal(err)
 	}

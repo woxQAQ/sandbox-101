@@ -18,7 +18,10 @@ import (
 
 func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal haven.Principal, id string) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		writeJSON(w, 426, &api.Error{Code: api.ErrInvalid, Message: "Connection: Upgrade and Upgrade: sandbox-v1 required"})
+		writeJSON(w, 426, &api.Error{
+			Code:    api.ErrInvalid,
+			Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
+		})
 		return
 	}
 	if r.ProtoMajor != 1 {
@@ -41,17 +44,25 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 		writeError(w, err)
 		return
 	}
-	defer func() { _ = upstream.Close() }()
+	defer func() {
+		_ = upstream.Close()
+	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := adapter.service.AttachData(r.Context(), principal, id, upstream, func() (net.Conn, error) { var err error; raw, buffer, err = hijacker.Hijack(); return raw, err })
+	downstream, err := adapter.service.AttachData(r.Context(), principal, id, upstream, func() (net.Conn, error) {
+		var err error
+		raw, buffer, err = hijacker.Hijack()
+		return raw, err
+	})
 	if err != nil {
 		if raw == nil {
 			writeError(w, err)
 		}
 		return
 	}
-	defer func() { _ = downstream.Close() }()
+	defer func() {
+		_ = downstream.Close()
+	}()
 	if _, err = buffer.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sandbox-v1\r\n\r\n"); err != nil {
 		return
 	}
@@ -100,7 +111,9 @@ func (adapter *Adapter) createPreview(w http.ResponseWriter, r *http.Request, pr
 		ttl = 300
 	}
 	path, err := adapter.service.PreviewURL(r.Context(), principal, id, port, time.Duration(ttl)*time.Second)
-	respond(w, map[string]string{"url": path}, err)
+	respond(w, map[string]string{
+		"url": path,
+	}, err)
 }
 
 func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
@@ -120,24 +133,36 @@ func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return adapter.service.Forward(ctx, target.Principal, target.SandboxID, target.Port)
-	}}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return adapter.service.Forward(ctx, target.Principal, target.SandboxID, target.Port)
+		},
+	}
 	defer transport.CloseIdleConnections()
 	proxy := &httputil.ReverseProxy{
 		Transport: transport,
 		Rewrite: func(request *httputil.ProxyRequest) {
-			request.SetURL(&url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(target.Port))})
+			request.SetURL(&url.URL{
+				Scheme: "http",
+				Host:   net.JoinHostPort("127.0.0.1", strconv.Itoa(target.Port)),
+			})
 			request.Out.URL.Path = "/" + tail
 			request.Out.URL.RawPath = ""
 			request.Out.Header.Del("Authorization")
 			request.Out.Header.Del("Cookie")
 			request.SetXForwarded()
 		},
-		ModifyResponse: func(response *http.Response) error { response.Header.Set("Referrer-Policy", "no-referrer"); return nil },
+		ModifyResponse: func(response *http.Response) error {
+			response.Header.Set("Referrer-Policy", "no-referrer")
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			writeJSON(w, 502, &api.Error{Code: api.ErrInternal, Message: "preview upstream unavailable"})
+			writeJSON(w, 502, &api.Error{
+				Code:    api.ErrInternal,
+				Message: "preview upstream unavailable",
+			})
 		},
 	}
 	proxy.ServeHTTP(w, r)

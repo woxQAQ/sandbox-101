@@ -16,14 +16,24 @@ func InspectWorkDeletion(ctx context.Context, state, operation string, plan Imag
 	if err := VerifyImageImportBoundary(state, operation, boundary, false); err != nil {
 		return empty, err
 	}
-	directories := map[string]bool{".": true, "input": true, "input/blobs": true, "input/blobs/sha256": true}
-	fixed := map[string]loom.FileIdentity{".": boundary.Work}
+	directories := map[string]bool{
+		".":                  true,
+		"input":              true,
+		"input/blobs":        true,
+		"input/blobs/sha256": true,
+	}
+	fixed := map[string]loom.FileIdentity{
+		".": boundary.Work,
+	}
 	files := map[string]os.FileMode{}
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
 		files["input/oci-layout"] = 0
 		files["input/index.json"] = 0
 	}
-	for _, digest := range []string{plan.Options.Digest, plan.ConfigDigest} {
+	for _, digest := range []string{
+		plan.Options.Digest,
+		plan.ConfigDigest,
+	} {
 		name, err := host.SHAName(digest)
 		if err != nil {
 			return empty, err
@@ -36,9 +46,20 @@ func InspectWorkDeletion(ctx context.Context, state, operation string, plan Imag
 	if !published {
 		directories["output"] = true
 		fixed["output"] = boundary.Output
-		names := []string{"kernel", "initramfs", "fsmeta.erofs", "fsmeta.map.json", "image.json"}
+		names := []string{
+			"kernel",
+			"initramfs",
+			"fsmeta.erofs",
+			"fsmeta.map.json",
+			"image.json",
+		}
 		if plan.Options.Materialization == host.MergedOCIEROFSLayout {
-			names = []string{"kernel", "initramfs", "root.erofs", "image.json"}
+			names = []string{
+				"kernel",
+				"initramfs",
+				"root.erofs",
+				"image.json",
+			}
 		}
 		for _, name := range names {
 			files[filepath.Join("output", name)] = 0
@@ -55,11 +76,17 @@ func InspectUnpublishedImageDeletion(ctx context.Context, state, path string, bo
 	if err := VerifyImportedImage(ctx, state, path, boundary, proof); err != nil {
 		return empty, err
 	}
-	files := map[string]os.FileMode{"image.json": 0}
+	files := map[string]os.FileMode{
+		"image.json": 0,
+	}
 	for name := range proof.Manifest.Files {
 		files[name] = 0
 	}
-	return loom.InspectOwnedArtifactTopology(ctx, state, path, map[string]bool{".": true}, files, map[string]loom.FileIdentity{".": boundary.Output})
+	return loom.InspectOwnedArtifactTopology(ctx, state, path, map[string]bool{
+		".": true,
+	}, files, map[string]loom.FileIdentity{
+		".": boundary.Output,
+	})
 }
 
 func VerifyCacheWitness(ctx context.Context, state string, witness ImageCacheWitness) error {
@@ -75,7 +102,11 @@ func VerifyCacheWitness(ctx context.Context, state string, witness ImageCacheWit
 		return fmt.Errorf("cache ownership path or charge changed")
 	}
 	var bytes int64
-	for path, identity := range map[string]loom.FileIdentity{expected: witness.Directory, filepath.Join(expected, "layer.erofs"): witness.Data, filepath.Join(expected, "layer.json"): witness.Receipt} {
+	for path, identity := range map[string]loom.FileIdentity{
+		expected:                               witness.Directory,
+		filepath.Join(expected, "layer.erofs"): witness.Data,
+		filepath.Join(expected, "layer.json"):  witness.Receipt,
+	} {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
@@ -105,5 +136,14 @@ func InspectCacheDeletion(ctx context.Context, state string, witness ImageCacheW
 	if err := VerifyCacheWitness(ctx, state, witness); err != nil {
 		return empty, err
 	}
-	return loom.InspectOwnedArtifactTopology(ctx, state, witness.Path, map[string]bool{".": true}, map[string]os.FileMode{"layer.erofs": 0, "layer.json": 0}, map[string]loom.FileIdentity{".": witness.Directory, "layer.erofs": witness.Data, "layer.json": witness.Receipt})
+	return loom.InspectOwnedArtifactTopology(ctx, state, witness.Path, map[string]bool{
+		".": true,
+	}, map[string]os.FileMode{
+		"layer.erofs": 0,
+		"layer.json":  0,
+	}, map[string]loom.FileIdentity{
+		".":           witness.Directory,
+		"layer.erofs": witness.Data,
+		"layer.json":  witness.Receipt,
+	})
 }

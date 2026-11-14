@@ -53,7 +53,9 @@ func (service *Service) admitWarmClaim(ctx context.Context, principal Principal,
 	if err != nil {
 		return empty, false, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadOwnedTemplate(ctx, tx, template.TenantID, template.ID)
 	if err != nil {
 		return empty, false, err
@@ -106,16 +108,48 @@ func (service *Service) admitWarmClaim(ctx context.Context, principal Principal,
 	if sandbox.State != "provisioning" || sandbox.SourceOperation != source.OperationID || sandbox.Instance != pool.Instance || sandbox.SlotAssignment != nil {
 		return empty, false, loom.Fail(loom.ManualRecovery, "warm allocation current sandbox identity changed")
 	}
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending", Result: operationResult{SandboxID: pool.SandboxID, VMID: pool.VMID, SnapshotID: template.SnapshotID, ResourceReady: true}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:     pool.SandboxID,
+			VMID:          pool.VMID,
+			SnapshotID:    template.SnapshotID,
+			ResourceReady: true,
+		},
+	}
 	settings := admission.Settings
 	settings.Generation = operation.ID
-	input := warmClaimInput{RequestTenantID: principal.TenantID, Command: admission.Command, PoolID: poolID, Pool: pool, Source: source, Settings: settings, Restore: restore}
+	input := warmClaimInput{
+		RequestTenantID: principal.TenantID,
+		Command:         admission.Command,
+		PoolID:          poolID,
+		Pool:            pool,
+		Source:          source,
+		Settings:        settings,
+		Restore:         restore,
+	}
 	payload := encode(input)
 	hash := digest(payload)
 	sandbox.OperationID = operation.ID
-	sandbox.SlotAssignment = &generationRef{OperationID: operation.ID, InputHash: hash}
+	sandbox.SlotAssignment = &generationRef{
+		OperationID: operation.ID,
+		InputHash:   hash,
+	}
 	sandbox.Identity = newSandboxIdentity(template, "warm")
-	activation := activationInput{Attempt: "warm", AllowFallback: true, RequestTenantID: principal.TenantID, TenantID: template.TenantID, SandboxID: pool.SandboxID, ResourceOperation: source.OperationID, ResourceHash: source.Hash, ExpectedInstance: pool.Instance, Settings: settings, ResetIdentity: true}
+	activation := activationInput{
+		Attempt:           "warm",
+		AllowFallback:     true,
+		RequestTenantID:   principal.TenantID,
+		TenantID:          template.TenantID,
+		SandboxID:         pool.SandboxID,
+		ResourceOperation: source.OperationID,
+		ResourceHash:      source.Hash,
+		ExpectedInstance:  pool.Instance,
+		Settings:          settings,
+		ResetIdentity:     true,
+	}
 	activationPayload := encode(activation)
 	frozen := encode(struct {
 		Action  string
@@ -125,20 +159,84 @@ func (service *Service) admitWarmClaim(ctx context.Context, principal Principal,
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", principal.TenantID, key, digest(frozen), frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_credentials VALUES(?,?)", []any{operation.ID, admission.MAC}},
-		{"INSERT INTO operation_steps VALUES(?,'warm_claim','claim',?,?,?,?,'pending',?)", []any{operation.ID, hash, payload, pool.SandboxID, pool.Instance, encode(warmClaimState{Phase: "selected"})}},
-		{"INSERT INTO sandbox_settings VALUES(?,?)", []any{pool.SandboxID, encode(settings)}},
-		{"INSERT INTO configuration_fences VALUES(?,?)", []any{pool.SandboxID, operation.ID}},
-		{"INSERT INTO operation_steps VALUES(?,'activation:warm','activate',?,?,?,?,'pending',?)", []any{operation.ID, digest(activationPayload), activationPayload, pool.VMID, pool.Instance, encode("admitted")}},
-		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='provisioning' AND body=?", []any{encode(sandbox), sandbox.ID, template.TenantID, encode(oldSandbox)}},
-		{"UPDATE quota_resources SET sandbox_slots=1 WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?", []any{template.TenantID, pool.SandboxID, source.Input.SlotOperation}},
-		{"DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at=?", []any{pool.VMID, template.ID, template.SnapshotID, pool.CreatedAt.UnixNano()}},
-		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='warm' AND holder_id=?", []any{pool.VMID, poolID}},
-		{"UPDATE pool_slots SET status='selected' WHERE operation_id=? AND status='ready' AND body=?", []any{poolID, encode(pool)}},
-		{"INSERT INTO source_leases VALUES(?,?,'warm_claim')", []any{template.SnapshotID, operation.ID}},
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{template.SnapshotID, operation.ID + ":warm_claim"}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{template.TenantID, template.SnapshotID, operation.ID + ":warm_claim"}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			principal.TenantID,
+			key,
+			digest(frozen),
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_credentials VALUES(?,?)", []any{
+			operation.ID,
+			admission.MAC,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'warm_claim','claim',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			hash,
+			payload,
+			pool.SandboxID,
+			pool.Instance,
+			encode(warmClaimState{
+				Phase: "selected",
+			}),
+		}},
+		{"INSERT INTO sandbox_settings VALUES(?,?)", []any{
+			pool.SandboxID,
+			encode(settings),
+		}},
+		{"INSERT INTO configuration_fences VALUES(?,?)", []any{
+			pool.SandboxID,
+			operation.ID,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'activation:warm','activate',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(activationPayload),
+			activationPayload,
+			pool.VMID,
+			pool.Instance,
+			encode("admitted"),
+		}},
+		{"UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='provisioning' AND body=?", []any{
+			encode(sandbox),
+			sandbox.ID,
+			template.TenantID,
+			encode(oldSandbox),
+		}},
+		{"UPDATE quota_resources SET sandbox_slots=1 WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?", []any{
+			template.TenantID,
+			pool.SandboxID,
+			source.Input.SlotOperation,
+		}},
+		{"DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at=?", []any{
+			pool.VMID,
+			template.ID,
+			template.SnapshotID,
+			pool.CreatedAt.UnixNano(),
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='warm' AND holder_id=?", []any{
+			pool.VMID,
+			poolID,
+		}},
+		{"UPDATE pool_slots SET status='selected' WHERE operation_id=? AND status='ready' AND body=?", []any{
+			poolID,
+			encode(pool),
+		}},
+		{"INSERT INTO source_leases VALUES(?,?,'warm_claim')", []any{
+			template.SnapshotID,
+			operation.ID,
+		}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{
+			template.SnapshotID,
+			operation.ID + ":warm_claim",
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{
+			template.TenantID,
+			template.SnapshotID,
+			operation.ID + ":warm_claim",
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, false, err

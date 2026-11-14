@@ -12,7 +12,11 @@ import (
 )
 
 func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
-	for _, boundary := range []string{"image_import_materialized", "image_import_renamed", "image_import_publication_before_commit"} {
+	for _, boundary := range []string{
+		"image_import_materialized",
+		"image_import_renamed",
+		"image_import_publication_before_commit",
+	} {
 		t.Run(boundary, func(t *testing.T) {
 			options := privateOCIImport(t)
 			service, runtime, _, _ := sandboxFixture(t)
@@ -24,7 +28,10 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
-			operation, err := service.AdmitImageImport(ctx, Principal{Root: true, TenantID: "root"}, "import", options)
+			operation, err := service.AdmitImageImport(ctx, Principal{
+				Root:     true,
+				TenantID: "root",
+			}, "import", options)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,7 +44,10 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 				t.Fatal(err)
 			}
 			service = reopenCloneService(t, service, runtime)
-			result, err := service.WaitManagement(ctx, Principal{Root: true, TenantID: "root"}, operation.ID)
+			result, err := service.WaitManagement(ctx, Principal{
+				Root:     true,
+				TenantID: "root",
+			}, operation.ID)
 			if err != nil || result.Result.ImageDigest != options.Digest {
 				t.Fatal(result, err)
 			}
@@ -60,7 +70,10 @@ func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	operation, err := service.AdmitImageImport(ctx, Principal{Root: true, TenantID: "root"}, "import", options)
+	operation, err := service.AdmitImageImport(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "import", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +103,10 @@ func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
 		}
 	}
 	service = reopenCloneService(t, service, runtime)
-	result, err := service.WaitManagement(ctx, Principal{Root: true, TenantID: "root"}, operation.ID)
+	result, err := service.WaitManagement(ctx, Principal{
+		Root:     true,
+		TenantID: "root",
+	}, operation.ID)
 	if err == nil || result.Status != "failed" {
 		t.Fatal(result, err)
 	}

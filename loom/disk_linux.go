@@ -15,13 +15,17 @@ func InspectWritableDisk(resource Resource) (FileIdentity, error) {
 	if err != nil {
 		return FileIdentity{}, err
 	}
-	defer func() { _ = parent.Close() }()
+	defer func() {
+		_ = parent.Close()
+	}()
 	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(resource.Disk), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return FileIdentity{}, err
 	}
 	file := os.NewFile(uintptr(fd), resource.Disk)
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return FileIdentity{}, err

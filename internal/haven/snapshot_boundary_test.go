@@ -14,7 +14,12 @@ import (
 
 func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 	parallelLifecycle(t)
-	for _, damage := range []string{"extra-file", "symlink", "oversize", "writer-after-copy"} {
+	for _, damage := range []string{
+		"extra-file",
+		"symlink",
+		"oversize",
+		"writer-after-copy",
+	} {
 		t.Run(damage, func(t *testing.T) {
 			var service *Service
 			var modified bool
@@ -97,7 +102,11 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 	service, backend := coldService(t, nil)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
-	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+	t.Cleanup(func() {
+		unblock.Do(func() {
+			close(release)
+		})
+	})
 	backend.before = func(name string, _ loom.Resource) error {
 		if name == "capture" {
 			close(entered)
@@ -116,7 +125,9 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 	if err := service.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("shutdown did not retain bounded caller wait", err)
 	}
-	unblock.Do(func() { close(release) })
+	unblock.Do(func() {
+		close(release)
+	})
 	if err := service.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +146,9 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = resumed.Close(context.Background()) })
+	t.Cleanup(func() {
+		_ = resumed.Close(context.Background())
+	})
 	step := awaitCapture(t, resumed, operation.ID)
 	if step.Status != "failed" || backend.count("capture") != 1 || backend.count("launch") != 1 {
 		t.Fatal("shutdown recaptured unproved bytes or restarted source", step.State)

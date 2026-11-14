@@ -31,7 +31,13 @@ const (
 func mergedOCIBuilder(tools map[string]string) string {
 	var profile strings.Builder
 	profile.WriteString(mergedOCIProfile)
-	for _, tool := range []string{"umoci", "unshare", "bwrap", "mkfs.erofs", "fsck.erofs"} {
+	for _, tool := range []string{
+		"umoci",
+		"unshare",
+		"bwrap",
+		"mkfs.erofs",
+		"fsck.erofs",
+	} {
 		profile.WriteString("\n" + tool + "=" + tools[tool])
 	}
 	sum := sha256.Sum256([]byte(profile.String()))
@@ -39,7 +45,10 @@ func mergedOCIBuilder(tools map[string]string) string {
 }
 
 func mergedOCITools(ctx context.Context, tools map[string]string) (map[string]string, error) {
-	for _, tool := range []string{"umoci", "unshare"} {
+	for _, tool := range []string{
+		"umoci",
+		"unshare",
+	} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return nil, api.Fail(api.Incompatible, "required OCI compatibility tool missing: %s", tool)
 		}
@@ -115,7 +124,9 @@ func validateMergedOCIEntry(h *tar.Header) error {
 }
 
 func (m ImageManifest) validateMergedOCI() error {
-	bad := func() error { return api.Fail(api.Incompatible, "invalid OCI merged EROFS materialization identity") }
+	bad := func() error {
+		return api.Fail(api.Incompatible, "invalid OCI merged EROFS materialization identity")
+	}
 	if m.Format != 3 || m.Layout != MergedOCIEROFSLayout || m.Architecture != runtime.GOARCH || len(m.Artifacts) != 0 ||
 		len(m.DiffIDs) == 0 ||
 		len(m.DiffIDs) > MaxImageDataDevices ||
@@ -132,7 +143,11 @@ func (m ImageManifest) validateMergedOCI() error {
 		erofsVersion.FindString(m.Tools["mkfs.erofs"]) != erofsVersion.FindString(m.Tools["fsck.erofs"]) {
 		return bad()
 	}
-	for _, name := range []string{"kernel", "initramfs", "root.erofs"} {
+	for _, name := range []string{
+		"kernel",
+		"initramfs",
+		"root.erofs",
+	} {
 		if _, err := shaName(m.Files[name]); err != nil {
 			return bad()
 		}
@@ -159,7 +174,10 @@ func (m ImageManifest) verifyMergedOCI(dir, want string) error {
 		filepath.Base(filepath.Dir(dir)) != "images" {
 		return api.Fail(api.Incompatible, "image directory does not match manifest")
 	}
-	for _, parent := range []string{filepath.Dir(dir), dir} {
+	for _, parent := range []string{
+		filepath.Dir(dir),
+		dir,
+	} {
 		st, err := os.Lstat(parent)
 		if err != nil {
 			return err
@@ -195,7 +213,9 @@ func (m ImageManifest) verifyMergedOCIArtifacts(dir string) error {
 func materializeMergedOCI(ctx context.Context, input, out, digest string, expandedLimit int64) error {
 	// Construct a minimal trusted index. No source index tags, URLs, annotations
 	// or runtime configuration can select a different image for unpacking.
-	if err := writeJSON(filepath.Join(input, "oci-layout"), v1.ImageLayout{Version: "1.0.0"}); err != nil {
+	if err := writeJSON(filepath.Join(input, "oci-layout"), v1.ImageLayout{
+		Version: "1.0.0",
+	}); err != nil {
 		return err
 	}
 	n, _ := shaName(digest)
@@ -204,21 +224,31 @@ func materializeMergedOCI(ctx context.Context, input, out, digest string, expand
 		return err
 	}
 	index := v1.Index{
-		Versioned: specs.Versioned{SchemaVersion: 2},
+		Versioned: specs.Versioned{
+			SchemaVersion: 2,
+		},
 		Manifests: []v1.Descriptor{
 			{
-				MediaType:   v1.MediaTypeImageManifest,
-				Digest:      ocidigest.Digest(digest),
-				Size:        st.Size(),
-				Annotations: map[string]string{v1.AnnotationRefName: "compat"},
+				MediaType: v1.MediaTypeImageManifest,
+				Digest:    ocidigest.Digest(digest),
+				Size:      st.Size(),
+				Annotations: map[string]string{
+					v1.AnnotationRefName: "compat",
+				},
 			},
 		},
 	}
 	if err = writeJSON(filepath.Join(input, "index.json"), index); err != nil {
 		return err
 	}
-	reads := []imageMount{{input, "/input"}}
-	for _, tool := range []string{"umoci", "mkfs.erofs", "sh"} {
+	reads := []imageMount{
+		{input, "/input"},
+	}
+	for _, tool := range []string{
+		"umoci",
+		"mkfs.erofs",
+		"sh",
+	} {
 		binary, x := exec.LookPath(tool)
 		if x != nil {
 			return x
@@ -254,7 +284,9 @@ exec /tools/mkfs.erofs --quiet --workers=1 -b4096 -E noinline_data -T0 --mkfs-ti
 	return extractImageBoot(
 		ctx,
 		out,
-		[]imageMount{{filepath.Join(out, "root.erofs"), "/root.erofs"}},
+		[]imageMount{
+			{filepath.Join(out, "root.erofs"), "/root.erofs"},
+		},
 		nil,
 		"/root.erofs",
 	)
@@ -269,7 +301,12 @@ func runMappedImageTool(ctx context.Context, sandboxArgs []string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"--user", "--map-auto", "--map-root-user", "--keep-caps"}
+	args := []string{
+		"--user",
+		"--map-auto",
+		"--map-root-user",
+		"--keep-caps",
+	}
 	if os.Geteuid() == 0 {
 		// A root daemon can identity-map all valid Linux IDs, still inside a new
 		// user namespace and the same readonly bubblewrap filesystem boundary.

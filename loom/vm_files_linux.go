@@ -13,13 +13,34 @@ import (
 // its exact run, and the supplied published-capture boundaries. No unknown
 // version/run/file is adopted. The caller persists the inode receipt before unlink.
 func InspectVMDeletion(ctx context.Context, stateRoot string, resource Resource, diskIdentity FileIdentity, materials *RestoreMaterials, captures []CaptureBoundary) (DeletionIntent, []string, error) {
-	intent := DeletionIntent{Format: 1, Path: resource.Dir, Dir: true, Nodes: map[string]FileIdentity{}}
+	intent := DeletionIntent{
+		Format: 1,
+		Path:   resource.Dir,
+		Dir:    true,
+		Nodes:  map[string]FileIdentity{},
+	}
 	if !ValidResourceID(resource.VMID, "vm-") || !ValidResourceID(resource.Instance, "run-") || resource.Dir != filepath.Join(stateRoot, "vms", resource.VMID) || resource.RunDir != filepath.Join(resource.Dir, "runs", resource.Instance) {
 		return intent, nil, fmt.Errorf("deletion resource differs from frozen input")
 	}
 	run := "runs/" + resource.Instance
-	directories := map[string]bool{".": true, "capture": true, "runs": true, run: true, run + "/root": true, run + "/io": true}
-	files := map[string]os.FileMode{"network.json": 0, "network-policy.json": 0, "network-removing.json": 0, run + "/launch.json": 0, run + "/console.log": 0, run + "/process.json": 0, run + "/io/api.sock": os.ModeSocket, run + "/io/vsock": os.ModeSocket}
+	directories := map[string]bool{
+		".":           true,
+		"capture":     true,
+		"runs":        true,
+		run:           true,
+		run + "/root": true,
+		run + "/io":   true,
+	}
+	files := map[string]os.FileMode{
+		"network.json":          0,
+		"network-policy.json":   0,
+		"network-removing.json": 0,
+		run + "/launch.json":    0,
+		run + "/console.log":    0,
+		run + "/process.json":   0,
+		run + "/io/api.sock":    os.ModeSocket,
+		run + "/io/vsock":       os.ModeSocket,
+	}
 	fixed := map[string]FileIdentity{}
 	if resource.RestoreDir == "" {
 		disk := filepath.Base(resource.Disk)
@@ -65,7 +86,11 @@ func InspectVMDeletion(ctx context.Context, stateRoot string, resource Resource,
 		fixed[relative] = boundary.Parent
 		directories[relative] = true
 		directories[relative+"/ch"] = true
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+		for _, name := range []string{
+			"config.json",
+			"state.json",
+			"memory-ranges",
+		} {
 			files[relative+"/ch/"+name] = 0
 		}
 	}
@@ -73,7 +98,12 @@ func InspectVMDeletion(ctx context.Context, stateRoot string, resource Resource,
 }
 
 func inspectVMFileTopology(ctx context.Context, stateRoot string, resource Resource, directories map[string]bool, files map[string]os.FileMode, fixed map[string]FileIdentity) (DeletionIntent, []string, error) {
-	intent := DeletionIntent{Format: 1, Path: resource.Dir, Dir: true, Nodes: map[string]FileIdentity{}}
+	intent := DeletionIntent{
+		Format: 1,
+		Path:   resource.Dir,
+		Dir:    true,
+		Nodes:  map[string]FileIdentity{},
+	}
 	if _, err := os.Lstat(resource.Dir); os.IsNotExist(err) {
 		return intent, nil, nil
 	}

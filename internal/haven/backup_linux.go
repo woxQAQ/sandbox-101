@@ -31,7 +31,12 @@ type recoveryReview struct {
 	ReviewedAt time.Time   `json:"reviewed_at"`
 }
 
-var backupComponents = []string{"haven.db", "node.key", "store.json", "HEAD.json"}
+var backupComponents = []string{
+	"haven.db",
+	"node.key",
+	"store.json",
+	"HEAD.json",
+}
 
 // BackupState takes the normal exclusive writer lock after the daemon exits.
 // Runtime disks, RAM and physical custody require separate resource recovery.
@@ -45,7 +50,13 @@ func BackupState(ctx context.Context, directory, destination string) (BackupPoin
 }
 
 func (state *store) backup(ctx context.Context, destination string) (BackupPoint, error) {
-	point := BackupPoint{Format: 1, ID: newID("backup-"), CreatedAt: time.Now().UTC(), Store: state.identity, Files: map[string]string{}}
+	point := BackupPoint{
+		Format:    1,
+		ID:        newID("backup-"),
+		CreatedAt: time.Now().UTC(),
+		Store:     state.identity,
+		Files:     map[string]string{},
+	}
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return point, err
 	}
@@ -69,7 +80,15 @@ func (state *store) backup(ctx context.Context, destination string) (BackupPoint
 	if err != nil {
 		return point, err
 	}
-	for name, payload := range map[string][]byte{"node.key": state.key, "store.json": encode(state.identity), "HEAD.json": encode(storeHead{Format: storeFormat, Identity: state.identity.Identity, Epoch: point.Epoch})} {
+	for name, payload := range map[string][]byte{
+		"node.key":   state.key,
+		"store.json": encode(state.identity),
+		"HEAD.json": encode(storeHead{
+			Format:   storeFormat,
+			Identity: state.identity.Identity,
+			Epoch:    point.Epoch,
+		}),
+	} {
 		if err = loom.AtomicWrite(filepath.Join(destination, name), payload, 0o600); err != nil {
 			return point, err
 		}
@@ -102,7 +121,9 @@ func copyBackupComponent(ctx context.Context, source, destination string) error 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = input.Close() }()
+	defer func() {
+		_ = input.Close()
+	}()
 	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -156,7 +177,10 @@ func readBackup(ctx context.Context, source string) (BackupPoint, error) {
 	if identity != point.Store || len(key) != 32 || keyHash(key) != identity.NodeKeySHA256 {
 		return point, loom.Fail(loom.Incompatible, "backup DB/node-key identity mismatch")
 	}
-	state := &store{directory: source, identity: identity}
+	state := &store{
+		directory: source,
+		identity:  identity,
+	}
 	database, err := sql.Open("sqlite", storeDSN(filepath.Join(source, "haven.db"), "ro", true))
 	if err != nil {
 		return point, err
@@ -218,11 +242,15 @@ func AcknowledgeRecovery(ctx context.Context, directory, note string) error {
 		return err
 	}
 	lock := os.NewFile(uintptr(fd), "writer.lock")
-	defer func() { _ = lock.Close() }()
+	defer func() {
+		_ = lock.Close()
+	}()
 	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return loom.Fail(loom.Conflict, "Haven store is active")
 	}
-	defer func() { _ = unix.Flock(fd, unix.LOCK_UN) }()
+	defer func() {
+		_ = unix.Flock(fd, unix.LOCK_UN)
+	}()
 	if err = privateStoreFile(filepath.Join(directory, "RECOVERY_REQUIRED")); err != nil {
 		return err
 	}
@@ -245,7 +273,12 @@ func AcknowledgeRecovery(ctx context.Context, directory, note string) error {
 			return loom.Fail(loom.ManualRecovery, "restored metadata changed before review")
 		}
 	}
-	if err = loom.WriteJSON(filepath.Join(directory, "RECOVERY_REVIEWED.json"), recoveryReview{Format: 1, Backup: point, Note: note, ReviewedAt: time.Now().UTC()}); err != nil {
+	if err = loom.WriteJSON(filepath.Join(directory, "RECOVERY_REVIEWED.json"), recoveryReview{
+		Format:     1,
+		Backup:     point,
+		Note:       note,
+		ReviewedAt: time.Now().UTC(),
+	}); err != nil {
 		return err
 	}
 	if err = os.Remove(filepath.Join(directory, "RECOVERY_REQUIRED")); err != nil {

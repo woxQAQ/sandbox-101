@@ -27,7 +27,9 @@ func activationKey(attempt string) string {
 }
 
 func loadActivation(ctx context.Context, q queryer, id string) (activationStep, error) {
-	step := activationStep{OperationID: id}
+	step := activationStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var candidate, expected, action string
 	err := q.QueryRowContext(ctx, "SELECT step_key,input_hash,input,status,body,candidate_resource_id,expected_instance,action FROM operation_steps WHERE operation_id=? AND action='activate' ORDER BY rowid DESC LIMIT 1", id).Scan(&step.Key, &step.Hash, &payload, &step.Status, &body, &candidate, &expected, &action)
@@ -128,7 +130,9 @@ func (service *Service) checkActivation(step activationStep) (resourceStep, erro
 	if err != nil {
 		return resourceStep{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadActivation(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return resourceStep{}, err
@@ -147,7 +151,9 @@ func (service *Service) markActivation(step *activationStep, phase string) error
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, _, err = service.activationProof(service.ctx, tx, *step); err != nil {
 		return err
 	}
@@ -347,7 +353,14 @@ func (service *Service) continueActivation(operation string) (runErr error) {
 		if _, err = service.checkActivation(step); err != nil {
 			return err
 		}
-		activation := Activation{SandboxID: step.Input.SandboxID, Hostname: strings.ReplaceAll(step.Input.SandboxID, "_", "-"), ResetIdentity: step.Input.ResetIdentity, Env: step.Input.Settings.Env, Network: step.Input.Settings.Policy.Mode, CAPEM: service.opts.CAPEM}
+		activation := Activation{
+			SandboxID:     step.Input.SandboxID,
+			Hostname:      strings.ReplaceAll(step.Input.SandboxID, "_", "-"),
+			ResetIdentity: step.Input.ResetIdentity,
+			Env:           step.Input.Settings.Env,
+			Network:       step.Input.Settings.Policy.Mode,
+			CAPEM:         service.opts.CAPEM,
+		}
 		if err = service.opts.Guest.Activate(service.ctx, resource, activation); err != nil {
 			return err
 		}
@@ -415,7 +428,9 @@ func (service *Service) commitActivationPolicy(step activationStep, source resou
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, _, err = service.activationProof(service.ctx, tx, step); err != nil {
 		return err
 	}
@@ -464,7 +479,9 @@ func (service *Service) completeActivation(step activationStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadActivation(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -495,11 +512,30 @@ func (service *Service) completeActivation(step activationStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE sandboxes SET state='running',body=? WHERE id=? AND tenant=? AND state IN ('provisioning','running')", []any{encode(sandbox), sandbox.ID, sandbox.TenantID}},
-		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{encode(settings), sandbox.ID, encode(step.Input.Settings)}},
-		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{sandbox.ID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND body=? AND status='running'", []any{encode("complete"), step.OperationID, step.Key, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"UPDATE sandboxes SET state='running',body=? WHERE id=? AND tenant=? AND state IN ('provisioning','running')", []any{
+			encode(sandbox),
+			sandbox.ID,
+			sandbox.TenantID,
+		}},
+		{"UPDATE sandbox_settings SET body=? WHERE sandbox_id=? AND body=?", []any{
+			encode(settings),
+			sandbox.ID,
+			encode(step.Input.Settings),
+		}},
+		{"DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?", []any{
+			sandbox.ID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND body=? AND status='running'", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Key,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

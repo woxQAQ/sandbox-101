@@ -35,7 +35,9 @@ type (
 )
 
 func loadWarmClaim(ctx context.Context, q queryer, id string) (warmClaimStep, error) {
-	step := warmClaimStep{OperationID: id}
+	step := warmClaimStep{
+		OperationID: id,
+	}
 	var input, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='warm_claim'", id).Scan(&step.Hash, &input, &step.Status, &body, &action, &candidate, &expected)
@@ -75,7 +77,10 @@ func (service *Service) currentSlotBudget(ctx context.Context, q queryer, sandbo
 		return slotBudget{}, err
 	}
 	original := claim.Input.Source
-	if claim.Hash != assignment.InputHash || claim.Input.Pool.SandboxID != sandbox.ID || claim.Input.Pool.Template.TenantID != sandbox.TenantID || original.OperationID != source.Input.SlotOperation || original.Hash != claim.Input.Pool.Source.InputHash || original.State.Witness == "" || original.State.Witness != claim.Input.Pool.Instance || original.Status != "succeeded" || original.Input.SlotBudget != (slotBudget{Kind: "sandbox_slot", Units: 0}) || (source.Input.SlotAssignment != nil && !reflect.DeepEqual(source.Input.SlotAssignment, assignment)) {
+	if claim.Hash != assignment.InputHash || claim.Input.Pool.SandboxID != sandbox.ID || claim.Input.Pool.Template.TenantID != sandbox.TenantID || original.OperationID != source.Input.SlotOperation || original.Hash != claim.Input.Pool.Source.InputHash || original.State.Witness == "" || original.State.Witness != claim.Input.Pool.Instance || original.Status != "succeeded" || original.Input.SlotBudget != (slotBudget{
+		Kind:  "sandbox_slot",
+		Units: 0,
+	}) || (source.Input.SlotAssignment != nil && !reflect.DeepEqual(source.Input.SlotAssignment, assignment)) {
 		return slotBudget{}, loom.Fail(loom.ManualRecovery, "slot charge differs from frozen warm selection")
 	}
 	historical, err := loadStep(ctx, q, original.OperationID)
@@ -85,7 +90,10 @@ func (service *Service) currentSlotBudget(ctx context.Context, q queryer, sandbo
 	if !reflect.DeepEqual(historical, original) {
 		return slotBudget{}, loom.Fail(loom.ManualRecovery, "warm slot birth history changed")
 	}
-	return slotBudget{Kind: "sandbox_slot", Units: 1}, nil
+	return slotBudget{
+		Kind:  "sandbox_slot",
+		Units: 1,
+	}, nil
 }
 
 func (parent *warmClaimAdmission) admitResource(ctx context.Context, service *Service, tx *sql.Tx, child Operation, kind, candidate, hash string) error {

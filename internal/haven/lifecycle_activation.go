@@ -45,8 +45,15 @@ func (service *Service) completeLifecycleActivation(tx *sql.Tx, activation activ
 			q    string
 			args []any
 		}{
-			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{snapshot, activation.Input.SandboxID}},
-			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{activation.Input.TenantID, snapshot, "sleep:" + activation.Input.SandboxID}},
+			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?", []any{
+				snapshot,
+				activation.Input.SandboxID,
+			}},
+			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+				activation.Input.TenantID,
+				snapshot,
+				"sleep:" + activation.Input.SandboxID,
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -58,5 +65,8 @@ func (service *Service) completeLifecycleActivation(tx *sql.Tx, activation activ
 		}
 		snapshot = lifecycle.Input.Rollback.Checkpoint.SnapshotID
 	}
-	return requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{Phase: "complete", SnapshotID: snapshot}), lifecycle.OperationID, lifecycle.Hash))
+	return requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='lifecycle' AND input_hash=? AND status IN ('pending','running')", encode(lifecycleState{
+		Phase:      "complete",
+		SnapshotID: snapshot,
+	}), lifecycle.OperationID, lifecycle.Hash))
 }

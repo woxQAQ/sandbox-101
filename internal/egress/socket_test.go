@@ -43,7 +43,9 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err != nil {
+	if err := m.Bind(context.Background(), "s", "t", base, Policy{
+		Mode: "relay",
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if proofCalls.Load() != 1 {
@@ -52,14 +54,18 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 	// Even an ownership callback cannot authorize removing a live listener.
 	other, err := New(
 		Options{
-			RecoverStaleSocket: func(Binding, string, os.FileInfo) bool { return true },
+			RecoverStaleSocket: func(Binding, string, os.FileInfo) bool {
+				return true
+			},
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if err := other.Bind(context.Background(), "s", "t", base, Policy{Mode: "relay"}, nil); err == nil {
+	if err := other.Bind(context.Background(), "s", "t", base, Policy{
+		Mode: "relay",
+	}, nil); err == nil {
 		t.Fatal("replaced a live socket")
 	}
 	// Revoke must not unlink a different inode installed at the same pathname.

@@ -169,13 +169,25 @@ func (service *Service) imageGCInventory(ctx context.Context) ([]GCRoot, []GCIte
 			return nil, nil, nil, false, err
 		}
 		if !terminal(source.Status) || pending != 0 {
-			roots = append(roots, GCRoot{Kind: "import_work", ID: id, Path: source.Input.Work})
+			roots = append(roots, GCRoot{
+				Kind: "import_work",
+				ID:   id,
+				Path: source.Input.Work,
+			})
 		}
 		if pending == 1 {
 			if err = imageWorkCleanupEligible(source); err != nil {
-				deferred = append(deferred, GCItem{Kind: "image_work", ID: id, Reason: "import effect lacks complete historical ownership proof"})
+				deferred = append(deferred, GCItem{
+					Kind:   "image_work",
+					ID:     id,
+					Reason: "import effect lacks complete historical ownership proof",
+				})
 			} else {
-				candidates = append(candidates, GCItem{Kind: "image_work", ID: id, Proof: source.Hash})
+				candidates = append(candidates, GCItem{
+					Kind:  "image_work",
+					ID:    id,
+					Proof: source.Hash,
+				})
 			}
 		}
 	}
@@ -201,7 +213,11 @@ func (service *Service) imageGCInventory(ctx context.Context) ([]GCRoot, []GCIte
 		}
 		if err = imageimport.VerifyCacheWitness(ctx, service.store.directory, record.Witness); err != nil {
 			blocked = true
-			deferred = append(deferred, GCItem{Kind: "image_cache", ID: key[0] + ":" + key[1], Reason: "cache historical ownership verification failed"})
+			deferred = append(deferred, GCItem{
+				Kind:   "image_cache",
+				ID:     key[0] + ":" + key[1],
+				Reason: "cache historical ownership verification failed",
+			})
 			continue
 		}
 		var held int
@@ -210,7 +226,11 @@ func (service *Service) imageGCInventory(ctx context.Context) ([]GCRoot, []GCIte
 		}
 		if held != 1 {
 			blocked = true
-			deferred = append(deferred, GCItem{Kind: "image_cache", ID: key[0] + ":" + key[1], Reason: "cache physical responsibility missing"})
+			deferred = append(deferred, GCItem{
+				Kind:   "image_cache",
+				ID:     key[0] + ":" + key[1],
+				Reason: "cache physical responsibility missing",
+			})
 			continue
 		}
 		live, err := imageCacheLive(ctx, service.store.db, record.Witness)
@@ -218,9 +238,19 @@ func (service *Service) imageGCInventory(ctx context.Context) ([]GCRoot, []GCIte
 			return nil, nil, nil, false, err
 		}
 		if live {
-			roots = append(roots, GCRoot{Kind: "image_cache", ID: key[0] + ":" + key[1], Path: record.Witness.Path})
+			roots = append(roots, GCRoot{
+				Kind: "image_cache",
+				ID:   key[0] + ":" + key[1],
+				Path: record.Witness.Path,
+			})
 		} else {
-			candidates = append(candidates, GCItem{Kind: "image_cache", ID: key[0][7:] + ":" + key[1][7:], Proof: digest(encode(record)), CacheBuilder: key[0], CacheDiffID: key[1]})
+			candidates = append(candidates, GCItem{
+				Kind:         "image_cache",
+				ID:           key[0][7:] + ":" + key[1][7:],
+				Proof:        digest(encode(record)),
+				CacheBuilder: key[0],
+				CacheDiffID:  key[1],
+			})
 		}
 	}
 	return roots, candidates, deferred, blocked, nil

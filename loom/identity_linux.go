@@ -17,7 +17,11 @@ type FileIdentity struct {
 
 func IdentityOf(info os.FileInfo) FileIdentity {
 	stat := info.Sys().(*syscall.Stat_t)
-	return FileIdentity{Device: uint64(stat.Dev), Inode: stat.Ino, Mode: uint32(info.Mode())}
+	return FileIdentity{
+		Device: uint64(stat.Dev),
+		Inode:  stat.Ino,
+		Mode:   uint32(info.Mode()),
+	}
 }
 
 // ValidResourceID validates the fixed identifiers used in resource paths. It

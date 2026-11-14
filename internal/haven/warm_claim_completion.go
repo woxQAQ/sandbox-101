@@ -14,9 +14,19 @@ func (service *Service) retireWarmClaimLease(tx *sql.Tx, parent warmClaimStep) e
 		q    string
 		args []any
 	}{
-		{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='warm_claim'", []any{snapshot, parent.OperationID}},
-		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{snapshot, parent.OperationID + ":warm_claim"}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{parent.Input.Pool.Template.TenantID, snapshot, parent.OperationID + ":warm_claim"}},
+		{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='warm_claim'", []any{
+			snapshot,
+			parent.OperationID,
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			snapshot,
+			parent.OperationID + ":warm_claim",
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			parent.Input.Pool.Template.TenantID,
+			snapshot,
+			parent.OperationID + ":warm_claim",
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -83,7 +93,9 @@ func (service *Service) completeWarmClaim(tx *sql.Tx, activation activationStep)
 	if err = service.retireWarmClaimLease(tx, parent); err != nil {
 		return err
 	}
-	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(warmClaimState{Phase: "complete"}), parent.OperationID, parent.Hash, encode(parent.State))); err != nil {
+	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(warmClaimState{
+		Phase: "complete",
+	}), parent.OperationID, parent.Hash, encode(parent.State))); err != nil {
 		return err
 	}
 	resource, err := loadStep(service.ctx, tx, activation.Input.ResourceOperation)

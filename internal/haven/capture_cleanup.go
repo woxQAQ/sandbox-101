@@ -30,7 +30,9 @@ type (
 )
 
 func loadCaptureCleanup(ctx context.Context, q queryer, id string) (captureCleanupStep, error) {
-	step := captureCleanupStep{OperationID: id}
+	step := captureCleanupStep{
+		OperationID: id,
+	}
 	var input, body []byte
 	var candidate, expected, action string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,candidate_resource_id,expected_instance,action FROM operation_steps WHERE operation_id=? AND step_key='capture_cleanup'", id).Scan(&step.Hash, &input, &step.Status, &body, &candidate, &expected, &action)
@@ -76,7 +78,9 @@ func (service *Service) admitCaptureCleanup(ctx context.Context, request Capture
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -142,8 +146,21 @@ func (service *Service) admitCaptureCleanup(ctx context.Context, request Capture
 	if sandbox.SourceOperation != source.OperationID || sandbox.Instance != source.State.Witness || sandbox.VMID != source.Candidate {
 		return empty, loom.Fail(loom.Conflict, "raw capture source ownership changed")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: source.Candidate, SnapshotID: capture.Input.Snapshot.ID}}
-	input := captureCleanupInput{Request: request, Capture: capture, Stop: stopped}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:  sandbox.ID,
+			VMID:       source.Candidate,
+			SnapshotID: capture.Input.Snapshot.ID,
+		},
+	}
+	input := captureCleanupInput{
+		Request: request,
+		Capture: capture,
+		Stop:    stopped,
+	}
 	payload := encode(input)
 	if err = service.admitResourceParent(ctx, tx, parent, operation, "capture_cleanup", source.Candidate, hash); err != nil {
 		return empty, err
@@ -152,11 +169,40 @@ func (service *Service) admitCaptureCleanup(ctx context.Context, request Capture
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'capture_cleanup','capture_cleanup',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, source.Candidate, source.State.Witness, encode("admitted")}},
-		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND resource_kind='capture' AND resource_id=? AND status='pending'", []any{"capture:" + capture.OperationID, capture.OperationID, source.Candidate}},
-		{"INSERT INTO cleanup_intents VALUES(?,?,'capture_raw',?,'pending',?)", []any{"raw:" + operation.ID, operation.ID, source.Candidate, payload}},
-		{"UPDATE vms SET operation_id=? WHERE id=? AND current_instance=? AND state='stopped' AND operation_id IS NULL", []any{operation.ID, source.Candidate, source.State.Witness}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'capture_cleanup','capture_cleanup',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			source.Candidate,
+			source.State.Witness,
+			encode("admitted"),
+		}},
+		{"UPDATE cleanup_intents SET status='transferred' WHERE id=? AND operation_id=? AND resource_kind='capture' AND resource_id=? AND status='pending'", []any{
+			"capture:" + capture.OperationID,
+			capture.OperationID,
+			source.Candidate,
+		}},
+		{"INSERT INTO cleanup_intents VALUES(?,?,'capture_raw',?,'pending',?)", []any{
+			"raw:" + operation.ID,
+			operation.ID,
+			source.Candidate,
+			payload,
+		}},
+		{"UPDATE vms SET operation_id=? WHERE id=? AND current_instance=? AND state='stopped' AND operation_id IS NULL", []any{
+			operation.ID,
+			source.Candidate,
+			source.State.Witness,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return empty, err
@@ -235,7 +281,9 @@ func (service *Service) checkCaptureRaw(step captureCleanupStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	return service.captureRawProof(tx, step)
 }
 
@@ -267,7 +315,9 @@ func (service *Service) captureRawReceipt(step *captureCleanupStep) (loom.Deleti
 	if err != nil {
 		return intent, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.captureRawProof(tx, *step); err != nil {
 		return intent, err
 	}
@@ -296,7 +346,9 @@ func (service *Service) runCaptureCleanup(step captureCleanupStep) error {
 		return err
 	}
 	source := step.Input.Capture.Input.Source
-	if err := service.inspectStoppedGenerations([]resourceStep{source}); err != nil {
+	if err := service.inspectStoppedGenerations([]resourceStep{
+		source,
+	}); err != nil {
 		return err
 	}
 	intent, err := service.captureRawReceipt(&step)
@@ -337,7 +389,9 @@ func (service *Service) runCaptureCleanup(step captureCleanupStep) error {
 	if err = service.fault("capture_cleanup_files_removed"); err != nil {
 		return err
 	}
-	if err = service.inspectStoppedGenerations([]resourceStep{source}); err != nil {
+	if err = service.inspectStoppedGenerations([]resourceStep{
+		source,
+	}); err != nil {
 		return err
 	}
 	return service.completeCaptureRaw(step, intent)
@@ -350,7 +404,9 @@ func (service *Service) completeCaptureRaw(step captureCleanupStep, intent loom.
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if err = service.captureRawProof(tx, step); err != nil {
 		return err
 	}
@@ -360,14 +416,41 @@ func (service *Service) completeCaptureRaw(step captureCleanupStep, intent loom.
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{source.Candidate, capture.OperationID}},
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{source.Input.Resource.Config.Image, capture.OperationID}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{"capture:" + capture.OperationID, capture.OperationID}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{"raw:" + step.OperationID, step.OperationID}},
-		{"UPDATE vms SET operation_id=NULL WHERE id=? AND current_instance=? AND operation_id=? AND state='stopped'", []any{source.Candidate, source.State.Witness, step.OperationID}},
-		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='capture_cleanup' AND body=?", []any{intent.Path, step.OperationID, encode(intent)}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='capture_cleanup' AND input_hash=? AND status='running' AND body=?", []any{encode("complete"), step.OperationID, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"DELETE FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			source.Candidate,
+			capture.OperationID,
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			source.Input.Resource.Config.Image,
+			capture.OperationID,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='transferred'", []any{
+			"capture:" + capture.OperationID,
+			capture.OperationID,
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='pending'", []any{
+			"raw:" + step.OperationID,
+			step.OperationID,
+		}},
+		{"UPDATE vms SET operation_id=NULL WHERE id=? AND current_instance=? AND operation_id=? AND state='stopped'", []any{
+			source.Candidate,
+			source.State.Witness,
+			step.OperationID,
+		}},
+		{"DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key='capture_cleanup' AND body=?", []any{
+			intent.Path,
+			step.OperationID,
+			encode(intent),
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='capture_cleanup' AND input_hash=? AND status='running' AND body=?", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

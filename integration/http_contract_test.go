@@ -34,7 +34,9 @@ func controlHTTP(t *testing.T, endpoint, method, path, token, key string, body [
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = response.Body.Close() }()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	payload, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +53,10 @@ func controlHTTP(t *testing.T, endpoint, method, path, token, key string, body [
 func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	_, scoped, _, firstID := transportFixture(t)
 	endpoint := scoped.Endpoint
-	for _, path := range []string{"/v1/sandboxes", "/v1/unknown"} {
+	for _, path := range []string{
+		"/v1/sandboxes",
+		"/v1/unknown",
+	} {
 		controlHTTP(t, endpoint, "GET", path, "", "", nil, false, 404)
 	}
 	controlHTTP(t, endpoint, "PUT", "/v1/sandboxes", "transport-token", "", nil, false, 405)
@@ -90,7 +95,12 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if operation.Result.Sandbox == nil || operation.Result.Sandbox.TTLSeconds != 300 || operation.FinishedAt.IsZero() {
 		t.Fatal(operation)
 	}
-	replay, err := tenant.Claim(ctx, "http-claim", api.Command{TemplateID: "fixture", Policy: api.Policy{Mode: "none"}})
+	replay, err := tenant.Claim(ctx, "http-claim", api.Command{
+		TemplateID: "fixture",
+		Policy: api.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil || replay.OperationID != operation.ID {
 		t.Fatal(replay, err)
 	}
@@ -105,14 +115,20 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if value, err := root.Operation(ctx, operation.ID); err != nil || value.ID != operation.ID {
 		t.Fatal("administrator cannot read a tenant operation", value, err)
 	}
-	foreign, err := root.PutTenant(ctx, api.Tenant{ID: "foreign", MaxSandboxes: 1, MaxStorageMiB: 128})
+	foreign, err := root.PutTenant(ctx, api.Tenant{
+		ID:            "foreign",
+		MaxSandboxes:  1,
+		MaxStorageMiB: 128,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+operation.Result.Sandbox.ID, foreign.Token, "", nil, false, 404)
 	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/missing", foreign.Token, "", nil, false, 404)
 	scopedClient := sdk.New(endpoint, operation.Result.Tokens[operation.Result.Sandbox.ID])
-	released, err := scopedClient.Change(ctx, operation.Result.Sandbox.ID, "self-release", api.Command{Action: "release"})
+	released, err := scopedClient.Change(ctx, operation.Result.Sandbox.ID, "self-release", api.Command{
+		Action: "release",
+	})
 	if err != nil || released.Sandbox == nil || released.Sandbox.State != "terminated" || released.Tokens != nil {
 		t.Fatal(released, err)
 	}

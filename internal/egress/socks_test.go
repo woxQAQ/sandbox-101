@@ -14,15 +14,24 @@ import (
 func TestSOCKS5TCPAndGuards(t *testing.T) {
 	up := httptest.NewServer(
 		http.HandlerFunc(
-			func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "socks upstream") },
+			func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, "socks upstream")
+			},
 		),
 	)
 	defer up.Close()
 	var dials atomic.Int32
 	_, b := newTestManager(
 		t,
-		Options{DialContext: targetDialer(up.Listener.Addr().String(), &dials)},
-		Policy{Mode: "relay", AllowedHosts: []string{"example.com"}},
+		Options{
+			DialContext: targetDialer(up.Listener.Addr().String(), &dials),
+		},
+		Policy{
+			Mode: "relay",
+			AllowedHosts: []string{
+				"example.com",
+			},
+		},
 		nil,
 	)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
@@ -38,7 +47,12 @@ func TestSOCKS5TCPAndGuards(t *testing.T) {
 	for _, tc := range []struct {
 		host    string
 		command byte
-	}{{"127.0.0.1", 1}, {"attacker.example.com", 1}, {"example.com", 3}, {"example.com", 2}} {
+	}{
+		{"127.0.0.1", 1},
+		{"attacker.example.com", 1},
+		{"example.com", 3},
+		{"example.com", 2},
+	} {
 		conn, status := socksConnect(t, b.SOCKSPath, tc.host, tc.command)
 		_ = conn.Close()
 		if status == 0 {
@@ -51,11 +65,15 @@ func TestSOCKS5TCPAndGuards(t *testing.T) {
 	_, b2 := newTestManager(
 		t,
 		Options{},
-		Policy{Mode: "relay"},
+		Policy{
+			Mode: "relay",
+		},
 		map[string]Secret{
 			"key": {
-				Value:  "host-secret",
-				Hosts:  []string{"example.com"},
+				Value: "host-secret",
+				Hosts: []string{
+					"example.com",
+				},
 				Header: "Authorization",
 			},
 		},
@@ -87,7 +105,11 @@ func TestSOCKS5HalfClose(t *testing.T) {
 			_, _ = conn.Write(append([]byte("echo:"), data...))
 		}
 	}()
-	_, b := newTestManager(t, Options{DialContext: targetDialer(up.Addr().String(), nil)}, Policy{Mode: "relay"}, nil)
+	_, b := newTestManager(t, Options{
+		DialContext: targetDialer(up.Addr().String(), nil),
+	}, Policy{
+		Mode: "relay",
+	}, nil)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
 	defer conn.Close()
 	if status != 0 {

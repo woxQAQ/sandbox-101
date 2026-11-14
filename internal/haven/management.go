@@ -13,7 +13,12 @@ func (service *Service) Status(ctx context.Context, principal Principal) (api.No
 	if !principal.Root || principal.SandboxID != "" {
 		return api.NodeStatus{}, api.Fail(api.ErrForbidden, "root access required")
 	}
-	status := api.NodeStatus{Format: storeFormat, Version: storeVersion, StoreID: service.store.identity.Identity, RecoveryReviewed: service.store.reviewed}
+	status := api.NodeStatus{
+		Format:           storeFormat,
+		Version:          storeVersion,
+		StoreID:          service.store.identity.Identity,
+		RecoveryReviewed: service.store.reviewed,
+	}
 	if err := service.store.db.QueryRowContext(ctx, "SELECT epoch FROM store_metadata WHERE singleton=1").Scan(&status.Epoch); err != nil {
 		return status, err
 	}
@@ -30,7 +35,12 @@ func InspectState(ctx context.Context, directory string) (api.NodeStatus, error)
 	if err != nil {
 		return api.NodeStatus{}, err
 	}
-	status := api.NodeStatus{Format: storeFormat, Version: storeVersion, StoreID: state.identity.Identity, RecoveryReviewed: state.reviewed}
+	status := api.NodeStatus{
+		Format:           storeFormat,
+		Version:          storeVersion,
+		StoreID:          state.identity.Identity,
+		RecoveryReviewed: state.reviewed,
+	}
 	err = state.db.QueryRowContext(ctx, "SELECT epoch FROM store_metadata WHERE singleton=1").Scan(&status.Epoch)
 	closeErr := state.close()
 	if err != nil {
@@ -40,7 +50,12 @@ func InspectState(ctx context.Context, directory string) (api.NodeStatus, error)
 }
 
 func managementOperation(value Operation) api.ManagementOperation {
-	return api.ManagementOperation{ID: value.ID, Key: value.Key, Status: value.Status, Result: api.ManagementResult(value.Result)}
+	return api.ManagementOperation{
+		ID:     value.ID,
+		Key:    value.Key,
+		Status: value.Status,
+		Result: api.ManagementResult(value.Result),
+	}
 }
 
 func (service *Service) ManagementOperation(ctx context.Context, principal Principal, id string) (api.ManagementOperation, error) {
@@ -74,12 +89,18 @@ func (service *Service) Manage(ctx context.Context, principal Principal, request
 		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, loom.Fail(loom.Invalid, "supply cleanup requires only original operation id")
 		}
-		operation, err = service.AdmitSupplyCleanup(ctx, principal, request.Key, SupplyCleanupRequest{OperationID: request.OperationID})
+		operation, err = service.AdmitSupplyCleanup(ctx, principal, request.Key, SupplyCleanupRequest{
+			OperationID: request.OperationID,
+		})
 	case "image_cleanup":
 		if request.Import != nil || request.GC != nil {
 			return response, loom.Fail(loom.Invalid, "image cleanup accepts only original import or cache identity")
 		}
-		operation, err = service.AdmitImageCleanup(ctx, principal, request.Key, ImageCleanupRequest{ImportOperationID: request.OperationID, CacheBuilder: request.CacheBuilder, CacheDiffID: request.CacheDiffID})
+		operation, err = service.AdmitImageCleanup(ctx, principal, request.Key, ImageCleanupRequest{
+			ImportOperationID: request.OperationID,
+			CacheBuilder:      request.CacheBuilder,
+			CacheDiffID:       request.CacheDiffID,
+		})
 	default:
 		return response, loom.Fail(loom.Invalid, "unsupported management action")
 	}

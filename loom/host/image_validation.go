@@ -24,7 +24,11 @@ type countedHash struct {
 	bytes int64
 }
 
-func newSHA256() *countedHash { return &countedHash{h: sha256.New()} }
+func newSHA256() *countedHash {
+	return &countedHash{
+		h: sha256.New(),
+	}
+}
 
 func (h *countedHash) Write(b []byte) (int, error) {
 	n, e := h.h.Write(b)
@@ -45,7 +49,9 @@ func readBlobJSON(file, want string, v any) error {
 	if e != nil {
 		return e
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	b, e := io.ReadAll(io.LimitReader(f, (16<<20)+1))
 	if e != nil {
 		return e
@@ -103,7 +109,9 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 	if err != nil {
 		return 0, 0, err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+	}()
 	var stream io.Reader = f
 	switch media {
 	case v1.MediaTypeImageLayerGzip,
@@ -112,7 +120,9 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 		if e != nil {
 			return 0, 0, e
 		}
-		defer func() { _ = g.Close() }()
+		defer func() {
+			_ = g.Close()
+		}()
 		stream = g
 	case v1.MediaTypeImageLayer:
 	default:

@@ -118,13 +118,44 @@ func (service *Service) checkProvisionIntent(tx *sql.Tx, step resourceStep) (vmR
 		query string
 		args  []any
 	}{
-		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{"vm:" + step.Candidate, vmBytes, shape.MemoryMiB + 128, shape.VCPUs}},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{tenant, step.OperationID + ":resource", shape.DiskMiB, step.OperationID}},
-		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{tenant, step.OperationID + ":resource", step.OperationID + ":resource"}},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=0 AND source_operation_id=?", []any{tenant, step.Input.SlotBudget.Kind, sandbox.ID, step.Input.SlotBudget.Units, step.Input.SlotOperation}},
-		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{tenant, step.Input.SlotBudget.Kind, sandbox.ID, "sandbox:" + sandbox.ID}},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{step.Candidate, step.OperationID + ":resource"}},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{vm.Resource.Config.Image, step.OperationID + ":resource"}},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{
+			"vm:" + step.Candidate,
+			vmBytes,
+			shape.MemoryMiB + 128,
+			shape.VCPUs,
+		}},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{
+			tenant,
+			step.OperationID + ":resource",
+			shape.DiskMiB,
+			step.OperationID,
+		}},
+		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			tenant,
+			step.OperationID + ":resource",
+			step.OperationID + ":resource",
+		}},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=0 AND source_operation_id=?", []any{
+			tenant,
+			step.Input.SlotBudget.Kind,
+			sandbox.ID,
+			step.Input.SlotBudget.Units,
+			step.Input.SlotOperation,
+		}},
+		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+			tenant,
+			step.Input.SlotBudget.Kind,
+			sandbox.ID,
+			"sandbox:" + sandbox.ID,
+		}},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			step.Candidate,
+			step.OperationID + ":resource",
+		}},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			vm.Resource.Config.Image,
+			step.OperationID + ":resource",
+		}},
 	}
 	for _, check := range checks {
 		if err = tx.QueryRowContext(service.ctx, check.query, check.args...).Scan(&count); err != nil || count != 1 {
@@ -141,7 +172,9 @@ func (service *Service) completeCold(step resourceStep, observation loom.Observa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadStep(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -180,7 +213,12 @@ func (service *Service) completeCold(step resourceStep, observation loom.Observa
 	if err = requireWrite(tx.ExecContext(service.ctx, "DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=?", sandbox.TenantID, step.OperationID+":resource")); err != nil {
 		return err
 	}
-	for _, reference := range []struct{ kind, id, holderKind, holder string }{{"vm", r.VMID, "sandbox", sandbox.ID}, {"image", r.Config.Image, "vm", r.VMID}} {
+	for _, reference := range []struct {
+		kind, id, holderKind, holder string
+	}{
+		{"vm", r.VMID, "sandbox", sandbox.ID},
+		{"image", r.Config.Image, "vm", r.VMID},
+	} {
 		if current.Action != "restore" || reference.kind != "image" {
 			if err = requireWrite(tx.ExecContext(service.ctx, "INSERT INTO resource_refs VALUES(?,?,?,?)", reference.kind, reference.id, reference.holderKind, reference.holder)); err != nil {
 				return err

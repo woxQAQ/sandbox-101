@@ -18,7 +18,12 @@ type forkBudget struct {
 func forkFunding(input forkInput) forkBudget {
 	shape := input.Template.Config.Shape
 	count := int64(len(input.Targets))
-	return forkBudget{Bytes: count * ((2*(shape.MemoryMiB+shape.DiskMiB) + 64) << 20), Memory: count * (shape.MemoryMiB + 128), Storage: count * shape.DiskMiB, CPUs: int(count) * shape.VCPUs}
+	return forkBudget{
+		Bytes:   count * ((2*(shape.MemoryMiB+shape.DiskMiB) + 64) << 20),
+		Memory:  count * (shape.MemoryMiB + 128),
+		Storage: count * shape.DiskMiB,
+		CPUs:    int(count) * shape.VCPUs,
+	}
 }
 
 func (service *Service) reserveForkTargets(ctx context.Context, tx *sql.Tx, operation Operation, input forkInput, free int64) error {
@@ -56,10 +61,26 @@ func (service *Service) reserveForkTargets(ctx context.Context, tx *sql.Tx, oper
 			q    string
 			args []any
 		}{
-			{"INSERT INTO sandboxes VALUES(?,?,?,?)", []any{target.ID, target.TenantID, target.State, encode(target)}},
-			{"INSERT INTO sandbox_settings VALUES(?,?)", []any{target.ID, encode(input.Settings)}},
-			{"INSERT INTO quota_resources VALUES(?,'sandbox_slot',?,1,0,?)", []any{target.TenantID, target.ID, operation.ID}},
-			{"INSERT INTO quota_refs VALUES(?,'sandbox_slot',?,'active_use',?)", []any{target.TenantID, target.ID, forkSlotHolder(operation.ID, target.ID)}},
+			{"INSERT INTO sandboxes VALUES(?,?,?,?)", []any{
+				target.ID,
+				target.TenantID,
+				target.State,
+				encode(target),
+			}},
+			{"INSERT INTO sandbox_settings VALUES(?,?)", []any{
+				target.ID,
+				encode(input.Settings),
+			}},
+			{"INSERT INTO quota_resources VALUES(?,'sandbox_slot',?,1,0,?)", []any{
+				target.TenantID,
+				target.ID,
+				operation.ID,
+			}},
+			{"INSERT INTO quota_refs VALUES(?,'sandbox_slot',?,'active_use',?)", []any{
+				target.TenantID,
+				target.ID,
+				forkSlotHolder(operation.ID, target.ID),
+			}},
 		} {
 			if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -70,9 +91,23 @@ func (service *Service) reserveForkTargets(ctx context.Context, tx *sql.Tx, oper
 		q    string
 		args []any
 	}{
-		{"INSERT INTO reservations VALUES(?,?,?,?)", []any{"fork:" + operation.ID, budget.Bytes, budget.Memory, budget.CPUs}},
-		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{input.OwnerTenantID, operation.ID + ":fork_group", budget.Storage, operation.ID}},
-		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{input.OwnerTenantID, operation.ID + ":fork_group", operation.ID + ":fork_group"}},
+		{"INSERT INTO reservations VALUES(?,?,?,?)", []any{
+			"fork:" + operation.ID,
+			budget.Bytes,
+			budget.Memory,
+			budget.CPUs,
+		}},
+		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{
+			input.OwnerTenantID,
+			operation.ID + ":fork_group",
+			budget.Storage,
+			operation.ID,
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{
+			input.OwnerTenantID,
+			operation.ID + ":fork_group",
+			operation.ID + ":fork_group",
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -89,9 +124,23 @@ func consumeForkForecast(ctx context.Context, tx *sql.Tx, step forkStep) error {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{"fork:" + step.OperationID, budget.Bytes, budget.Memory, budget.CPUs}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{step.Input.OwnerTenantID, step.OperationID + ":fork_group", step.OperationID + ":fork_group"}},
-		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{step.Input.OwnerTenantID, step.OperationID + ":fork_group", budget.Storage, step.OperationID}},
+		{"DELETE FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{
+			"fork:" + step.OperationID,
+			budget.Bytes,
+			budget.Memory,
+			budget.CPUs,
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			step.Input.OwnerTenantID,
+			step.OperationID + ":fork_group",
+			step.OperationID + ":fork_group",
+		}},
+		{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{
+			step.Input.OwnerTenantID,
+			step.OperationID + ":fork_group",
+			budget.Storage,
+			step.OperationID,
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -129,9 +178,22 @@ func retireUnallocatedFork(ctx context.Context, tx *sql.Tx, step forkStep) error
 			q    string
 			args []any
 		}{
-			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{target.TenantID, target.ID, forkSlotHolder(step.OperationID, target.ID)}},
-			{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=1 AND storage_mib=0 AND source_operation_id=?", []any{target.TenantID, target.ID, step.OperationID}},
-			{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state='provisioning' AND body=?", []any{encode(terminated), target.ID, target.TenantID, encode(current)}},
+			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?", []any{
+				target.TenantID,
+				target.ID,
+				forkSlotHolder(step.OperationID, target.ID),
+			}},
+			{"DELETE FROM quota_resources WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=1 AND storage_mib=0 AND source_operation_id=?", []any{
+				target.TenantID,
+				target.ID,
+				step.OperationID,
+			}},
+			{"UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state='provisioning' AND body=?", []any{
+				encode(terminated),
+				target.ID,
+				target.TenantID,
+				encode(current),
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 				return err

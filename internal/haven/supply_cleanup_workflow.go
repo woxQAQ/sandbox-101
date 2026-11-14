@@ -15,8 +15,16 @@ func (service *Service) runSupplyCleanup(step supplyCleanupStep) error {
 		source := step.Input.Source
 		if len(step.Input.CaptureFailures) > 0 {
 			if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "stop"); errors.Is(lookup, sql.ErrNoRows) {
-				parent := &supplyCleanupAdmission{Parent: step, Role: "stop"}
-				if _, err := service.admitStop(service.ctx, StopRequest{TenantID: source.Input.TenantID, Key: step.OperationID + ":stop", SandboxID: source.Input.SandboxID, ExpectedInstance: source.State.Witness}, parent); err != nil {
+				parent := &supplyCleanupAdmission{
+					Parent: step,
+					Role:   "stop",
+				}
+				if _, err := service.admitStop(service.ctx, StopRequest{
+					TenantID:         source.Input.TenantID,
+					Key:              step.OperationID + ":stop",
+					SandboxID:        source.Input.SandboxID,
+					ExpectedInstance: source.State.Witness,
+				}, parent); err != nil {
 					return err
 				}
 			} else if lookup != nil {
@@ -29,8 +37,18 @@ func (service *Service) runSupplyCleanup(step supplyCleanupStep) error {
 			for _, reference := range step.Input.CaptureFailures {
 				role := "capture:" + reference.OperationID
 				if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
-					parent := &supplyCleanupAdmission{Parent: step, Role: role}
-					if _, err = service.admitCaptureDiscard(service.ctx, CaptureDiscardRequest{TenantID: source.Input.TenantID, Key: step.OperationID + ":" + role, SandboxID: source.Input.SandboxID, FailedOperationID: reference.OperationID, ExpectedInstance: source.State.Witness, StopOperationID: stopped.ChildID}, parent); err != nil {
+					parent := &supplyCleanupAdmission{
+						Parent: step,
+						Role:   role,
+					}
+					if _, err = service.admitCaptureDiscard(service.ctx, CaptureDiscardRequest{
+						TenantID:          source.Input.TenantID,
+						Key:               step.OperationID + ":" + role,
+						SandboxID:         source.Input.SandboxID,
+						FailedOperationID: reference.OperationID,
+						ExpectedInstance:  source.State.Witness,
+						StopOperationID:   stopped.ChildID,
+					}, parent); err != nil {
 						return err
 					}
 				} else if lookup != nil {
@@ -42,13 +60,26 @@ func (service *Service) runSupplyCleanup(step supplyCleanupStep) error {
 			}
 		}
 		if _, _, lookup := loadResourceLink(service.ctx, service.store.db, step.OperationID, "resource"); errors.Is(lookup, sql.ErrNoRows) {
-			parent := &supplyCleanupAdmission{Parent: step, Role: "resource"}
+			parent := &supplyCleanupAdmission{
+				Parent: step,
+				Role:   "resource",
+			}
 			if source.Status == "failed" {
-				if _, err := service.admitDiscard(service.ctx, DiscardRequest{TenantID: source.Input.TenantID, Key: step.OperationID + ":resource", SandboxID: source.Input.SandboxID, FailedOperationID: source.OperationID, ExpectedInstance: source.Input.Resource.Instance}, parent); err != nil {
+				if _, err := service.admitDiscard(service.ctx, DiscardRequest{
+					TenantID:          source.Input.TenantID,
+					Key:               step.OperationID + ":resource",
+					SandboxID:         source.Input.SandboxID,
+					FailedOperationID: source.OperationID,
+					ExpectedInstance:  source.Input.Resource.Instance,
+				}, parent); err != nil {
 					return err
 				}
 			} else {
-				if _, err := service.admitRelease(service.ctx, ReleaseRequest{TenantID: source.Input.TenantID, Key: step.OperationID + ":resource", SandboxID: source.Input.SandboxID}, parent); err != nil {
+				if _, err := service.admitRelease(service.ctx, ReleaseRequest{
+					TenantID:  source.Input.TenantID,
+					Key:       step.OperationID + ":resource",
+					SandboxID: source.Input.SandboxID,
+				}, parent); err != nil {
 					return err
 				}
 			}
@@ -69,7 +100,9 @@ func (service *Service) completeSupplyCleanup(step supplyCleanupStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSupplyCleanup(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -150,10 +183,23 @@ func (service *Service) completeSupplyCleanup(step supplyCleanupStep) error {
 		q    string
 		args []any
 	}{
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{source.Input.Resource.Config.Image, step.OperationID + ":supply_cleanup"}},
-		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind='supply_cleanup' AND status='pending'", []any{"supply_cleanup:" + step.OperationID, step.OperationID}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply_cleanup' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{encode("complete"), step.OperationID, step.Hash, encode(step.Phase)}},
-		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{step.OperationID}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			source.Input.Resource.Config.Image,
+			step.OperationID + ":supply_cleanup",
+		}},
+		{"UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind='supply_cleanup' AND status='pending'", []any{
+			"supply_cleanup:" + step.OperationID,
+			step.OperationID,
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply_cleanup' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{
+			encode("complete"),
+			step.OperationID,
+			step.Hash,
+			encode(step.Phase),
+		}},
+		{"UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')", []any{
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

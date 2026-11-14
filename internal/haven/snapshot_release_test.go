@@ -12,7 +12,12 @@ import (
 
 func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"release_admitted", "release_unlinked", "release_completion_before_commit", "none"} {
+	for _, point := range []string{
+		"release_admitted",
+		"release_unlinked",
+		"release_completion_before_commit",
+		"none",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend := coldService(t, nil)
 			capture, request := captureReady(t, service, "checkpoint")
@@ -25,7 +30,11 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 				}
 				return nil
 			}
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: request.TenantID, Key: "release", SandboxID: request.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  request.TenantID,
+				Key:       "release",
+				SandboxID: request.SandboxID,
+			})
 			if err != nil && !errors.Is(err, ErrInterrupted) {
 				t.Fatal(err)
 			}
@@ -80,7 +89,11 @@ func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
 	if _, err := service.store.db.Exec("CREATE TRIGGER deny_capture_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: request.TenantID, Key: "release", SandboxID: request.SandboxID}); err == nil {
+	if _, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  request.TenantID,
+		Key:       "release",
+		SandboxID: request.SandboxID,
+	}); err == nil {
 		t.Fatal("ignored capture handoff accepted release")
 	}
 	sandbox, err := loadSandbox(context.Background(), service.store.db, request.SandboxID, request.TenantID)

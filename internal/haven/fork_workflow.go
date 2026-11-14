@@ -107,7 +107,9 @@ func (service *Service) captureForkSource(step *forkStep, link resourceLink) err
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadFork(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -162,7 +164,9 @@ func (service *Service) allocateFork(step *forkStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadFork(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -175,8 +179,16 @@ func (service *Service) allocateFork(step *forkStep) error {
 	}
 	var children []string
 	for index, target := range step.Input.Targets {
-		parent := &forkBranchAdmission{Group: *step, Target: target, Index: index}
-		request := CloneRequest{TenantID: step.Input.OwnerTenantID, Key: fmt.Sprintf("%s:branch:%d", step.OperationID, index), SnapshotID: source.Snapshot.ID}
+		parent := &forkBranchAdmission{
+			Group:  *step,
+			Target: target,
+			Index:  index,
+		}
+		request := CloneRequest{
+			TenantID:   step.Input.OwnerTenantID,
+			Key:        fmt.Sprintf("%s:branch:%d", step.OperationID, index),
+			SnapshotID: source.Snapshot.ID,
+		}
 		command := step.Input.Command
 		command.Action, command.SandboxID, command.CheckpointID, command.Count = "fork_branch", target.ID, "", 0
 		frozen := encode(struct {
@@ -184,8 +196,17 @@ func (service *Service) allocateFork(step *forkStep) error {
 			Request CloneRequest
 			Claim   Command
 		}{"clone", request, command})
-		activation := &claimAdmission{Command: step.Input.Command, Settings: step.Input.Settings}
-		child, err := service.admitProvisionIn(service.ctx, tx, request.TenantID, request.Key, frozen, digest(frozen), step.Input.Template, image, &source, nil, &provisionTarget{Sandbox: target, SlotOperation: step.OperationID, SlotHolder: forkSlotHolder(step.OperationID, target.ID), Parent: parent, Activation: activation}, free)
+		activation := &claimAdmission{
+			Command:  step.Input.Command,
+			Settings: step.Input.Settings,
+		}
+		child, err := service.admitProvisionIn(service.ctx, tx, request.TenantID, request.Key, frozen, digest(frozen), step.Input.Template, image, &source, nil, &provisionTarget{
+			Sandbox:       target,
+			SlotOperation: step.OperationID,
+			SlotHolder:    forkSlotHolder(step.OperationID, target.ID),
+			Parent:        parent,
+			Activation:    activation,
+		}, free)
 		if err != nil {
 			return err
 		}
@@ -227,7 +248,9 @@ func (service *Service) completeFork(step forkStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadFork(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -286,9 +309,19 @@ func (service *Service) completeFork(step forkStep) error {
 			q    string
 			args []any
 		}{
-			{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='fork_group'", []any{step.State.Snapshot.Snapshot.ID, step.OperationID}},
-			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{step.State.Snapshot.Snapshot.ID, step.OperationID + ":fork_group"}},
-			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{step.Input.OwnerTenantID, step.State.Snapshot.Snapshot.ID, step.OperationID + ":fork_group"}},
+			{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='fork_group'", []any{
+				step.State.Snapshot.Snapshot.ID,
+				step.OperationID,
+			}},
+			{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+				step.State.Snapshot.Snapshot.ID,
+				step.OperationID + ":fork_group",
+			}},
+			{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+				step.Input.OwnerTenantID,
+				step.State.Snapshot.Snapshot.ID,
+				step.OperationID + ":fork_group",
+			}},
 		} {
 			if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 				return err
@@ -319,8 +352,17 @@ func (service *Service) completeFork(step forkStep) error {
 		q    string
 		args []any
 	}{
-		{"UPDATE operation_steps SET status=?,body=? WHERE operation_id=? AND step_key='fork_group' AND input_hash=? AND status IN ('pending','running')", []any{status, encode(state), step.OperationID, step.Hash}},
-		{"UPDATE operations SET status=?,body=? WHERE id=? AND status IN ('pending','running')", []any{status, encode(result), step.OperationID}},
+		{"UPDATE operation_steps SET status=?,body=? WHERE operation_id=? AND step_key='fork_group' AND input_hash=? AND status IN ('pending','running')", []any{
+			status,
+			encode(state),
+			step.OperationID,
+			step.Hash,
+		}},
+		{"UPDATE operations SET status=?,body=? WHERE id=? AND status IN ('pending','running')", []any{
+			status,
+			encode(result),
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

@@ -21,7 +21,9 @@ func (service *Service) checkCapture(step captureStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	_, err = service.captureProof(service.ctx, tx, step)
 	return err
 }
@@ -33,7 +35,9 @@ func (service *Service) saveCapture(ctx context.Context, step *captureStep, next
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.captureProof(ctx, tx, *step); err != nil {
 		return err
 	}
@@ -116,7 +120,9 @@ func (service *Service) failCapture(step *captureStep, cause error) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if _, err = service.captureProof(service.ctx, tx, *step); err != nil {
 		return err
 	}
@@ -128,7 +134,12 @@ func (service *Service) failCapture(step *captureStep, cause error) error {
 	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='capture' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(next), step.OperationID, step.Hash, encode(step.State))); err != nil {
 		return err
 	}
-	result := operationResult{SandboxID: step.Input.Request.SandboxID, VMID: step.Input.Source.Candidate, SnapshotID: step.Input.Snapshot.ID, Error: next.Error}
+	result := operationResult{
+		SandboxID:  step.Input.Request.SandboxID,
+		VMID:       step.Input.Source.Candidate,
+		SnapshotID: step.Input.Snapshot.ID,
+		Error:      next.Error,
+	}
 	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operations SET status='failed',body=? WHERE id=? AND status IN ('pending','running')", encode(result), step.OperationID)); err != nil {
 		return err
 	}
@@ -182,7 +193,9 @@ func (service *Service) runCapture(step captureStep) (runErr error) {
 		case <-service.ctx.Done():
 			return service.ctx.Err()
 		}
-		defer func() { <-service.capture }()
+		defer func() {
+			<-service.capture
+		}()
 		if step.State.Boundary == nil {
 			boundary, err := loom.PrepareCapture(r, step.OperationID)
 			if err != nil {
@@ -287,7 +300,12 @@ func (service *Service) runCapture(step captureStep) (runErr error) {
 	if len(files) != 4 {
 		return service.failCapture(&step, fmt.Errorf("capture artifact set incomplete"))
 	}
-	for _, name := range []string{"ch/config.json", "ch/state.json", "ch/memory-ranges", "disk.raw"} {
+	for _, name := range []string{
+		"ch/config.json",
+		"ch/state.json",
+		"ch/memory-ranges",
+		"disk.raw",
+	} {
 		if files[name] == "" {
 			return service.failCapture(&step, fmt.Errorf("missing capture artifact"))
 		}
@@ -308,7 +326,17 @@ func (service *Service) runCapture(step captureStep) (runErr error) {
 			return err
 		}
 	}
-	manifest := snapshotManifest{Format: 1, Backend: step.Input.Backend, Architecture: step.Input.Architecture, CPU: step.Input.CPU, Config: r.Config, MemoryMode: "CopyOnWrite", PublicationMode: "IndependentInodes", Files: step.State.Files, Image: encode(step.Input.Source.Input.Image)}
+	manifest := snapshotManifest{
+		Format:          1,
+		Backend:         step.Input.Backend,
+		Architecture:    step.Input.Architecture,
+		CPU:             step.Input.CPU,
+		Config:          r.Config,
+		MemoryMode:      "CopyOnWrite",
+		PublicationMode: "IndependentInodes",
+		Files:           step.State.Files,
+		Image:           encode(step.Input.Source.Input.Image),
+	}
 	if err = loom.WriteJSON(filepath.Join(stage, "manifest.json"), manifest); err != nil {
 		return err
 	}

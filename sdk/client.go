@@ -31,7 +31,15 @@ type Client struct {
 }
 
 func New(endpoint, token string) *Client {
-	return &Client{Endpoint: strings.TrimRight(endpoint, "/"), Token: token, HTTP: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &Client{
+		Endpoint: strings.TrimRight(endpoint, "/"),
+		Token:    token,
+		HTTP: &http.Client{
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
 }
 
 func (c *Client) call(ctx context.Context, method, path, key string, body, out any) error {
@@ -59,7 +67,9 @@ func (c *Client) call(ctx context.Context, method, path, key string, body, out a
 	if err != nil {
 		return err
 	}
-	defer func() { _ = response.Body.Close() }()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var failure api.Error
 		if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&failure) != nil {
@@ -112,7 +122,10 @@ func (c *Client) PutTemplate(ctx context.Context, key string, template api.Templ
 		action = "template_build"
 	}
 	var result api.Result
-	err := c.call(ctx, "POST", "/v1/templates", key, api.Command{Action: action, Template: &template}, &result)
+	err := c.call(ctx, "POST", "/v1/templates", key, api.Command{
+		Action:   action,
+		Template: &template,
+	}, &result)
 	return result, err
 }
 
@@ -140,7 +153,9 @@ type RPCError struct {
 	ResultState string
 }
 
-func (err *RPCError) Error() string { return err.Message }
+func (err *RPCError) Error() string {
+	return err.Message
+}
 
 type Connection struct {
 	net.Conn
@@ -153,7 +168,10 @@ type Connection struct {
 }
 
 func (c *Connection) acquire(ctx context.Context) error {
-	c.once.Do(func() { c.admit = make(chan struct{}, 1); c.admit <- struct{}{} })
+	c.once.Do(func() {
+		c.admit = make(chan struct{}, 1)
+		c.admit <- struct{}{}
+	})
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -169,7 +187,9 @@ func (c *Connection) acquire(ctx context.Context) error {
 	}
 	return nil
 }
-func (c *Connection) release() { c.admit <- struct{}{} }
+func (c *Connection) release() {
+	c.admit <- struct{}{}
+}
 func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
@@ -192,22 +212,34 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		if config != nil {
 			config = config.Clone()
 		} else {
-			config = &tls.Config{MinVersion: tls.VersionTLS12}
+			config = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
 		}
 		if config.ServerName == "" {
 			config.ServerName = endpoint.Hostname()
 		}
-		conn, err = (&tls.Dialer{NetDialer: &net.Dialer{}, Config: config}).DialContext(ctx, "tcp", address)
+		conn, err = (&tls.Dialer{
+			NetDialer: &net.Dialer{},
+			Config:    config,
+		}).DialContext(ctx, "tcp", address)
 	} else {
 		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	}
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 	defer stop()
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1/sandboxes/" + url.PathEscape(id) + "/connect"
-	request := &http.Request{Method: "GET", URL: endpoint, Host: endpoint.Host, Header: make(http.Header)}
+	request := &http.Request{
+		Method: "GET",
+		URL:    endpoint,
+		Host:   endpoint.Host,
+		Header: make(http.Header),
+	}
 	request.Header.Set("Authorization", "Bearer "+c.Token)
 	if c.Tenant != "" {
 		request.Header.Set("X-Tenant-ID", c.Tenant)
@@ -225,15 +257,24 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		return nil, err
 	}
 	if response.StatusCode != 101 || !strings.EqualFold(response.Header.Get("Upgrade"), "sandbox-v1") {
-		defer func() { _ = response.Body.Close() }()
-		defer func() { _ = conn.Close() }()
+		defer func() {
+			_ = response.Body.Close()
+		}()
+		defer func() {
+			_ = conn.Close()
+		}()
 		var failure api.Error
 		if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&failure) == nil {
 			return nil, &failure
 		}
 		return nil, fmt.Errorf("sandbox upgrade HTTP %d", response.StatusCode)
 	}
-	return &Connection{Conn: &bufferedConn{Conn: conn, reader: reader}}, nil
+	return &Connection{
+		Conn: &bufferedConn{
+			Conn:   conn,
+			reader: reader,
+		},
+	}, nil
 }
 
 type bufferedConn struct {
@@ -242,7 +283,9 @@ type bufferedConn struct {
 	reader *bufio.Reader
 }
 
-func (c *bufferedConn) Read(buffer []byte) (int, error) { return c.reader.Read(buffer) }
+func (c *bufferedConn) Read(buffer []byte) (int, error) {
+	return c.reader.Read(buffer)
+}
 func (c *bufferedConn) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()
@@ -257,7 +300,10 @@ func (c *Connection) Call(ctx context.Context, method string, params map[string]
 		return nil, err
 	}
 	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { _ = c.Close(); close(done) })
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.Close()
+		close(done)
+	})
 	defer func() {
 		if !stop() {
 			<-done
@@ -271,7 +317,12 @@ func (c *Connection) Call(ctx context.Context, method string, params map[string]
 	if err != nil {
 		return nil, err
 	}
-	if err = pb.WriteFrame(c, &pb.Frame{Id: id, Method: method, Params: parameters, Eof: true}); err != nil {
+	if err = pb.WriteFrame(c, &pb.Frame{
+		Id:     id,
+		Method: method,
+		Params: parameters,
+		Eof:    true,
+	}); err != nil {
 		return nil, err
 	}
 	for {
@@ -286,7 +337,11 @@ func (c *Connection) Call(ctx context.Context, method string, params map[string]
 			values := frame.Params.AsMap()
 			code, _ := values["error_code"].(string)
 			state, _ := values["result_state"].(string)
-			return values, &RPCError{Message: frame.Error, Code: code, ResultState: state}
+			return values, &RPCError{
+				Message:     frame.Error,
+				Code:        code,
+				ResultState: state,
+			}
 		}
 		if consume != nil {
 			if err = consume(frame); err != nil {
@@ -301,7 +356,9 @@ func (c *Connection) Call(ctx context.Context, method string, params map[string]
 }
 
 func (c *Connection) Exec(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
-	params, err := c.Call(ctx, "exec", map[string]any{"command": command}, func(frame *pb.Frame) error {
+	params, err := c.Call(ctx, "exec", map[string]any{
+		"command": command,
+	}, func(frame *pb.Frame) error {
 		if len(frame.Data) == 0 {
 			return nil
 		}
@@ -326,8 +383,12 @@ func (c *Connection) Exec(ctx context.Context, command string, stdout, stderr io
 }
 
 // Send and Receive expose frames while the caller owns the connection exclusively.
-func (c *Connection) Send(frame *pb.Frame) error  { return pb.WriteFrame(c, frame) }
-func (c *Connection) Receive() (*pb.Frame, error) { return pb.ReadFrame(c) }
+func (c *Connection) Send(frame *pb.Frame) error {
+	return pb.WriteFrame(c, frame)
+}
+func (c *Connection) Receive() (*pb.Frame, error) {
+	return pb.ReadFrame(c)
+}
 func (c *Connection) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()

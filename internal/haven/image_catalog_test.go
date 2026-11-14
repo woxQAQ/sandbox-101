@@ -24,7 +24,11 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	if _, err = service.store.db.Exec("DELETE FROM images WHERE digest=?", image.Digest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.AdmitCold(ctx, ColdRequest{TenantID: "tenant", Key: "orphan", TemplateID: "cold"}); err == nil || backend.count("prepare") != 0 {
+	if _, err = service.AdmitCold(ctx, ColdRequest{
+		TenantID:   "tenant",
+		Key:        "orphan",
+		TemplateID: "cold",
+	}); err == nil || backend.count("prepare") != 0 {
 		t.Fatal("filesystem-only image granted provisioning authority", err)
 	}
 	// Restore only the original immutable fixture input, never a workflow fact.
@@ -41,7 +45,11 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	if err = loom.WriteJSON(filepath.Join(directory, "image.json"), changed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.AdmitCold(ctx, ColdRequest{TenantID: "tenant", Key: "changed", TemplateID: "cold"}); err == nil || backend.count("prepare") != before {
+	if _, err = service.AdmitCold(ctx, ColdRequest{
+		TenantID:   "tenant",
+		Key:        "changed",
+		TemplateID: "cold",
+	}); err == nil || backend.count("prepare") != before {
 		t.Fatal("changed file materialization granted provisioning authority", err)
 	}
 	if err = loom.WriteJSON(filepath.Join(directory, "image.json"), image); err != nil {

@@ -117,11 +117,15 @@ func isolationFixture(t *testing.T) (Resource, *CaptureBoundary) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		os.RemoveAll(dir)
+	})
 	if err = os.Chmod(dir, 0o711); err != nil {
 		t.Fatal(err)
 	}
-	r := Resource{Dir: dir}
+	r := Resource{
+		Dir: dir,
+	}
 	if err = os.Mkdir(filepath.Join(dir, "capture"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +156,11 @@ func writerCommand(t *testing.T, c *CaptureBoundary, action string) *exec.Cmd {
 	cmd := exec.Command(binary, "-test.run=^TestCaptureIsolationWriter$", "-test.v")
 	cmd.Env = append(os.Environ(), "CAPTURE_WRITER_ACTION="+action, "CAPTURE_WRITER_PATH="+c.Path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{Uid: 1, Gid: 1, NoSetGroups: true},
+		Credential: &syscall.Credential{
+			Uid:         1,
+			Gid:         1,
+			NoSetGroups: true,
+		},
 	}
 	return cmd
 }
@@ -162,7 +170,11 @@ func TestCaptureIsolationParentOwnership(t *testing.T) {
 	if out, err := writerCommand(t, c, "parents").CombinedOutput(); err != nil {
 		t.Fatalf("writer: %v %s", err, out)
 	}
-	for _, path := range []string{filepath.Join(r.Dir, "capture"), c.Path, filepath.Join(c.Path, "publication")} {
+	for _, path := range []string{
+		filepath.Join(r.Dir, "capture"),
+		c.Path,
+		filepath.Join(c.Path, "publication"),
+	} {
 		st, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -210,7 +222,11 @@ func TestCaptureIsolationRejectsEntryReplacement(t *testing.T) {
 
 func writeCaptureFixture(t *testing.T, c *CaptureBoundary) {
 	t.Helper()
-	for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
+	for _, name := range []string{
+		"config.json",
+		"state.json",
+		"memory-ranges",
+	} {
 		path := filepath.Join(c.Path, "ch", name)
 		if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
 			t.Fatal(err)
@@ -294,7 +310,13 @@ func TestCaptureIsolationPublishedFilesAreIndependent(t *testing.T) {
 }
 
 func TestCaptureIsolationRejectsNonregularArtifacts(t *testing.T) {
-	for _, kind := range []string{"fifo", "symlink", "directory", "unknown", "oversized"} {
+	for _, kind := range []string{
+		"fifo",
+		"symlink",
+		"directory",
+		"unknown",
+		"oversized",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			_, c := isolationFixture(t)
 			writeCaptureFixture(t, c)

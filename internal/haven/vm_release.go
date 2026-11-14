@@ -41,7 +41,9 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -99,7 +101,15 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 	if instances != len(generations) || versions != len(generations) || warm != 0 || holders != 1+len(captures) {
 		return empty, loom.Fail(loom.ManualRecovery, "cold release has additional or missing resource responsibilities")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID: sandbox.ID,
+			VMID:      sandbox.VMID,
+		},
+	}
 	budget, err := service.currentSlotBudget(ctx, tx, sandbox, source)
 	if err != nil {
 		return empty, err
@@ -115,7 +125,12 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 		if warm.Role != "warm_release" {
 			return empty, loom.Fail(loom.Invalid, "warm claim release role invalid")
 		}
-		input.SlotDestination = &quotaDestination{OperationID: warm.ParentID, Kind: "claim", ID: sandbox.ID, SnapshotID: warm.Input.Pool.Template.SnapshotID}
+		input.SlotDestination = &quotaDestination{
+			OperationID: warm.ParentID,
+			Kind:        "claim",
+			ID:          sandbox.ID,
+			SnapshotID:  warm.Input.Pool.Template.SnapshotID,
+		}
 	}
 	if link != nil && link.Input.Command.Action == "pause" {
 		parent, err := loadLifecycle(ctx, tx, link.Parent.ID)
@@ -125,7 +140,12 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 		if parent.State.Phase != "captured" || parent.State.SnapshotID == "" {
 			return empty, loom.Fail(loom.Conflict, "pause source release lacks published snapshot")
 		}
-		input.SlotDestination = &quotaDestination{OperationID: link.Parent.ID, Kind: "sleep", ID: sandbox.ID, SnapshotID: parent.State.SnapshotID}
+		input.SlotDestination = &quotaDestination{
+			OperationID: link.Parent.ID,
+			Kind:        "sleep",
+			ID:          sandbox.ID,
+			SnapshotID:  parent.State.SnapshotID,
+		}
 	} else if link != nil && link.Input.Command.Action == "resume" && link.Role == "compensate" {
 		activation, err := loadActivation(ctx, tx, link.Parent.ID)
 		if err != nil {
@@ -134,7 +154,12 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 		if activation.Status != "failed" || activation.Input.ResourceOperation != source.OperationID || activation.Input.ExpectedInstance != source.State.Witness {
 			return empty, loom.Fail(loom.Conflict, "resume compensation lacks failed delivery proof")
 		}
-		input.SlotDestination = &quotaDestination{OperationID: link.Parent.ID, Kind: "sleep", ID: sandbox.ID, SnapshotID: link.Input.Sandbox.SnapshotID}
+		input.SlotDestination = &quotaDestination{
+			OperationID: link.Parent.ID,
+			Kind:        "sleep",
+			ID:          sandbox.ID,
+			SnapshotID:  link.Input.Sandbox.SnapshotID,
+		}
 	}
 	if err = service.admitResourceParent(ctx, tx, parent, operation, "release", sandbox.VMID, hash); err != nil {
 		return empty, err
@@ -142,7 +167,9 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 	if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, operation.Status, encode(operation.Result))); err != nil {
 		return empty, err
 	}
-	if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO operation_steps VALUES(?,?,?,?,?,?,?,?,?)", operation.ID, "resource", "release", digest(encode(input)), encode(input), sandbox.VMID, source.State.Witness, "pending", encode(stepState{Phase: "admitted"}))); err != nil {
+	if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO operation_steps VALUES(?,?,?,?,?,?,?,?,?)", operation.ID, "resource", "release", digest(encode(input)), encode(input), sandbox.VMID, source.State.Witness, "pending", encode(stepState{
+		Phase: "admitted",
+	}))); err != nil {
 		return empty, err
 	}
 	if err = requireWrite(tx.ExecContext(ctx, "INSERT INTO cleanup_intents VALUES(?,?,?,?,?,?)", "cleanup:"+operation.ID, operation.ID, "vm", sandbox.VMID, "pending", encode(input))); err != nil {
@@ -156,9 +183,15 @@ func (service *Service) admitRelease(ctx context.Context, request ReleaseRequest
 	if err = requireWrite(tx.ExecContext(ctx, "UPDATE vms SET operation_id=?,body=? WHERE id=? AND current_instance=? AND operation_id IS NULL", operation.ID, encode(vm), sandbox.VMID, source.State.Witness)); err != nil {
 		return empty, err
 	}
-	quotas := []struct{ kind, key string }{{input.SlotBudget.Kind, sandbox.ID}}
+	quotas := []struct {
+		kind, key string
+	}{
+		{input.SlotBudget.Kind, sandbox.ID},
+	}
 	for _, generation := range generations {
-		quotas = append(quotas, struct{ kind, key string }{"vm_disk", generation.Input.DiskKey})
+		quotas = append(quotas, struct {
+			kind, key string
+		}{"vm_disk", generation.Input.DiskKey})
 	}
 	for _, quota := range quotas {
 		if err = requireWrite(tx.ExecContext(ctx, "UPDATE quota_refs SET holder_kind='cleanup',holder_id=? WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='active_use' AND holder_id=?", operation.ID+":resource", sandbox.TenantID, quota.kind, quota.key, "sandbox:"+sandbox.ID)); err != nil {
@@ -288,7 +321,10 @@ func (service *Service) releaseProof(tx *sql.Tx, step resourceStep) (vmRecord, e
 	if err = json.Unmarshal(versionBody, &version); err != nil {
 		return vm, err
 	}
-	if versionID != source.OperationID || versionOwner != source.OperationID || versionKey != source.Key || !reflect.DeepEqual(version, resourceVersion{Resource: source.Input.Resource, DiskIdentity: source.State.DiskIdentity}) {
+	if versionID != source.OperationID || versionOwner != source.OperationID || versionKey != source.Key || !reflect.DeepEqual(version, resourceVersion{
+		Resource:     source.Input.Resource,
+		DiskIdentity: source.State.DiskIdentity,
+	}) {
 		return vm, fmt.Errorf("release resource version birth proof changed")
 	}
 	var instanceOwner string
@@ -326,29 +362,77 @@ func (service *Service) releaseProof(tx *sql.Tx, step resourceStep) (vmRecord, e
 		args  []any
 		want  int
 	}{
-		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{step.Candidate}, len(generations)},
-		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{step.Candidate}, len(generations)},
-		{"SELECT COUNT(*) FROM backing WHERE vm_id=?", []any{step.Candidate}, expectedBacking},
-		{"SELECT COUNT(*) FROM warm WHERE vm_id=?", []any{step.Candidate}, 0},
-		{"SELECT COUNT(*) FROM cleanup_intents WHERE resource_kind='vm' AND resource_id=? AND status!='done'", []any{step.Candidate}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{step.Candidate}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{step.Candidate, step.OperationID + ":resource"}, 1},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='vm' AND holder_id=?", []any{step.Input.Resource.Config.Image, step.Candidate}, 1},
-		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{"vm:" + step.Candidate, vmBytes, shape.MemoryMiB + 128, shape.VCPUs}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{tenant, step.Input.DiskKey, shape.DiskMiB, step.Input.SourceOperation}, 1},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=0 AND source_operation_id=?", []any{tenant, step.Input.SlotBudget.Kind, sandbox.ID, step.Input.SlotBudget.Units, step.Input.SlotOperation}, 1},
+		{"SELECT COUNT(*) FROM instances WHERE vm_id=?", []any{
+			step.Candidate,
+		}, len(generations)},
+		{"SELECT COUNT(*) FROM resource_versions WHERE vm_id=?", []any{
+			step.Candidate,
+		}, len(generations)},
+		{"SELECT COUNT(*) FROM backing WHERE vm_id=?", []any{
+			step.Candidate,
+		}, expectedBacking},
+		{"SELECT COUNT(*) FROM warm WHERE vm_id=?", []any{
+			step.Candidate,
+		}, 0},
+		{"SELECT COUNT(*) FROM cleanup_intents WHERE resource_kind='vm' AND resource_id=? AND status!='done'", []any{
+			step.Candidate,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=?", []any{
+			step.Candidate,
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			step.Candidate,
+			step.OperationID + ":resource",
+		}, 1},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='vm' AND holder_id=?", []any{
+			step.Input.Resource.Config.Image,
+			step.Candidate,
+		}, 1},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?", []any{
+			"vm:" + step.Candidate,
+			vmBytes,
+			shape.MemoryMiB + 128,
+			shape.VCPUs,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{
+			tenant,
+			step.Input.DiskKey,
+			shape.DiskMiB,
+			step.Input.SourceOperation,
+		}, 1},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=0 AND source_operation_id=?", []any{
+			tenant,
+			step.Input.SlotBudget.Kind,
+			sandbox.ID,
+			step.Input.SlotBudget.Units,
+			step.Input.SlotOperation,
+		}, 1},
 	}
-	for _, quota := range []struct{ kind, key string }{{"vm_disk", step.Input.DiskKey}, {step.Input.SlotBudget.Kind, sandbox.ID}} {
+	for _, quota := range []struct {
+		kind, key string
+	}{
+		{"vm_disk", step.Input.DiskKey},
+		{step.Input.SlotBudget.Kind, sandbox.ID},
+	} {
 		checks = append(checks, struct {
 			query string
 			args  []any
 			want  int
-		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?", []any{tenant, quota.kind, quota.key}, 1})
+		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?", []any{
+			tenant,
+			quota.kind,
+			quota.key,
+		}, 1})
 		checks = append(checks, struct {
 			query string
 			args  []any
 			want  int
-		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{tenant, quota.kind, quota.key, step.OperationID + ":resource"}, 1})
+		}{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind='cleanup' AND holder_id=?", []any{
+			tenant,
+			quota.kind,
+			quota.key,
+			step.OperationID + ":resource",
+		}, 1})
 	}
 	for _, check := range checks {
 		var count int

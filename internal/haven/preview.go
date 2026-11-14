@@ -43,7 +43,13 @@ func (service *Service) PreviewURL(ctx context.Context, principal Principal, id 
 	if !expires.After(time.Now()) {
 		return "", loom.Fail(loom.Conflict, "lease expired")
 	}
-	value := previewCapability{Sandbox: sandbox.ID, Tenant: sandbox.TenantID, Epoch: sandbox.Epoch, Port: port, Expires: expires.Unix()}
+	value := previewCapability{
+		Sandbox: sandbox.ID,
+		Tenant:  sandbox.TenantID,
+		Epoch:   sandbox.Epoch,
+		Port:    port,
+		Expires: expires.Unix(),
+	}
 	body := base64.RawURLEncoding.EncodeToString(encode(value))
 	return "/preview/" + body + "." + service.store.sign("preview-v1", body) + "/", nil
 }
@@ -58,10 +64,17 @@ func (service *Service) ResolvePreview(ctx context.Context, body, signature stri
 	if err != nil || json.Unmarshal(payload, &value) != nil || value.Port < 1 || value.Port > 65535 || time.Now().Unix() >= value.Expires {
 		return PreviewTarget{}, denied
 	}
-	principal := Principal{TenantID: value.Tenant, SandboxID: value.Sandbox}
+	principal := Principal{
+		TenantID:  value.Tenant,
+		SandboxID: value.Sandbox,
+	}
 	sandbox, err := service.Get(ctx, principal, value.Sandbox)
 	if err != nil || sandbox.Epoch != value.Epoch || sandbox.State == "terminated" || value.Expires > sandbox.Deadline.Unix() {
 		return PreviewTarget{}, denied
 	}
-	return PreviewTarget{Principal: principal, SandboxID: value.Sandbox, Port: value.Port}, nil
+	return PreviewTarget{
+		Principal: principal,
+		SandboxID: value.Sandbox,
+		Port:      value.Port,
+	}, nil
 }

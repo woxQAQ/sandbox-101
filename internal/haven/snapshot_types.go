@@ -70,7 +70,9 @@ type captureStep struct {
 }
 
 func loadCapture(ctx context.Context, query queryer, operation string) (captureStep, error) {
-	step := captureStep{OperationID: operation}
+	step := captureStep{
+		OperationID: operation,
+	}
 	var input, body []byte
 	var action, candidate, instance string
 	err := query.QueryRowContext(ctx, "SELECT action,input_hash,input,candidate_resource_id,expected_instance,status,body FROM operation_steps WHERE operation_id=? AND step_key='capture'", operation).Scan(&action, &step.Hash, &input, &candidate, &instance, &step.Status, &body)
@@ -170,7 +172,10 @@ func (service *Service) captureProof(ctx context.Context, tx *sql.Tx, step captu
 	if err = json.Unmarshal(versionBody, &version); err != nil {
 		return vm, err
 	}
-	if !reflect.DeepEqual(version, resourceVersion{Resource: source.Input.Resource, DiskIdentity: source.State.DiskIdentity}) {
+	if !reflect.DeepEqual(version, resourceVersion{
+		Resource:     source.Input.Resource,
+		DiskIdentity: source.State.DiskIdentity,
+	}) {
 		return vm, fmt.Errorf("capture source version proof changed")
 	}
 	image, err := loadImage(ctx, tx, source.Input.Resource.Config.Image)
@@ -182,14 +187,44 @@ func (service *Service) captureProof(ctx context.Context, tx *sql.Tx, step captu
 		q    string
 		args []any
 	}{
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND storage_mib=? AND source_operation_id=?", []any{snapshot.TenantID, source.Candidate, shape.DiskMiB, source.OperationID}},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?", []any{source.Candidate, sandbox.ID}},
-		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{snapshot.ID, snapshot.TenantID, step.OperationID}},
-		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{"snapshot:" + snapshot.ID, (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20}},
-		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{snapshot.TenantID, step.OperationID + ":capture", shape.MemoryMiB + shape.DiskMiB, step.OperationID}},
-		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{snapshot.TenantID, step.OperationID + ":capture", step.OperationID + ":capture"}},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{source.Candidate, step.OperationID}},
-		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{vm.Resource.Config.Image, step.OperationID}},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='vm_disk' AND resource_key=? AND storage_mib=? AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			source.Candidate,
+			shape.DiskMiB,
+			source.OperationID,
+		}},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?", []any{
+			source.Candidate,
+			sandbox.ID,
+		}},
+		{"SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture'", []any{
+			snapshot.ID,
+			snapshot.TenantID,
+			step.OperationID,
+		}},
+		{"SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=0 AND cpus=0", []any{
+			"snapshot:" + snapshot.ID,
+			(2*shape.MemoryMiB + shape.DiskMiB + 224) << 20,
+		}},
+		{"SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND sandbox_slots=0 AND storage_mib=? AND source_operation_id=?", []any{
+			snapshot.TenantID,
+			step.OperationID + ":capture",
+			shape.MemoryMiB + shape.DiskMiB,
+			step.OperationID,
+		}},
+		{"SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind='pending_storage' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			snapshot.TenantID,
+			step.OperationID + ":capture",
+			step.OperationID + ":capture",
+		}},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			source.Candidate,
+			step.OperationID,
+		}},
+		{"SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='capture' AND holder_id=?", []any{
+			vm.Resource.Config.Image,
+			step.OperationID,
+		}},
 	}
 	for _, check := range checks {
 		var n int

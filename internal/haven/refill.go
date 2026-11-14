@@ -22,7 +22,10 @@ func (service *Service) runRefill(step supplyStep) error {
 	if err != nil {
 		return err
 	}
-	if status != "pending" || pool.Source.OperationID != source.OperationID || pool.Source.InputHash != source.Hash || source.Status != "succeeded" || source.State.Witness == "" || source.Input.SlotBudget != (slotBudget{Kind: "sandbox_slot", Units: 0}) {
+	if status != "pending" || pool.Source.OperationID != source.OperationID || pool.Source.InputHash != source.Hash || source.Status != "succeeded" || source.State.Witness == "" || source.Input.SlotBudget != (slotBudget{
+		Kind:  "sandbox_slot",
+		Units: 0,
+	}) {
 		return fmt.Errorf("refill source differs from original pool reservation")
 	}
 	lock := service.vmLock(source.Candidate)
@@ -50,7 +53,9 @@ func (service *Service) runRefill(step supplyStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadSupply(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -90,12 +95,39 @@ func (service *Service) runRefill(step supplyStep) error {
 		q    string
 		args []any
 	}{
-		{"INSERT INTO warm VALUES(?,?,?,?)", []any{pool.VMID, pool.Template.ID, pool.Template.SnapshotID, pool.CreatedAt.UnixNano()}},
-		{"INSERT INTO resource_refs VALUES('vm',?,'warm',?)", []any{pool.VMID, step.OperationID}},
-		{"UPDATE pool_slots SET status='ready',body=? WHERE operation_id=? AND status='pending' AND body=?", []any{encode(pool), step.OperationID, encode(original)}},
-		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{pool.Template.Config.Image, step.OperationID + ":supply"}},
-		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{encode(supplyState{Phase: "complete", SnapshotID: pool.Template.SnapshotID, FinishedAt: time.Now().UTC()}), step.OperationID, step.Hash, encode(step.State)}},
-		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{encode(result), step.OperationID}},
+		{"INSERT INTO warm VALUES(?,?,?,?)", []any{
+			pool.VMID,
+			pool.Template.ID,
+			pool.Template.SnapshotID,
+			pool.CreatedAt.UnixNano(),
+		}},
+		{"INSERT INTO resource_refs VALUES('vm',?,'warm',?)", []any{
+			pool.VMID,
+			step.OperationID,
+		}},
+		{"UPDATE pool_slots SET status='ready',body=? WHERE operation_id=? AND status='pending' AND body=?", []any{
+			encode(pool),
+			step.OperationID,
+			encode(original),
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='image' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			pool.Template.Config.Image,
+			step.OperationID + ":supply",
+		}},
+		{"UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='supply' AND input_hash=? AND body=? AND status IN ('pending','running')", []any{
+			encode(supplyState{
+				Phase:      "complete",
+				SnapshotID: pool.Template.SnapshotID,
+				FinishedAt: time.Now().UTC(),
+			}),
+			step.OperationID,
+			step.Hash,
+			encode(step.State),
+		}},
+		{"UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')", []any{
+			encode(result),
+			step.OperationID,
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

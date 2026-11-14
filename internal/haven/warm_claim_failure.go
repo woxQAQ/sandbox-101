@@ -15,7 +15,9 @@ func (service *Service) failWarmClaim(step warmClaimStep) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	current, err := loadWarmClaim(service.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -52,7 +54,9 @@ func (service *Service) failWarmClaim(step warmClaimStep) error {
 	if err = tx.QueryRowContext(service.ctx, "SELECT status,body FROM operations WHERE id=?", step.OperationID).Scan(&status, &body); err != nil {
 		return err
 	}
-	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND status IN ('pending','running')", encode(warmClaimState{Phase: "failed"}), step.OperationID, step.Hash)); err != nil {
+	if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND status IN ('pending','running')", encode(warmClaimState{
+		Phase: "failed",
+	}), step.OperationID, step.Hash)); err != nil {
 		return err
 	}
 	if !terminal(status) {
@@ -103,7 +107,9 @@ func (service *Service) retireSupersededWarm(tx *sql.Tx, release lifecycleStep) 
 		return err
 	}
 	if !terminal(parent.Status) {
-		if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND status IN ('pending','running')", encode(warmClaimState{Phase: "superseded"}), parent.OperationID, parent.Hash)); err != nil {
+		if err = requireWrite(tx.ExecContext(service.ctx, "UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key='warm_claim' AND input_hash=? AND status IN ('pending','running')", encode(warmClaimState{
+			Phase: "superseded",
+		}), parent.OperationID, parent.Hash)); err != nil {
 			return err
 		}
 	}

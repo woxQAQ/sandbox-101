@@ -9,10 +9,22 @@ import (
 // No host-policy exemption mechanism is implemented. This list is enforced in
 // the namespace even when an allowlist contains a broad prefix such as /0.
 var directDeniedCIDRs = []string{
-	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
-	"169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
-	"192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
-	"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "168.63.129.16/32",
+	"0.0.0.0/8",
+	"10.0.0.0/8",
+	"100.64.0.0/10",
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"172.16.0.0/12",
+	"192.0.0.0/24",
+	"192.0.2.0/24",
+	"192.88.99.0/24",
+	"192.168.0.0/16",
+	"198.18.0.0/15",
+	"198.51.100.0/24",
+	"203.0.113.0/24",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+	"168.63.129.16/32",
 }
 
 func ValidateNetworkPolicy(p *api.NetworkPolicy) error {
@@ -48,4 +60,6 @@ func ValidateNetworkPolicy(p *api.NetworkPolicy) error {
 	return nil
 }
 
-func validateNetworkPolicy(policy *api.NetworkPolicy) error { return ValidateNetworkPolicy(policy) }
+func validateNetworkPolicy(policy *api.NetworkPolicy) error {
+	return ValidateNetworkPolicy(policy)
+}

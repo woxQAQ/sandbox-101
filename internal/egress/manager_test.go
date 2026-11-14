@@ -29,7 +29,9 @@ func (f resolverFunc) LookupNetIP(c context.Context, n, h string) ([]netip.Addr,
 func publicResolver() Resolver {
 	return resolverFunc(
 		func(context.Context, string, string) ([]netip.Addr, error) {
-			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+			return []netip.Addr{
+				netip.MustParseAddr("93.184.216.34"),
+			}, nil
 		},
 	)
 }
@@ -53,7 +55,9 @@ func newTestManager(t *testing.T, opts Options, p Policy, secrets map[string]Sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
 	if opts.Resolver == nil {
 		opts.Resolver = publicResolver()
 	}
@@ -106,9 +110,11 @@ func proxyClient(t *testing.T, m *Manager, b Binding) *http.Client {
 	}
 	t.Cleanup(tr.CloseIdleConnections)
 	return &http.Client{
-		Transport:     tr,
-		Timeout:       5 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: tr,
+		Timeout:   5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }
 
@@ -143,7 +149,9 @@ func connectTunnel(t *testing.T, path, host string) net.Conn {
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	_, _ = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
 	reader := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(reader, &http.Request{Method: "CONNECT"})
+	resp, err := http.ReadResponse(reader, &http.Request{
+		Method: "CONNECT",
+	})
 	if err != nil {
 		_ = conn.Close()
 		t.Fatal(err)
@@ -165,15 +173,28 @@ func socksConnect(t *testing.T, path, host string, command byte) (net.Conn, byte
 		t.Fatal(err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, _ = conn.Write([]byte{5, 1, 0})
+	_, _ = conn.Write([]byte{
+		5,
+		1,
+		0,
+	})
 	var auth [2]byte
 	if _, err := io.ReadFull(conn, auth[:]); err != nil {
 		t.Fatal(err)
 	}
-	if auth != [2]byte{5, 0} {
+	if auth != [2]byte{
+		5,
+		0,
+	} {
 		t.Fatalf("unexpected auth: %v", auth)
 	}
-	req := append([]byte{5, command, 0, 3, byte(len(host))}, []byte(host)...)
+	req := append([]byte{
+		5,
+		command,
+		0,
+		3,
+		byte(len(host)),
+	}, []byte(host)...)
 	req = append(req, 0, 80)
 	_, _ = conn.Write(req)
 	var reply [4]byte
@@ -198,14 +219,21 @@ func socksConnect(t *testing.T, path, host string, command byte) (net.Conn, byte
 func TestConnectionBudgetAndRevoke(t *testing.T) {
 	up := httptest.NewServer(
 		http.HandlerFunc(
-			func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") },
+			func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, "ok")
+			},
 		),
 	)
 	defer up.Close()
 	m, b := newTestManager(
 		t,
-		Options{DialContext: targetDialer(up.Listener.Addr().String(), nil)},
-		Policy{Mode: "relay", MaxConnections: 1},
+		Options{
+			DialContext: targetDialer(up.Listener.Addr().String(), nil),
+		},
+		Policy{
+			Mode:           "relay",
+			MaxConnections: 1,
+		},
 		nil,
 	)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
@@ -231,7 +259,10 @@ func TestConnectionBudgetAndRevoke(t *testing.T) {
 	if n, err := conn.Read(one[:]); n != 0 || err == nil {
 		t.Fatal("active SOCKS connection survived revoke")
 	}
-	for _, path := range []string{b.HTTPPath, b.SOCKSPath} {
+	for _, path := range []string{
+		b.HTTPPath,
+		b.SOCKSPath,
+	} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("socket survived revoke: %s %v", path, err)
 		}
@@ -250,14 +281,22 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, mode := range []string{"", "unknown", "direct"} {
-		if err := m.Bind(context.Background(), mode+"id", "t", "/tmp/not-used", Policy{Mode: mode}, nil); err == nil {
+	for _, mode := range []string{
+		"",
+		"unknown",
+		"direct",
+	} {
+		if err := m.Bind(context.Background(), mode+"id", "t", "/tmp/not-used", Policy{
+			Mode: mode,
+		}, nil); err == nil {
 			t.Errorf("accepted mode %q", mode)
 		}
 	}
 	dir := t.TempDir()
 	base := filepath.Join(dir, "vsock")
-	if err := m.Bind(context.Background(), "none", "t", base, Policy{Mode: "none"}, nil); err != nil {
+	if err := m.Bind(context.Background(), "none", "t", base, Policy{
+		Mode: "none",
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(base + "_2049"); !errors.Is(err, os.ErrNotExist) {
@@ -266,7 +305,9 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 	if err := os.WriteFile(base+"_2050", []byte("owner data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(context.Background(), "relay", "t", base, Policy{Mode: "relay"}, nil); err == nil {
+	if err := m.Bind(context.Background(), "relay", "t", base, Policy{
+		Mode: "relay",
+	}, nil); err == nil {
 		t.Fatal("overwrote existing path")
 	}
 	if _, err := os.Stat(base + "_2049"); !errors.Is(err, os.ErrNotExist) {
@@ -281,7 +322,10 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		Options{
 			InstallDirect: func(context.Context, Binding, Policy) (func() error, error) {
 				installed.Store(true)
-				return func() error { removed.Store(true); return nil }, nil
+				return func() error {
+					removed.Store(true)
+					return nil
+				}, nil
 			},
 		},
 	)
@@ -289,7 +333,9 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer direct.Close()
-	if err := direct.Bind(context.Background(), "direct", "t", base, Policy{Mode: "direct"}, nil); err != nil {
+	if err := direct.Bind(context.Background(), "direct", "t", base, Policy{
+		Mode: "direct",
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !installed.Load() {
@@ -303,7 +349,9 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	up := httptest.NewServer(
 		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") },
+			func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "ok")
+			},
 		),
 	)
 	defer up.Close()
@@ -322,7 +370,12 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	p := Policy{Mode: "relay", AllowedHosts: []string{"example.com"}}
+	p := Policy{
+		Mode: "relay",
+		AllowedHosts: []string{
+			"example.com",
+		},
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := m.Bind(ctx, "s", "t", filepath.Join(dir, "vsock"), p, nil); err != nil {
 		t.Fatal(err)
@@ -359,7 +412,9 @@ func mitmClient(t *testing.T, m *Manager, b Binding) *tls.Conn {
 			MinVersion: tls.VersionTLS12,
 		},
 	)
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
 	if err := conn.Handshake(); err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,9 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = first.close() })
+	t.Cleanup(func() {
+		_ = first.close()
+	})
 	if second, err := openStore(directory, false); !errors.Is(err, errStoreConflict) {
 		if second != nil {
 			_ = second.close()
@@ -72,8 +74,13 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 }
 
 func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
-	for _, initialize := range []bool{false, true} {
-		for _, legacy := range []struct{ name, schema string }{
+	for _, initialize := range []bool{
+		false,
+		true,
+	} {
+		for _, legacy := range []struct {
+			name, schema string
+		}{
 			{"metadata.db", "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); INSERT INTO meta VALUES('schema','1');"},
 			{"sandboxd.db", "CREATE TABLE version(version INTEGER); INSERT INTO version VALUES(6);"},
 		} {
@@ -96,7 +103,19 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			})
 		}
 	}
-	for _, scenario := range []string{"nonempty-init", "missing-db", "corrupt-db", "foreign-application", "future-version", "missing-table", "missing-guard", "dangling-reference", "recovery-gate", "missing-key", "public-directory"} {
+	for _, scenario := range []string{
+		"nonempty-init",
+		"missing-db",
+		"corrupt-db",
+		"foreign-application",
+		"future-version",
+		"missing-table",
+		"missing-guard",
+		"dangling-reference",
+		"recovery-gate",
+		"missing-key",
+		"public-directory",
+	} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := filepath.Join(t.TempDir(), "state")
 			state, err := openStore(directory, true)
@@ -245,7 +264,10 @@ func storeSnapshot(t *testing.T, directory string) map[string]storeFileSnapshot 
 		if err != nil {
 			return err
 		}
-		value := storeFileSnapshot{Mode: info.Mode(), Inode: info.Sys().(*syscall.Stat_t).Ino}
+		value := storeFileSnapshot{
+			Mode:  info.Mode(),
+			Inode: info.Sys().(*syscall.Stat_t).Ino,
+		}
 		if info.Mode().IsRegular() {
 			data, err := os.ReadFile(path)
 			if err != nil {

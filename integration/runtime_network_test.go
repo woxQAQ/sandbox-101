@@ -29,7 +29,10 @@ func probeGuestTCP(
 ) {
 	t.Helper()
 	const allowed, denied = "93.184.216.34", "93.184.216.35"
-	for _, address := range []string{allowed, denied} {
+	for _, address := range []string{
+		allowed,
+		denied,
+	} {
 		if out, err := exec.CommandContext(ctx, "ip", "addr", "add", address+"/32", "dev", "lo").
 			CombinedOutput(); err != nil {
 			t.Fatalf("private loopback TCP target: %v: %s", err, out)
@@ -59,12 +62,18 @@ func probeGuestTCP(
 			if err == nil && len(line) < 128 {
 				stage := strings.TrimSpace(line)
 				_, _ = fmt.Fprintf(conn, "reply-%s\n", stage)
-				observed <- observation{Stage: stage, RemoteIP: conn.RemoteAddr().(*net.TCPAddr).IP.String()}
+				observed <- observation{
+					Stage:    stage,
+					RemoteIP: conn.RemoteAddr().(*net.TCPAddr).IP.String(),
+				}
 			}
 			conn.Close()
 		}
 	}()
-	defer func() { listener.Close(); <-serverDone }()
+	defer func() {
+		listener.Close()
+		<-serverDone
+	}()
 	_, err = client.PutTemplate(
 		ctx,
 		"tcp-template",
@@ -91,7 +100,9 @@ func probeGuestTCP(
 				cleanup,
 				id,
 				"tcp-release-"+id,
-				api.Command{Action: "release"},
+				api.Command{
+					Action: "release",
+				},
 			); err != nil {
 				t.Errorf("release TCP sandbox: %v", err)
 			}
@@ -99,9 +110,13 @@ func probeGuestTCP(
 	}()
 	claim := func(key, mode string) api.Sandbox {
 		t.Helper()
-		policy := api.Policy{Mode: mode}
+		policy := api.Policy{
+			Mode: mode,
+		}
 		if mode == "direct" {
-			policy.AllowedCIDRs = []string{allowed + "/32"}
+			policy.AllowedCIDRs = []string{
+				allowed + "/32",
+			}
 			policy.MaxConnections = 16
 		}
 		result, err := client.Claim(
@@ -137,7 +152,10 @@ func probeGuestTCP(
 			strings.ReplaceAll(script, "'", "'\\''"),
 		)
 		got := guestExec(t, ctx, client, sandbox.ID, command)
-		if got != map[bool]string{true: "allowed", false: "blocked"}[want] {
+		if got != map[bool]string{
+			true:  "allowed",
+			false: "blocked",
+		}[want] {
 			t.Fatalf("actual guest TCP %s: got %q allowed=%v", stage, got, want)
 		}
 		vm, err := ec.GetVM(ctx, sandbox.VMID)
@@ -170,11 +188,16 @@ func probeGuestTCP(
 	probe(direct, "denied-cidr", denied, false)
 	none := claim("none", "none")
 	probe(none, "none-policy", allowed, false)
-	if _, err := client.Change(ctx, none.ID, "tcp-release-none", api.Command{Action: "release"}); err != nil {
+	if _, err := client.Change(ctx, none.ID, "tcp-release-none", api.Command{
+		Action: "release",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	owned = owned[:1]
-	forked, err := client.Change(ctx, direct.ID, "tcp-fork", api.Command{Action: "fork", Count: 1})
+	forked, err := client.Change(ctx, direct.ID, "tcp-fork", api.Command{
+		Action: "fork",
+		Count:  1,
+	})
 	if err != nil || len(forked.Sandboxes) != 1 {
 		t.Fatalf("capture/fork for real TCP rebind: %+v: %v", forked.Sandboxes, err)
 	}
@@ -182,7 +205,9 @@ func probeGuestTCP(
 	owned = append(owned, branch.ID)
 	probe(branch, "fork", allowed, true)
 	probe(branch, "fork-denied", denied, false)
-	if _, err := client.Change(ctx, direct.ID, "tcp-pause", api.Command{Action: "pause"}); err != nil {
+	if _, err := client.Change(ctx, direct.ID, "tcp-pause", api.Command{
+		Action: "pause",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Connecting performs the actual sandbox auto-resume and instance rebind.

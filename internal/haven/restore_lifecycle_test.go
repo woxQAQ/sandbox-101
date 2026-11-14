@@ -11,7 +11,11 @@ import (
 
 func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"release_admitted", "release_unlinked", "release_completion_before_commit"} {
+	for _, point := range []string{
+		"release_admitted",
+		"release_unlinked",
+		"release_completion_before_commit",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, source := cloneFixture(t)
 			clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
@@ -24,7 +28,11 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 				}
 				return nil
 			}
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-clone", SandboxID: clone.Result.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  "tenant",
+				Key:       "release-clone",
+				SandboxID: clone.Result.SandboxID,
+			})
 			if err != nil && !errors.Is(err, ErrInterrupted) {
 				t.Fatal(err)
 			}
@@ -78,7 +86,11 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 		service = reopenCloneService(t, service, backend)
 		cloneLiability(t, service, awaitColdWorker(t, service, clone.ID), true)
 	})
-	for _, damage := range []string{"disk", "memory-inode", "missing-proof"} {
+	for _, damage := range []string{
+		"disk",
+		"memory-inode",
+		"missing-proof",
+	} {
 		t.Run(damage, func(t *testing.T) {
 			service, backend, source := cloneFixture(t)
 			service.opts.Fault = func(point string) error {
@@ -136,7 +148,12 @@ func TestHavenRestoreCloneCanBeCaptured(t *testing.T) {
 	clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
 	ready := awaitColdWorker(t, service, clone.ID)
 	cloneLiability(t, service, ready, true)
-	capture, err := service.AdmitCapture(context.Background(), CaptureRequest{TenantID: "tenant", Key: "clone-capture", SandboxID: clone.Result.SandboxID, ExpectedInstance: ready.State.Witness})
+	capture, err := service.AdmitCapture(context.Background(), CaptureRequest{
+		TenantID:         "tenant",
+		Key:              "clone-capture",
+		SandboxID:        clone.Result.SandboxID,
+		ExpectedInstance: ready.State.Witness,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

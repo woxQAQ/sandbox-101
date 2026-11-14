@@ -138,7 +138,11 @@ func (backend *generationRuntime) Resume(ctx context.Context, r loom.Resource) e
 func targetSetup(t *testing.T) (*Service, *generationRuntime, RestoreRequest, resourceStep) {
 	t.Helper()
 	service, base := coldService(t, nil)
-	backend := &generationRuntime{restorableRuntime: &restorableRuntime{base}, known: map[string]loom.Resource{}, states: map[string]loom.Observation{}}
+	backend := &generationRuntime{
+		restorableRuntime: &restorableRuntime{base},
+		known:             map[string]loom.Resource{},
+		states:            map[string]loom.Observation{},
+	}
 	service.opts.Backend = backend
 	capture, _ := captureReady(t, service, "target-source")
 	if proof := awaitCapture(t, service, capture.ID); proof.Status != "succeeded" {
@@ -149,7 +153,12 @@ func targetSetup(t *testing.T) (*Service, *generationRuntime, RestoreRequest, re
 	if ready.Status != "succeeded" {
 		t.Fatal(ready.State)
 	}
-	stop, err := service.AdmitStop(context.Background(), StopRequest{TenantID: "tenant", Key: "target-stop", SandboxID: target.Result.SandboxID, ExpectedInstance: ready.State.Witness})
+	stop, err := service.AdmitStop(context.Background(), StopRequest{
+		TenantID:         "tenant",
+		Key:              "target-stop",
+		SandboxID:        target.Result.SandboxID,
+		ExpectedInstance: ready.State.Witness,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +183,14 @@ func targetSetup(t *testing.T) (*Service, *generationRuntime, RestoreRequest, re
 		service.mu.Unlock()
 		t.Fatal("stop did not succeed", result, reason, err)
 	}
-	request := RestoreRequest{TenantID: "tenant", Key: "restore", SandboxID: target.Result.SandboxID, SnapshotID: capture.Result.SnapshotID, ExpectedInstance: ready.State.Witness, StopOperationID: stop.ID}
+	request := RestoreRequest{
+		TenantID:         "tenant",
+		Key:              "restore",
+		SandboxID:        target.Result.SandboxID,
+		SnapshotID:       capture.Result.SnapshotID,
+		ExpectedInstance: ready.State.Witness,
+		StopOperationID:  stop.ID,
+	}
 	return service, backend, request, ready
 }
 
@@ -191,7 +207,11 @@ func targetFixture(t *testing.T) (*Service, *generationRuntime, Operation, resou
 
 func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"restore_candidate_copied", "restore_resources_ready", "effect_launched"} {
+	for _, point := range []string{
+		"restore_candidate_copied",
+		"restore_resources_ready",
+		"effect_launched",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, request, prior := targetSetup(t)
 			service.opts.Fault = func(candidate string) error {
@@ -224,7 +244,13 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 				t.Fatal("failure lost old/new disk debt", cost, err)
 			}
 			service.opts.Fault = nil
-			discard, err := service.AdmitDiscard(context.Background(), DiscardRequest{TenantID: "tenant", Key: "discard-target", SandboxID: request.SandboxID, FailedOperationID: operation.ID, ExpectedInstance: failed.Input.Resource.Instance})
+			discard, err := service.AdmitDiscard(context.Background(), DiscardRequest{
+				TenantID:          "tenant",
+				Key:               "discard-target",
+				SandboxID:         request.SandboxID,
+				FailedOperationID: operation.ID,
+				ExpectedInstance:  failed.Input.Resource.Instance,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -248,7 +274,22 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 
 func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"restore_admitted", "restore_prepare_intent", "restore_candidate_prepared", "restore_candidate_copied", "restore_candidate_renamed", "restore_candidate_synced", "restore_materials_complete", "restore_resources_ready", "step_launch_intent", "effect_launched", "step_launched", "step_booted", "step_agent_ready", "completion_before_commit"} {
+	for _, point := range []string{
+		"restore_admitted",
+		"restore_prepare_intent",
+		"restore_candidate_prepared",
+		"restore_candidate_copied",
+		"restore_candidate_renamed",
+		"restore_candidate_synced",
+		"restore_materials_complete",
+		"restore_resources_ready",
+		"step_launch_intent",
+		"effect_launched",
+		"step_launched",
+		"step_booted",
+		"step_agent_ready",
+		"completion_before_commit",
+	} {
 		t.Run(point, func(t *testing.T) {
 			service, backend, request, prior := targetSetup(t)
 			service.opts.Fault = func(candidate string) error {
@@ -317,14 +358,26 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if first.Status != "succeeded" {
 		t.Fatal(first.State)
 	}
-	stop, err := service.AdmitStop(context.Background(), StopRequest{TenantID: "tenant", Key: "stop-again", SandboxID: operation.Result.SandboxID, ExpectedInstance: first.State.Witness})
+	stop, err := service.AdmitStop(context.Background(), StopRequest{
+		TenantID:         "tenant",
+		Key:              "stop-again",
+		SandboxID:        operation.Result.SandboxID,
+		ExpectedInstance: first.State.Witness,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if proof := awaitStop(t, service, stop.ID); proof.Status != "succeeded" {
 		t.Fatal("second stop failed", proof)
 	}
-	second, err := service.AdmitRestore(context.Background(), RestoreRequest{TenantID: "tenant", Key: "restore-again", SandboxID: operation.Result.SandboxID, SnapshotID: first.Input.Restore.Snapshot.ID, ExpectedInstance: first.State.Witness, StopOperationID: stop.ID})
+	second, err := service.AdmitRestore(context.Background(), RestoreRequest{
+		TenantID:         "tenant",
+		Key:              "restore-again",
+		SandboxID:        operation.Result.SandboxID,
+		SnapshotID:       first.Input.Restore.Snapshot.ID,
+		ExpectedInstance: first.State.Witness,
+		StopOperationID:  stop.ID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +392,11 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err = service.store.db.QueryRow("SELECT COUNT(*) FROM backing WHERE vm_id=?", restored.Candidate).Scan(&backing); err != nil || backing != 2 {
 		t.Fatal("multiple retained RAM versions lost", backing, err)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-generations", SandboxID: operation.Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release-generations",
+		SandboxID: operation.Result.SandboxID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,10 +413,18 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 
 func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, write := range []struct{ event, table, condition string }{
-		{"INSERT", "instances", "1"}, {"INSERT", "quota_resources", "NEW.kind='pending_storage'"}, {"UPDATE", "vms", "NEW.operation_id IS NOT NULL"}, {"UPDATE", "resource_refs", "NEW.resource_kind='vm'"},
+	for _, write := range []struct {
+		event, table, condition string
+	}{
+		{"INSERT", "instances", "1"},
+		{"INSERT", "quota_resources", "NEW.kind='pending_storage'"},
+		{"UPDATE", "vms", "NEW.operation_id IS NOT NULL"},
+		{"UPDATE", "resource_refs", "NEW.resource_kind='vm'"},
 	} {
-		for _, mode := range []string{"ABORT,'fixture target admission rejection'", "IGNORE"} {
+		for _, mode := range []string{
+			"ABORT,'fixture target admission rejection'",
+			"IGNORE",
+		} {
 			t.Run(write.table+mode, func(t *testing.T) {
 				service, _, request, prior := targetSetup(t)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_target_admission BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
@@ -380,7 +445,10 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 
 func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 	parallelLifecycle(t)
-	for _, mode := range []string{"ABORT,'fixture generation retirement rejection'", "IGNORE"} {
+	for _, mode := range []string{
+		"ABORT,'fixture generation retirement rejection'",
+		"IGNORE",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			service, backend, operation, step := targetFixture(t)
 			if step.Status != "succeeded" {
@@ -391,7 +459,11 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 			if _, err := service.store.db.Exec(statement); err != nil {
 				t.Fatal(err)
 			}
-			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-restored", SandboxID: operation.Result.SandboxID})
+			release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+				TenantID:  "tenant",
+				Key:       "release-restored",
+				SandboxID: operation.Result.SandboxID,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -424,7 +496,11 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 	if step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-restored", SandboxID: operation.Result.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release-restored",
+		SandboxID: operation.Result.SandboxID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

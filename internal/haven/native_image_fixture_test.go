@@ -19,7 +19,9 @@ import (
 type nativeImageFixture struct {
 	service *Service
 	db      *statementDB
-	opts    struct{ StateDir string }
+	opts    struct {
+		StateDir string
+	}
 }
 
 func newNativeImageFixture(t *testing.T) *nativeImageFixture {
@@ -29,11 +31,21 @@ func newNativeImageFixture(t *testing.T) *nativeImageFixture {
 
 func nativeImageFixtureAt(t *testing.T, directory string) *nativeImageFixture {
 	t.Helper()
-	service, err := Open(Options{StateDir: directory, Initialize: true, Backend: newColdRuntime(), MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1})
+	service, err := Open(Options{
+		StateDir:     directory,
+		Initialize:   true,
+		Backend:      newColdRuntime(),
+		MaxMemoryMiB: 8192,
+		MaxVCPUs:     64,
+		SafetyBytes:  1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &nativeImageFixture{service: service, db: service.store.db}
+	fixture := &nativeImageFixture{
+		service: service,
+		db:      service.store.db,
+	}
 	fixture.opts.StateDir = service.store.directory
 	if err := os.Mkdir(filepath.Join(service.store.directory, "images"), 0o700); err != nil {
 		t.Fatal(err)
@@ -46,10 +58,15 @@ func nativeImageFixtureAt(t *testing.T, directory string) *nativeImageFixture {
 	return fixture
 }
 
-func (fixture *nativeImageFixture) Close() error { return fixture.service.Close(context.Background()) }
+func (fixture *nativeImageFixture) Close() error {
+	return fixture.service.Close(context.Background())
+}
 
 func (fixture *nativeImageFixture) ImportOCI(ctx context.Context, options ImportOptions) (ImageManifest, error) {
-	root := Principal{Root: true, TenantID: "root"}
+	root := Principal{
+		Root:     true,
+		TenantID: "root",
+	}
 	operation, err := fixture.service.AdmitImageImport(ctx, root, "native-"+digest(encode(options)), options)
 	if err != nil {
 		return ImageManifest{}, err

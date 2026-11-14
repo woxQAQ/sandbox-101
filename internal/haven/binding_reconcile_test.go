@@ -9,18 +9,30 @@ import (
 )
 
 func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
-	for _, tracked := range []bool{false, true} {
-		t.Run(map[bool]string{false: "untracked", true: "tracked"}[tracked], func(t *testing.T) {
+	for _, tracked := range []bool{
+		false,
+		true,
+	} {
+		t.Run(map[bool]string{
+			false: "untracked",
+			true:  "tracked",
+		}[tracked], func(t *testing.T) {
 			service, _, guest, manager := sandboxFixture(t)
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "none"})
-			principal := Principal{TenantID: "tenant"}
+			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				Mode: "none",
+			})
+			principal := Principal{
+				TenantID: "tenant",
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			connection, err := service.Connect(ctx, principal, claim.Result.SandboxID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = connection.Close() }()
+			defer func() {
+				_ = connection.Close()
+			}()
 			guest.mu.Lock()
 			peer := guest.peers[len(guest.peers)-1]
 			before := len(guest.activations)
@@ -44,7 +56,10 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 					t.Fatal("none maintenance retained proxy")
 				}
 				exchange := make(chan error, 1)
-				go func() { _, err := peer.Write([]byte("x")); exchange <- err }()
+				go func() {
+					_, err := peer.Write([]byte("x"))
+					exchange <- err
+				}()
 				if err = connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 					t.Fatal(err)
 				}
@@ -68,8 +83,15 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 
 func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
 	service, backend, _, manager := sandboxFixture(t)
-	principal := Principal{TenantID: "tenant"}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{Mode: "relay", AllowedHosts: []string{"unused.invalid"}})
+	principal := Principal{
+		TenantID: "tenant",
+	}
+	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+		Mode: "relay",
+		AllowedHosts: []string{
+			"unused.invalid",
+		},
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	before, err := service.Get(ctx, principal, claim.Result.SandboxID)

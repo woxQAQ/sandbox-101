@@ -31,9 +31,16 @@ type RestoreFileProof struct {
 	Identity  FileIdentity `json:"identity"`
 }
 
-var restoreNames = []string{"config.json", "state.json", "disk.raw", "memory-ranges"}
+var restoreNames = []string{
+	"config.json",
+	"state.json",
+	"disk.raw",
+	"memory-ranges",
+}
 
-func RestoreFileNames() []string { return slices.Clone(restoreNames) }
+func RestoreFileNames() []string {
+	return slices.Clone(restoreNames)
+}
 
 func restorePath(resource Resource, name string) string {
 	if name == "disk.raw" {
@@ -55,13 +62,17 @@ func inspectRestoreFile(path, want string, size int64, synchronize bool) (Restor
 	if err != nil {
 		return RestoreFileProof{}, err
 	}
-	defer func() { _ = parent.Close() }()
+	defer func() {
+		_ = parent.Close()
+	}()
 	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return RestoreFileProof{}, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return RestoreFileProof{}, err
@@ -82,7 +93,12 @@ func inspectRestoreFile(path, want string, size int64, synchronize bool) (Restor
 			return RestoreFileProof{}, err
 		}
 	}
-	return RestoreFileProof{Source: want, Candidate: got, Size: info.Size(), Identity: IdentityOf(info)}, nil
+	return RestoreFileProof{
+		Source:    want,
+		Candidate: got,
+		Size:      info.Size(),
+		Identity:  IdentityOf(info),
+	}, nil
 }
 
 // RestoreBoundary keeps the candidate directory descriptors pinned for one
@@ -110,7 +126,13 @@ func PrepareRestore(resource Resource, operation, source string, digests map[str
 	if !ValidResourceID(operation, "op-") || resource.Disk != filepath.Join(versionPath, "disk.raw") || resource.RestoreDir != filepath.Join(versionPath, "restore") {
 		return nil, Fail(ManualRecovery, "restore candidate ownership mismatch")
 	}
-	boundary := &RestoreBoundary{source: source, Materials: &RestoreMaterials{Resource: resource, Files: map[string]RestoreFileProof{}}}
+	boundary := &RestoreBoundary{
+		source: source,
+		Materials: &RestoreMaterials{
+			Resource: resource,
+			Files:    map[string]RestoreFileProof{},
+		},
+	}
 	complete := false
 	defer func() {
 		if !complete {
@@ -239,7 +261,10 @@ func VerifyRestoreMaterials(proof *RestoreMaterials, expected Resource, digests 
 	if proof == nil || !proof.Complete || !reflect.DeepEqual(proof.Resource, expected) || len(proof.Files) != len(restoreNames) {
 		return Fail(ManualRecovery, "restore completion proof missing or inconsistent; legacy handoff requires manual recovery")
 	}
-	for path, identity := range map[string]FileIdentity{filepath.Dir(expected.RestoreDir): proof.Version, expected.RestoreDir: proof.Restore} {
+	for path, identity := range map[string]FileIdentity{
+		filepath.Dir(expected.RestoreDir): proof.Version,
+		expected.RestoreDir:               proof.Restore,
+	} {
 		file, err := OpenCaptureDir(path)
 		if err != nil {
 			return err

@@ -18,7 +18,10 @@ func TestHTTPFailuresEndAtHavenContract(t *testing.T) {
 	}))
 	defer server.Close()
 	client := sdk.New(server.URL, "unused-test-token")
-	for _, connect := range []bool{false, true} {
+	for _, connect := range []bool{
+		false,
+		true,
+	} {
 		var err error
 		if connect {
 			_, err = client.Connect(context.Background(), "sandbox")

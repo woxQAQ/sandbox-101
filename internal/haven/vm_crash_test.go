@@ -102,8 +102,13 @@ func runAbruptExitChild(t *testing.T) {
 		}
 		return nil
 	})
-	service.opts.Backend = &persistentColdRuntime{coldRuntime: backend, directory: directory}
-	if err := loom.WriteJSON(filepath.Join(directory, "controller.json"), struct{ Directory string }{service.store.directory}); err != nil {
+	service.opts.Backend = &persistentColdRuntime{
+		coldRuntime: backend,
+		directory:   directory,
+	}
+	if err := loom.WriteJSON(filepath.Join(directory, "controller.json"), struct {
+		Directory string
+	}{service.store.directory}); err != nil {
 		t.Fatal(err)
 	}
 	operation := coldClaim(t, service, "abrupt")
@@ -116,7 +121,11 @@ func TestHavenStepAbruptSQLiteRecovery(t *testing.T) {
 		runAbruptExitChild(t)
 		return
 	}
-	for _, point := range []string{"effect_launched", "completion_before_commit", "step_completed"} {
+	for _, point := range []string{
+		"effect_launched",
+		"completion_before_commit",
+		"step_completed",
+	} {
 		t.Run(point, func(t *testing.T) {
 			directory := t.TempDir()
 			executable, err := os.Executable()
@@ -132,16 +141,29 @@ func TestHavenStepAbruptSQLiteRecovery(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != 86 {
 				t.Fatalf("controller did not abruptly exit at %s: %v %s", point, err, output)
 			}
-			var controller struct{ Directory string }
+			var controller struct {
+				Directory string
+			}
 			if err = loom.ReadJSON(filepath.Join(directory, "controller.json"), &controller); err != nil {
 				t.Fatal(err)
 			}
-			backend := &persistentColdRuntime{coldRuntime: newColdRuntime(), directory: directory}
-			service, err := Open(Options{StateDir: controller.Directory, Backend: backend, MaxMemoryMiB: 8192, MaxVCPUs: 64, SafetyBytes: 1})
+			backend := &persistentColdRuntime{
+				coldRuntime: newColdRuntime(),
+				directory:   directory,
+			}
+			service, err := Open(Options{
+				StateDir:     controller.Directory,
+				Backend:      backend,
+				MaxMemoryMiB: 8192,
+				MaxVCPUs:     64,
+				SafetyBytes:  1,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = service.Close(context.Background()) })
+			t.Cleanup(func() {
+				_ = service.Close(context.Background())
+			})
 			var operation string
 			if err = service.store.db.QueryRow("SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id='tenant' AND idem_key='abrupt'").Scan(&operation); err != nil {
 				t.Fatal(err)

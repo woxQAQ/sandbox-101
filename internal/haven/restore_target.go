@@ -70,7 +70,9 @@ func (service *Service) admitRestore(ctx context.Context, request RestoreRequest
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -166,7 +168,16 @@ func (service *Service) admitRestore(ctx context.Context, request RestoreRequest
 	if held > free || service.opts.SafetyBytes > free-held || reserve > free-held-service.opts.SafetyBytes {
 		return empty, fmt.Errorf("restore host peak reservation exhausted")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: prior.Candidate, SnapshotID: request.SnapshotID}}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:  sandbox.ID,
+			VMID:       prior.Candidate,
+			SnapshotID: request.SnapshotID,
+		},
+	}
 	resource := prior.Input.Resource
 	resource.Instance = newID("run-")
 	resource.Config = config
@@ -174,17 +185,37 @@ func (service *Service) admitRestore(ctx context.Context, request RestoreRequest
 	resource.RestoreDir = filepath.Join(resource.Dir, "versions", operation.ID, "restore")
 	resource.Disk = filepath.Join(resource.Dir, "versions", operation.ID, "disk.raw")
 	ancestors := append([]generationRef(nil), prior.Input.Ancestors...)
-	ancestors = append(ancestors, generationRef{OperationID: prior.OperationID, InputHash: prior.Hash})
+	ancestors = append(ancestors, generationRef{
+		OperationID: prior.OperationID,
+		InputHash:   prior.Hash,
+	})
 	budget, err := service.currentSlotBudget(ctx, tx, sandbox, prior)
 	if err != nil {
 		return empty, err
 	}
-	input := stepInput{SlotAssignment: sandbox.SlotAssignment, SlotBudget: budget, TemplateID: prior.Input.TemplateID, Resource: resource, Image: image, TenantID: request.TenantID, SandboxID: sandbox.ID, Restore: &snapshot, Ancestors: ancestors, DiskKey: operation.ID, SlotOperation: prior.Input.SlotOperation, RuntimeBytes: prior.Input.RuntimeBytes, BackingHolder: operation.ID, StopOperation: request.StopOperationID}
+	input := stepInput{
+		SlotAssignment: sandbox.SlotAssignment,
+		SlotBudget:     budget,
+		TemplateID:     prior.Input.TemplateID,
+		Resource:       resource,
+		Image:          image,
+		TenantID:       request.TenantID,
+		SandboxID:      sandbox.ID,
+		Restore:        &snapshot,
+		Ancestors:      ancestors,
+		DiskKey:        operation.ID,
+		SlotOperation:  prior.Input.SlotOperation,
+		RuntimeBytes:   prior.Input.RuntimeBytes,
+		BackingHolder:  operation.ID,
+		StopOperation:  request.StopOperationID,
+	}
 	if err = service.admitResourceParent(ctx, tx, parent, operation, "restore", resource.VMID, hash); err != nil {
 		return empty, err
 	}
 	oldSandbox := sandbox
-	vm = vmRecord{Resource: resource}
+	vm = vmRecord{
+		Resource: resource,
+	}
 	sandbox.State = "provisioning"
 	sandbox.OperationID = operation.ID
 	sandbox.SourceOperation = operation.ID
@@ -194,20 +225,90 @@ func (service *Service) admitRestore(ctx context.Context, request RestoreRequest
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'resource','restore',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, resource.VMID, request.ExpectedInstance, encode(stepState{Phase: "admitted"})}},
-		{"UPDATE vms SET operation_id=?,body=? WHERE id=? AND operation_id IS NULL AND current_instance=? AND state='stopped'", []any{operation.ID, encode(vm), resource.VMID, request.ExpectedInstance}},
-		{"UPDATE sandboxes SET state='provisioning',body=? WHERE id=? AND tenant=? AND state=? AND body=?", []any{encode(sandbox), sandbox.ID, request.TenantID, oldSandbox.State, encode(oldSandbox)}},
-		{"INSERT INTO instances VALUES(?,?,?,?)", []any{resource.Instance, resource.VMID, operation.ID, encode(vm)}},
-		{"INSERT INTO resource_versions VALUES(?, ?,?,'resource',?)", []any{operation.ID, resource.VMID, operation.ID, encode(resourceVersion{Resource: resource})}},
-		{"INSERT INTO reservations VALUES(?,?,0,0)", []any{"restore:" + operation.ID, reserve}},
-		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{request.TenantID, operation.ID + ":resource", shape.DiskMiB, operation.ID}},
-		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{request.TenantID, operation.ID + ":resource", operation.ID + ":resource"}},
-		{"INSERT INTO source_leases VALUES(?,?,'resource')", []any{request.SnapshotID, operation.ID}},
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{request.SnapshotID, operation.ID + ":resource"}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{request.TenantID, request.SnapshotID, operation.ID + ":resource"}},
-		{"UPDATE resource_refs SET holder_kind='step',holder_id=? WHERE resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?", []any{operation.ID + ":resource", resource.VMID, sandbox.ID}},
-		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{resource.Config.Image, operation.ID + ":resource"}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'resource','restore',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			resource.VMID,
+			request.ExpectedInstance,
+			encode(stepState{
+				Phase: "admitted",
+			}),
+		}},
+		{"UPDATE vms SET operation_id=?,body=? WHERE id=? AND operation_id IS NULL AND current_instance=? AND state='stopped'", []any{
+			operation.ID,
+			encode(vm),
+			resource.VMID,
+			request.ExpectedInstance,
+		}},
+		{"UPDATE sandboxes SET state='provisioning',body=? WHERE id=? AND tenant=? AND state=? AND body=?", []any{
+			encode(sandbox),
+			sandbox.ID,
+			request.TenantID,
+			oldSandbox.State,
+			encode(oldSandbox),
+		}},
+		{"INSERT INTO instances VALUES(?,?,?,?)", []any{
+			resource.Instance,
+			resource.VMID,
+			operation.ID,
+			encode(vm),
+		}},
+		{"INSERT INTO resource_versions VALUES(?, ?,?,'resource',?)", []any{
+			operation.ID,
+			resource.VMID,
+			operation.ID,
+			encode(resourceVersion{
+				Resource: resource,
+			}),
+		}},
+		{"INSERT INTO reservations VALUES(?,?,0,0)", []any{
+			"restore:" + operation.ID,
+			reserve,
+		}},
+		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{
+			request.TenantID,
+			operation.ID + ":resource",
+			shape.DiskMiB,
+			operation.ID,
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{
+			request.TenantID,
+			operation.ID + ":resource",
+			operation.ID + ":resource",
+		}},
+		{"INSERT INTO source_leases VALUES(?,?,'resource')", []any{
+			request.SnapshotID,
+			operation.ID,
+		}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{
+			request.SnapshotID,
+			operation.ID + ":resource",
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{
+			request.TenantID,
+			request.SnapshotID,
+			operation.ID + ":resource",
+		}},
+		{"UPDATE resource_refs SET holder_kind='step',holder_id=? WHERE resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?", []any{
+			operation.ID + ":resource",
+			resource.VMID,
+			sandbox.ID,
+		}},
+		{"INSERT INTO resource_refs VALUES('image',?,'step',?)", []any{
+			resource.Config.Image,
+			operation.ID + ":resource",
+		}},
 	}
 	for _, statement := range statements {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {

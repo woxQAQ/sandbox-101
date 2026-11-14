@@ -46,7 +46,7 @@ lint-fix:
 	golangci-lint run --fix $(GO_WORK_PACKAGES)
 
 fmt:
-	gofmt -w $$(rg --files api cmd sdk integration loom internal protocol/gen -g '*.go' -g '!sandbox.pb.go' -g '!**/third_party/**')
+	go tool structfmt -w $$(rg --files api cmd sdk integration loom internal protocol/gen -g '*.go' -g '!sandbox.pb.go' -g '!**/third_party/**')
 	cargo fmt --all
 
 proto:

@@ -53,7 +53,8 @@ func newVMInventory(t *testing.T, state string, backends ...*host.CloudHyperviso
 			BuildReceipt: requireEnv(t, "SANDBOX_E2E_BUILD_RECEIPT"),
 			CgroupRoot:   requireEnv(t, "SANDBOX_E2E_CGROUP_ROOT"),
 			IOMax:        requireEnv(t, "SANDBOX_E2E_IO_MAX"),
-			UID:          vmmIdentity(t, "SANDBOX_E2E_VMM_UID"), GID: vmmIdentity(t, "SANDBOX_E2E_VMM_GID"),
+			UID:          vmmIdentity(t, "SANDBOX_E2E_VMM_UID"),
+			GID:          vmmIdentity(t, "SANDBOX_E2E_VMM_GID"),
 		})
 	}
 	var err error
@@ -101,7 +102,15 @@ func (inventory *vmInventory) GetVM(ctx context.Context, id string) (vmObservati
 	if err != nil || !observation.Alive {
 		return vm, fmt.Errorf("actual VM inspection: alive=%v: %w", observation.Alive, err)
 	}
-	vm = vmObservation{ID: id, Instance: record.Resource.Instance, PID: observation.PID, StartTime: observation.StartTime, Verified: record.Verified, AgentReady: record.AgentReady, NetworkActual: observation.Network}
+	vm = vmObservation{
+		ID:            id,
+		Instance:      record.Resource.Instance,
+		PID:           observation.PID,
+		StartTime:     observation.StartTime,
+		Verified:      record.Verified,
+		AgentReady:    record.AgentReady,
+		NetworkActual: observation.Network,
+	}
 	var policyRaw []byte
 	err = inventory.db.QueryRowContext(ctx, "SELECT instance,body FROM network_policies WHERE vm_id=?", id).Scan(&vm.NetworkPolicyInstance, &policyRaw)
 	if err == nil {
@@ -165,19 +174,41 @@ func startHaven(t *testing.T, ctx context.Context, artifacts, materials, cgroup,
 		return nil, err
 	}
 	args := []string{
-		"--state-dir=/run/p/e", "--socket=/run/p/manage/control.sock", "--listen=" + address,
-		"--root-token-file=/run/p/root-token", "--cloud-hypervisor=" + filepath.Join(materials, "cloud-hypervisor"),
-		"--build-receipt=" + filepath.Join(materials, "cloud-hypervisor.json"), "--cgroup-root=" + cgroup,
-		"--host-policy=" + filepath.Join(artifacts, "host-policy.json"), "--io-max=" + ioMax,
-		"--vmm-uid=65534", "--vmm-gid=65534", "--max-memory-mib=4096", "--max-vcpus=8",
+		"--state-dir=/run/p/e",
+		"--socket=/run/p/manage/control.sock",
+		"--listen=" + address,
+		"--root-token-file=/run/p/root-token",
+		"--cloud-hypervisor=" + filepath.Join(materials, "cloud-hypervisor"),
+		"--build-receipt=" + filepath.Join(materials, "cloud-hypervisor.json"),
+		"--cgroup-root=" + cgroup,
+		"--host-policy=" + filepath.Join(artifacts, "host-policy.json"),
+		"--io-max=" + ioMax,
+		"--vmm-uid=65534",
+		"--vmm-gid=65534",
+		"--max-memory-mib=4096",
+		"--max-vcpus=8",
 	}
 	retainConsoles(t, artifacts, cgroup)
 	process := startProcess(t, artifacts, "haven-1", "/run/p/bin/haven", append(append([]string{}, args...), "--init")...)
-	t.Cleanup(func() { process.stop(t) })
+	t.Cleanup(func() {
+		process.stop(t)
+	})
 	client := sdk.New("http://"+address, token)
-	awaitProcess(t, ctx, process, func(attempt context.Context) error { _, err := client.List(attempt); return err })
+	awaitProcess(t, ctx, process, func(attempt context.Context) error {
+		_, err := client.List(attempt)
+		return err
+	})
 	management := sdk.NewManagement("/run/p/manage/control.sock")
-	response, err := management.Manage(ctx, api.ManagementRequest{Action: "import", Key: "runtime-import", Import: &api.ImageImport{Layout: layout, Digest: image, MaxBytes: 512 << 20, MaxFiles: 100000}})
+	response, err := management.Manage(ctx, api.ManagementRequest{
+		Action: "import",
+		Key:    "runtime-import",
+		Import: &api.ImageImport{
+			Layout:   layout,
+			Digest:   image,
+			MaxBytes: 512 << 20,
+			MaxFiles: 100000,
+		},
+	})
 	if err != nil || response.Operation == nil || response.Operation.Status != "succeeded" || response.Operation.Result.ImageDigest != image {
 		return nil, fmt.Errorf("OCI import through Haven: %+v: %w", response, err)
 	}
@@ -189,5 +220,10 @@ func startHaven(t *testing.T, ctx context.Context, artifacts, materials, cgroup,
 	if err != nil || businessStatus.StoreID != managementStatus.StoreID {
 		return nil, fmt.Errorf("business and management store differ: %w", err)
 	}
-	return &runningHaven{process: process, client: client, token: token, args: args}, nil
+	return &runningHaven{
+		process: process,
+		client:  client,
+		token:   token,
+		args:    args,
+	}, nil
 }

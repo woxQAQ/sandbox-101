@@ -16,10 +16,14 @@ import (
 	"github.com/woxQAQ/haven/internal/httpwire"
 )
 
-type Adapter struct{ service *haven.Service }
+type Adapter struct {
+	service *haven.Service
+}
 
 func New(service *haven.Service) http.Handler {
-	adapter := &Adapter{service: service}
+	adapter := &Adapter{
+		service: service,
+	}
 	router := gin.New()
 	router.RedirectTrailingSlash = false
 	router.RedirectFixedPath = false
@@ -42,10 +46,23 @@ func New(service *haven.Service) http.Handler {
 				return
 			}
 		}
-		writeJSON(c.Writer, 405, &api.Error{Code: api.ErrInvalid, Message: "method not allowed"})
+		writeJSON(c.Writer, 405, &api.Error{
+			Code:    api.ErrInvalid,
+			Message: "method not allowed",
+		})
 	})
-	router.Match([]string{http.MethodGet, http.MethodHead}, "/healthz", func(c *gin.Context) { writeJSON(c.Writer, 200, map[string]string{"status": "ok"}) })
-	router.Match([]string{http.MethodGet, http.MethodHead}, "/metrics", adapter.authenticate, adapter.metrics)
+	router.Match([]string{
+		http.MethodGet,
+		http.MethodHead,
+	}, "/healthz", func(c *gin.Context) {
+		writeJSON(c.Writer, 200, map[string]string{
+			"status": "ok",
+		})
+	})
+	router.Match([]string{
+		http.MethodGet,
+		http.MethodHead,
+	}, "/metrics", adapter.authenticate, adapter.metrics)
 	router.Any("/preview/*path", gin.WrapF(adapter.preview))
 	v1 := router.Group("/v1", adapter.authenticate)
 	v1.POST("/tenants", adapter.putTenant)
@@ -59,7 +76,9 @@ func New(service *haven.Service) http.Handler {
 			return
 		}
 		service.Drain()
-		writeJSON(c.Writer, 200, map[string]bool{"draining": true})
+		writeJSON(c.Writer, 200, map[string]bool{
+			"draining": true,
+		})
 	})
 	v1.GET("/sandboxes", func(c *gin.Context) {
 		value, err := service.List(c.Request.Context(), principal(c))
@@ -81,16 +100,32 @@ func New(service *haven.Service) http.Handler {
 		value, err := service.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
 		respond(c.Writer, value, err)
 	})
-	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) { adapter.relay(c.Writer, c.Request, principal(c), c.Param("id")) })
-	v1.POST("/claim", func(c *gin.Context) { adapter.mutate(c, "claim", "", "") })
-	v1.POST("/templates", func(c *gin.Context) { adapter.mutate(c, "template_put", "", "") })
-	v1.DELETE("/sandboxes/:id", func(c *gin.Context) { adapter.mutate(c, "release", c.Param("id"), "") })
-	v1.POST("/sandboxes/:id/:action", func(c *gin.Context) { adapter.mutate(c, c.Param("action"), c.Param("id"), "") })
-	v1.DELETE("/checkpoints/:id", func(c *gin.Context) { adapter.mutate(c, "delete_checkpoint", "", c.Param("id")) })
-	v1.POST("/checkpoints/:id/fork", func(c *gin.Context) { adapter.mutate(c, "fork", "", c.Param("id")) })
+	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) {
+		adapter.relay(c.Writer, c.Request, principal(c), c.Param("id"))
+	})
+	v1.POST("/claim", func(c *gin.Context) {
+		adapter.mutate(c, "claim", "", "")
+	})
+	v1.POST("/templates", func(c *gin.Context) {
+		adapter.mutate(c, "template_put", "", "")
+	})
+	v1.DELETE("/sandboxes/:id", func(c *gin.Context) {
+		adapter.mutate(c, "release", c.Param("id"), "")
+	})
+	v1.POST("/sandboxes/:id/:action", func(c *gin.Context) {
+		adapter.mutate(c, c.Param("action"), c.Param("id"), "")
+	})
+	v1.DELETE("/checkpoints/:id", func(c *gin.Context) {
+		adapter.mutate(c, "delete_checkpoint", "", c.Param("id"))
+	})
+	v1.POST("/checkpoints/:id/fork", func(c *gin.Context) {
+		adapter.mutate(c, "fork", "", c.Param("id"))
+	})
 	return router
 }
-func principal(c *gin.Context) haven.Principal { return c.MustGet("principal").(haven.Principal) }
+func principal(c *gin.Context) haven.Principal {
+	return c.MustGet("principal").(haven.Principal)
+}
 func (adapter *Adapter) authenticate(c *gin.Context) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
@@ -137,7 +172,12 @@ func (adapter *Adapter) putTenant(c *gin.Context) {
 		}
 		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
 	}
-	_, err := adapter.service.PutTenant(c.Request.Context(), owner, haven.Tenant{ID: value.ID, Token: value.Token, MaxSandboxes: value.MaxSandboxes, MaxStorageMiB: value.MaxStorageMiB})
+	_, err := adapter.service.PutTenant(c.Request.Context(), owner, haven.Tenant{
+		ID:            value.ID,
+		Token:         value.Token,
+		MaxSandboxes:  value.MaxSandboxes,
+		MaxStorageMiB: value.MaxStorageMiB,
+	})
 	if err != nil {
 		writeError(c.Writer, err)
 		return
@@ -160,7 +200,15 @@ func (adapter *Adapter) metrics(c *gin.Context) {
 		counts[sandbox.State]++
 	}
 	c.Header("Content-Type", "text/plain; version=0.0.4")
-	for _, state := range []string{"provisioning", "running", "pausing", "paused", "resuming", "failed", "terminated"} {
+	for _, state := range []string{
+		"provisioning",
+		"running",
+		"pausing",
+		"paused",
+		"resuming",
+		"failed",
+		"terminated",
+	} {
 		if _, err = fmt.Fprintf(c.Writer, "sandboxd_sandboxes{state=%q} %d\n", state, counts[state]); err != nil {
 			return
 		}
@@ -270,9 +318,15 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 	}
 	respond(c.Writer, view.Result, nil)
 }
-func writeJSON(w http.ResponseWriter, status int, value any) { httpwire.JSON(w, status, value) }
-func writeError(w http.ResponseWriter, err error)            { httpwire.Error(w, err) }
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	httpwire.JSON(w, status, value)
+}
+func writeError(w http.ResponseWriter, err error) {
+	httpwire.Error(w, err)
+}
 func readJSON(w http.ResponseWriter, r *http.Request, value any) error {
 	return httpwire.ReadJSON(w, r, value)
 }
-func respond(w http.ResponseWriter, value any, err error) { httpwire.Respond(w, value, err) }
+func respond(w http.ResponseWriter, value any, err error) {
+	httpwire.Respond(w, value, err)
+}

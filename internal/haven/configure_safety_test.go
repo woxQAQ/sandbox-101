@@ -29,12 +29,36 @@ func waitFixtureWorker(t *testing.T, service *Service, id string) {
 }
 
 func TestHavenConfigureFailureMatrix(t *testing.T) {
-	for _, stage := range []string{"inspect", "network_off", "info", "activate", "bind", "save_intent", "running_save", "final_settings", "fence_delete", "fence_ignored", "operation_result", "commit"} {
+	for _, stage := range []string{
+		"inspect",
+		"network_off",
+		"info",
+		"activate",
+		"bind",
+		"save_intent",
+		"running_save",
+		"final_settings",
+		"fence_delete",
+		"fence_ignored",
+		"operation_result",
+		"commit",
+	} {
 		t.Run(stage, func(t *testing.T) {
 			service, runtime, guest, manager := sandboxFixture(t)
-			principal := Principal{TenantID: "tenant"}
-			wide := egress.Policy{Mode: "relay", AllowedHosts: []string{"old.invalid"}}
-			claim := claimSandbox(t, service, "claim", map[string]EnvVar{"REVISION": {Value: "old"}}, wide)
+			principal := Principal{
+				TenantID: "tenant",
+			}
+			wide := egress.Policy{
+				Mode: "relay",
+				AllowedHosts: []string{
+					"old.invalid",
+				},
+			}
+			claim := claimSandbox(t, service, "claim", map[string]EnvVar{
+				"REVISION": {
+					Value: "old",
+				},
+			}, wide)
 			before, err := service.Get(context.Background(), principal, claim.Result.SandboxID)
 			if err != nil {
 				t.Fatal(err)
@@ -43,7 +67,9 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = connection.Close() }()
+			defer func() {
+				_ = connection.Close()
+			}()
 			waitFixtureWorker(t, service, claim.ID)
 			var statement string
 			switch stage {
@@ -94,7 +120,21 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			command := Command{Action: "configure", SandboxID: before.ID, Env: map[string]EnvVar{"REVISION": {Value: "new"}}, Policy: egress.Policy{Mode: "relay", AllowedHosts: []string{"new.invalid"}}}
+			command := Command{
+				Action:    "configure",
+				SandboxID: before.ID,
+				Env: map[string]EnvVar{
+					"REVISION": {
+						Value: "new",
+					},
+				},
+				Policy: egress.Policy{
+					Mode: "relay",
+					AllowedHosts: []string{
+						"new.invalid",
+					},
+				},
+			}
 			failed, err := service.Execute(ctx, principal, "configure", command)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("failure changed accepted goal", failed, err)

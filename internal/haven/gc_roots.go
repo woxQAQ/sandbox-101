@@ -11,11 +11,15 @@ import (
 // gcGraphFence checks normalized roots before any collector can be admitted.
 // Unknown relationships are retained instead of being treated as absent users.
 func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
-	tx, err := service.store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := service.store.db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly: true,
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	var deferred []GCItem
 	violations, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
 	if err != nil {
@@ -27,7 +31,10 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 		return nil, err
 	}
 	if invalid {
-		deferred = append(deferred, GCItem{Kind: "metadata", Reason: "dangling normalized root reference"})
+		deferred = append(deferred, GCItem{
+			Kind:   "metadata",
+			Reason: "dangling normalized root reference",
+		})
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT resource_kind,resource_id,holder_kind,holder_id FROM resource_refs ORDER BY resource_kind,resource_id")
 	if err != nil {
@@ -41,7 +48,11 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 		validKind := kind == "vm" || kind == "image" || kind == "snapshot"
 		validHolder := holder == "template" || holder == "vm" || holder == "snapshot" || holder == "capture" || holder == "step" || holder == "checkpoint" || holder == "checkpoint_binding" || holder == "warm" || holder == "sleep" || holder == "backing" || holder == "sandbox" || holder == "cleanup"
 		if !validKind || !validHolder || id == "" || owner == "" {
-			deferred = append(deferred, GCItem{Kind: "metadata", ID: id, Reason: "unknown resource reference root"})
+			deferred = append(deferred, GCItem{
+				Kind:   "metadata",
+				ID:     id,
+				Reason: "unknown resource reference root",
+			})
 		}
 	}
 	if err = errors.Join(err, rows.Err(), rows.Close()); err != nil {
@@ -64,7 +75,11 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 	}
 	for _, pair := range templates {
 		if _, err = loadOwnedTemplate(ctx, tx, pair[1], pair[0]); err != nil {
-			deferred = append(deferred, GCItem{Kind: "template", ID: pair[0], Reason: "template publication root is unresolved or inconsistent"})
+			deferred = append(deferred, GCItem{
+				Kind:   "template",
+				ID:     pair[0],
+				Reason: "template publication root is unresolved or inconsistent",
+			})
 		}
 	}
 	rows, err = tx.QueryContext(ctx, "SELECT snapshot_id,operation_id,step_key FROM source_leases ORDER BY operation_id")
@@ -117,7 +132,11 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 			proofErr = fmt.Errorf("unknown source lease purpose")
 		}
 		if proofErr != nil {
-			deferred = append(deferred, GCItem{Kind: "source_lease", ID: lease[1], Reason: "source lease lacks matching immutable dependency"})
+			deferred = append(deferred, GCItem{
+				Kind:   "source_lease",
+				ID:     lease[1],
+				Reason: "source lease lacks matching immutable dependency",
+			})
 		}
 	}
 	rows, err = tx.QueryContext(ctx, "SELECT id FROM resource_versions ORDER BY id")
@@ -139,23 +158,39 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 	for _, id := range versions {
 		source, lookup := loadStep(ctx, tx, id)
 		if lookup != nil {
-			deferred = append(deferred, GCItem{Kind: "version", ID: id, Reason: "resource version lacks original step"})
+			deferred = append(deferred, GCItem{
+				Kind:   "version",
+				ID:     id,
+				Reason: "resource version lacks original step",
+			})
 			continue
 		}
 		if !source.State.BackingReady {
 			continue
 		}
 		if source.Input.Restore == nil {
-			deferred = append(deferred, GCItem{Kind: "backing", ID: id, Reason: "backing lacks original source"})
+			deferred = append(deferred, GCItem{
+				Kind:   "backing",
+				ID:     id,
+				Reason: "backing lacks original source",
+			})
 			continue
 		}
 		path := filepath.Join(source.Input.Resource.RestoreDir, "memory-ranges")
 		if knownBackings[path] {
-			deferred = append(deferred, GCItem{Kind: "backing", ID: id, Reason: "ambiguous physical backing root"})
+			deferred = append(deferred, GCItem{
+				Kind:   "backing",
+				ID:     id,
+				Reason: "ambiguous physical backing root",
+			})
 		}
 		knownBackings[path] = true
 		if err = service.restoreRelations(ctx, tx, source); err != nil {
-			deferred = append(deferred, GCItem{Kind: "backing", ID: id, Reason: "backing responsibility or original material proof inconsistent"})
+			deferred = append(deferred, GCItem{
+				Kind:   "backing",
+				ID:     id,
+				Reason: "backing responsibility or original material proof inconsistent",
+			})
 		}
 	}
 	rows, err = tx.QueryContext(ctx, "SELECT path FROM backing ORDER BY path")
@@ -168,7 +203,11 @@ func (service *Service) gcGraphFence(ctx context.Context) ([]GCItem, error) {
 			break
 		}
 		if !knownBackings[path] {
-			deferred = append(deferred, GCItem{Kind: "backing", ID: path, Reason: "physical backing lacks known resource generation"})
+			deferred = append(deferred, GCItem{
+				Kind:   "backing",
+				ID:     path,
+				Reason: "physical backing lacks known resource generation",
+			})
 		}
 	}
 	if err = errors.Join(err, rows.Err(), rows.Close()); err != nil {

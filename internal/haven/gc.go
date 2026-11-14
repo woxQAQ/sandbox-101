@@ -31,7 +31,9 @@ type (
 )
 
 func loadGC(ctx context.Context, q queryer, id string) (gcStep, error) {
-	step := gcStep{OperationID: id}
+	step := gcStep{
+		OperationID: id,
+	}
 	var payload, body []byte
 	var action, candidate, expected string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,action,candidate_resource_id,expected_instance FROM operation_steps WHERE operation_id=? AND step_key='gc'", id).Scan(&step.Hash, &payload, &step.Status, &body, &action, &candidate, &expected)
@@ -59,7 +61,16 @@ func (service *Service) CollectGarbage(ctx context.Context, principal Principal,
 		return empty, loom.Fail(loom.NotFound, "not found")
 	}
 	if service.store.reviewed {
-		return GCReport{DryRun: options.DryRun, Blocked: true, Deferred: []GCItem{{Kind: "recovery", Reason: "reviewed rollback has no complete ownership history"}}}, nil
+		return GCReport{
+			DryRun:  options.DryRun,
+			Blocked: true,
+			Deferred: []GCItem{
+				{
+					Kind:   "recovery",
+					Reason: "reviewed rollback has no complete ownership history",
+				},
+			},
+		}, nil
 	}
 	if options.Batch == 0 {
 		options.Batch = 16
@@ -70,7 +81,10 @@ func (service *Service) CollectGarbage(ctx context.Context, principal Principal,
 	if options.Batch < 1 || options.Batch > 1024 || options.Budget <= 0 {
 		return empty, loom.Fail(loom.Invalid, "invalid GC batch or budget")
 	}
-	requestGuard := service.vmLock("node-request:" + string(encode([]string{service.store.identity.Identity, key})))
+	requestGuard := service.vmLock("node-request:" + string(encode([]string{
+		service.store.identity.Identity,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	request := encode(struct {
@@ -95,11 +109,27 @@ func (service *Service) CollectGarbage(ctx context.Context, principal Principal,
 	budgetCtx, cancel := context.WithTimeout(ctx, options.Budget)
 	defer cancel()
 	if !service.gcMu.TryLock() {
-		return GCReport{DryRun: options.DryRun, Deferred: []GCItem{{Kind: "busy", Reason: "another collector owns inventory"}}}, nil
+		return GCReport{
+			DryRun: options.DryRun,
+			Deferred: []GCItem{
+				{
+					Kind:   "busy",
+					Reason: "another collector owns inventory",
+				},
+			},
+		}, nil
 	}
 	defer service.gcMu.Unlock()
 	if !service.artifacts.TryLock() {
-		return GCReport{DryRun: options.DryRun, Deferred: []GCItem{{Kind: "busy", Reason: "artifact publication active"}}}, nil
+		return GCReport{
+			DryRun: options.DryRun,
+			Deferred: []GCItem{
+				{
+					Kind:   "busy",
+					Reason: "artifact publication active",
+				},
+			},
+		}, nil
 	}
 	report, err := service.gcInventory(budgetCtx)
 	service.artifacts.Unlock()
@@ -127,9 +157,19 @@ func (service *Service) CollectGarbage(ctx context.Context, principal Principal,
 		return report, err
 	}
 	deadline, _ := budgetCtx.Deadline()
-	operation := Operation{ID: newID("op-"), Key: key, Status: "pending"}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    key,
+		Status: "pending",
+	}
 	report.OperationID = operation.ID
-	input := gcInput{StoreID: service.store.identity.Identity, RequestTenantID: principal.TenantID, Options: options, Deadline: deadline, Report: report}
+	input := gcInput{
+		StoreID:         service.store.identity.Identity,
+		RequestTenantID: principal.TenantID,
+		Options:         options,
+		Deadline:        deadline,
+		Report:          report,
+	}
 	payload := encode(input)
 	service.admission.Lock()
 	if err = service.checkAdmissionOpen(); err == nil {
@@ -140,8 +180,26 @@ func (service *Service) CollectGarbage(ctx context.Context, principal Principal,
 				q    string
 				args []any
 			}{
-				{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "node", service.store.identity.Identity, key, hash, request, "pending", encode(operation.Result)}},
-				{"INSERT INTO operation_steps VALUES(?,'gc','gc',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, input.StoreID, "", encode(gcState{Report: report})}},
+				{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+					operation.ID,
+					"node",
+					service.store.identity.Identity,
+					key,
+					hash,
+					request,
+					"pending",
+					encode(operation.Result),
+				}},
+				{"INSERT INTO operation_steps VALUES(?,'gc','gc',?,?,?,?,'pending',?)", []any{
+					operation.ID,
+					digest(payload),
+					payload,
+					input.StoreID,
+					"",
+					encode(gcState{
+						Report: report,
+					}),
+				}},
 			} {
 				if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 					break
@@ -181,7 +239,9 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 	key := parent.OperationID + ":" + item.Kind + ":" + item.ID
 	switch item.Kind {
 	case "image_work", "image_cache":
-		request := ImageCleanupRequest{ImportOperationID: item.ID}
+		request := ImageCleanupRequest{
+			ImportOperationID: item.ID,
+		}
 		if item.Kind == "image_cache" {
 			record, err := loadImageCache(ctx, service.store.db, item.CacheBuilder, item.CacheDiffID)
 			if err != nil {
@@ -190,7 +250,10 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 			if digest(encode(record)) != item.Proof {
 				return Operation{}, "", loom.Fail(loom.ManualRecovery, "GC frozen cache ownership changed")
 			}
-			request = ImageCleanupRequest{CacheBuilder: item.CacheBuilder, CacheDiffID: item.CacheDiffID}
+			request = ImageCleanupRequest{
+				CacheBuilder: item.CacheBuilder,
+				CacheDiffID:  item.CacheDiffID,
+			}
 		} else {
 			source, err := loadImageImport(ctx, service.store.db, item.ID)
 			if err != nil {
@@ -200,7 +263,10 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 				return Operation{}, "", loom.Fail(loom.ManualRecovery, "GC frozen import ownership changed")
 			}
 		}
-		result, err := service.AdmitImageCleanup(ctx, Principal{Root: true, TenantID: parent.Input.RequestTenantID}, key, request)
+		result, err := service.AdmitImageCleanup(ctx, Principal{
+			Root:     true,
+			TenantID: parent.Input.RequestTenantID,
+		}, key, request)
 		return result, "", err
 	case "supply":
 		source, err := loadSupply(ctx, service.store.db, item.ID)
@@ -210,7 +276,12 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 		if source.Hash != item.Proof {
 			return Operation{}, "", loom.Fail(loom.ManualRecovery, "GC frozen supply input changed")
 		}
-		result, err := service.AdmitSupplyCleanup(ctx, Principal{Root: true, TenantID: parent.Input.RequestTenantID}, key, SupplyCleanupRequest{OperationID: item.ID})
+		result, err := service.AdmitSupplyCleanup(ctx, Principal{
+			Root:     true,
+			TenantID: parent.Input.RequestTenantID,
+		}, key, SupplyCleanupRequest{
+			OperationID: item.ID,
+		})
 		return result, "", err
 	case "snapshot":
 		source, err := service.snapshotPublication(ctx, service.store.db, item.TenantID, item.ID)
@@ -227,7 +298,11 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 		if !eligible {
 			return Operation{}, "", loom.Fail(loom.Conflict, "snapshot gained an active consumer")
 		}
-		result, err := service.AdmitSnapshotDelete(ctx, SnapshotDeleteRequest{TenantID: item.TenantID, Key: key, SnapshotID: item.ID})
+		result, err := service.AdmitSnapshotDelete(ctx, SnapshotDeleteRequest{
+			TenantID:   item.TenantID,
+			Key:        key,
+			SnapshotID: item.ID,
+		})
 		return result, item.TenantID, err
 	case "raw_capture":
 		capture, err := loadCapture(ctx, service.store.db, item.ID)
@@ -237,7 +312,12 @@ func (service *Service) gcChild(ctx context.Context, parent gcStep, item GCItem)
 		if capture.Hash != item.Proof {
 			return Operation{}, "", loom.Fail(loom.ManualRecovery, "GC frozen raw capture changed")
 		}
-		result, err := service.AdmitCaptureCleanup(ctx, CaptureCleanupRequest{TenantID: item.TenantID, Key: key, CaptureOperationID: item.ID, StopOperationID: item.OperationID})
+		result, err := service.AdmitCaptureCleanup(ctx, CaptureCleanupRequest{
+			TenantID:           item.TenantID,
+			Key:                key,
+			CaptureOperationID: item.ID,
+			StopOperationID:    item.OperationID,
+		})
 		return result, item.TenantID, err
 	default:
 		return Operation{}, "", loom.Fail(loom.Invalid, "unsupported GC candidate")
@@ -251,7 +331,10 @@ func (service *Service) runGC(step gcStep) error {
 	ctx, cancel := context.WithDeadline(service.ctx, step.Input.Deadline)
 	defer cancel()
 	if !service.artifacts.TryLock() {
-		step.State.Report.Deferred = append(step.State.Report.Deferred, GCItem{Kind: "busy", Reason: "artifact publication active"})
+		step.State.Report.Deferred = append(step.State.Report.Deferred, GCItem{
+			Kind:   "busy",
+			Reason: "artifact publication active",
+		})
 		step.State.Next = len(step.Input.Report.Candidates)
 	} else {
 		service.artifacts.Unlock()
@@ -270,9 +353,13 @@ func (service *Service) runGC(step gcStep) error {
 				item.OperationID = child.ID
 				if err == nil {
 					if scope == "" {
-						_, err = service.WaitManagement(ctx, Principal{Root: true}, child.ID)
+						_, err = service.WaitManagement(ctx, Principal{
+							Root: true,
+						}, child.ID)
 					} else {
-						_, err = service.Wait(ctx, Principal{TenantID: scope}, child.ID)
+						_, err = service.Wait(ctx, Principal{
+							TenantID: scope,
+						}, child.ID)
 					}
 				}
 			}
@@ -299,7 +386,9 @@ func (service *Service) saveGC(step gcStep, complete bool) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	status := "running"
 	if complete {
 		status = "succeeded"

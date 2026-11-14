@@ -23,7 +23,16 @@ type Template struct {
 }
 
 func publicTemplate(record templateRecord) Template {
-	return Template{ID: record.ID, TenantID: record.TenantID, Image: record.Config.Image, Shape: record.Config.Shape, SnapshotID: record.SnapshotID, State: record.State, TargetWarm: record.TargetWarm, Warmup: record.Warmup}
+	return Template{
+		ID:         record.ID,
+		TenantID:   record.TenantID,
+		Image:      record.Config.Image,
+		Shape:      record.Config.Shape,
+		SnapshotID: record.SnapshotID,
+		State:      record.State,
+		TargetWarm: record.TargetWarm,
+		Warmup:     record.Warmup,
+	}
 }
 
 func (service *Service) GetTemplate(ctx context.Context, principal Principal, id string) (Template, error) {
@@ -79,7 +88,9 @@ type (
 )
 
 func loadSupply(ctx context.Context, q queryer, id string) (supplyStep, error) {
-	step := supplyStep{OperationID: id}
+	step := supplyStep{
+		OperationID: id,
+	}
 	var input, body []byte
 	var candidate, expected, action string
 	err := q.QueryRowContext(ctx, "SELECT input_hash,input,status,body,candidate_resource_id,expected_instance,action FROM operation_steps WHERE operation_id=? AND step_key='supply'", id).Scan(&step.Hash, &input, &step.Status, &body, &candidate, &expected, &action)

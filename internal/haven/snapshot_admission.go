@@ -52,7 +52,9 @@ func (service *Service) admitCapture(ctx context.Context, request CaptureRequest
 	if err != nil {
 		return empty, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	if cached, found, err := cachedOperation(ctx, tx, request.TenantID, request.Key, hash); found || err != nil {
 		if found && err == nil && !terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -113,9 +115,33 @@ func (service *Service) admitCapture(ctx context.Context, request CaptureRequest
 	if held > free || service.opts.SafetyBytes > free-held || reserve > free-held-service.opts.SafetyBytes {
 		return empty, loom.Fail(loom.Exhausted, "capture host peak reservation exhausted")
 	}
-	operation := Operation{ID: newID("op-"), Key: request.Key, Status: "pending", Result: operationResult{SandboxID: sandbox.ID, VMID: sandbox.VMID, SnapshotID: newID("snap-")}}
-	snapshot := snapshotRecord{ID: operation.Result.SnapshotID, TenantID: request.TenantID, OperationID: operation.ID, SourceVM: sandbox.VMID, SourceInstance: request.ExpectedInstance, Dir: filepath.Join(service.store.directory, "snapshots", operation.Result.SnapshotID)}
-	input := captureInput{Request: request, Source: source, Sandbox: sandbox, Snapshot: snapshot, Backend: compatibility, Architecture: runtime.GOARCH, CPU: cpu}
+	operation := Operation{
+		ID:     newID("op-"),
+		Key:    request.Key,
+		Status: "pending",
+		Result: operationResult{
+			SandboxID:  sandbox.ID,
+			VMID:       sandbox.VMID,
+			SnapshotID: newID("snap-"),
+		},
+	}
+	snapshot := snapshotRecord{
+		ID:             operation.Result.SnapshotID,
+		TenantID:       request.TenantID,
+		OperationID:    operation.ID,
+		SourceVM:       sandbox.VMID,
+		SourceInstance: request.ExpectedInstance,
+		Dir:            filepath.Join(service.store.directory, "snapshots", operation.Result.SnapshotID),
+	}
+	input := captureInput{
+		Request:      request,
+		Source:       source,
+		Sandbox:      sandbox,
+		Snapshot:     snapshot,
+		Backend:      compatibility,
+		Architecture: runtime.GOARCH,
+		CPU:          cpu,
+	}
 	payload := encode(input)
 	if err = service.admitResourceParent(ctx, tx, parent, operation, "capture", snapshot.ID, hash); err != nil {
 		return empty, err
@@ -124,16 +150,64 @@ func (service *Service) admitCapture(ctx context.Context, request CaptureRequest
 		q    string
 		args []any
 	}{
-		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{operation.ID, "tenant", request.TenantID, request.Key, hash, frozen, "pending", encode(operation.Result)}},
-		{"INSERT INTO operation_steps VALUES(?,'capture','snapshot',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, snapshot.ID, request.ExpectedInstance, encode(captureState{Phase: "admitted"})}},
-		{"INSERT INTO snapshots VALUES(?,?,0,0,?)", []any{snapshot.ID, sandbox.VMID, encode(snapshot)}},
-		{"INSERT INTO snapshot_owners VALUES(?,?,?,'capture')", []any{snapshot.ID, request.TenantID, operation.ID}},
-		{"INSERT INTO reservations VALUES(?,?,0,0)", []any{"snapshot:" + snapshot.ID, reserve}},
-		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{request.TenantID, operation.ID + ":capture", cost, operation.ID}},
-		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{request.TenantID, operation.ID + ":capture", operation.ID + ":capture"}},
-		{"INSERT INTO resource_refs VALUES('vm',?,'capture',?)", []any{sandbox.VMID, operation.ID}},
-		{"INSERT INTO resource_refs VALUES('image',?,'capture',?)", []any{vm.Resource.Config.Image, operation.ID}},
-		{"UPDATE vms SET operation_id=? WHERE id=? AND current_instance=? AND operation_id IS NULL AND state='running'", []any{operation.ID, sandbox.VMID, request.ExpectedInstance}},
+		{"INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", []any{
+			operation.ID,
+			"tenant",
+			request.TenantID,
+			request.Key,
+			hash,
+			frozen,
+			"pending",
+			encode(operation.Result),
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'capture','snapshot',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			snapshot.ID,
+			request.ExpectedInstance,
+			encode(captureState{
+				Phase: "admitted",
+			}),
+		}},
+		{"INSERT INTO snapshots VALUES(?,?,0,0,?)", []any{
+			snapshot.ID,
+			sandbox.VMID,
+			encode(snapshot),
+		}},
+		{"INSERT INTO snapshot_owners VALUES(?,?,?,'capture')", []any{
+			snapshot.ID,
+			request.TenantID,
+			operation.ID,
+		}},
+		{"INSERT INTO reservations VALUES(?,?,0,0)", []any{
+			"snapshot:" + snapshot.ID,
+			reserve,
+		}},
+		{"INSERT INTO quota_resources VALUES(?,'pending_storage',?,0,?,?)", []any{
+			request.TenantID,
+			operation.ID + ":capture",
+			cost,
+			operation.ID,
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'pending_storage',?,'engine_dependency',?)", []any{
+			request.TenantID,
+			operation.ID + ":capture",
+			operation.ID + ":capture",
+		}},
+		{"INSERT INTO resource_refs VALUES('vm',?,'capture',?)", []any{
+			sandbox.VMID,
+			operation.ID,
+		}},
+		{"INSERT INTO resource_refs VALUES('image',?,'capture',?)", []any{
+			vm.Resource.Config.Image,
+			operation.ID,
+		}},
+		{"UPDATE vms SET operation_id=? WHERE id=? AND current_instance=? AND operation_id IS NULL AND state='running'", []any{
+			operation.ID,
+			sandbox.VMID,
+			request.ExpectedInstance,
+		}},
 	}
 	for _, statement := range statements {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {

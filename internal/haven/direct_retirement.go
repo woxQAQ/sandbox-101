@@ -41,7 +41,10 @@ func retireDirectGenerations(ctx context.Context, tx *sql.Tx, generations []reso
 		if !known {
 			return fmt.Errorf("direct retirement source generation lacks reclamation proof")
 		}
-		if err = requireWrite(tx.ExecContext(ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(directRetirementState{Phase: "reclaimed", RetiredBy: retirement}), operation, step.Hash, encode(step.State))); err != nil {
+		if err = requireWrite(tx.ExecContext(ctx, "UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key='direct_retirement' AND input_hash=? AND body=? AND status IN ('pending','running')", encode(directRetirementState{
+			Phase:     "reclaimed",
+			RetiredBy: retirement,
+		}), operation, step.Hash, encode(step.State))); err != nil {
 			return err
 		}
 		if err = requireWrite(tx.ExecContext(ctx, "UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND resource_kind='direct_policy' AND status IN ('armed','pending')", "direct_policy:"+operation, operation)); err != nil {

@@ -22,7 +22,13 @@ type (
 )
 
 func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
-	report := GCReport{StartedAt: time.Now().UTC(), Roots: []GCRoot{}, Candidates: []GCItem{}, Collected: []GCItem{}, Deferred: []GCItem{}}
+	report := GCReport{
+		StartedAt:  time.Now().UTC(),
+		Roots:      []GCRoot{},
+		Candidates: []GCItem{},
+		Collected:  []GCItem{},
+		Deferred:   []GCItem{},
+	}
 	graphDeferred, graphErr := service.gcGraphFence(ctx)
 	if graphErr != nil {
 		return report, graphErr
@@ -31,7 +37,11 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 	report.Blocked = len(graphDeferred) != 0
 	known := map[string]bool{}
 	addRoot := func(kind, id, path string) {
-		report.Roots = append(report.Roots, GCRoot{Kind: kind, ID: id, Path: path})
+		report.Roots = append(report.Roots, GCRoot{
+			Kind: kind,
+			ID:   id,
+			Path: path,
+		})
 		if path != "" {
 			known[filepath.Clean(path)] = true
 		}
@@ -63,7 +73,11 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 		directory := filepath.Join(service.store.directory, "images", item.id[7:])
 		if err = verifyImageFiles(image, directory); err != nil {
 			report.Blocked = true
-			report.Deferred = append(report.Deferred, GCItem{Kind: "image", ID: item.id, Reason: "published image root could not be verified"})
+			report.Deferred = append(report.Deferred, GCItem{
+				Kind:   "image",
+				ID:     item.id,
+				Reason: "published image root could not be verified",
+			})
 		}
 		addRoot("image", item.id, directory)
 		for _, artifact := range image.Artifacts {
@@ -96,7 +110,11 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 		}
 		if vm.Resource.VMID != item.id || vm.Resource.Dir != filepath.Join(service.store.directory, "vms", item.id) {
 			report.Blocked = true
-			report.Deferred = append(report.Deferred, GCItem{Kind: "vm", ID: item.id, Reason: "current VM root identity inconsistent"})
+			report.Deferred = append(report.Deferred, GCItem{
+				Kind:   "vm",
+				ID:     item.id,
+				Reason: "current VM root identity inconsistent",
+			})
 		}
 		addRoot("vm", item.id, vm.Resource.Dir)
 	}
@@ -122,7 +140,11 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 	for _, item := range controls {
 		if digest(item.input) != item.hash {
 			report.Blocked = true
-			report.Deferred = append(report.Deferred, GCItem{Kind: "step", ID: item.id, Reason: "immutable step checksum inconsistent"})
+			report.Deferred = append(report.Deferred, GCItem{
+				Kind:   "step",
+				ID:     item.id,
+				Reason: "immutable step checksum inconsistent",
+			})
 		}
 		if !terminal(item.status) && item.status != "blocked" {
 			addRoot("unresolved_step", item.id, "")
@@ -153,7 +175,12 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 			return report, err
 		}
 		if pending == 1 {
-			report.Candidates = append(report.Candidates, GCItem{Kind: "supply", ID: id, TenantID: original.Input.Template.TenantID, Proof: original.Hash})
+			report.Candidates = append(report.Candidates, GCItem{
+				Kind:     "supply",
+				ID:       id,
+				TenantID: original.Input.Template.TenantID,
+				Proof:    original.Hash,
+			})
 		}
 	}
 	rows, err = service.store.db.QueryContext(ctx, "SELECT operation_id FROM pool_slots WHERE status='ready' ORDER BY operation_id")
@@ -185,7 +212,12 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 			if err != nil {
 				return report, err
 			}
-			report.Candidates = append(report.Candidates, GCItem{Kind: "supply", ID: id, TenantID: pool.Template.TenantID, Proof: original.Hash})
+			report.Candidates = append(report.Candidates, GCItem{
+				Kind:     "supply",
+				ID:       id,
+				TenantID: pool.Template.TenantID,
+				Proof:    original.Hash,
+			})
 		}
 	}
 	rows, err = service.store.db.QueryContext(ctx, "SELECT id,body,published,deleting FROM snapshots ORDER BY id")
@@ -222,9 +254,18 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 			return report, err
 		}
 		if candidate {
-			report.Candidates = append(report.Candidates, GCItem{Kind: "snapshot", ID: item.id, TenantID: snapshot.TenantID, Proof: digest(item.body)})
+			report.Candidates = append(report.Candidates, GCItem{
+				Kind:     "snapshot",
+				ID:       item.id,
+				TenantID: snapshot.TenantID,
+				Proof:    digest(item.body),
+			})
 		} else if deferReason != "" {
-			report.Deferred = append(report.Deferred, GCItem{Kind: "snapshot", ID: item.id, Reason: deferReason})
+			report.Deferred = append(report.Deferred, GCItem{
+				Kind:   "snapshot",
+				ID:     item.id,
+				Reason: deferReason,
+			})
 		}
 	}
 	imageRoots, imageCandidates, imageDeferred, imageBlocked, err := service.imageGCInventory(ctx)
@@ -242,7 +283,13 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 	}
 	report.Deferred = append(report.Deferred, imageDeferred...)
 	report.Blocked = report.Blocked || imageBlocked
-	for _, base := range []string{"vms", "snapshots", "images", "imports", "layer-cache"} {
+	for _, base := range []string{
+		"vms",
+		"snapshots",
+		"images",
+		"imports",
+		"layer-cache",
+	} {
 		directory := filepath.Join(service.store.directory, base)
 		entries, err := os.ReadDir(directory)
 		if os.IsNotExist(err) {
@@ -261,7 +308,11 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 				// collection authority from their names or materialized contents.
 				dir, openErr := loom.OpenCaptureDir(path)
 				if openErr != nil {
-					report.Deferred = append(report.Deferred, GCItem{Kind: "unknown_artifact", ID: path, Reason: "cache builder directory could not be safely inspected"})
+					report.Deferred = append(report.Deferred, GCItem{
+						Kind:   "unknown_artifact",
+						ID:     path,
+						Reason: "cache builder directory could not be safely inspected",
+					})
 					continue
 				}
 				children, readErr := dir.ReadDir(-1)
@@ -272,17 +323,29 @@ func (service *Service) gcInventory(ctx context.Context) (GCReport, error) {
 				for _, child := range children {
 					candidate := filepath.Join(path, child.Name())
 					if !known[candidate] {
-						report.Deferred = append(report.Deferred, GCItem{Kind: "unknown_artifact", ID: candidate, Reason: "no exact durable cache collection authority"})
+						report.Deferred = append(report.Deferred, GCItem{
+							Kind:   "unknown_artifact",
+							ID:     candidate,
+							Reason: "no exact durable cache collection authority",
+						})
 					}
 				}
 				continue
 			}
-			report.Deferred = append(report.Deferred, GCItem{Kind: "unknown_artifact", ID: path, Reason: "no exact durable collection authority"})
+			report.Deferred = append(report.Deferred, GCItem{
+				Kind:   "unknown_artifact",
+				ID:     path,
+				Reason: "no exact durable collection authority",
+			})
 		}
 	}
 	if _, err = os.Lstat(filepath.Join(service.store.directory, "RECOVERY_REVIEWED.json")); err == nil {
 		report.Blocked = true
-		report.Deferred = append(report.Deferred, GCItem{Kind: "recovery", ID: "reviewed", Reason: "review does not prove complete ownership history"})
+		report.Deferred = append(report.Deferred, GCItem{
+			Kind:   "recovery",
+			ID:     "reviewed",
+			Reason: "review does not prove complete ownership history",
+		})
 	} else if !os.IsNotExist(err) {
 		return report, err
 	}

@@ -32,7 +32,12 @@ func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 	if step := awaitCapture(t, service, capture.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	fixture := &snapshotDeletionFixture{service: service, runtime: runtime, backend: backend, capture: capture}
+	fixture := &snapshotDeletionFixture{
+		service: service,
+		runtime: runtime,
+		backend: backend,
+		capture: capture,
+	}
 	for index := range clones {
 		operation := admitCloneFixture(t, service, capture.Result.SnapshotID, fmt.Sprintf("delete-clone-%d", index))
 		if step := awaitColdWorker(t, service, operation.ID); step.Status != "succeeded" {
@@ -44,7 +49,11 @@ func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: "release-snapshot-source", SandboxID: original.Input.Request.SandboxID})
+	release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+		TenantID:  "tenant",
+		Key:       "release-snapshot-source",
+		SandboxID: original.Input.Request.SandboxID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +95,11 @@ func snapshotDeleteCost(t *testing.T, fixture *snapshotDeletionFixture, want int
 
 func admitSnapshotDeleteFixture(t *testing.T, fixture *snapshotDeletionFixture) Operation {
 	t.Helper()
-	operation, err := fixture.service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "tenant", Key: "delete-snapshot", SnapshotID: fixture.capture.Result.SnapshotID})
+	operation, err := fixture.service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+		TenantID:   "tenant",
+		Key:        "delete-snapshot",
+		SnapshotID: fixture.capture.Result.SnapshotID,
+	})
 	if err != nil && !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}
@@ -95,7 +108,10 @@ func admitSnapshotDeleteFixture(t *testing.T, fixture *snapshotDeletionFixture) 
 
 func TestHavenSnapshotDelete(t *testing.T) {
 	parallelLifecycle(t)
-	for _, clones := range []int{0, 2} {
+	for _, clones := range []int{
+		0,
+		2,
+	} {
 		t.Run(fmt.Sprint(clones), func(t *testing.T) {
 			fixture := snapshotDeleteFixture(t, clones)
 			service := fixture.service
@@ -117,7 +133,11 @@ func TestHavenSnapshotDelete(t *testing.T) {
 			if _, err = service.GetSnapshot(context.Background(), "tenant", fixture.capture.Result.SnapshotID); err == nil {
 				t.Fatal("deleted snapshot still in catalog")
 			}
-			if _, err = service.AdmitClone(context.Background(), CloneRequest{TenantID: "tenant", Key: "clone-deleted", SnapshotID: fixture.capture.Result.SnapshotID}); err == nil {
+			if _, err = service.AdmitClone(context.Background(), CloneRequest{
+				TenantID:   "tenant",
+				Key:        "clone-deleted",
+				SnapshotID: fixture.capture.Result.SnapshotID,
+			}); err == nil {
 				t.Fatal("deleted snapshot acquired new user")
 			}
 			want := 0
@@ -135,7 +155,11 @@ func TestHavenSnapshotDelete(t *testing.T) {
 				if err = loom.VerifyRestoreMaterials(source.State.Materials, source.Input.Resource, source.Input.Restore.Snapshot.Manifest.Files, false); err != nil {
 					t.Fatal("deletion damaged retained backing", err)
 				}
-				release, err := service.AdmitRelease(context.Background(), ReleaseRequest{TenantID: "tenant", Key: fmt.Sprintf("release-deleted-clone-%d", index), SandboxID: clone.Result.SandboxID})
+				release, err := service.AdmitRelease(context.Background(), ReleaseRequest{
+					TenantID:  "tenant",
+					Key:       fmt.Sprintf("release-deleted-clone-%d", index),
+					SandboxID: clone.Result.SandboxID,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -155,7 +179,11 @@ func TestHavenSnapshotDelete(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(after, original) {
 				t.Fatal("snapshot delete changed original capture result", err)
 			}
-			replay, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{TenantID: "tenant", Key: "delete-snapshot", SnapshotID: fixture.capture.Result.SnapshotID})
+			replay, err := service.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+				TenantID:   "tenant",
+				Key:        "delete-snapshot",
+				SnapshotID: fixture.capture.Result.SnapshotID,
+			})
 			if err != nil || replay.ID != operation.ID || replay.Status != "succeeded" {
 				t.Fatal("snapshot delete same-key replay changed", replay, err)
 			}
@@ -165,7 +193,15 @@ func TestHavenSnapshotDelete(t *testing.T) {
 
 func TestHavenSnapshotDeleteRecovery(t *testing.T) {
 	parallelLifecycle(t)
-	for _, point := range []string{"snapshot_delete_admitted", "snapshot_delete_receipt", "snapshot_delete_unlinked", "snapshot_delete_directory_removed", "snapshot_delete_files_removed", "snapshot_delete_completion_before_commit", "snapshot_delete_completed"} {
+	for _, point := range []string{
+		"snapshot_delete_admitted",
+		"snapshot_delete_receipt",
+		"snapshot_delete_unlinked",
+		"snapshot_delete_directory_removed",
+		"snapshot_delete_files_removed",
+		"snapshot_delete_completion_before_commit",
+		"snapshot_delete_completed",
+	} {
 		t.Run(point, func(t *testing.T) {
 			fixture := snapshotDeleteFixture(t, 0)
 			fixture.service.opts.Fault = func(candidate string) error {

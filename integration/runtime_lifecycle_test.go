@@ -30,7 +30,11 @@ import (
 // real Haven daemon, runs in fresh subordinate-ID, mount, PID and network namespaces.
 // Missing runtime prerequisites fail the test; no backend/agent is mocked.
 func TestHavenRuntimeLifecycle(t *testing.T) {
-	for _, ns := range []string{"user", "net", "mnt"} {
+	for _, ns := range []string{
+		"user",
+		"net",
+		"mnt",
+	} {
 		parent := requireEnv(t, "SANDBOX_RUNTIME_PARENT_"+strings.ToUpper(ns))
 		current, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil || current == parent {
@@ -69,12 +73,19 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 	// Keep the runtime socket paths below sockaddr_un's 108-byte limit, including
 	// the sandbox proxy suffix. The compiled daemon is executable by the dropped
 	// identity, just as their installed /usr/local/bin counterparts would be.
-	for _, dir := range []string{"/run/p", "/run/p/bin", "/run/p/e", "/run/p/backing"} {
+	for _, dir := range []string{
+		"/run/p",
+		"/run/p/bin",
+		"/run/p/e",
+		"/run/p/backing",
+	} {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"haven"} {
+	for _, name := range []string{
+		"haven",
+	} {
 		copyFixtureFile(t, filepath.Join(artifacts, name), "/run/p/bin/"+name, 0o755)
 	}
 	if err := unix.Mount(
@@ -99,7 +110,9 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		"/run/p/backing",
 		"/run/p/e",
 	)
-	t.Cleanup(func() { filesystem.stop(t) })
+	t.Cleanup(func() {
+		filesystem.stop(t)
+	})
 	awaitProcess(t, ctx, filesystem, func(context.Context) error {
 		var stat unix.Statfs_t
 		if err := unix.Statfs("/run/p/e", &stat); err != nil {
@@ -143,7 +156,14 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 			t.Errorf("archive owned engine state: %v: %s", err, out)
 		}
 	})
-	for _, name := range []string{"uid_map", "gid_map", "setgroups", "cgroup", "mountinfo", "status"} {
+	for _, name := range []string{
+		"uid_map",
+		"gid_map",
+		"setgroups",
+		"cgroup",
+		"mountinfo",
+		"status",
+	} {
 		data, err := os.ReadFile("/proc/self/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -220,7 +240,9 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { store.process.stop(t) }()
+	defer func() {
+		store.process.stop(t)
+	}()
 	ec := newVMInventory(t, "/run/p/e", backend)
 	defer ec.Close()
 	client := store.client
@@ -282,7 +304,9 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 				Action:     "claim",
 				TemplateID: "adoption",
 				TTLSeconds: 900,
-				Policy:     api.Policy{Mode: "none"},
+				Policy: api.Policy{
+					Mode: "none",
+				},
 			},
 		)
 		if err != nil {
@@ -295,7 +319,9 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 				cleanup,
 				claim.Sandbox.ID,
 				"adoption-release",
-				api.Command{Action: "release"},
+				api.Command{
+					Action: "release",
+				},
 			); err != nil {
 				t.Errorf("release adopted VM: %v", err)
 			}
@@ -332,7 +358,10 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 			t.Fatalf("VMM died with Haven: %v", err)
 		}
 		store.process = startProcess(t, artifacts, "haven-2", "/run/p/bin/haven", store.args...)
-		awaitProcess(t, ctx, store.process, func(attempt context.Context) error { _, err := client.List(attempt); return err })
+		awaitProcess(t, ctx, store.process, func(attempt context.Context) error {
+			_, err := client.List(attempt)
+			return err
+		})
 		after, err := ec.GetVM(ctx, before.ID)
 		if err != nil || !after.Verified || !after.AgentReady || after.PID != before.PID ||
 			after.StartTime != before.StartTime ||
@@ -356,7 +385,10 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 				"session_id": sessionID,
 				"command":    "printf '%s' \"$ADOPTION_STATE\"",
 			},
-			func(frame *pb.Frame) error { _, err := stdout.Write(frame.Data); return err },
+			func(frame *pb.Frame) error {
+				_, err := stdout.Write(frame.Data)
+				return err
+			},
 		)
 		if err != nil || stdout.String() != "alive" {
 			t.Fatalf("daemon adoption lost the live guest shell: %q: %v", stdout.String(), err)
@@ -470,7 +502,9 @@ func verifyProvisioningTiers(
 				cleanup,
 				id,
 				"tier-cleanup-"+id,
-				api.Command{Action: "release"},
+				api.Command{
+					Action: "release",
+				},
 			); err != nil {
 				t.Errorf("release provisioning tier sandbox: %v", err)
 			}
@@ -483,9 +517,13 @@ func verifyProvisioningTiers(
 			Action:     "claim",
 			TemplateID: template.ID,
 			TTLSeconds: 600,
-			Policy:     api.Policy{Mode: "none"},
+			Policy: api.Policy{
+				Mode: "none",
+			},
 			Env: map[string]api.EnvVar{
-				"PROVISIONING_TIER": {Value: "golden"},
+				"PROVISIONING_TIER": {
+					Value: "golden",
+				},
 			},
 		},
 	)
@@ -510,7 +548,9 @@ func verifyProvisioningTiers(
 		ctx,
 		golden.Sandbox.ID,
 		"tier-release-golden",
-		api.Command{Action: "release"},
+		api.Command{
+			Action: "release",
+		},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -554,9 +594,13 @@ func verifyProvisioningTiers(
 			Action:     "claim",
 			TemplateID: template.ID,
 			TTLSeconds: 600,
-			Policy:     api.Policy{Mode: "none"},
+			Policy: api.Policy{
+				Mode: "none",
+			},
 			Env: map[string]api.EnvVar{
-				"PROVISIONING_TIER": {Value: "warm"},
+				"PROVISIONING_TIER": {
+					Value: "warm",
+				},
 			},
 		},
 	)
@@ -666,7 +710,10 @@ func retainConsoles(t *testing.T, artifacts, cgroup string) {
 			}
 		}
 	}()
-	t.Cleanup(func() { close(stop); <-done })
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
 }
 
 // memory.events supports POLLPRI notifications. Retain the last readable counters
@@ -696,7 +743,12 @@ func retainScopeMemory(artifacts, scope string, stop <-chan struct{}) <-chan str
 				return
 			}
 			proof["memory.events"] = string(data)
-			for _, name := range []string{"memory.max", "memory.current", "memory.peak", "memory.stat"} {
+			for _, name := range []string{
+				"memory.max",
+				"memory.current",
+				"memory.peak",
+				"memory.stat",
+			} {
 				if data, err := os.ReadFile(filepath.Join(scope, name)); err == nil {
 					proof[name] = string(data)
 				}
@@ -707,7 +759,10 @@ func retainScopeMemory(artifacts, scope string, stop <-chan struct{}) <-chan str
 			default:
 			}
 			poll := []unix.PollFd{
-				{Fd: int32(events.Fd()), Events: unix.POLLPRI | unix.POLLERR},
+				{
+					Fd:     int32(events.Fd()),
+					Events: unix.POLLPRI | unix.POLLERR,
+				},
 			}
 			if _, err := unix.Poll(poll, 100); err != nil && err != unix.EINTR {
 				return
@@ -769,8 +824,14 @@ func startProcess(t *testing.T, artifacts, name, binary string, args ...string) 
 		log.Close()
 		t.Fatal(err)
 	}
-	process := &daemonProcess{cmd: cmd, done: make(chan error, 1)}
-	go func() { process.done <- cmd.Wait(); log.Close() }()
+	process := &daemonProcess{
+		cmd:  cmd,
+		done: make(chan error, 1),
+	}
+	go func() {
+		process.done <- cmd.Wait()
+		log.Close()
+	}()
 	return process
 }
 
@@ -838,7 +899,13 @@ func recordVMMProof(t *testing.T, artifacts, stage string, vm vmObservation) {
 	}
 	writeArtifact(t, artifacts, "vmm-"+stage+".json", data)
 	var status []byte
-	for _, name := range []string{"status", "cgroup", "mountinfo", "stat", "maps"} {
+	for _, name := range []string{
+		"status",
+		"cgroup",
+		"mountinfo",
+		"stat",
+		"maps",
+	} {
 		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/%s", vm.PID, name))
 		if err != nil {
 			t.Fatalf("inspect actual dropped VMM %s: %v", name, err)
@@ -848,7 +915,17 @@ func recordVMMProof(t *testing.T, artifacts, stage string, vm vmObservation) {
 			status = data
 		}
 	}
-	for _, want := range []string{"Uid:\t65534\t65534\t65534\t65534", "Gid:\t65534\t65534\t65534\t65534", "CapInh:\t0000000000000000", "CapPrm:\t0000000000000000", "CapEff:\t0000000000000000", "CapBnd:\t0000000000000000", "CapAmb:\t0000000000000000", "NoNewPrivs:\t1", "Seccomp:\t2"} {
+	for _, want := range []string{
+		"Uid:\t65534\t65534\t65534\t65534",
+		"Gid:\t65534\t65534\t65534\t65534",
+		"CapInh:\t0000000000000000",
+		"CapPrm:\t0000000000000000",
+		"CapEff:\t0000000000000000",
+		"CapBnd:\t0000000000000000",
+		"CapAmb:\t0000000000000000",
+		"NoNewPrivs:\t1",
+		"Seccomp:\t2",
+	} {
 		if !bytes.Contains(status, []byte(want)) {
 			t.Fatalf("VMM privilege isolation missing %q", want)
 		}
@@ -866,7 +943,13 @@ func recordVMMProof(t *testing.T, artifacts, stage string, vm vmObservation) {
 		t.Fatal("VMM supplementary group status missing")
 	}
 	var namespaces strings.Builder
-	for _, name := range []string{"mnt", "pid", "ipc", "uts", "net"} {
+	for _, name := range []string{
+		"mnt",
+		"pid",
+		"ipc",
+		"uts",
+		"net",
+	} {
 		parent, err := os.Readlink("/proc/self/ns/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -879,7 +962,12 @@ func recordVMMProof(t *testing.T, artifacts, stage string, vm vmObservation) {
 	}
 	writeArtifact(t, artifacts, "vmm-"+stage+"-namespaces.txt", []byte(namespaces.String()))
 	root := fmt.Sprintf("/proc/%d/root", vm.PID)
-	for _, forbidden := range []string{".oldroot", "home", "nix/store", "etc/shadow"} {
+	for _, forbidden := range []string{
+		".oldroot",
+		"home",
+		"nix/store",
+		"etc/shadow",
+	} {
 		if _, err := os.Lstat(filepath.Join(root, forbidden)); !os.IsNotExist(err) {
 			t.Fatalf("pivot_root leaked %s: %v", forbidden, err)
 		}

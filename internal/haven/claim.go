@@ -41,7 +41,10 @@ func (service *Service) AdmitClaim(ctx context.Context, principal Principal, key
 	if service.opts.Guest == nil || principal.TenantID == "" || principal.SandboxID != "" || command.Action != "claim" || command.TemplateID == "" || key == "" || len(key) > 256 {
 		return empty, loom.Fail(loom.Invalid, "claim requires tenant authority, template, key and guest effects")
 	}
-	requestGuard := service.vmLock("request:" + string(encode([]string{principal.TenantID, key})))
+	requestGuard := service.vmLock("request:" + string(encode([]string{
+		principal.TenantID,
+		key,
+	})))
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	admission, err := service.prepareClaim(command)
@@ -93,13 +96,21 @@ func (service *Service) AdmitClaim(ctx context.Context, principal Principal, key
 			Action  string
 			Request CloneRequest
 			Claim   Command
-		}{"clone", CloneRequest{TenantID: principal.TenantID, Key: key, SnapshotID: template.SnapshotID}, admission.Command})
+		}{"clone", CloneRequest{
+			TenantID:   principal.TenantID,
+			Key:        key,
+			SnapshotID: template.SnapshotID,
+		}, admission.Command})
 	} else {
 		frozen = encode(struct {
 			Action  string
 			Request ColdRequest
 			Claim   Command
-		}{"claim", ColdRequest{TenantID: principal.TenantID, Key: key, TemplateID: template.ID}, admission.Command})
+		}{"claim", ColdRequest{
+			TenantID:   principal.TenantID,
+			Key:        key,
+			TemplateID: template.ID,
+		}, admission.Command})
 	}
 	if source != nil {
 		if warm, found, err := service.admitWarmClaim(ctx, principal, key, *admission, template, *source); found || err != nil {
@@ -115,7 +126,16 @@ func sameConfig(first, second loom.Config) bool {
 
 func (service *Service) admitActivation(tx *sql.Tx, operation Operation, resource stepInput, claim claimAdmission) error {
 	claim.Settings.Generation = operation.ID
-	input := activationInput{RequestTenantID: resource.TenantID, TenantID: resource.TenantID, SandboxID: resource.SandboxID, ResourceOperation: operation.ID, ResourceHash: digest(encode(resource)), ExpectedInstance: resource.Resource.Instance, Settings: claim.Settings, ResetIdentity: true}
+	input := activationInput{
+		RequestTenantID:   resource.TenantID,
+		TenantID:          resource.TenantID,
+		SandboxID:         resource.SandboxID,
+		ResourceOperation: operation.ID,
+		ResourceHash:      digest(encode(resource)),
+		ExpectedInstance:  resource.Resource.Instance,
+		Settings:          claim.Settings,
+		ResetIdentity:     true,
+	}
 	payload := encode(input)
 	if claim.MAC != "" {
 		if err := requireWrite(tx.ExecContext(service.ctx, "INSERT INTO operation_credentials VALUES(?,?)", operation.ID, claim.MAC)); err != nil {
@@ -126,9 +146,22 @@ func (service *Service) admitActivation(tx *sql.Tx, operation Operation, resourc
 		q    string
 		args []any
 	}{
-		{"INSERT INTO sandbox_settings VALUES(?,?)", []any{resource.SandboxID, encode(claim.Settings)}},
-		{"INSERT INTO configuration_fences VALUES(?,?)", []any{resource.SandboxID, operation.ID}},
-		{"INSERT INTO operation_steps VALUES(?,'activation','activate',?,?,?,?,'pending',?)", []any{operation.ID, digest(payload), payload, resource.Resource.VMID, resource.Resource.Instance, encode("admitted")}},
+		{"INSERT INTO sandbox_settings VALUES(?,?)", []any{
+			resource.SandboxID,
+			encode(claim.Settings),
+		}},
+		{"INSERT INTO configuration_fences VALUES(?,?)", []any{
+			resource.SandboxID,
+			operation.ID,
+		}},
+		{"INSERT INTO operation_steps VALUES(?,'activation','activate',?,?,?,?,'pending',?)", []any{
+			operation.ID,
+			digest(payload),
+			payload,
+			resource.Resource.VMID,
+			resource.Resource.Instance,
+			encode("admitted"),
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err

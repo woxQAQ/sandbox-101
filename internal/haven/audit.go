@@ -22,7 +22,9 @@ func (service *Service) Audit(ctx context.Context, event any) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	var previous string
 	if err = tx.QueryRowContext(ctx, "SELECT hash FROM journal ORDER BY seq DESC LIMIT 1").Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -45,7 +47,9 @@ func (state *store) validateJournal(database *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		_ = rows.Close()
+	}()
 	previous := ""
 	for rows.Next() {
 		var body []byte

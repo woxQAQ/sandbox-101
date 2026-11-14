@@ -33,9 +33,19 @@ func (service *Service) admitRollbackLease(ctx context.Context, tx *sql.Tx, pare
 		q    string
 		args []any
 	}{
-		{"INSERT INTO source_leases VALUES(?,?,'lifecycle')", []any{checkpoint.SnapshotID, parent.ID}},
-		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{checkpoint.SnapshotID, parent.ID + ":lifecycle"}},
-		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{input.OwnerTenantID, checkpoint.SnapshotID, parent.ID + ":lifecycle"}},
+		{"INSERT INTO source_leases VALUES(?,?,'lifecycle')", []any{
+			checkpoint.SnapshotID,
+			parent.ID,
+		}},
+		{"INSERT INTO resource_refs VALUES('snapshot',?,'step',?)", []any{
+			checkpoint.SnapshotID,
+			parent.ID + ":lifecycle",
+		}},
+		{"INSERT INTO quota_refs VALUES(?,'snapshot',?,'engine_dependency',?)", []any{
+			input.OwnerTenantID,
+			checkpoint.SnapshotID,
+			parent.ID + ":lifecycle",
+		}},
 	} {
 		if err = requireWrite(tx.ExecContext(ctx, statement.q, statement.args...)); err != nil {
 			return err
@@ -53,9 +63,19 @@ func (service *Service) retireRollbackLease(tx *sql.Tx, parent lifecycleStep) er
 		q    string
 		args []any
 	}{
-		{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='lifecycle'", []any{source.Checkpoint.SnapshotID, parent.OperationID}},
-		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{source.Checkpoint.SnapshotID, parent.OperationID + ":lifecycle"}},
-		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{parent.Input.OwnerTenantID, source.Checkpoint.SnapshotID, parent.OperationID + ":lifecycle"}},
+		{"DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key='lifecycle'", []any{
+			source.Checkpoint.SnapshotID,
+			parent.OperationID,
+		}},
+		{"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='step' AND holder_id=?", []any{
+			source.Checkpoint.SnapshotID,
+			parent.OperationID + ":lifecycle",
+		}},
+		{"DELETE FROM quota_refs WHERE tenant_id=? AND kind='snapshot' AND resource_key=? AND holder_kind='engine_dependency' AND holder_id=?", []any{
+			parent.Input.OwnerTenantID,
+			source.Checkpoint.SnapshotID,
+			parent.OperationID + ":lifecycle",
+		}},
 	} {
 		if err := requireWrite(tx.ExecContext(service.ctx, statement.q, statement.args...)); err != nil {
 			return err
