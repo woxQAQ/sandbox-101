@@ -1,6 +1,6 @@
 # Haven Sandbox API 与生命周期
 
-本路径保留文档索引入口，当前实现为根 `github.com/woxQAQ/haven` module，没有 sandboxd Go module 或独立 daemon。入口与配置见 [Haven control](../docs/haven-control.md)，宿主部署见 [Host](../deploy/host/README.md)。公开 DTO 在 `api/`，SDK 在 `sdk/`，HTTP adapter 在 `internal/httpapi/`；业务和资源工作流共享 `internal/haven` 的唯一 store。
+本路径保留文档索引入口，当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module，没有 sandboxd Go module 或独立 daemon。入口与配置见 [Haven control](../docs/haven-control.md)，宿主部署见 [Host](../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/httpapi/`；业务和资源工作流共享 `haven` 的唯一 store。
 
 ## Tokens、幂等和错误
 
@@ -10,7 +10,7 @@ mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键同参数返回�
 
 终态 result 和时间在原工作流事务中冻结，后来 renew/configure/release 不修改原 delivery。result 可能含 sandbox token，应私密保存；令牌不以真值写入 DB。
 
-HTTP 错误及 `Operation.Error` 属于 `api.Error`，JSON 为 `{"code":"...","message":"..."}`。SDK 只解码此公开类型；私有 Cause 不进入 wire，不作为 Loom absence proof。需要 operator 诊断的资源丢失不变成 tenant 404。
+HTTP 错误及 `Operation.Error` 使用 `types.ApiError` 数据，JSON 为 `{"code":"...","message":"..."}`。该 DTO 不实现 Go error，也不携带 Cause；SDK 将失败响应转换为普通 Go error。wire payload 不作为 Loom absence proof。需要 operator 诊断的资源丢失不变成 tenant 404。
 
 | Code | HTTP | 调用方处理 |
 |---|---:|---|
@@ -88,15 +88,15 @@ result, err := client.Claim(ctx, "persisted-claim-key", api.Command{
 })
 ```
 
-`Connect` 后使用 `Call`/`Exec`。Call 串行接纳，排队取消不发送、不耗 RPC ID；发送后取消关闭连接，之后不能复用。consume callback 须自行返回，取消不能抢占用户 callback。`sdk.RPCError` 暴露 guest Code/ResultState。keyed exec 先记 intent、同参重放、异参冲突；unknown 不重跑。frame ID 仅关联回复。unkeyed Exec 不去重，SDK 不盲目重试未知副作用。
+`Connect` 后使用 `Call`/`Exec`。Call 串行接纳，排队取消不发送、不耗 RPC ID；发送后取消关闭连接，之后不能复用。consume callback 须自行返回，取消不能抢占用户 callback。`Call` 在失败时仍返回终态 params；guest `error_code` 和 `result_state` 从该数据读取，Go error 使用普通 `errors.New`，没有 `RPCError` 包装。keyed exec 先记 intent、同参重放、异参冲突；unknown 不重跑。frame ID 仅关联回复。unkeyed Exec 不去重，SDK 不盲目重试未知副作用。
 
 ```nu
 havenctl --token-file /private/tenant-token list
-havenctl --token-file /private/tenant-token --key claim-001 claim
+havenctl --token-file /private/tenant-token --key claim-001 --request-file /private/claim.json claim
 havenctl --token-file /private/sandbox-token exec SANDBOX_ID 'python3 --version'
 ```
 
-claim JSON 通过私有 stdin 传入。flag 放在 command 前。`havenctl exec` 为 unkeyed；持久去重使用 SDK 的 exec_key。
+claim JSON 通过 `--request-file /private/claim.json` 显式文件传入，不读取 stdin。flag 放在 command 前。`havenctl exec` 为 unkeyed；持久去重使用 SDK 的 exec_key。
 
 ## Durable quota responsibility
 
@@ -128,7 +128,7 @@ D=64、M=128 时，cold=64，checkpoint/resume peak=256，running 单 branch for
 
 ## Egress、配置与 Preview
 
-relay 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../internal/egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/relay NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
+relay 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../haven/egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/relay NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
 
 configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 settings。runtime/guest/bind/SQL 失败保留阻断；自动 rebind/reconcile 不清 fence。最终 running/result/settings/fence retirement 原子提交，失败撤销新 binding。迟到 worker 或旧 direct callback 不影响后继实例。
 

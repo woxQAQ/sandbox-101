@@ -1,13 +1,13 @@
 package host
 
 import (
+	"errors"
+	// ImageManifest fixes the materializer identity and the complete ordered set of
+	// immutable block devices. Catalog publication remains the caller's decision.
+	"fmt"
 	"runtime"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
-// ImageManifest fixes the materializer identity and the complete ordered set of
-// immutable block devices. Catalog publication remains the caller's decision.
 type ImageManifest struct {
 	Format       int               `json:"format"`
 	Layout       string            `json:"layout"`
@@ -29,7 +29,7 @@ func (m ImageManifest) Verify(dir, digest string) error {
 		return m.verifyMergedOCI(dir, digest)
 	}
 	if m.Format != 1 || m.Layout != "merged-erofs-v1" || m.Digest != digest || m.Architecture != runtime.GOARCH || m.Builder != "" || len(m.Artifacts) != 0 {
-		return api.Fail(api.Incompatible, "image format/platform mismatch")
+		return errors.New("image format/platform mismatch")
 	}
 	for _, name := range []string{
 		"kernel",
@@ -37,7 +37,7 @@ func (m ImageManifest) Verify(dir, digest string) error {
 		"root.erofs",
 	} {
 		if _, ok := m.Files[name]; !ok {
-			return api.Fail(api.Incompatible, "image missing %s", name)
+			return fmt.Errorf("image missing %s", name)
 		}
 	}
 	return verifyFiles(dir, m.Files)

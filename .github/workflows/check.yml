@@ -11,8 +11,12 @@ jobs:
         with:
           go-version: '1.26.5'
           cache-dependency-path: |
-            go.sum
+            haven/go.sum
+            loom/go.sum
+            sdk/go.sum
+            common/go.sum
             protocol/gen/go.sum
+      - uses: extractions/setup-just@v3
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -23,8 +27,8 @@ jobs:
       - run: python3 -I scripts/test_runner_environment.py
       - run: python3 -I scripts/test_native_gate.py
       - run: python3 -I scripts/check-architecture.py
-      - run: GOWORK=off go test -tags=kvm ./internal/haven -run '^TestKVMRootfsOCI$' -count=1
-      - run: make test check test-race integration smoke
+      - run: GOWORK=off go -C haven test -tags=kvm . -run '^TestKVMRootfsOCI$' -count=1
+      - run: just test check test-race integration smoke
   native-image:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -38,6 +42,7 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
+      - uses: extractions/setup-just@v3
       - name: Install lint toolchain
         uses: golangci/golangci-lint-action@v9.3.0
         with:
@@ -105,17 +110,17 @@ jobs:
             GOWORK=off go build -mod=mod -o "$prefix/bin/umoci" ./cmd/umoci
           )
           # All privileged commands use this closed PATH, not the runner PATH.
-          echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v golangci-lint)"):$(dirname "$(command -v go)"):/usr/bin:/bin" >> "$GITHUB_ENV"
+          echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v golangci-lint)"):$(dirname "$(command -v go)"):$(dirname "$(command -v just)"):/usr/bin:/bin" >> "$GITHUB_ENV"
       - name: Verify native namespaces and mapping
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --preflight
       - name: Verify missing-bwrap failure
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --negative
       - name: Require actual native coverage
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py
-      # make lint includes go fix. Run it last so native evidence binds the
+      # just lint includes go fix. Run it last so native evidence binds the
       # committed checkout, not a tree rewritten by the lint toolchain.
       - name: Lint as the ordinary runner user
-        run: PATH="$NATIVE_PATH" GOTOOLCHAIN=local make lint
+        run: PATH="$NATIVE_PATH" GOTOOLCHAIN=local just lint
       - name: Expose only diagnostic log directories to artifact collection
         if: always()
         shell: bash
@@ -147,4 +152,5 @@ jobs:
         with:
           shared-key: static-guest-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler musl-tools cpio ripgrep
-      - run: make guest
+      - uses: extractions/setup-just@v3
+      - run: just guest

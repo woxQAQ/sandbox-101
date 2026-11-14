@@ -11,6 +11,10 @@
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
 | [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED | 旧边界清除和测试/runner/部署迁移完成；组件/Rust/smoke/静态、required-native 677 pass 与实际 capture/kernel 通过，当前 KVM/production 缺显式私有材料和预算 |
 
+## 当前源码入口
+
+review 整理后根目录仅保留 `go.work`，控制面位于 `haven/`，效果库位于 `loom/`，wire DTO 位于 `types/`，SDK 位于 `sdk/`，共享代码位于 `common/`，开发工具位于 `tools/`。构建入口为 `justfile`；CLI 显式使用 `--request-file FILE`，不读取 stdin。上述历史 F 阶段通过记录仍只绑定原树；本次验证以当前会话实际命令为准。
+
 ## 恢复工作前
 
 1. 获得本次任务的明确范围，核对计划基准与当前源码/未提交改动。历史源码摘录、文件名和 schema 仅作定位线索，先重建实际映射再修改。

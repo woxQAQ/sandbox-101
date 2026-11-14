@@ -13,7 +13,7 @@ import unittest
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-PACKAGE = "github.com/woxQAQ/haven/internal/haven"
+PACKAGE = "github.com/woxQAQ/haven"
 TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
@@ -41,7 +41,7 @@ class NativeGateEntrypoints(unittest.TestCase):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         self.gate = self.root / "scripts/check-native-gate.py"
         shutil.copyfile(PROJECT / "scripts/check-native-gate.py", self.gate)
-        (self.root / "Makefile").write_text("# command fixture\n")
+        (self.root / "justfile").write_text("# command fixture\n")
         (self.root / ".github/workflows/check.yml").write_text("# command fixture\n")
         self.result_file = self.root / "command-result.json"
         self.env = {
@@ -57,11 +57,11 @@ if sys.argv[-2:] == ["rev-parse", "HEAD"]:
         command = """
 import json, os, sys
 from pathlib import Path
-if Path(sys.argv[0]).name == "make":
-    assert sys.argv[1:] == ["--no-print-directory", "test-native"]
+if Path(sys.argv[0]).name == "just":
+    assert sys.argv[1:] == ["--quiet", "test-native"]
 else:
-    assert sys.argv[1:] == ["test", "-json", "-run",
-        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "./internal/haven"]
+    assert sys.argv[1:] == ["-C", "haven", "test", "-json", "-run",
+        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "."]
     assert os.environ["GOWORK"] == "off"
     assert os.environ["SANDBOX_REQUIRE_EROFS_TESTS"] == "1"
     assert not (Path(os.environ["PATH"]) / "bwrap").exists()
@@ -70,7 +70,7 @@ sys.stdout.write(result["stdout"])
 sys.stderr.write(result["stderr"])
 sys.exit(result["exit_code"])
 """
-        for name in ("make", "go"):
+        for name in ("just", "go"):
             self.tool(name, command)
         self.passes = [event("pass", name) for name in TESTS] + [event("pass")]
 
@@ -154,7 +154,7 @@ sys.exit(result["exit_code"])
     def test_negative_requires_exact_failed_test_and_cleans_path(self):
         # A real bwrap entry in the fixture must be absent only in the child view.
         self.tool("bwrap", 'raise RuntimeError("must not run")\n')
-        reason = "    fsmeta_test.go:312: incompatible: required OCI tool missing: bwrap\n"
+        reason = "    fsmeta_test.go:312: required OCI tool missing: bwrap\n"
         rows = [event("output", TESTS[0], reason), event("fail", TESTS[0]), event("fail")]
         log = self.run_gate(rows, code=1, args=("--negative",))
         self.assertEqual((log / "negative.exit-code").read_text(), "1\n")

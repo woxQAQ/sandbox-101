@@ -1,6 +1,7 @@
 package host
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ func (b *CloudHypervisor) verifyCOWMappings(r Resource) error {
 		return err
 	}
 	if !alive {
-		return api.Fail(api.ManualRecovery, "restored VMM exited before COW verification")
+		return errors.New("restored VMM exited before COW verification")
 	}
 	var backing unix.Stat_t
 	if err = unix.Stat(filepath.Join(r.RestoreDir, "memory-ranges"), &backing); err != nil {
@@ -43,7 +44,7 @@ func (b *CloudHypervisor) verifyCOWMappings(r Resource) error {
 	}
 	start, _, err := procStart(process.PID)
 	if err != nil || start != process.StartTime {
-		return api.Fail(api.ManualRecovery, "VMM identity changed during COW verification")
+		return errors.New("VMM identity changed during COW verification")
 	}
 	return nil
 }

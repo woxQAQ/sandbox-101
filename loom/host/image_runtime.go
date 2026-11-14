@@ -1,11 +1,10 @@
 package host
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 func runtimeImage(r Resource) (ImageManifest, []ImageBinding, error) {
@@ -14,7 +13,7 @@ func runtimeImage(r Resource) (ImageManifest, []ImageBinding, error) {
 		return manifest, nil, err
 	}
 	if manifest.Digest != r.Config.Image {
-		return manifest, nil, api.Fail(api.Incompatible, "runtime image digest differs from VM configuration")
+		return manifest, nil, errors.New("runtime image digest differs from VM configuration")
 	}
 	bindings, err := manifest.ReadOnlyBindings(r.ImageDir)
 	return manifest, bindings, err
@@ -75,7 +74,7 @@ func cloudDisks(bindings []ImageBinding) []cloudDisk {
 
 func validateSnapshotDisks(saved, expected []cloudDisk) error {
 	if len(saved) != len(expected) {
-		return api.Fail(api.Incompatible, "snapshot disk count differs from image materialization")
+		return errors.New("snapshot disk count differs from image materialization")
 	}
 	for i, disk := range saved {
 		want := expected[i]
@@ -83,7 +82,7 @@ func validateSnapshotDisks(saved, expected []cloudDisk) error {
 			disk.ReadOnly != want.ReadOnly ||
 			disk.ImageType != want.ImageType ||
 			disk.NumQueues != want.NumQueues {
-			return api.Fail(api.Incompatible, "snapshot disk %d differs from image materialization", i)
+			return fmt.Errorf("snapshot disk %d differs from image materialization", i)
 		}
 	}
 	return nil

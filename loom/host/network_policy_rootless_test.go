@@ -5,7 +5,6 @@ package host
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -185,7 +184,7 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		t,
 		b.InstallNetworkPolicy(ctx, r, nil),
 		"policy revocation while interfaces are active",
-		api.Conflict,
+		"all owned interfaces must be down before policy replacement",
 	)
 	if err := b.VerifyNetworkPolicy(ctx, r, policy); err != nil {
 		t.Fatalf("traffic changed the stateless enforcement fingerprint: %v", err)
@@ -267,7 +266,7 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	if err := b.VerifyNetworkPolicy(ctx, r, nil); err != nil {
 		t.Fatal(err)
 	}
-	rootlessWantError(t, b.Network(ctx, r, true), "activation with revoked policy", api.Conflict)
+	rootlessWantError(t, b.Network(ctx, r, true), "activation with revoked policy", "direct policy revoked")
 	checkDown()
 	// Revocation must also drop real packets if interfaces are accidentally up.
 	links(true)
@@ -280,16 +279,16 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	}
 	stale := r
 	stale.Instance = "later-instance"
-	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, stale, policy), "stale instance receipt verification", api.Conflict)
-	rootlessWantError(t, b.Network(ctx, stale, true), "stale instance activation", api.Conflict)
+	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, stale, policy), "stale instance receipt verification", "network policy receipt does not match")
+	rootlessWantError(t, b.Network(ctx, stale, true), "stale instance activation", "network policy receipt does not match")
 	checkDown()
 	if err := b.Network(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	probe(targets[0], true)
 	rootlessNFT(t, ns, "insert rule inet engine_policy forward accept\n")
-	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, r, policy), "kernel ruleset tampering", api.Unknown)
-	rootlessWantError(t, b.Network(ctx, r, true), "tampered rules activation", api.Unknown)
+	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, r, policy), "kernel ruleset tampering", "namespace rules differ")
+	rootlessWantError(t, b.Network(ctx, r, true), "tampered rules activation", "namespace rules differ")
 	checkDown()
 	probe(targets[0], false)
 	if err := b.networkRemove(ctx, r); err != nil {
@@ -305,11 +304,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	)
 }
 
-func rootlessWantError(t *testing.T, err error, label string, code api.Code) {
+func rootlessWantError(t *testing.T, err error, label, message string) {
 	t.Helper()
-	var failure *api.Error
-	if !errors.As(err, &failure) || failure.Code != code {
-		t.Fatalf("%s: wanted %s, got %v", label, code, err)
+	if err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("%s: wanted %q, got %v", label, message, err)
 	}
 	t.Logf("%s rejected: %v", label, err)
 }

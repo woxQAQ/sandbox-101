@@ -40,7 +40,7 @@ Haven 按 off → 安装并核验策略 → Admin/Workload ready → on → 最�
 
 ## 安装和首次启动
 
-构建 `make build`，安装 `bin/haven`、`bin/havenctl`、`bin/loomctl`。审查 [配置示例](haven.example.yaml) 和 [service](haven.service)，预置私有 `/etc/haven`、token、host policy、cgroup、firewall 与可信 VMM 材料。token 至少 32 个 trimmed 字符、文件仅管理员可读。环境文件 `/etc/haven/haven.env` 使用 `HAVEN_IO_MAX`、`HAVEN_VMM_UID`、`HAVEN_VMM_GID` 等新前缀；旧前缀不参与配置。
+构建 `just build`，安装 `bin/haven`、`bin/havenctl`、`bin/loomctl`。审查 [配置示例](haven.example.yaml) 和 [service](haven.service)，预置私有 `/etc/haven`、token、host policy、cgroup、firewall 与可信 VMM 材料。token 至少 32 个 trimmed 字符、文件仅管理员可读。环境文件 `/etc/haven/haven.env` 使用 `HAVEN_IO_MAX`、`HAVEN_VMM_UID`、`HAVEN_VMM_GID` 等新前缀；旧前缀不参与配置。
 
 首次手动启动：
 

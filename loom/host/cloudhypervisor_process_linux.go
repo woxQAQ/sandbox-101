@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 type processReceipt struct {
@@ -149,7 +147,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		procs, x := os.ReadFile(filepath.Join(b.scope(r), "cgroup.procs"))
 		if x == nil && len(strings.TrimSpace(string(procs))) > 0 {
-			return p, false, api.Fail(api.ManualRecovery, "process exists in scope without identity receipt")
+			return p, false, errors.New("process exists in scope without identity receipt")
 		}
 		if x != nil && !os.IsNotExist(x) {
 			return p, false, x
@@ -160,7 +158,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if p.Instance != r.Instance {
-		return p, false, api.Fail(api.ManualRecovery, "process receipt belongs to another instance")
+		return p, false, errors.New("process receipt belongs to another instance")
 	}
 	if p.BootID != bootID() {
 		return p, false, nil
@@ -173,7 +171,7 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if start != p.StartTime {
-		return p, false, api.Fail(api.ManualRecovery, "PID reused: refusing to adopt or signal")
+		return p, false, errors.New("PID reused: refusing to adopt or signal")
 	}
 	if state == 'Z' || state == 'X' {
 		return p, false, nil
@@ -187,14 +185,14 @@ func (b *CloudHypervisor) process(r Resource) (processReceipt, bool, error) {
 		return p, false, err
 	}
 	if !os.SameFile(src, actual) {
-		return p, false, api.Fail(api.ManualRecovery, "VMM executable identity mismatch or launcher did not finish")
+		return p, false, errors.New("VMM executable identity mismatch or launcher did not finish")
 	}
 	cgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", p.PID))
 	if err != nil {
 		return p, false, err
 	}
 	if !strings.Contains(string(cgroup), "/"+filepath.Base(b.scope(r))+"\n") {
-		return p, false, api.Fail(api.ManualRecovery, "VMM cgroup identity mismatch")
+		return p, false, errors.New("VMM cgroup identity mismatch")
 	}
 	if err = b.watch(p.PID); err != nil {
 		return p, false, err
@@ -214,7 +212,7 @@ func (b *CloudHypervisor) Inspect(ctx context.Context, r Resource) (Observation,
 				return Observation{}, x
 			}
 			if strings.TrimSpace(string(procs)) != "" {
-				return Observation{}, api.Fail(api.ManualRecovery, "unrecorded live instance scope %s", entry.Name())
+				return Observation{}, fmt.Errorf("unrecorded live instance scope %s", entry.Name())
 			}
 		}
 	}
@@ -237,11 +235,10 @@ func (b *CloudHypervisor) Inspect(ctx context.Context, r Resource) (Observation,
 	obs.StartTime = p.StartTime
 	data, err := b.api(ctx, r, "GET", "vm.info", nil, nil)
 	if err != nil {
-		var status *chHTTPError
-		if errors.As(err, &status) && status.Status == 404 {
+		if errors.Is(err, errCHNotFound) {
 			return obs, nil
 		}
-		return obs, api.Fail(api.ManualRecovery, "live VMM API unreachable: %v", err)
+		return obs, fmt.Errorf("live VMM API unreachable: %v", err)
 	}
 	obs.Configured = true
 	var info struct {
@@ -275,7 +272,7 @@ func (b *CloudHypervisor) setupScope(r Resource, loading bool) error {
 	}
 	for name, value := range values {
 		if err := os.WriteFile(filepath.Join(path, name), []byte(value), 0o600); err != nil {
-			return api.Fail(api.Incompatible, "cgroup %s: %v", name, err)
+			return fmt.Errorf("cgroup %s: %v", name, err)
 		}
 	}
 	return nil
@@ -291,10 +288,7 @@ func (b *CloudHypervisor) arm(r Resource) error {
 
 func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) error {
 	if _, err := os.Lstat(filepath.Join(r.RunDir, "process.json")); err == nil {
-		return api.Fail(
-			api.Unknown,
-			"this instance previously launched and exited; submit a new intent after inspection",
-		)
+		return errors.New("this instance previously launched and exited; submit a new intent after inspection")
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -365,7 +359,7 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 		Pdeathsig:   0,
 	}
 	if err = cmd.Start(); err != nil {
-		return api.Fail(api.Incompatible, "isolated CLONE_INTO_CGROUP launcher failed: %v", err)
+		return fmt.Errorf("isolated CLONE_INTO_CGROUP launcher failed: %v", err)
 	}
 	// Wait only reaps this process. It neither forwards signals nor supervises it.
 	go func() {
@@ -380,7 +374,7 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return api.Fail(api.ManualRecovery, "launcher did not publish a usable API; preserve scope and console.log")
+			return errors.New("launcher did not publish a usable API; preserve scope and console.log")
 		case <-tick.C:
 			if _, alive, x := b.process(r); x == nil && alive {
 				if _, x = b.api(ctx, r, "GET", "vmm.ping", nil, nil); x == nil {
@@ -411,7 +405,7 @@ func (b *CloudHypervisor) Stop(ctx context.Context, r Resource) error {
 		return err
 	}
 	if start != p.StartTime {
-		return api.Fail(api.ManualRecovery, "process changed before signal")
+		return errors.New("process changed before signal")
 	}
 	// SIGKILL via pidfd has no PID-reuse race and also works for namespace PID 1.
 	if err = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
@@ -446,7 +440,7 @@ func (b *CloudHypervisor) Remove(ctx context.Context, r Resource) error {
 		return err
 	}
 	if alive {
-		return api.Fail(api.Conflict, "refusing cleanup of live VMM")
+		return errors.New("refusing cleanup of live VMM")
 	}
 	if err = b.networkRemove(ctx, r); err != nil {
 		return err
@@ -467,7 +461,7 @@ func (b *CloudHypervisor) Remove(ctx context.Context, r Resource) error {
 				return x
 			}
 			if len(strings.TrimSpace(string(procs))) > 0 {
-				return api.Fail(api.ManualRecovery, "historical VMM scope still populated")
+				return errors.New("historical VMM scope still populated")
 			}
 			if x = os.Remove(p); x != nil {
 				return x

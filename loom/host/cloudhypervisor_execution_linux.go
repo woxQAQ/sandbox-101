@@ -17,18 +17,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	api "github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/unixsocket"
 )
 
-type chHTTPError struct {
-	Status         int
-	Endpoint, Body string
-}
-
-func (e *chHTTPError) Error() string {
-	return fmt.Sprintf("CH %s HTTP %d: %.4096s", e.Endpoint, e.Status, e.Body)
-}
+var errCHNotFound = errors.New("CH endpoint not found")
 
 func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 	if err := b.Check(ctx, r.Config); err != nil {
@@ -36,7 +28,7 @@ func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
 	}
 	var image ImageManifest
 	if err := readJSON(filepath.Join(r.ImageDir, "image.json"), &image); err != nil {
-		return api.Fail(api.Incompatible, "image not imported: %v", err)
+		return fmt.Errorf("image not imported: %v", err)
 	}
 	if err := image.Verify(r.ImageDir, r.Config.Image); err != nil {
 		return err
@@ -106,7 +98,7 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 	}()
 	if restore {
 		if obs.Configured {
-			return api.Fail(api.ManualRecovery, "partially loaded restore state requires inspection before retry")
+			return errors.New("partially loaded restore state requires inspection before retry")
 		}
 		if err = b.validateCOW(r); err != nil {
 			return err
@@ -224,7 +216,7 @@ func (b *CloudHypervisor) ensureColdNetwork(ctx context.Context, r Resource, tap
 		if len(info.Config.Net) != 1 || info.Config.Net[0].ID != "net0" || info.Config.Net[0].Tap != "" ||
 			len(info.Config.Net[0].FDs) != 1 ||
 			info.Config.Net[0].FDs[0] < 0 {
-			return api.Fail(api.ManualRecovery, "configured cold network has no verified TAP descriptor")
+			return errors.New("configured cold network has no verified TAP descriptor")
 		}
 		return nil
 	}
@@ -259,7 +251,7 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 		"landlock_rules",
 	} {
 		if v := cfg[k]; len(v) > 0 && string(v) != "null" && string(v) != "[]" && string(v) != "false" {
-			return api.Fail(api.Incompatible, "unapproved COW device/configuration %s", k)
+			return fmt.Errorf("unapproved COW device/configuration %s", k)
 		}
 	}
 	var mem struct {
@@ -278,7 +270,7 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 		mem.HotplugSize != 0 ||
 		mem.File != "" ||
 		(len(mem.Zones) > 0 && string(mem.Zones) != "null" && string(mem.Zones) != "[]") {
-		return api.Fail(api.Incompatible, "COW requires static private RAM without zones")
+		return errors.New("COW requires static private RAM without zones")
 	}
 	// Only snapshots of this exact engine layout are accepted. Configuration
 	// checks supplement the published manifest's checksums and compatibility ID.
@@ -298,7 +290,7 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 		return err
 	}
 	if st.Size() < mem.Size || st.Size()%int64(os.Getpagesize()) != 0 {
-		return api.Fail(api.Incompatible, "unaligned or truncated COW memory file")
+		return errors.New("unaligned or truncated COW memory file")
 	}
 	return validateCOWTopology(r.RestoreDir, uint64(mem.Size))
 }
@@ -322,7 +314,7 @@ func (b *CloudHypervisor) Capture(ctx context.Context, r Resource, dst string) e
 	rel, err := filepath.Rel(filepath.Join(r.Dir, "capture"), dst)
 	parts := strings.Split(rel, string(filepath.Separator))
 	if err != nil || len(parts) != 2 || !gcID(parts[0], "op-") || parts[1] != "ch" {
-		return api.Fail(api.Invalid, "capture outside prepared CH leaf")
+		return errors.New("capture outside prepared CH leaf")
 	}
 	leaf, err := openCaptureDir(dst)
 	if err != nil {
@@ -335,7 +327,7 @@ func (b *CloudHypervisor) Capture(ctx context.Context, r Resource, dst string) e
 	}
 	owner := st.Sys().(*syscall.Stat_t)
 	if owner.Uid != b.opts.UID || owner.Gid != b.opts.GID || st.Mode().Perm() != 0o700 {
-		return api.Fail(api.Incompatible, "capture writer leaf was not prepared")
+		return errors.New("capture writer leaf was not prepared")
 	}
 	_, err = b.api(
 		ctx,
@@ -411,11 +403,10 @@ func (b *CloudHypervisor) api(
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, &chHTTPError{
-			Status:   resp.StatusCode,
-			Endpoint: endpoint,
-			Body:     string(out),
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: CH %s HTTP %d: %.4096s", errCHNotFound, endpoint, resp.StatusCode, out)
 		}
+		return nil, fmt.Errorf("CH %s HTTP %d: %.4096s", endpoint, resp.StatusCode, out)
 	}
 	return out, nil
 }

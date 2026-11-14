@@ -22,6 +22,7 @@
             rustfmt
             clippy
             protobuf
+            just
             gnumake
             ripgrep
             golangci-lint

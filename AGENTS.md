@@ -4,9 +4,9 @@
 
 - 跨 Haven/Loom 职责、生命周期或隔离边界变更，先读 [资源架构](docs/architecture.md) 和 [Sandbox 架构](docs/sandbox-architecture.md) 中相关协议与不变量。
 - 修改资源 step、witness、捕获/恢复、GC 或备份时，读 [资源集成契约](docs/engine-integration.md)；修改 OCI/EROFS 时再读 [镜像物化](docs/image-materialization.md)，修改 direct 网络时再读 [网络策略](docs/network-policy.md)。
-- 修改 sandbox 授权、模板、配额、恢复或数据面时，读 [Sandbox 契约](sandboxd/README.md)；修改代理或 secret handling 时再读 [Egress 契约](internal/egress/README.md)。修改 daemon/CLI 或管理协议时读 [Haven 控制契约](docs/haven-control.md)。
+- 修改 sandbox 授权、模板、配额、恢复或数据面时，读 [Sandbox 契约](sandboxd/README.md)；修改代理或 secret handling 时再读 [Egress 契约](haven/egress/README.md)。修改 daemon/CLI 或管理协议时读 [Haven 控制契约](docs/haven-control.md)。
 - 修改 guest 或 RPC 时，读 [Guest 契约](guest/README.md) 与 [Protocol](protocol/README.md)。修改 operator 时遵循其目录内的 `AGENTS.md`。
-- 构建与验证从 [README](README.md#build-and-local-verification) 和 `Makefile` 选当前入口；原生/跨 UID/VM 验收先读 [测试输入与 runner 边界](scripts/README.md)，部署条件见 [文档索引](docs/README.md#组件与运行)。
+- 构建与验证从 [README](README.md#build-and-local-verification) 和 `justfile` 选当前入口；原生/跨 UID/VM 验收先读 [测试输入与 runner 边界](scripts/README.md)，部署条件见 [文档索引](docs/README.md#组件与运行)。
 - 继续计划时先核对 [未完成计划索引](plans/README.md)。仅在追查历史设计或验收来源时读取 [.agents/archive](.agents/archive/README.md)，其中执行指令与授权均为历史。
 
 ## 持久与安全边界

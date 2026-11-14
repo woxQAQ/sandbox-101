@@ -41,6 +41,7 @@ def main():
             "state-dir": str(state), "socket": str(directory / "unused.sock"),
             "listen": "127.0.0.1:1", "root-token-file": str(token_file),
             "gc-interval": "0s", "max-memory-mib": 8192, "max-vcpus": 64,
+            "log-format": "json", "log-level": "warn",
         }))
         client_config = directory / "havenctl.json"
         client_config.write_text(json.dumps({
@@ -96,6 +97,7 @@ def main():
                               "--socket", str(management), "--init"]
             environment = {
                 **os.environ, "HAVEN_LISTEN": f"127.0.0.1:{port}",
+                "HAVEN_LOG_LEVEL": "info",
                 "HAVEN_SOCKET": str(management),
                 "ENGINE_STATE_DIR": str(directory / "legacy-engine-must-not-exist"),
                 "SANDBOXD_STATE_DIR": str(directory / "legacy-sandboxd-must-not-exist"),
@@ -126,7 +128,11 @@ def main():
             assert "unknown flag" in rejected.stderr
             rejected = command("haven", ["--tls-cert", "unused"], success=False)
             assert "provided together" in rejected.stderr
-            print("PASS: renamed configuration rejects legacy flags, unknown/null keys and fractional budgets")
+            rejected = command("haven", ["--log-level", "invalid"], success=False)
+            assert "unsupported log level" in rejected.stderr
+            rejected = command("haven", ["--log-format", "invalid"], success=False)
+            assert "unsupported log format" in rejected.stderr
+            print("PASS: configuration rejects legacy flags, unknown/null keys, fractional budgets and invalid logging")
             daemon = start(True)
             ready()
             business = command("havenctl", [*haven_args, "status"],
@@ -136,12 +142,31 @@ def main():
             assert business == local
             assert local["format"] == "haven-single-control" and local["version"] >= 9
             assert command("havenctl", [*haven_args, "list"]) == []
-            tenant = request("/v1/tenants", {
+            tenant_file = directory / "tenant.json"
+            tenant_file.write_text(json.dumps({
                 "id": "smoke", "max_sandboxes": 2, "max_storage_mib": 256,
-            })
+            }))
+            tenant_file.chmod(0o600)
+            tenant = command("havenctl", [*haven_args, "--request-file", str(tenant_file), "tenant"])
             assert tenant["id"] == "smoke" and tenant["token"]
             assert request("/v1/sandboxes", bearer=tenant["token"]) == []
-            print("PASS: one Haven, both protocol CLIs, same store identity and tenant HTTP")
+            print("PASS: one Haven, both protocol CLIs, same store identity and tenant request file")
+            malformed = directory / "malformed.json"
+            for payload in ('{"unknown":true}', '{} {}', 'x' * ((1 << 20) + 1)):
+                malformed.write_text(payload)
+                command("havenctl", [*haven_args, "--request-file", str(malformed), "tenant"], success=False)
+            rejected = command("havenctl", [*haven_args, "tenant"], body={"id": "ignored"}, success=False)
+            assert "--request-file" in rejected.stderr
+            rejected = command("havenctl", [*haven_args, "--request-file", "-", "tenant"], success=False)
+            assert "--request-file" in rejected.stderr
+            command("havenctl", [*haven_args, "--request-file", str(directory), "tenant"], success=False)
+            fifo = directory / "intent.fifo"
+            os.mkfifo(fifo, 0o600)
+            rejected = command("havenctl", [*haven_args, "--request-file", str(fifo), "tenant"], success=False)
+            assert "regular file" in rejected.stderr
+            command("havenctl", [*haven_args, "--request-file", str(tenant_file), "list"], success=False)
+            assert len(command("havenctl", [*haven_args, "list"])) == 0
+            print("PASS: explicit request files reject unknown fields, multiple values, oversized input and stdin")
 
             rejected = command("haven", ["--config", str(config), "--listen", "127.0.0.1:0",
                                           "--socket", str(directory / "second.sock")], success=False)
@@ -154,6 +179,14 @@ def main():
 
             before = command("loomctl", [*loom_args, "status"])
             dry_run = command("loomctl", [*loom_args, "--dry-run", "gc"])["gc"]
+            request_file = directory / "gc.json"
+            request_file.write_text(json.dumps({"action": "gc", "gc": {"dry_run": True}}))
+            from_file = command("loomctl", [*loom_args, "--request-file", str(request_file), "request"])["gc"]
+            assert from_file["dry_run"] and not from_file.get("operation_id")
+            request_file.write_text(json.dumps({"action": "gc", "key": "different", "gc": {}}))
+            rejected = command("loomctl", [*loom_args, "--key", "expected", "--request-file", str(request_file), "request"], success=False)
+            assert "key differs" in rejected.stderr
+            command("loomctl", [*loom_args, "request"], success=False)
             after = command("loomctl", [*loom_args, "status"])
             assert dry_run["dry_run"] and not dry_run.get("operation_id")
             assert before["epoch"] == after["epoch"]
@@ -194,6 +227,12 @@ def main():
                 assert database.execute("SELECT scope_kind,status FROM operations WHERE id=?",
                                         (operation_id,)).fetchone() == ("node", "succeeded")
             assert json.loads((backup / "HEAD.json").read_text())["epoch"] == point["epoch"]
+            logs.flush()
+            logs.seek(0)
+            entries = [json.loads(line) for line in logs.read().splitlines()]
+            assert any(row["msg"] == "Haven listening" and row["level"] == "INFO" for row in entries)
+            assert all("time" in row and "level" in row and "msg" in row for row in entries)
+            print("PASS: JSON logging on stderr honors environment over file configuration")
             print("PASS: one offline backup contains business and management state plus matching key/HEAD")
         except BaseException:
             logs.flush()

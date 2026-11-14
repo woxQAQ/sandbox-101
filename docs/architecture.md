@@ -1,6 +1,6 @@
 # Haven / Loom 资源架构
 
-Haven 是单宿主唯一持久控制面。`cmd/haven` 同时提供业务 HTTP 与私有管理 UDS；`internal/haven` 独占一份 SQLite、node key 和 HEAD，统一授权、资源/业务工作流、恢复、配额与 GC。`loom`、`loom/host`、`loom/imageimport` 接收明确资源及冻结证明，执行一次宿主效果并返回现场证据，没有控制数据库、自主重试或恢复循环。
+Haven 是单宿主唯一持久控制面。`haven/cmd/haven` 同时提供业务 HTTP 与私有管理 UDS；`haven/` 独占一份 SQLite、node key 和 HEAD，统一授权、资源/业务工作流、恢复、配额与 GC。`loom`、`loom/host`、`loom/imageimport` 接收明确资源及冻结证明，执行一次宿主效果并返回现场证据，没有控制数据库、自主重试或恢复循环。
 
 ```mermaid
 flowchart LR
@@ -78,7 +78,7 @@ restore/clone 固定 source manifest、读取 lease、候选和复制预留。�
 
 新实例默认 NIC off，不继承 snapshot 网络授权。Haven 持久保存 desired policy、实例绑定和退休责任；Loom 实装/核验 netns、TAP/veth/nft 与 receipt。direct 顺序为 off → policy → Admin/Workload ready → on → final admission。旧 callback 只能退休原 activation/policy/instance，不得撤销后继实例。
 
-System ready 只证明资源协作；业务 running 还要求 Admin 激活、Workload、lease、settings/fence 与代理接纳。`configure` 的持久 fence 在新 settings 保存前撤权；任何失败保持阻断。secret 真值仅内存，重启后需显式重供。数据 setup 和最终 HTTP Hijack 同属服务关闭与配置撤权的连接 registry。详细协议见 [Sandbox 架构](sandbox-architecture.md)、[网络策略](network-policy.md) 和 [Egress](../internal/egress/README.md)。
+System ready 只证明资源协作；业务 running 还要求 Admin 激活、Workload、lease、settings/fence 与代理接纳。`configure` 的持久 fence 在新 settings 保存前撤权；任何失败保持阻断。secret 真值仅内存，重启后需显式重供。数据 setup 和最终 HTTP Hijack 同属服务关闭与配置撤权的连接 registry。详细协议见 [Sandbox 架构](sandbox-architecture.md)、[网络策略](network-policy.md) 和 [Egress](../haven/egress/README.md)。
 
 ## 回收、备份和证据
 

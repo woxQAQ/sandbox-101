@@ -18,7 +18,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/woxQAQ/haven/api"
+	"github.com/woxQAQ/haven/types"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
@@ -71,90 +71,80 @@ func (c *Client) call(ctx context.Context, method, path, key string, body, out a
 		_ = response.Body.Close()
 	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure api.Error
+		var failure types.ApiError
 		if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&failure) != nil {
 			return fmt.Errorf("haven HTTP %d", response.StatusCode)
 		}
-		return &failure
+		return fmt.Errorf("%s: %s", failure.Code, failure.Message)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
 }
 
-func (c *Client) Claim(ctx context.Context, key string, command api.Command) (api.Result, error) {
-	var result api.Result
+func (c *Client) Claim(ctx context.Context, key string, command types.Command) (types.Result, error) {
+	var result types.Result
 	err := c.call(ctx, "POST", "/v1/claim", key, command, &result)
 	return result, err
 }
 
-func (c *Client) Change(ctx context.Context, id, key string, command api.Command) (api.Result, error) {
-	var result api.Result
+func (c *Client) Change(ctx context.Context, id, key string, command types.Command) (types.Result, error) {
+	var result types.Result
 	err := c.call(ctx, "POST", "/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(command.Action), key, command, &result)
 	return result, err
 }
 
-func (c *Client) List(ctx context.Context) ([]api.Sandbox, error) {
-	var result []api.Sandbox
+func (c *Client) List(ctx context.Context) ([]types.Sandbox, error) {
+	var result []types.Sandbox
 	err := c.call(ctx, "GET", "/v1/sandboxes", "", nil, &result)
 	return result, err
 }
 
-func (c *Client) Get(ctx context.Context, id string) (api.Sandbox, error) {
-	var result api.Sandbox
+func (c *Client) Get(ctx context.Context, id string) (types.Sandbox, error) {
+	var result types.Sandbox
 	err := c.call(ctx, "GET", "/v1/sandboxes/"+url.PathEscape(id), "", nil, &result)
 	return result, err
 }
 
-func (c *Client) Operation(ctx context.Context, id string) (api.Operation, error) {
-	var result api.Operation
+func (c *Client) Operation(ctx context.Context, id string) (types.Operation, error) {
+	var result types.Operation
 	err := c.call(ctx, "GET", "/v1/operations/"+url.PathEscape(id), "", nil, &result)
 	return result, err
 }
 
-func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (api.Result, error) {
-	var result api.Result
+func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (types.Result, error) {
+	var result types.Result
 	err := c.call(ctx, "DELETE", "/v1/checkpoints/"+url.PathEscape(id), key, nil, &result)
 	return result, err
 }
 
-func (c *Client) PutTemplate(ctx context.Context, key string, template api.Template, build bool) (api.Result, error) {
+func (c *Client) PutTemplate(ctx context.Context, key string, template types.Template, build bool) (types.Result, error) {
 	action := "template_put"
 	if build {
 		action = "template_build"
 	}
-	var result api.Result
-	err := c.call(ctx, "POST", "/v1/templates", key, api.Command{
+	var result types.Result
+	err := c.call(ctx, "POST", "/v1/templates", key, types.Command{
 		Action:   action,
 		Template: &template,
 	}, &result)
 	return result, err
 }
 
-func (c *Client) PutTenant(ctx context.Context, tenant api.Tenant) (api.Tenant, error) {
-	var result api.Tenant
+func (c *Client) PutTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error) {
+	var result types.Tenant
 	err := c.call(ctx, "POST", "/v1/tenants", "", tenant, &result)
 	return result, err
 }
 
-func (c *Client) Templates(ctx context.Context) ([]api.Template, error) {
-	var result []api.Template
+func (c *Client) Templates(ctx context.Context) ([]types.Template, error) {
+	var result []types.Template
 	err := c.call(ctx, "GET", "/v1/templates", "", nil, &result)
 	return result, err
 }
 
-func (c *Client) Checkpoints(ctx context.Context) ([]api.Checkpoint, error) {
-	var result []api.Checkpoint
+func (c *Client) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
+	var result []types.Checkpoint
 	err := c.call(ctx, "GET", "/v1/checkpoints", "", nil, &result)
 	return result, err
-}
-
-type RPCError struct {
-	Message     string
-	Code        string
-	ResultState string
-}
-
-func (err *RPCError) Error() string {
-	return err.Message
 }
 
 type Connection struct {
@@ -187,9 +177,11 @@ func (c *Connection) acquire(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (c *Connection) release() {
 	c.admit <- struct{}{}
 }
+
 func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
@@ -263,9 +255,9 @@ func (c *Client) Connect(ctx context.Context, id string) (*Connection, error) {
 		defer func() {
 			_ = conn.Close()
 		}()
-		var failure api.Error
+		var failure types.ApiError
 		if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&failure) == nil {
-			return nil, &failure
+			return nil, fmt.Errorf("%s: %s", failure.Code, failure.Message)
 		}
 		return nil, fmt.Errorf("sandbox upgrade HTTP %d", response.StatusCode)
 	}
@@ -286,6 +278,7 @@ type bufferedConn struct {
 func (c *bufferedConn) Read(buffer []byte) (int, error) {
 	return c.reader.Read(buffer)
 }
+
 func (c *bufferedConn) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()
@@ -335,13 +328,7 @@ func (c *Connection) Call(ctx context.Context, method string, params map[string]
 		}
 		if frame.Error != "" {
 			values := frame.Params.AsMap()
-			code, _ := values["error_code"].(string)
-			state, _ := values["result_state"].(string)
-			return values, &RPCError{
-				Message:     frame.Error,
-				Code:        code,
-				ResultState: state,
-			}
+			return values, errors.New(frame.Error)
 		}
 		if consume != nil {
 			if err = consume(frame); err != nil {
@@ -386,9 +373,11 @@ func (c *Connection) Exec(ctx context.Context, command string, stdout, stderr io
 func (c *Connection) Send(frame *pb.Frame) error {
 	return pb.WriteFrame(c, frame)
 }
+
 func (c *Connection) Receive() (*pb.Frame, error) {
 	return pb.ReadFrame(c)
 }
+
 func (c *Connection) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()

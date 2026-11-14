@@ -8,10 +8,10 @@ NixOS. There is no separate acceptance shell or automatically prepared VM fixtur
 ## Development and static guest
 
 ```nu
-nix develop --command make test check test-race
-nix develop --command make lint
+nix develop --command just test check test-race
+nix develop --command just lint
 let guest_package = (nix build .#guest-static --no-link --print-out-paths | str trim)
-nix develop --command make guest $"GUEST_ARTIFACT_DIR=($guest_package)/bin"
+nix develop --command just $"GUEST_ARTIFACT_DIR=($guest_package)/bin" guest
 ```
 
 The default shell supplies the host toolchain and sets

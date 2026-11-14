@@ -3,6 +3,7 @@ package loom
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 		return err
 	}
 	if len(data) > 64<<20 {
-		return Fail(Incompatible, "snapshot state exceeds validation limit")
+		return errors.New("snapshot state exceeds validation limit")
 	}
 	var snapshot struct {
 		Snapshots map[string]struct {
@@ -52,11 +53,11 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 		} `json:"snapshots"`
 	}
 	if err = json.Unmarshal(data, &snapshot); err != nil {
-		return Fail(Incompatible, "invalid snapshot state")
+		return errors.New("invalid snapshot state")
 	}
 	manager := snapshot.Snapshots["memory-manager"]
 	if manager.Data == nil {
-		return Fail(Incompatible, "snapshot memory manager state missing")
+		return errors.New("snapshot memory manager state missing")
 	}
 	var state struct {
 		MemoryRanges struct {
@@ -67,11 +68,11 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 		CurrentRAM uint64          `json:"current_ram"`
 	}
 	if err = json.Unmarshal([]byte(manager.Data.State), &state); err != nil {
-		return Fail(Incompatible, "invalid saved RAM topology")
+		return errors.New("invalid saved RAM topology")
 	}
 	if state.BootRAM != memoryBytes || state.CurrentRAM != memoryBytes || len(state.Mappings) == 0 ||
 		len(state.Mappings) != len(state.MemoryRanges.Data) {
-		return Fail(Incompatible, "COW requires complete static RAM ranges")
+		return errors.New("COW requires complete static RAM ranges")
 	}
 	page := uint64(os.Getpagesize())
 	sort.Slice(
@@ -88,11 +89,11 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 			mapping.ZoneID != "mem0" ||
 			mapping.FileOffset != 0 ||
 			(i > 0 && mapping.GPA < end) {
-			return Fail(Incompatible, "unsupported COW RAM region")
+			return errors.New("unsupported COW RAM region")
 		}
 		saved := state.MemoryRanges.Data[i]
 		if saved.GPA != mapping.GPA || saved.Length != mapping.Size || total+mapping.Size < total {
-			return Fail(Incompatible, "saved range does not cover one private RAM region")
+			return errors.New("saved range does not cover one private RAM region")
 		}
 		total += mapping.Size
 		end = mapping.GPA + mapping.Size
@@ -102,7 +103,7 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 		return err
 	}
 	if !info.Mode().IsRegular() || total != memoryBytes || uint64(info.Size()) != total {
-		return Fail(Incompatible, "COW memory file length does not match saved ranges")
+		return errors.New("COW memory file length does not match saved ranges")
 	}
 	return nil
 }
@@ -118,7 +119,7 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 5 {
-			return Fail(ManualRecovery, "invalid process map entry")
+			return errors.New("invalid process map entry")
 		}
 		inode, err := strconv.ParseUint(fields[4], 10, 64)
 		if err != nil {
@@ -126,7 +127,7 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 		}
 		majorText, minorText, ok := strings.Cut(fields[3], ":")
 		if !ok {
-			return Fail(ManualRecovery, "invalid process map device")
+			return errors.New("invalid process map device")
 		}
 		major, err := strconv.ParseUint(majorText, 16, 32)
 		if err != nil {
@@ -141,7 +142,7 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 		}
 		startText, endText, ok := strings.Cut(fields[0], "-")
 		if !ok || fields[1] != "rw-p" {
-			return Fail(Incompatible, "COW backing is not mapped private writable")
+			return errors.New("COW backing is not mapped private writable")
 		}
 		start, err := strconv.ParseUint(startText, 16, 64)
 		if err != nil {
@@ -156,7 +157,7 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 			return err
 		}
 		if end <= start || end-start > size || offset > size-(end-start) {
-			return Fail(Incompatible, "COW mapping exceeds retained memory file")
+			return errors.New("COW mapping exceeds retained memory file")
 		}
 		extents = append(extents, extent{offset, offset + end - start})
 	}
@@ -172,12 +173,12 @@ func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) er
 	var covered uint64
 	for _, extent := range extents {
 		if extent.offset != covered {
-			return Fail(Incompatible, "COW memory mappings have gaps or aliases")
+			return errors.New("COW memory mappings have gaps or aliases")
 		}
 		covered = extent.end
 	}
 	if size == 0 || covered != size {
-		return Fail(Incompatible, "VMM did not map the complete retained COW backing")
+		return errors.New("VMM did not map the complete retained COW backing")
 	}
 	return nil
 }

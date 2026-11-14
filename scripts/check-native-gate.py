@@ -14,7 +14,7 @@ import tempfile
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-NATIVE_PACKAGE = "github.com/woxQAQ/haven/internal/haven"
+NATIVE_PACKAGE = "github.com/woxQAQ/haven"
 REQUIRED_TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
@@ -29,7 +29,7 @@ ROOT_REASON = re.compile(
     r"[ \t]+image_compat_test\.go:[0-9]+: root can identity-map all owners"
 )
 MISSING_BWRAP = re.compile(
-    r"[ \t]+fsmeta_test\.go:[0-9]+: incompatible: required OCI tool missing: bwrap\n"
+    r"[ \t]+fsmeta_test\.go:[0-9]+: required OCI tool missing: bwrap\n"
 )
 REQUIRED_ENV = {"SANDBOX_REQUIRE_EROFS_TESTS": "1", "GOWORK": "off"}
 NAMESPACES = ("user", "mnt", "pid", "net")
@@ -131,7 +131,7 @@ def executable(name):
 
 def tool_versions(logs):
     versions = {}
-    tools = ("go", "make", "python3", "golangci-lint", "unshare", "id",
+    tools = ("go", "just", "python3", "golangci-lint", "unshare", "id",
              "readlink", "bwrap", "mkfs.erofs", "fsck.erofs", "dump.erofs", "umoci")
     for tool in tools:
         path = executable(tool)
@@ -222,8 +222,8 @@ def preflight(logs):
                 f"merged mapping must cover all valid Linux IDs: {kind}")
     test = "TestActualMergedOCIExplicitSelectionAndVerification"
     result = capture(logs, "merged-import", [
-        "go", "test", "-json", "-run", f"^{test}$",
-        "-count=1", "-timeout=60s", "./internal/haven",
+        "go", "-C", "haven", "test", "-json", "-run", f"^{test}$",
+        "-count=1", "-timeout=60s", ".",
     ], env={**os.environ, **REQUIRED_ENV})
     check_positive(logs, result, (test,))
 
@@ -248,8 +248,8 @@ def negative(logs):
                 "negative PATH still contains bwrap")
         test = REQUIRED_TESTS[0]
         result = capture(logs, "negative", [
-            go, "test", "-json", "-run", f"^{test}$",
-            "-count=1", "-timeout=60s", "./internal/haven",
+            go, "-C", "haven", "test", "-json", "-run", f"^{test}$",
+            "-count=1", "-timeout=60s", ".",
         ], env={**os.environ, **REQUIRED_ENV, "PATH": str(view)})
         stream = events(result)
         require(result.returncode != 0, "missing bwrap unexpectedly succeeded")
@@ -290,7 +290,7 @@ def main():
                     f"cannot record {name}")
         save_json(logs / "entrypoints.json", [
             {"file": file, "sha256": hashlib.sha256(Path(file).read_bytes()).hexdigest()}
-            for file in ("Makefile", "scripts/check-native-gate.py", ".github/workflows/check.yml")
+            for file in ("justfile", "scripts/check-native-gate.py", ".github/workflows/check.yml")
         ])
         # env -i forwards no HOME or credentials. Go still needs private cache
         # state, which is never included in the diagnostic artifact.
@@ -303,7 +303,7 @@ def main():
         elif options.negative:
             negative(logs)
         else:
-            result = capture(logs, "test-native", ["make", "--no-print-directory", "test-native"])
+            result = capture(logs, "test-native", ["just", "--quiet", "test-native"])
             check_positive(logs, result, REQUIRED_TESTS)
         (logs / "result.txt").write_text("PASS\n")
         print("native gate PASS")

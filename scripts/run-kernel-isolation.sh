@@ -7,7 +7,7 @@ artifacts_dir=$(realpath -- "$artifacts_dir")
 export SANDBOX_KERNEL_ISOLATION_ARTIFACTS="$artifacts_dir"
 test_binary="$artifacts_dir/kernel-isolation.test"
 test_pattern=${SANDBOX_KERNEL_ISOLATION_TEST_PATTERN:-'^TestKernelIsolationRootless(Network|Cgroup)$'}
-GOWORK=off go -C "$project_root" test -c -tags=kernel_isolation -o "$test_binary" ./loom/host
+GOWORK=off go -C "$project_root/loom" test -c -tags=kernel_isolation -o "$test_binary" ./host
 
 # DIRECT is for an already delegated test process. Missing namespaces or
 # controllers fail the test; this runner never turns missing proof into a skip.

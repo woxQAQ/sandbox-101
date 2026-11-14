@@ -103,7 +103,7 @@ func TestCaptureIsolationWriter(t *testing.T) {
 func isolationFixture(t *testing.T) (Resource, *CaptureBoundary) {
 	t.Helper()
 	if os.Getenv("CAPTURE_ISOLATION_INSIDE") != "1" || os.Geteuid() != 0 {
-		t.Fatal("run make capture-isolation-e2e: mapped root and writer namespaces required")
+		t.Fatal("run just capture-isolation-e2e: mapped root and writer namespaces required")
 	}
 	mapping, err := os.ReadFile("/proc/self/uid_map")
 	if err != nil || len(strings.Fields(string(mapping))) < 6 {

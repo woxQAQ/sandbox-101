@@ -89,6 +89,6 @@ configure admission 原子记录持久 fence，并在保存新 settings 前撤�
 
 none/relay NIC off；direct 必须 off → policy → Admin/Workload → on → final admission。direct 只支持 canonical IPv4 CIDR/flow，拒绝 hostname 与 host-only secret；实例更换不继承授权，旧 callback 只能退休原实例。网络机制见 [网络策略](network-policy.md)。
 
-relay 在宿主解析核验全部地址，数字地址拨号，HTTPS 校验 CONNECT authority/SNI/inner Host/证书；secret 真值仅内存，guest 只得到 harmless placeholder，注入前写 durable sanitized audit。重启需要显式重供 secret，不靠 snapshot/DB 恢复。代理细节见 [Egress](../internal/egress/README.md)。
+relay 在宿主解析核验全部地址，数字地址拨号，HTTPS 校验 CONNECT authority/SNI/inner Host/证书；secret 真值仅内存，guest 只得到 harmless placeholder，注入前写 durable sanitized audit。重启需要显式重供 secret，不靠 snapshot/DB 恢复。代理细节见 [Egress](../haven/egress/README.md)。
 
 Preview HMAC 绑定 tenant/sandbox/creation epoch/port/expiry，且不超过 lease；转发移除 Authorization/Cookie，强制 no-referrer。当前为 service origin 上 signed path，不提供每 sandbox 浏览器 origin 或 absolute asset URL 重写。

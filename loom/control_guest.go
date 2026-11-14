@@ -2,6 +2,7 @@ package loom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,7 +20,7 @@ import (
 // selection belong to the caller; tenant relays must always select Workload.
 func DialGuest(ctx context.Context, socket string, port int) (net.Conn, error) {
 	if port < 1 || port > 65535 {
-		return nil, Fail(Invalid, "invalid guest portal")
+		return nil, errors.New("invalid guest portal")
 	}
 	conn, err := unixsocket.Dial(ctx, socket)
 	if err != nil {
@@ -53,7 +54,7 @@ func DialGuest(ctx context.Context, socket string, port int) (net.Conn, error) {
 	fields := strings.Fields(string(line))
 	if len(line) == 0 || line[len(line)-1] != '\n' || len(fields) != 2 || fields[0] != "OK" || fields[1] != strconv.Itoa(port) {
 		_ = conn.Close()
-		return nil, Fail(Incompatible, "guest portal handshake rejected")
+		return nil, errors.New("guest portal handshake rejected")
 	}
 	if err = conn.SetDeadline(time.Time{}); err != nil {
 		_ = conn.Close()
@@ -97,30 +98,15 @@ func GuestControl(ctx context.Context, socket string, port int, id, method strin
 			return nil, err
 		}
 		if frame.Id != id {
-			return nil, Fail(Unknown, "uncorrelated guest response")
+			return nil, errors.New("uncorrelated guest response")
 		}
 		result := frame.Params.AsMap()
 		if frame.Error != "" {
-			code := Internal
-			switch result["error_code"] {
-			case "result_unknown":
-				code = Unknown
-			case "exec_in_progress", "exec_key_conflict", "conflict", "quiesced":
-				code = Conflict
-			case "resource_exhausted", "exec_ledger_capacity_exhausted":
-				code = Exhausted
-			case "not_found":
-				code = ManualRecovery
-			case "invalid":
-				if method == "exec" {
-					code = Invalid
-				}
-			}
-			return result, Fail(code, "guest control request failed")
+			return result, fmt.Errorf("guest %s control request failed", method)
 		}
 		output += len(frame.Data)
 		if output > 1<<20 {
-			return nil, Fail(Unknown, "guest control output exceeds limit")
+			return nil, errors.New("guest control output exceeds limit")
 		}
 		if frame.Eof {
 			return result, nil

@@ -19,8 +19,6 @@ import (
 
 	erofs "github.com/erofs/go-erofs"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 const (
@@ -102,7 +100,7 @@ func buildSharedLayerCache(
 		return cached, err
 	}
 	if _, err = os.Lstat(filepath.Join(parent, diff[7:])); !os.IsNotExist(err) {
-		return cached, api.Fail(api.Incompatible, "layer cache destination already exists")
+		return cached, errors.New("layer cache destination already exists")
 	}
 	if err = os.Rename(stage, filepath.Join(parent, diff[7:])); err != nil {
 		return cached, err
@@ -254,7 +252,7 @@ func restoreHeaderAttributes(attrs []headerAttribute) (map[string]string, error)
 	m := make(map[string]string, len(attrs))
 	for i, a := range attrs {
 		if i > 0 && attrs[i-1].Name >= a.Name {
-			return nil, api.Fail(api.Incompatible, "noncanonical cached OCI attributes")
+			return nil, errors.New("noncanonical cached OCI attributes")
 		}
 		m[a.Name] = a.Value
 	}
@@ -276,7 +274,7 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 	}
 	limit := receipt.Bytes*4 + receipt.Entries*4096 + 65536
 	if st.Size() <= 0 || st.Size() > limit {
-		return nil, api.Fail(api.Incompatible, "cached OCI index exceeds authenticated bounds")
+		return nil, errors.New("cached OCI index exceeds authenticated bounds")
 	}
 	dec := gob.NewDecoder(io.LimitReader(f, limit))
 	var records []cachedHeader
@@ -284,17 +282,17 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 		return nil, err
 	}
 	if int64(len(records)) != receipt.Entries {
-		return nil, api.Fail(api.Incompatible, "cached OCI entry count mismatch")
+		return nil, errors.New("cached OCI entry count mismatch")
 	}
 	var extra any
 	if err = dec.Decode(&extra); err != io.EOF {
-		return nil, api.Fail(api.Incompatible, "trailing cached OCI index data")
+		return nil, errors.New("trailing cached OCI index data")
 	}
 	headers := make([]tar.Header, len(records))
 	for i, r := range records {
 		h := r.Header
 		if h.Xattrs != nil || h.PAXRecords != nil || h.Size < 0 || h.Size > receipt.Bytes {
-			return nil, api.Fail(api.Incompatible, "invalid cached OCI header")
+			return nil, errors.New("invalid cached OCI header")
 		}
 		if err = tarPath(h.Name); err != nil {
 			return nil, err
@@ -306,7 +304,7 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 				return nil, err
 			}
 		default:
-			return nil, api.Fail(api.Incompatible, "unsupported cached OCI file type")
+			return nil, errors.New("unsupported cached OCI file type")
 		}
 		if h.Xattrs, err = restoreHeaderAttributes(r.Xattrs); err != nil {
 			return nil, err
@@ -319,7 +317,7 @@ func sharedHeaders(img fs.FS, receipt layerCache) ([]tar.Header, error) {
 		}
 		if strings.HasPrefix(path.Base(h.Name), ".wh.") &&
 			(h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Size != 0) {
-			return nil, api.Fail(api.Incompatible, "invalid cached OCI whiteout")
+			return nil, errors.New("invalid cached OCI whiteout")
 		}
 		headers[i] = h
 	}
@@ -344,6 +342,7 @@ type metadataInfo struct {
 func (i metadataInfo) Name() string {
 	return i.name
 }
+
 func (i metadataInfo) Sys() any {
 	if i.sys != nil {
 		return i.sys
@@ -392,9 +391,11 @@ func (m metadataFS) ReadDir(n string) ([]fs.DirEntry, error) {
 	)
 	return entries, nil
 }
+
 func (m metadataFS) BlockSize() uint32 {
 	return 4096
 }
+
 func (m metadataFS) DeviceBlocks() uint64 {
 	return m.blocks
 }
@@ -499,7 +500,7 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 				return x
 			}
 			if !info.Mode().IsRegular() || info.Size() != h.Size || info.Sys().(*erofs.Stat).InodeLayout != 0 {
-				return api.Fail(api.Incompatible, "cached OCI payload geometry mismatch")
+				return errors.New("cached OCI payload geometry mismatch")
 			}
 			name := fmt.Sprintf("%s%08x", prefix, j)
 			source.nodes[name] = metadataInfo{
@@ -598,7 +599,7 @@ func sharedParents(w *erofs.Writer, n string) error {
 	info, err := w.Stat(parent)
 	if err == nil {
 		if !info.IsDir() {
-			return api.Fail(api.Invalid, "OCI path traverses nondirectory %q", parent)
+			return fmt.Errorf("OCI path traverses nondirectory %q", parent)
 		}
 		return nil
 	}
@@ -705,7 +706,7 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 					return err
 				}
 				if info.IsDir() {
-					return api.Fail(api.Invalid, "OCI hardlink targets a directory")
+					return errors.New("OCI hardlink targets a directory")
 				}
 				continue
 			}
@@ -742,7 +743,7 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 					}
 				}
 			default:
-				return api.Fail(api.Incompatible, "unsupported cached OCI entry %q", n)
+				return fmt.Errorf("unsupported cached OCI entry %q", n)
 			}
 		}
 		if err := resolve(); err != nil {
@@ -750,7 +751,7 @@ func applySharedEntries(w *erofs.Writer, headers []tar.Header, prefix string) er
 		}
 	}
 	if len(pending) != 0 {
-		return api.Fail(api.Invalid, "unresolved or cyclic OCI hardlinks")
+		return errors.New("unresolved or cyclic OCI hardlinks")
 	}
 	return nil
 }

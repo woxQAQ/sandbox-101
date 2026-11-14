@@ -6,18 +6,18 @@ tools and inputs below are needed only by the relevant integration tests, not by
 every build or deployment. Runners use prepared tools and artifacts; they do not
 install a toolchain or build Cloud Hypervisor or a kernel.
 
-`make integration` builds the real Rust Unix fixture and runs root `integration/`
+`just integration` builds the real Rust Unix fixture and runs `haven/integration/`
 with the explicit `integration` build tag. The fixture supplies only owned host,
 System and Admin effects; all control intents, witnesses and accounting use Haven's
 real SQLite store. Missing `SANDBOX_AGENT_FIXTURE` is a failure in that tagged
-entrypoint. `make smoke` starts one real Haven and both protocol CLIs, including
+entrypoint. `just smoke` starts one real Haven and both protocol CLIs, including
 writer exclusion, dry-run, restart and unified offline backup. Neither boots a VM.
-The VM/production runners below use the root Haven module and explicit Loom
+The VM/production runners below use the Haven workspace module and explicit Loom
 packages; historical outcomes do not establish current Haven production acceptance.
 
 ## VM test inputs
 
-`internal/haven/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
+`haven/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
 not the privileged launcher or daemon lifecycle. The separate `kernel_isolation`
 tests under `loom/host/` cover real host networking and cgroup enforcement without a VM; production
 checks exercise the launcher and single Haven daemon. These are distinct evidence
@@ -68,8 +68,8 @@ prepare this input in a container build. It is not the production guest image:
 
 ```nu
 docker buildx build --output type=local,dest=build/kvm-rootfs -f scripts/fixtures/kvm-rootfs.Dockerfile .
-make guest
-make kvm-e2e KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path/to/rootfs KVM_ARTIFACTS_DIR=/dev/shm/haven-kvm
+just guest
+just KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path/to/rootfs KVM_ARTIFACTS_DIR=/dev/shm/haven-kvm kvm-e2e
 ```
 
 ## Host capabilities
@@ -86,7 +86,7 @@ additionally need TUN, systemd/systemctl/systemd-run, iproute2, nftables,
 util-linux (including sysctl), procps, tar and gzip. Production tests also need
 bindfs, subordinate UID/GID mappings, `/dev/fuse`, a user systemd manager
 delegating cpu/memory/io/pids, and the explicit block-device I/O budget described
-in host deployment. Use `make runtime-e2e` with `RUNTIME_OCI_LAYOUT`,
+in host deployment. Use `just runtime-e2e` with `RUNTIME_OCI_LAYOUT`,
 `RUNTIME_ARTIFACTS_DIR` and `SANDBOX_RUNTIME_IO_MAX` for the full daemon lifecycle.
 The runner resolves PATH before masking `/run`
 and forwards the configured image-tool roots into its transient service.
@@ -97,7 +97,7 @@ not validate later changes.
 
 ## Isolated provisioned-host lifecycle
 
-`make privileged-e2e` runs the same real lifecycle against an explicitly prepared
+`just privileged-e2e` runs the same real lifecycle against an explicitly prepared
 private Haven deployment. Supply `SANDBOX_E2E_ENDPOINT`, `SANDBOX_E2E_TOKEN_FILE`,
 `SANDBOX_E2E_IMAGE_DIGEST` and `SANDBOX_E2E_STATE_DIR`. Read-only VM observations
 use that store plus the real inspector; also supply the exact
@@ -106,10 +106,10 @@ use that store plus the real inspector; also supply the exact
 `SANDBOX_E2E_VMM_GID`. `SANDBOX_E2E_TENANT` selects the owner for root HTTP
 requests. No second control socket or control store is opened.
 
-The KVM test remains in `internal/haven/` to reuse the native OCI fixtures and
+The KVM test remains in `haven/` to reuse the native OCI fixtures and
 exercise the real durable importer without exporting test-only control hooks.
 Its `kvm` tag and all guest/COW assertions remain intact. Privileged production
-scenarios live in root `integration/`; their inventory helper is read-only and
+scenarios live in `haven/integration/`; their inventory helper is read-only and
 has no lifecycle or admission methods. The production runner starts one Haven,
 imports through management UDS, compares management/business store IDs, kills
 and restarts that daemon, and verifies the exact live VMM plus guest state.
@@ -130,6 +130,6 @@ needs native image tools and namespaces/mappings, but no VM:
 
 ```nu
 with-env {GOWORK: "off", SANDBOX_REQUIRE_EROFS_TESTS: "1"} {
-    go test -tags=kvm ./internal/haven -run '^TestKVMRootfsOCI$' -count=1
+    go -C haven test -tags=kvm . -run '^TestKVMRootfsOCI$' -count=1
 }
 ```

@@ -20,7 +20,7 @@ The namespace-local nft `ct count` budget is shared across outbound/reply traffi
 
 ## Haven activation and exact retirement
 
-The sequence in `internal/haven/activation.go` is:
+The sequence in `haven/activation.go` is:
 
 1. Verify the original resource/instance and ensure every effective interface is off.
 2. Install and verify the frozen policy through Loom while off, recording its exact instance and durable activation/retirement relationship.
@@ -46,6 +46,6 @@ Host root and tools are trusted. There is no continuous kernel watcher that inst
 
 ## Validation boundary
 
-`make kernel-isolation-e2e` exercises real nft/NAT/TCP in fresh user/network/mount/PID namespaces: public allow/deny, mandatory private/metadata denial under `/0`, revocation, stale instance and tampered-rule shutdown. A two-flow budget holds connections to two public targets and rejects a third handshake. The fixture proves target reachability and substitutes a veth for packet injection after real TAP preparation; it does not prove production privileged VMM launch.
+`just kernel-isolation-e2e` exercises real nft/NAT/TCP in fresh user/network/mount/PID namespaces: public allow/deny, mandatory private/metadata denial under `/0`, revocation, stale instance and tampered-rule shutdown. A two-flow budget holds connections to two public targets and rejects a third handshake. The fixture proves target reachability and substitutes a veth for packet injection after real TAP preparation; it does not prove production privileged VMM launch.
 
 Production separately retains real guest virtio/TAP plus policy/SNAT probes for source, fork and resume. Current command outcomes and missing prerequisites are recorded in [Plan 024](../plans/024-haven-loom-single-control-design.md); historical [acceptance](acceptance.md) does not validate the new Haven tree. Host bandwidth/conntrack/storage qualification remains per deployment.

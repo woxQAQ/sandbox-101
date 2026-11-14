@@ -124,7 +124,7 @@ func (boundary *RestoreBoundary) Close() error {
 func PrepareRestore(resource Resource, operation, source string, digests map[string]string, createVM bool) (*RestoreBoundary, error) {
 	versionPath := filepath.Join(resource.Dir, "versions", operation)
 	if !ValidResourceID(operation, "op-") || resource.Disk != filepath.Join(versionPath, "disk.raw") || resource.RestoreDir != filepath.Join(versionPath, "restore") {
-		return nil, Fail(ManualRecovery, "restore candidate ownership mismatch")
+		return nil, errors.New("restore candidate ownership mismatch")
 	}
 	boundary := &RestoreBoundary{
 		source: source,
@@ -212,7 +212,7 @@ func (boundary *RestoreBoundary) syncDirectories() error {
 // call has a separate control-plane checkpoint before the next physical effect.
 func (boundary *RestoreBoundary) CopyFile(name string) error {
 	if _, exists := boundary.Materials.Files[name]; !exists {
-		return Fail(Invalid, "unknown restore file")
+		return errors.New("unknown restore file")
 	}
 	destination := restorePath(boundary.Materials.Resource, name)
 	source := restoreSource(boundary.source, name)
@@ -229,7 +229,7 @@ func (boundary *RestoreBoundary) CopyFile(name string) error {
 func (boundary *RestoreBoundary) PublishFile(name string) error {
 	proof, exists := boundary.Materials.Files[name]
 	if !exists || name == "memory-ranges" {
-		return Fail(Invalid, "unknown or immutable restore file")
+		return errors.New("unknown or immutable restore file")
 	}
 	destination := restorePath(boundary.Materials.Resource, name)
 	if _, err := inspectRestoreFile(destination+".pending", proof.Source, proof.Size, true); err != nil {
@@ -248,7 +248,7 @@ func (boundary *RestoreBoundary) SyncMaterials() error {
 			return err
 		}
 		if name == "memory-ranges" && file.Identity != proof.Identity {
-			return Fail(ManualRecovery, "candidate backing inode mismatch")
+			return errors.New("candidate backing inode mismatch")
 		}
 		boundary.Materials.Files[name] = file
 	}
@@ -259,7 +259,7 @@ func (boundary *RestoreBoundary) SyncMaterials() error {
 // incomplete materials into new authority or verifies a live disk's old digest.
 func VerifyRestoreMaterials(proof *RestoreMaterials, expected Resource, digests map[string]string, disk bool) error {
 	if proof == nil || !proof.Complete || !reflect.DeepEqual(proof.Resource, expected) || len(proof.Files) != len(restoreNames) {
-		return Fail(ManualRecovery, "restore completion proof missing or inconsistent; legacy handoff requires manual recovery")
+		return errors.New("restore completion proof missing or inconsistent; legacy handoff requires manual recovery")
 	}
 	for path, identity := range map[string]FileIdentity{
 		filepath.Dir(expected.RestoreDir): proof.Version,
@@ -275,7 +275,7 @@ func VerifyRestoreMaterials(proof *RestoreMaterials, expected Resource, digests 
 			return err
 		}
 		if IdentityOf(info) != identity {
-			return Fail(ManualRecovery, "restore directory identity changed")
+			return errors.New("restore directory identity changed")
 		}
 	}
 	for _, name := range restoreNames {
@@ -285,7 +285,7 @@ func VerifyRestoreMaterials(proof *RestoreMaterials, expected Resource, digests 
 			key = name
 		}
 		if file.Source != digests[key] || file.Candidate != file.Source || file.Size <= 0 {
-			return Fail(Incompatible, "restore fixed source proof mismatch")
+			return errors.New("restore fixed source proof mismatch")
 		}
 		if name == "disk.raw" && !disk {
 			continue
@@ -295,7 +295,7 @@ func VerifyRestoreMaterials(proof *RestoreMaterials, expected Resource, digests 
 			return err
 		}
 		if got.Identity != file.Identity {
-			return Fail(ManualRecovery, "restore artifact inode mismatch")
+			return errors.New("restore artifact inode mismatch")
 		}
 	}
 	return nil

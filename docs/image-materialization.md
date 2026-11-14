@@ -124,11 +124,11 @@ Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d
 ## Validation
 
 Tests use the caller's prepared toolchain under the same contract for every
-environment provider. `make test` is the quick entrypoint and may skip native
-tests for missing tools/namespaces/mappings. `make test-native` forces `SANDBOX_REQUIRE_EROFS_TESTS=1` and runs the complete root
-Haven/Loom module with `-json -race ./... -count=1 -timeout=300s`;
+environment provider. `just test` is the quick entrypoint and may skip native
+tests for missing tools/namespaces/mappings. `just test-native` forces `SANDBOX_REQUIRE_EROFS_TESTS=1` and runs every host workspace module independently
+with `-json -race ./... -count=1 -timeout=300s`;
 missing prerequisites fail, and stdout contains only Go JSON. The required native
-pass events now belong to `github.com/woxQAQ/haven/internal/haven`, where the
+pass events now belong to `github.com/woxQAQ/haven`, where the
 original image scenarios execute through the real Haven importer.
 
 The gate additionally checks the original command exit code and individual
@@ -144,7 +144,7 @@ the exact source diagnostic `root can identity-map all owners`. Other skips,
 including package skips for packages without tests and unrelated KVM/capture
 tests, are recorded separately in `skips.json` and do not supply native coverage.
 
-Prepare Go with race/C compiler support, make, git, Python >=3.11, coreutils,
+Prepare Go with race/C compiler support, just, git, Python >=3.11, coreutils,
 golangci-lint, bubblewrap, util-linux unshare, matching mkfs/fsck.erofs
 **>=1.9.4 and <2**, dump.erofs and umoci **0.6.0**. Declare alternate readonly
 dependency roots using `SANDBOX_IMAGE_TOOL_ROOTS` as above. Executable realpaths
@@ -191,7 +191,7 @@ and distribution Python/bubblewrap/coreutils. The gate uses only Python's standa
 library and POSIX shell probes; Nushell is neither installed nor invoked.
 Separate preparation steps install tools;
 the official `golangci/golangci-lint-action@v9.3.0` supplies the fixed lint version
-using `install-only`, and the existing `make lint` remains the single lint entrypoint.
+using `install-only`, and the existing `just lint` remains the single lint entrypoint.
 Lint runs without sudo after native validation, so its `go fix` cannot rewrite the
 checkout before the native tests. The native probes/tests receive only
 the controlled PATH and `GOTOOLCHAIN=local` through `sudo env -i` (an alternate
@@ -221,4 +221,4 @@ Integrity tests cover cache corruption/missing receipts, cached index bounds/uns
 
 Additional actual umoci tests exercise its separate merged layout, including root attributes, cross-layer links, capabilities/ACLs, whiteout and duplicate ordering, symlink confinement, boot symlink refusal, digest/descriptor/resource limits, unmapped ownership, immutable manifests and layout conflicts. Its forward-hardlink refusal checks that no catalog entry is published.
 
-Host extraction tests are complemented by `make kvm-e2e KVM_MATERIALS_DIR=... KVM_ROOTFS_DIR=... KVM_ARTIFACTS_DIR=...`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel, packaged static guest and caller-supplied complete userspace to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The historical shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The recorded complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](acceptance.md) for exact source-bound outcomes and boundaries; those runs do not validate later harness changes.
+Host extraction tests are complemented by `just KVM_MATERIALS_DIR=... KVM_ROOTFS_DIR=... KVM_ARTIFACTS_DIR=... kvm-e2e`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel, packaged static guest and caller-supplied complete userspace to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The historical shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The recorded complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](acceptance.md) for exact source-bound outcomes and boundaries; those runs do not validate later harness changes.

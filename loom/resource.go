@@ -2,41 +2,7 @@
 // effects. Durable intent, publication and recovery belong to the caller.
 package loom
 
-import (
-	"context"
-	"fmt"
-)
-
-// Code classifies a resource effect failure. An error never proves that an
-// effect did not occur; callers retain responsibility until inspection proves it.
-type Code string
-
-const (
-	NotFound       Code = "not_found"
-	Conflict       Code = "conflict"
-	Invalid        Code = "invalid"
-	Exhausted      Code = "resource_exhausted"
-	Incompatible   Code = "incompatible"
-	Unknown        Code = "result_unknown"
-	ManualRecovery Code = "manual_recovery_required"
-	Internal       Code = "internal"
-)
-
-type Error struct {
-	Code    Code   `json:"code"`
-	Message string `json:"message"`
-}
-
-func (e *Error) Error() string {
-	return fmt.Sprintf("%s: %s", e.Code, e.Message)
-}
-
-func Fail(code Code, format string, args ...any) error {
-	return &Error{
-		Code:    code,
-		Message: fmt.Sprintf(format, args...),
-	}
-}
+import "context"
 
 type Shape struct {
 	VCPUs     int   `json:"vcpus"`

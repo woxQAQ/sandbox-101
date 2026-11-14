@@ -28,7 +28,7 @@ class RunnerEntrypoints(unittest.TestCase):
         # A deliberately closed PATH: no real package manager is available.
         for name in (
             "bash", "dirname", "realpath", "mkdir", "mktemp", "date", "tee",
-            "timeout", "make", "python3", "rg", "file", "readelf", "nm",
+            "timeout", "just", "python3", "rg", "file", "readelf", "nm",
             "chmod", "rm", "readlink",
         ):
             executable = shutil.which(name)
@@ -62,7 +62,7 @@ class RunnerEntrypoints(unittest.TestCase):
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result
 
-    def test_kvm_make_target_uses_only_supplied_environment(self):
+    def test_kvm_just_recipe_uses_only_supplied_environment(self):
         guest = self.root / "guest"
         rootfs = self.root / "rootfs"
         guest.mkdir()
@@ -78,14 +78,14 @@ Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
 }))
 """)
         self.run_command(
-            "make", "-s", "kvm-e2e", f"KVM_MATERIALS_DIR={self.materials}",
+            "just", "--quiet", f"KVM_MATERIALS_DIR={self.materials}",
             f"KVM_GUEST_DIR={guest}", f"KVM_ROOTFS_DIR={rootfs}",
-            f"KVM_ARTIFACTS_DIR={self.root / 'kvm artifacts'}",
+            f"KVM_ARTIFACTS_DIR={self.root / 'kvm artifacts'}", "kvm-e2e",
         )
         record = json.loads((self.root / "go.json").read_text())
         self.assertIn("-tags=kvm", record["args"])
-        self.assertEqual(record["args"][:2], ["-C", str(PROJECT)])
-        self.assertIn("./internal/haven", record["args"])
+        self.assertEqual(record["args"][:2], ["-C", str(PROJECT / "haven")])
+        self.assertIn(".", record["args"])
         self.assertIn("^TestKVMOCIFileViewAndCOW$", record["args"])
         self.assertEqual(record["environment"]["SANDBOX_KVM_ROOTFS"], str(rootfs))
         self.assertEqual(record["environment"]["SANDBOX_KVM_GUEST_DIR"], str(guest))
@@ -102,7 +102,7 @@ Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
         )
         self.assertIn("not the host root", result.stderr)
 
-    def test_runtime_make_target_forwards_explicit_dependencies(self):
+    def test_runtime_just_recipe_forwards_explicit_dependencies(self):
         oci = self.root / "oci"
         oci.mkdir()
         self.executable("go", """
@@ -118,9 +118,9 @@ Path(os.environ["RECORD_DIR"], "service.json").write_text(json.dumps(sys.argv[1:
 """)
         self.executable("systemctl", "import sys\nsys.exit(0)\n")
         self.run_command(
-            "make", "-s", "runtime-e2e", f"KVM_MATERIALS_DIR={self.materials}",
+            "just", "--quiet", f"KVM_MATERIALS_DIR={self.materials}",
             f"RUNTIME_OCI_LAYOUT={oci}",
-            f"RUNTIME_ARTIFACTS_DIR={self.root / 'runtime artifacts'}",
+            f"RUNTIME_ARTIFACTS_DIR={self.root / 'runtime artifacts'}", "runtime-e2e",
             SANDBOX_RUNTIME_IO_MAX="8:0 wbps=1048576",
         )
         args = json.loads((self.root / "service.json").read_text())
@@ -131,7 +131,7 @@ Path(os.environ["RECORD_DIR"], "service.json").write_text(json.dumps(sys.argv[1:
         commands = [json.loads(line) for line in (self.root / "runtime-go.jsonl").read_text().splitlines()]
         self.assertEqual(len(commands), 2)
         for command in commands:
-            self.assertEqual(command[:2], ["-C", str(PROJECT)])
+            self.assertEqual(command[:2], ["-C", str(PROJECT / "haven")])
         self.assertEqual(commands[0][-1], "./cmd/haven")
         self.assertIn("-tags=privileged", commands[1])
         self.assertEqual(commands[1][-1], "./integration")

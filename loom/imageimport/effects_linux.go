@@ -43,7 +43,7 @@ func StageImageImport(ctx context.Context, state, operation string, plan ImageIm
 			return err
 		}
 		if !info.Mode().IsRegular() || info.Size() > limit || (exact >= 0 && info.Size() != exact) {
-			return loom.Fail(loom.Invalid, "OCI blob size or type changed")
+			return errors.New("OCI blob size or type changed")
 		}
 		name, err := host.SHAName(digest)
 		if err != nil {
@@ -62,7 +62,7 @@ func StageImageImport(ctx context.Context, state, operation string, plan ImageIm
 			return err
 		}
 		if actual != digest {
-			return loom.Fail(loom.Invalid, "staged OCI digest mismatch")
+			return errors.New("staged OCI digest mismatch")
 		}
 		return nil
 	}
@@ -88,7 +88,7 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 		return proof, err
 	}
 	if index < 0 || index >= len(plan.Layers) {
-		return proof, loom.Fail(loom.Invalid, "invalid layer index")
+		return proof, errors.New("invalid layer index")
 	}
 	layer := plan.Layers[index]
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
@@ -109,7 +109,7 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 			return proof, err
 		}
 		if !reflect.DeepEqual(current, *layer.Cached) {
-			return proof, loom.Fail(loom.Incompatible, "frozen cache receipt changed")
+			return proof, errors.New("frozen cache receipt changed")
 		}
 		cache = current
 	} else {
@@ -124,7 +124,7 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 		}
 	}
 	if cache.Bytes > bytesLeft || cache.Entries > filesLeft {
-		return proof, loom.Fail(loom.Exhausted, "cached OCI layer exceeds import bounds")
+		return proof, errors.New("cached OCI layer exceeds import bounds")
 	}
 	artifact, err := cache.Artifact(state, index)
 	if err != nil {
@@ -170,7 +170,7 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 		return proof, err
 	}
 	if len(layers) != len(plan.Layers) {
-		return proof, loom.Fail(loom.Invalid, "image layer proof set incomplete")
+		return proof, errors.New("image layer proof set incomplete")
 	}
 	output := filepath.Join(boundary.Path, "output")
 	var artifacts []host.ImageArtifact
@@ -253,7 +253,7 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 
 func VerifyImportedImage(ctx context.Context, state, path string, boundary ImageImportBoundary, proof ImageImportProof) error {
 	if !proof.Synced || proof.ManifestSHA256 == "" || boundary.Output.Inode == 0 {
-		return loom.Fail(loom.Incompatible, "image publication lacks fixed synced proof")
+		return errors.New("image publication lacks fixed synced proof")
 	}
 	directory, err := loom.OpenCaptureDir(path)
 	if err != nil {
@@ -265,14 +265,14 @@ func VerifyImportedImage(ctx context.Context, state, path string, boundary Image
 		return err
 	}
 	if loom.IdentityOf(info) != boundary.Output {
-		return loom.Fail(loom.ManualRecovery, "image publication directory replaced")
+		return errors.New("image publication directory replaced")
 	}
 	hash, err := loom.DigestFileContext(ctx, filepath.Join(path, "image.json"))
 	if err != nil {
 		return err
 	}
 	if hash != proof.ManifestSHA256 {
-		return loom.Fail(loom.Incompatible, "image publication manifest bytes changed")
+		return errors.New("image publication manifest bytes changed")
 	}
 	if proof.Manifest.Layout == host.MergedOCIEROFSLayout {
 		return proof.Manifest.VerifyMergedOCIArtifacts(path)

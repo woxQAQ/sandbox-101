@@ -2,12 +2,11 @@ package sdk_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/sdk"
 )
 
@@ -28,8 +27,7 @@ func TestHTTPFailuresEndAtHavenContract(t *testing.T) {
 		} else {
 			_, err = client.Get(context.Background(), "sandbox")
 		}
-		var failure *api.Error
-		if !errors.As(err, &failure) || failure.Code != api.ErrForbidden || failure.Cause != nil {
+		if err == nil || !strings.Contains(err.Error(), "forbidden: root access required") {
 			t.Fatalf("HTTP error did not retain the Haven wire contract: %#v", err)
 		}
 	}

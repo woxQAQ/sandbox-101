@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/woxQAQ/haven/api"
+	"github.com/woxQAQ/haven/types"
 )
 
 // ManagementClient speaks only the local protocol. Socket possession and kernel
@@ -30,26 +30,26 @@ func NewManagement(socket string) *ManagementClient {
 	}
 }
 
-func (client *ManagementClient) Status(ctx context.Context) (api.NodeStatus, error) {
-	var out api.NodeStatus
+func (client *ManagementClient) Status(ctx context.Context) (types.NodeStatus, error) {
+	var out types.NodeStatus
 	err := client.client.call(ctx, "GET", "/v1/status", "", nil, &out)
 	return out, err
 }
 
-func (client *ManagementClient) Manage(ctx context.Context, request api.ManagementRequest) (api.ManagementResponse, error) {
-	var out api.ManagementResponse
+func (client *ManagementClient) Manage(ctx context.Context, request types.ManagementRequest) (types.ManagementResponse, error) {
+	var out types.ManagementResponse
 	err := client.client.call(ctx, "POST", "/v1/manage", "", request, &out)
 	return out, err
 }
 
-func (client *ManagementClient) Operation(ctx context.Context, id string) (api.ManagementOperation, error) {
-	var out api.ManagementOperation
+func (client *ManagementClient) Operation(ctx context.Context, id string) (types.ManagementOperation, error) {
+	var out types.ManagementOperation
 	err := client.client.call(ctx, "GET", "/v1/operations/"+url.PathEscape(id), "", nil, &out)
 	return out, err
 }
 
-func (client *Client) Status(ctx context.Context) (api.NodeStatus, error) {
-	var out api.NodeStatus
+func (client *Client) Status(ctx context.Context) (types.NodeStatus, error) {
+	var out types.NodeStatus
 	err := client.call(ctx, "GET", "/v1/status", "", nil, &out)
 	return out, err
 }

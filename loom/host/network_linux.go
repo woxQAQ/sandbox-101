@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 type networkReceipt struct {
@@ -79,11 +77,7 @@ func (b *CloudHypervisor) networkPrepare(ctx context.Context, r Resource) error 
 		return e
 	}
 	if _, e := os.Stat("/run/netns/" + ns); e == nil {
-		return api.Fail(
-			api.ManualRecovery,
-			"network namespace exists without completed ownership receipt; preserve and diagnose %s",
-			ns,
-		)
+		return fmt.Errorf("network namespace exists without completed ownership receipt; preserve and diagnose %s", ns)
 	}
 	if _, e := command(ctx, "ip", "netns", "add", ns); e != nil {
 		return e
@@ -164,7 +158,7 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 		if _, x := os.Stat("/run/netns/" + ns); os.IsNotExist(x) {
 			return false, nil
 		}
-		return false, api.Fail(api.ManualRecovery, "network preparation incomplete; ownership receipt absent")
+		return false, errors.New("network preparation incomplete; ownership receipt absent")
 	}
 	if err != nil {
 		return false, err
@@ -172,7 +166,7 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 	var removing networkReceipt
 	if x := readJSON(filepath.Join(r.Dir, "network-removing.json"), &removing); x == nil {
 		if removing != receipt {
-			return false, api.Fail(api.ManualRecovery, "network cleanup receipt mismatch")
+			return false, errors.New("network cleanup receipt mismatch")
 		}
 		st, x := os.Stat("/run/netns/" + ns)
 		if os.IsNotExist(x) {
@@ -182,7 +176,7 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 			return false, x
 		}
 		if st.Sys().(*syscall.Stat_t).Ino != receipt.Inode {
-			return false, api.Fail(api.ManualRecovery, "namespace replaced during cleanup")
+			return false, errors.New("namespace replaced during cleanup")
 		}
 		return false, nil
 	} else if !os.IsNotExist(x) {
@@ -190,10 +184,10 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 	}
 	st, err := os.Stat("/run/netns/" + ns)
 	if err != nil {
-		return false, api.Fail(api.ManualRecovery, "owned namespace missing; cannot prove host resources were cleaned")
+		return false, errors.New("owned namespace missing; cannot prove host resources were cleaned")
 	}
 	if receipt.Token != r.NetworkToken || receipt.Inode != st.Sys().(*syscall.Stat_t).Ino {
-		return false, api.Fail(api.ManualRecovery, "network namespace identity mismatch")
+		return false, errors.New("network namespace identity mismatch")
 	}
 	var links []linkInfo
 	out, err := command(ctx, "ip", "-j", "link", "show", "dev", host)
@@ -204,7 +198,7 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 		return false, err
 	}
 	if len(links) != 1 || links[0].Alias != netAlias(r) {
-		return false, api.Fail(api.ManualRecovery, "host veth ownership mismatch")
+		return false, errors.New("host veth ownership mismatch")
 	}
 	hostLink := links[0]
 	out, err = netIP(ctx, ns, "-j", "link", "show")
@@ -227,7 +221,7 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 	}
 	if tap == nil || up == nil || tap.Alias != netAlias(r) || up.Alias != netAlias(r) || hostLink.Peer != up.Index ||
 		up.Peer != hostLink.Index {
-		return false, api.Fail(api.ManualRecovery, "TAP/veth identity or pairing mismatch")
+		return false, errors.New("TAP/veth identity or pairing mismatch")
 	}
 	isUp := func(l linkInfo) bool {
 		return slices.Contains(l.Flags, "UP")
@@ -265,7 +259,7 @@ func ensureNetworkRoute(ctx context.Context, ns, destination, gateway, device st
 			routes[0].Gateway != gateway ||
 			routes[0].Device != device ||
 			(routes[0].Type != "" && routes[0].Type != "unicast") {
-			return api.Fail(api.ManualRecovery, "network route ownership mismatch for %s", destination)
+			return fmt.Errorf("network route ownership mismatch for %s", destination)
 		}
 		return nil
 	}
@@ -277,7 +271,7 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 	ns, host, peer, mapped, hostIP, peerIP := netNames(r)
 	if _, x := os.Stat(filepath.Join(r.Dir, "network-removing.json")); x == nil {
 		if enable {
-			return api.Fail(api.Conflict, "network cleanup in progress")
+			return errors.New("network cleanup in progress")
 		}
 		_, x = b.networkInspect(ctx, r)
 		return x
@@ -288,7 +282,7 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 	}
 	if _, err = os.Stat(filepath.Join(r.Dir, "network.json")); os.IsNotExist(err) {
 		if enable {
-			return api.Fail(api.Conflict, "network not prepared")
+			return errors.New("network not prepared")
 		}
 		return nil
 	}
@@ -305,10 +299,10 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		}
 		var installed networkPolicyReceipt
 		if err = readJSON(filepath.Join(r.Dir, "network-policy.json"), &installed); err != nil {
-			return api.Fail(api.Conflict, "direct policy receipt required: %v", err)
+			return fmt.Errorf("direct policy receipt required: %v", err)
 		}
 		if installed.Policy == nil {
-			return api.Fail(api.Conflict, "direct policy revoked")
+			return errors.New("direct policy revoked")
 		}
 		if err = b.VerifyNetworkPolicy(ctx, r, installed.Policy); err != nil {
 			return err
@@ -380,7 +374,7 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		if active, x := b.networkInspect(ctx, r); x != nil {
 			errs = append(errs, x)
 		} else if active {
-			errs = append(errs, api.Fail(api.Unknown, "interface shutdown unconfirmed"))
+			errs = append(errs, errors.New("interface shutdown unconfirmed"))
 		}
 	}
 	return errors.Join(errs...)
@@ -415,10 +409,10 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 		return err
 	}
 	if saved != receipt {
-		return api.Fail(api.ManualRecovery, "cleanup ownership marker mismatch")
+		return errors.New("cleanup ownership marker mismatch")
 	}
 	if st, err := os.Stat("/run/netns/" + ns); err == nil && st.Sys().(*syscall.Stat_t).Ino != receipt.Inode {
-		return api.Fail(api.ManualRecovery, "namespace replaced during cleanup")
+		return errors.New("namespace replaced during cleanup")
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -432,7 +426,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 	}
 	for _, link := range existing {
 		if link.Name == host && link.Alias != netAlias(r) {
-			return api.Fail(api.ManualRecovery, "reused veth name during cleanup")
+			return errors.New("reused veth name during cleanup")
 		}
 	}
 	for _, elem := range []struct {
@@ -490,7 +484,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 		for _, l := range links {
 			if l.Name == host {
 				if l.Alias != netAlias(r) {
-					return api.Fail(api.ManualRecovery, "reused veth name during cleanup")
+					return errors.New("reused veth name during cleanup")
 				}
 				if _, err = command(ctx, "ip", "link", "del", host); err != nil {
 					return err

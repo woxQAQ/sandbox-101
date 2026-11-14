@@ -86,8 +86,8 @@ for directory in "${tool_paths[@]}"; do
 done
 export PATH="$resolved_path"
 export CGO_ENABLED=0
-GOWORK=off go -C "$project_root" build -o "$run_dir/haven" ./cmd/haven 2>&1 | tee "$run_dir/build.log"
-GOWORK=off go -C "$project_root" test -c -tags=privileged -o "$run_dir/runtime.test" ./integration 2>&1 | tee -a "$run_dir/build.log"
+GOWORK=off go -C "$project_root/haven" build -o "$run_dir/haven" ./cmd/haven 2>&1 | tee "$run_dir/build.log"
+GOWORK=off go -C "$project_root/haven" test -c -tags=privileged -o "$run_dir/runtime.test" ./integration 2>&1 | tee -a "$run_dir/build.log"
 bash "$project_root/scripts/check-kernel.sh" "$materials_dir/kernel.config"
 
 unit="sandbox-runtime-$(date +%s)-$$.service"

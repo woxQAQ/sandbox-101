@@ -12,7 +12,7 @@ run=$(mktemp -d /tmp/haven-capture.XXXXXXXX)
 chmod 0711 "$run"
 export TMPDIR="$run"
 trap 'rm -rf -- "$run"' EXIT
-GOWORK=off go -C "$root" test -c -tags=capture_isolation -o "$run/capture.test" ./loom
+GOWORK=off go -C "$root/loom" test -c -tags=capture_isolation -o "$run/capture.test" .
 export CAPTURE_PARENT_USER CAPTURE_PARENT_MNT CAPTURE_PARENT_PID
 CAPTURE_PARENT_USER=$(readlink /proc/self/ns/user)
 CAPTURE_PARENT_MNT=$(readlink /proc/self/ns/mnt)

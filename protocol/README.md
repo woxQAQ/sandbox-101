@@ -57,22 +57,20 @@ a reply. The protobuf schema and field numbers are unchanged.
 
 `error` is a human diagnostic containing operation/target context and
 `file:line:column` locations, not a machine-parsing contract. Diagnostic context
-does not dump command text, environment values or exec keys. SDK `RPCError.Code`
-exposes the category for every method; `ResultState` retains the optional
-`params.result_state`. Terminal result params are returned even on failure:
+does not dump command text, environment values or exec keys. The SDK returns a
+plain Go error and retains `error_code` and `result_state` in the returned params;
+there is no separate Go RPC error hierarchy. Terminal result params are returned even on failure:
 in particular, `tree_push` postcommit failures retain all commit/durability and
 cleanup fields alongside `error_code`. Neither classification nor an internal
 error authorizes automatic replay of an uncertain mutation.
 
-The Go host control client translates failures to sandboxd's own error contract,
-not the Engine API. Guest `conflict`/`quiesced` become `conflict`, and
-`resource_exhausted` remains an admission-capacity failure. A missing management
-resource requires operator recovery; invalid host-constructed management
-arguments, authorization failures and unknown management codes are internal
-failures, not tenant validation errors or tenant-resource 404s. Private guest
-diagnostics remain in the host error's non-serialized cause.
-Missing, unknown or internal keyed-exec failures remain `result_unknown` at
-the host, never a reason to choose a new key.
+The Go host control client returns ordinary Go errors. Haven interprets explicit
+control-result params where admission needs to distinguish conflict, capacity or
+manual recovery; these are standard `errors.New` sentinels wrapped by
+`fmt.Errorf`, not Loom error types. Missing management resources never become
+tenant-resource 404s. Private guest diagnostics are excluded from host control
+errors. Missing, unknown or internal keyed-exec failures retain the original
+identity and remain unconfirmed; they never authorize a replacement key.
 
 ## System methods (2047)
 

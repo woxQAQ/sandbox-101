@@ -6,6 +6,8 @@ socket: /run/haven/management.sock
 listen: 127.0.0.1:7777
 root-token-file: /etc/haven/root-token
 mode: serve
+log-level: info
+log-format: json
 cloud-hypervisor: /usr/local/libexec/sandbox/cloud-hypervisor
 build-receipt: /usr/local/libexec/sandbox/cloud-hypervisor.json
 cgroup-root: /sys/fs/cgroup/sandbox-vms

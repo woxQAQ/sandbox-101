@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"os"
@@ -15,8 +17,6 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 type countedHash struct {
@@ -39,7 +39,7 @@ func (h *countedHash) Write(b []byte) (int, error) {
 func shaName(s string) (string, error) {
 	d, err := digest.Parse(s)
 	if err != nil || d.Algorithm() != digest.SHA256 {
-		return "", api.Fail(api.Invalid, "only canonical sha256 OCI descriptors accepted")
+		return "", errors.New("only canonical sha256 OCI descriptors accepted")
 	}
 	return d.Encoded(), nil
 }
@@ -57,11 +57,11 @@ func readBlobJSON(file, want string, v any) error {
 		return e
 	}
 	if len(b) > 16<<20 {
-		return api.Fail(api.Exhausted, "OCI metadata exceeds 16 MiB")
+		return errors.New("OCI metadata exceeds 16 MiB")
 	}
 	sum := sha256.Sum256(b)
 	if "sha256:"+hex.EncodeToString(sum[:]) != want {
-		return api.Fail(api.Invalid, "OCI metadata checksum mismatch")
+		return errors.New("OCI metadata checksum mismatch")
 	}
 	return json.Unmarshal(b, v)
 }
@@ -80,7 +80,7 @@ func blob(root, digest string) (string, error) {
 		return "", e
 	}
 	if hash != digest {
-		return "", api.Fail(api.Invalid, "OCI blob checksum mismatch")
+		return "", errors.New("OCI blob checksum mismatch")
 	}
 	return p, nil
 }
@@ -90,11 +90,11 @@ func tarPath(s string) error {
 		s = before
 	}
 	if s == "" || strings.HasPrefix(s, "/") {
-		return api.Fail(api.Invalid, "unsafe OCI tar path")
+		return errors.New("unsafe OCI tar path")
 	}
 	for part := range strings.SplitSeq(s, "/") {
 		if part == "" || part == ".." {
-			return api.Fail(api.Invalid, "unsafe OCI tar path")
+			return errors.New("unsafe OCI tar path")
 		}
 	}
 	return nil
@@ -126,7 +126,7 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 		stream = g
 	case v1.MediaTypeImageLayer:
 	default:
-		return 0, 0, api.Fail(api.Incompatible, "only uncompressed/gzip OCI layers supported, got %s", media)
+		return 0, 0, fmt.Errorf("only uncompressed/gzip OCI layers supported, got %s", media)
 	}
 	// Validate the uncompressed digest and tar's complete stream (including padding).
 	hash := newSHA256()
@@ -144,7 +144,7 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 		}
 		count++
 		if count > maxFiles {
-			return 0, 0, api.Fail(api.Exhausted, "OCI file count exceeds bound")
+			return 0, 0, errors.New("OCI file count exceeds bound")
 		}
 		if e = tarPath(h.Name); e != nil {
 			return 0, 0, e
@@ -156,14 +156,14 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 				return 0, 0, e
 			}
 		default:
-			return 0, 0, api.Fail(api.Invalid, "unsupported OCI tar special file %q", h.Name)
+			return 0, 0, fmt.Errorf("unsupported OCI tar special file %q", h.Name)
 		}
 		if h.Size < 0 || h.Size > maxBytes-size {
-			return 0, 0, api.Fail(api.Exhausted, "OCI expanded size exceeds bound")
+			return 0, 0, errors.New("OCI expanded size exceeds bound")
 		}
 		size += h.Size
 		if strings.HasPrefix(path.Base(h.Name), ".wh.") && (h.Typeflag != tar.TypeReg || h.Size != 0) {
-			return 0, 0, api.Fail(api.Invalid, "invalid whiteout marker")
+			return 0, 0, errors.New("invalid whiteout marker")
 		}
 		e = validateMergedOCIEntry(h)
 		if e != nil {
@@ -179,10 +179,10 @@ func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merg
 	}
 	_ = rest
 	if hash.bytes > maxBytes {
-		return 0, 0, api.Fail(api.Exhausted, "OCI decompression bound exceeded")
+		return 0, 0, errors.New("OCI decompression bound exceeded")
 	}
 	if "sha256:"+hex.EncodeToString(hash.h.Sum(nil)) != diffID {
-		return 0, 0, api.Fail(api.Invalid, "OCI diff_id mismatch")
+		return 0, 0, errors.New("OCI diff_id mismatch")
 	}
 	return hash.bytes, count, nil
 }

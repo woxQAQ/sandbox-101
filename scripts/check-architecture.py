@@ -16,7 +16,7 @@ def packages(patterns):
     result = subprocess.run(
         ["go", "list", "-deps", "-json", *patterns],
         cwd=ROOT,
-        env={**os.environ, "GOWORK": "off"},
+        env={**os.environ, "GOWORK": str(ROOT / "go.work")},
         text=True,
         capture_output=True,
         check=False,
@@ -50,13 +50,17 @@ def forbidden_loom(package):
         "github.com/spf13/viper",
         "github.com/woxQAQ/sandbox-engine",
         "github.com/woxQAQ/sandboxd",
-        MODULE + "/api",
+        MODULE + "/types",
+        MODULE + "/egress",
+        MODULE + "/httpapi",
+        MODULE + "/httpwire",
+        MODULE + "/management",
         MODULE + "/sdk",
         MODULE + "/internal",
         MODULE + "/cmd",
         MODULE + "/integration",
     )
-    return any(within(package, prefix) for prefix in prefixes)
+    return package == MODULE or any(within(package, prefix) for prefix in prefixes)
 
 
 def violation_paths(graph, roots, forbidden):
@@ -92,7 +96,9 @@ def main():
     )
     args = parser.parse_args()
     graph = packages(["./loom/..."])
-    roots = [name for name in graph if within(name, MODULE + "/loom")]
+    roots = [name for name in graph if within(name, MODULE + "/loom")
+             and not within(name, MODULE + "/loom/cmd")
+             and not within(name, MODULE + "/loom/config")]
     if not roots:
         raise RuntimeError("Loom packages are missing")
     violations = violation_paths(graph, roots, forbidden_loom)
@@ -102,19 +108,21 @@ def main():
             if (directory / "go.mod").exists() or any(directory.rglob("*.go")):
                 raise RuntimeError(f"retired control module/source remains: {retired}")
         final_graph = packages([
-            "./internal/haven/...", "./cmd/haven", "./cmd/havenctl", "./cmd/loomctl",
-            "./api/...", "./sdk/...",
+            "./haven/...", "./sdk/...", "./types/...", "./loom/cmd/loomctl",
         ])
-        for required in ("internal/haven", "cmd/haven", "cmd/havenctl", "cmd/loomctl", "api", "sdk"):
-            if MODULE + "/" + required not in final_graph:
+        for required in ("", "/cmd/haven", "/sdk/cmd/havenctl", "/loom/cmd/loomctl", "/types", "/sdk"):
+            if MODULE + required not in final_graph:
                 raise RuntimeError(f"required package missing: {required}")
-        client_roots = [MODULE + "/" + name for name in ("cmd/havenctl", "cmd/loomctl", "api", "sdk")]
+        client_roots = [MODULE + "/" + name for name in ("sdk/cmd/havenctl", "loom/cmd/loomctl", "types", "sdk")]
         violations.extend(
             violation_paths(
                 final_graph,
                 client_roots,
-                lambda name: within(name, MODULE + "/loom")
-                or within(name, MODULE + "/internal/haven")
+                lambda name: name == MODULE + "/loom"
+                or within(name, MODULE + "/loom/host")
+                or within(name, MODULE + "/loom/imageimport")
+                or name == MODULE
+                or within(name, MODULE + "/egress")
                 or within(name, "database/sql")
                 or within(name, "modernc.org/sqlite")
                 or within(name, "github.com/woxQAQ/sandbox-engine")
@@ -123,7 +131,7 @@ def main():
         )
         violations.extend(violation_paths(
             final_graph,
-            [MODULE + "/cmd/haven", MODULE + "/internal/haven"],
+            [MODULE + "/cmd/haven", MODULE],
             lambda name: within(name, "github.com/woxQAQ/sandbox-engine")
             or within(name, "github.com/woxQAQ/sandboxd"),
         ))

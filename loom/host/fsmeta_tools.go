@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,8 +13,6 @@ import (
 	"strings"
 
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 var erofsVersion = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
@@ -39,7 +38,7 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 		"fsck.erofs",
 	} {
 		if _, err := exec.LookPath(tool); err != nil {
-			return nil, api.Fail(api.Incompatible, "required OCI tool missing: %s", tool)
+			return nil, fmt.Errorf("required OCI tool missing: %s", tool)
 		}
 		v, err := command(ctx, tool, "--version")
 		if err != nil {
@@ -47,11 +46,11 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 		}
 		tools[tool] = strings.TrimSpace(string(v))
 		if tool != "bwrap" && !supportedEROFSVersion(tools[tool]) {
-			return nil, api.Fail(api.Incompatible, "layered materializer requires erofs-utils >=1.9.4 and <2")
+			return nil, errors.New("layered materializer requires erofs-utils >=1.9.4 and <2")
 		}
 	}
 	if erofsVersion.FindString(tools["mkfs.erofs"]) != erofsVersion.FindString(tools["fsck.erofs"]) {
-		return nil, api.Fail(api.Incompatible, "mkfs.erofs and fsck.erofs versions must match")
+		return nil, errors.New("mkfs.erofs and fsck.erofs versions must match")
 	}
 	return tools, nil
 }
@@ -200,13 +199,13 @@ func loadLayerCache(state, builder, diff string) (layerCache, error) {
 			return cached, err
 		}
 		if !st.IsDir() {
-			return cached, api.Fail(api.Incompatible, "layer cache traverses a symlink or nondirectory")
+			return cached, errors.New("layer cache traverses a symlink or nondirectory")
 		}
 	}
 	// An existing but incomplete cache is corruption, not a cache miss. Never
 	// replace evidence or silently regenerate bytes under a published identity.
 	bad := func() error {
-		return api.Fail(api.Incompatible, "missing/corrupt layer cache receipt or artifact: %s", diff)
+		return fmt.Errorf("missing/corrupt layer cache receipt or artifact: %s", diff)
 	}
 	receipt := filepath.Join(dir, "layer.json")
 	if regular(receipt) != nil || readJSON(receipt, &cached) != nil || cached.Format != 1 ||
@@ -302,7 +301,7 @@ func buildLayerCache(
 	}
 	dest := filepath.Join(parent, diff[7:])
 	if _, err = os.Lstat(dest); !os.IsNotExist(err) {
-		return cached, api.Fail(api.Incompatible, "layer cache destination already exists")
+		return cached, errors.New("layer cache destination already exists")
 	}
 	if err = os.Rename(stage, dest); err != nil {
 		return cached, err
@@ -389,7 +388,7 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 	} {
 		st, x := root.Stat(required)
 		if x != nil || !st.Mode().IsRegular() || st.Size() == 0 {
-			return api.Fail(api.Incompatible, "image boot contract missing %s", required)
+			return fmt.Errorf("image boot contract missing %s", required)
 		}
 	}
 	for _, item := range []struct {
@@ -400,7 +399,7 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 	} {
 		st, x := root.Lstat(item.src)
 		if x != nil || !st.Mode().IsRegular() {
-			return api.Fail(api.Incompatible, "boot materials must be regular nonsymlink files")
+			return errors.New("boot materials must be regular nonsymlink files")
 		}
 		in, x := root.Open(item.src)
 		if x != nil {

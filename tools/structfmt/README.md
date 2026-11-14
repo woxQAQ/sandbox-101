@@ -12,7 +12,7 @@
 从仓库根目录使用 module tool：
 
 ```nu
-go tool structfmt -w cmd/haven/main.go
+go -C tools tool structfmt -w /absolute/path/to/haven/cmd/haven/main.go
 ```
 
-省略 `-w` 时向 stdout 输出格式化结果。`make fmt` 使用同一入口展开仓库宿主源码并执行 gofmt，再执行 `cargo fmt --all` 格式化 Rust workspace。工具不会扫描 reference submodules 或自行发现目录。CLI 回归验证嵌套 struct/map、显式 array/slice（含索引元素）、字段声明及 tag、函数与控制流块、注释/字符串、重复执行不变、权限保留及语法错误时不写入。
+省略 `-w` 时向 stdout 输出格式化结果。`just fmt` 使用同一入口展开仓库宿主源码并执行 gofmt，再通过 `golangci-lint fmt` 统一 gofumpt、import 分组与排序，最后执行 `cargo fmt --all` 格式化 Rust workspace。工具不会扫描 reference submodules 或自行发现目录。CLI 回归验证嵌套 struct/map、显式 array/slice（含索引元素）、字段声明及 tag、函数与控制流块、注释/字符串、重复执行不变、权限保留及语法错误时不写入。

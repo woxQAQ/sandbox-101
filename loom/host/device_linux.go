@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 // InternalDeviceCheck runs only as the already dropped VMM identity. Opening the
@@ -61,10 +59,7 @@ func (b *CloudHypervisor) checkDeviceIdentity(ctx context.Context) error {
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return api.Fail(
-			api.Incompatible,
-			"VMM UID %d GID %d cannot use required devices: %v %.1024s",
-			b.opts.UID,
+		return fmt.Errorf("VMM UID %d GID %d cannot use required devices: %v %.1024s", b.opts.UID,
 			b.opts.GID,
 			err,
 			output,

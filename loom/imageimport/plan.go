@@ -2,6 +2,7 @@ package imageimport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ func NormalizeImageImportOptions(options ImageImportOptions) (ImageImportOptions
 		options.Materialization = host.LayeredEROFSLayout
 	}
 	if options.Materialization != host.LayeredEROFSLayout && options.Materialization != host.MergedOCIEROFSLayout {
-		return options, loom.Fail(loom.Invalid, "unknown image materialization")
+		return options, errors.New("unknown image materialization")
 	}
 	if _, err := host.SHAName(options.Digest); err != nil {
 		return options, err
@@ -55,7 +56,7 @@ func NormalizeImageImportOptions(options ImageImportOptions) (ImageImportOptions
 		options.MaxFiles = 1000000
 	}
 	if options.MaxBytes <= 0 || options.MaxBytes > 1<<40 || options.MaxFiles <= 0 || options.MaxFiles > 1<<30 {
-		return options, loom.Fail(loom.Invalid, "invalid import bounds")
+		return options, errors.New("invalid import bounds")
 	}
 	source, err := filepath.Abs(options.Layout)
 	if err != nil {
@@ -81,14 +82,14 @@ func ReadImageImportPlan(ctx context.Context, state string, options ImageImportO
 		return plan, err
 	}
 	if info.Size() > 16<<20 {
-		return plan, loom.Fail(loom.Exhausted, "OCI manifest exceeds metadata bound")
+		return plan, errors.New("OCI manifest exceeds metadata bound")
 	}
 	var manifest v1.Manifest
 	if err = host.ReadBlobJSON(manifestPath, options.Digest, &manifest); err != nil {
 		return plan, err
 	}
 	if manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 || len(manifest.Layers) > host.MaxImageDataDevices {
-		return plan, loom.Fail(loom.Incompatible, "OCI image requires 1..%d layers", host.MaxImageDataDevices)
+		return plan, fmt.Errorf("OCI image requires 1..%d layers", host.MaxImageDataDevices)
 	}
 	configPath, err := host.Blob(source, manifest.Config.Digest.String())
 	if err != nil {
@@ -99,14 +100,14 @@ func ReadImageImportPlan(ctx context.Context, state string, options ImageImportO
 		return plan, err
 	}
 	if manifest.Config.Size < 0 || info.Size() != manifest.Config.Size || info.Size() > 16<<20 {
-		return plan, loom.Fail(loom.Invalid, "OCI config descriptor size mismatch or metadata bound")
+		return plan, errors.New("OCI config descriptor size mismatch or metadata bound")
 	}
 	var config v1.Image
 	if err = host.ReadBlobJSON(configPath, manifest.Config.Digest.String(), &config); err != nil {
 		return plan, err
 	}
 	if config.OS != "linux" || config.Architecture != runtime.GOARCH || config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != len(manifest.Layers) {
-		return plan, loom.Fail(loom.Incompatible, "OCI platform/rootfs mismatch")
+		return plan, errors.New("OCI platform/rootfs mismatch")
 	}
 	tools, err := host.ImageTools(ctx)
 	if err != nil {
@@ -130,10 +131,10 @@ func ReadImageImportPlan(ctx context.Context, state string, options ImageImportO
 	var compressed int64
 	for index, layer := range manifest.Layers {
 		if layer.Size < 0 || !host.SupportedLayerMedia(layer.MediaType) {
-			return plan, loom.Fail(loom.Incompatible, "unsupported OCI layer media or size")
+			return plan, errors.New("unsupported OCI layer media or size")
 		}
 		if layer.Size > options.MaxBytes*2-compressed {
-			return plan, loom.Fail(loom.Exhausted, "OCI compressed staging bound exceeded")
+			return plan, errors.New("OCI compressed staging bound exceeded")
 		}
 		compressed += layer.Size
 		diff := config.RootFS.DiffIDs[index].String()
@@ -182,7 +183,7 @@ type (
 func PrepareImageImport(state, operation string) (ImageImportBoundary, error) {
 	var boundary ImageImportBoundary
 	if !loom.ValidResourceID(operation, "op-") {
-		return boundary, loom.Fail(loom.Invalid, "invalid import operation")
+		return boundary, errors.New("invalid import operation")
 	}
 	parent := filepath.Join(state, "imports")
 	if err := os.Mkdir(parent, 0o700); err != nil && !os.IsExist(err) {
@@ -195,7 +196,7 @@ func PrepareImageImport(state, operation string) (ImageImportBoundary, error) {
 	_ = directory.Close()
 	work := filepath.Join(parent, operation)
 	if err = os.Mkdir(work, 0o700); err != nil {
-		return boundary, loom.Fail(loom.ManualRecovery, "import work cannot be adopted without preparation receipt: %v", err)
+		return boundary, fmt.Errorf("import work cannot be adopted without preparation receipt: %v", err)
 	}
 	boundary.Path = work
 	info, err := os.Lstat(work)
@@ -226,7 +227,7 @@ func PrepareImageImport(state, operation string) (ImageImportBoundary, error) {
 
 func VerifyImageImportBoundary(state, operation string, boundary ImageImportBoundary, output bool) error {
 	if boundary.Path != filepath.Join(state, "imports", operation) || !loom.ValidResourceID(operation, "op-") {
-		return loom.Fail(loom.Invalid, "import boundary path changed")
+		return errors.New("import boundary path changed")
 	}
 	for path, want := range map[string]loom.FileIdentity{
 		boundary.Path: boundary.Work,

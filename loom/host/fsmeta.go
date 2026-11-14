@@ -6,14 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	api "github.com/woxQAQ/haven/loom"
 )
 
 const (
@@ -71,7 +70,7 @@ func dataArtifact(builder, diff, hash, receipt string, index int) ImageArtifact 
 
 func (m ImageManifest) validateLayered() error {
 	bad := func() error {
-		return api.Fail(api.Incompatible, "invalid layered EROFS materialization identity/order")
+		return errors.New("invalid layered EROFS materialization identity/order")
 	}
 	if m.Format != 2 || m.Layout != LayeredEROFSLayout || m.Architecture != runtime.GOARCH || len(m.DiffIDs) < 1 ||
 		len(m.DiffIDs) > MaxImageDataDevices ||
@@ -132,14 +131,14 @@ func (m ImageManifest) validateLayered() error {
 
 func (m ImageManifest) verifyLayered(dir, want string) error {
 	if m.Digest != want {
-		return api.Fail(api.Incompatible, "image digest mismatch")
+		return errors.New("image digest mismatch")
 	}
 	if err := m.validateLayered(); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || filepath.Base(dir) != m.Digest[7:] ||
 		filepath.Base(filepath.Dir(dir)) != "images" {
-		return api.Fail(api.Incompatible, "image directory does not match manifest")
+		return errors.New("image directory does not match manifest")
 	}
 	for _, p := range []string{
 		filepath.Dir(dir),
@@ -150,7 +149,7 @@ func (m ImageManifest) verifyLayered(dir, want string) error {
 			return err
 		}
 		if !st.IsDir() {
-			return api.Fail(api.Incompatible, "image directory traverses a symlink or nondirectory")
+			return errors.New("image directory traverses a symlink or nondirectory")
 		}
 	}
 	return m.verifyLayeredArtifacts(filepath.Dir(filepath.Dir(dir)), dir)
@@ -170,7 +169,7 @@ func (m ImageManifest) verifyLayeredArtifacts(state, imageDir string) error {
 	for _, a := range m.Artifacts[1:] {
 		if previous, ok := verified[a.DiffID]; ok {
 			if previous.SHA256 != a.SHA256 || previous.CacheSHA256 != a.CacheSHA256 {
-				return api.Fail(api.Incompatible, "repeated layer cache identity mismatch")
+				return errors.New("repeated layer cache identity mismatch")
 			}
 		} else {
 			if err := verifyImmutable(
@@ -185,7 +184,7 @@ func (m ImageManifest) verifyLayeredArtifacts(state, imageDir string) error {
 				return err
 			}
 			if cached.SHA256 != a.SHA256 || (cached.Profile == sharedLayerProfile) != m.sharedLayered() {
-				return api.Fail(api.Incompatible, "layer cache receipt mismatch")
+				return errors.New("layer cache receipt mismatch")
 			}
 			verified[a.DiffID] = a
 		}
@@ -199,7 +198,7 @@ func (m ImageManifest) verifyLayeredArtifacts(state, imageDir string) error {
 func verifyImmutable(root, rel, want string) error {
 	if filepath.IsAbs(rel) || rel == "." || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") ||
 		strings.Contains(rel, "\\") {
-		return api.Fail(api.Incompatible, "invalid immutable artifact path")
+		return errors.New("invalid immutable artifact path")
 	}
 	file := root
 	parts := strings.Split(rel, string(filepath.Separator))
@@ -211,15 +210,15 @@ func verifyImmutable(root, rel, want string) error {
 		}
 		if i < len(parts)-1 {
 			if !st.IsDir() {
-				return api.Fail(api.Incompatible, "artifact traverses non-directory")
+				return errors.New("artifact traverses non-directory")
 			}
 		} else if !st.Mode().IsRegular() || st.Mode().Perm()&0o222 != 0 || st.Size() == 0 {
-			return api.Fail(api.Incompatible, "artifact must be nonempty, regular and readonly")
+			return errors.New("artifact must be nonempty, regular and readonly")
 		}
 	}
 	got, err := digestFile(file)
 	if err == nil && got != want {
-		err = api.Fail(api.Incompatible, "immutable artifact checksum mismatch: %s", rel)
+		err = fmt.Errorf("immutable artifact checksum mismatch: %s", rel)
 	}
 	return err
 }
@@ -246,7 +245,7 @@ func erofsSuper(file string) ([]byte, int64, error) {
 		return nil, 0, err
 	}
 	if binary.LittleEndian.Uint32(sb) != 0xe0f5e1e2 || sb[12] != 12 || sb[13] != 0 || st.Size()%4096 != 0 {
-		return nil, 0, api.Fail(api.Incompatible, "unsupported EROFS superblock")
+		return nil, 0, errors.New("unsupported EROFS superblock")
 	}
 	return sb, st.Size(), nil
 }
@@ -261,7 +260,7 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 		return err
 	}
 	bad := func() error {
-		return api.Fail(api.Incompatible, "EROFS device_table/order/block identity mismatch")
+		return errors.New("EROFS device_table/order/block identity mismatch")
 	}
 	// The materializer never emits 48-bit, compressed or alternate-block layouts.
 	features := binary.LittleEndian.Uint32(sb[80:])
@@ -289,7 +288,7 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 		if binary.LittleEndian.Uint16(lsb[86:]) != 0 || binary.LittleEndian.Uint32(lsb[80:]) != 0 ||
 			uint64(binary.LittleEndian.Uint32(lsb[36:])) != uint64(layerSize/4096) ||
 			hex.EncodeToString(lsb[48:64]) != diffs[i][7:39] {
-			return api.Fail(api.Incompatible, "EROFS layer block identity mismatch: layer=%d diff=%s", i, diffs[i])
+			return fmt.Errorf("EROFS layer block identity mismatch: layer=%d diff=%s", i, diffs[i])
 		}
 		var slot [128]byte
 		if _, err = f.ReadAt(slot[:], offset+int64(i)*128); err != nil {
@@ -311,10 +310,7 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 			uint64(binary.LittleEndian.Uint32(slot[64:])) != uint64(layerSize/4096) ||
 			uint64(binary.LittleEndian.Uint32(slot[68:])) != wantMapped ||
 			!bytes.Equal(slot[72:], make([]byte, 56)) {
-			return api.Fail(
-				api.Incompatible,
-				"EROFS device_table slot mismatch: slot=%d blocks=%d mapped=%d",
-				i,
+			return fmt.Errorf("EROFS device_table slot mismatch: slot=%d blocks=%d mapped=%d", i,
 				layerSize/4096,
 				mapped,
 			)
@@ -330,7 +326,7 @@ func verifyImageDeviceTable(meta string, layers, diffs []string, shared bool) er
 //nolint:staticcheck // OCI input validation includes legacy tar headers and their xattr representation.
 func validateLayerEntry(h *tar.Header, entries map[string]byte, whiteouts map[string]bool) error {
 	unsupported := func(reason string) error {
-		return api.Fail(api.Incompatible, "unsupported OCI layer entry %q: %s", h.Name, reason)
+		return fmt.Errorf("unsupported OCI layer entry %q: %s", h.Name, reason)
 	}
 	n := path.Clean(h.Name)
 	if _, exists := entries[n]; exists {

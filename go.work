@@ -1,7 +1,12 @@
 go 1.26.5
 
 use (
-	.
+	./common
+	./haven
+	./loom
 	./operator
 	./protocol/gen
+	./sdk
+	./tools
+	./types
 )

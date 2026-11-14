@@ -18,7 +18,7 @@ flowchart LR
 
 ## 启动与配置
 
-字段和默认值以 [daemon 配置](../internal/config/daemon.go)、[CLI 配置](../internal/config/cli.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
+字段和默认值以 [daemon 配置](../haven/config/daemon.go)、[daemon flags](../haven/cmd/haven/config.go)、[业务 CLI](../sdk/cmd/havenctl/config.go) 和 [Loom CLI 配置](../loom/config/cli.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
 
 | 程序 | 环境前缀 | 文件选择 | 示例 |
 |---|---|---|---|
@@ -27,6 +27,8 @@ flowchart LR
 | `loomctl` | `LOOMCTL_` | `LOOMCTL_CONFIG` / `--config` | `LOOMCTL_SOCKET`、`LOOMCTL_KEY` |
 
 `ENGINE_`、`SANDBOXD_`、`SANDBOXCTL_` 不参与新入口的配置；`--engine-socket` 等旧 flag 明确拒绝。CLI 配置 flag 放在命令之前，避免解释 guest 命令自己的参数。
+
+daemon 的 `--log-level` 接受 debug/info/warn/error，`--log-format` 接受 text/json，默认 info/text。两者遵循相同配置优先级，日志写 stderr；`common/logging` 只初始化标准 slog handler。CLI flags 的注册与解析分别位于各自 `cmd`，通用文件/env/flag 解码在 `common/config`。
 
 首次启动只对新的空私有 state 目录使用 `--init`：
 
@@ -42,7 +44,7 @@ Haven 先取得 writer lock，再创建管理 listener 或执行恢复。代理 
 
 ## 业务 HTTP 与 SDK
 
-JSON 类型位于 [api](../api/types.go)，错误类别位于 [api/errors.go](../api/errors.go)，Go 客户端为 `github.com/woxQAQ/haven/sdk`。HTTP adapter 位于 [internal/httpapi](../internal/httpapi/http.go)，不拥有 catalog 或独立 operation store。
+JSON 类型位于 [types](../types/types.go)，错误 payload 为 `types.ApiError`，定义位于 [types/errors.go](../types/errors.go)，只承载 `code/message` 数据，不实现 `error`、不包装 cause。SDK 将失败响应转换为普通 Go error。Go 客户端为 `github.com/woxQAQ/haven/sdk`。HTTP adapter 位于 [haven/httpapi](../haven/httpapi/http.go)，不拥有 catalog 或独立 operation store。
 
 | 路由 | 用途 |
 |---|---|
@@ -61,15 +63,15 @@ JSON 类型位于 [api](../api/types.go)，错误类别位于 [api/errors.go](..
 
 Bearer 鉴权、root 的 `X-Tenant-ID`、未知与 foreign 对象同为 404 的边界保持。sandbox token 只能读取自身对象并提交 renew/release；操作查询只允许自身 renew/release。已终止 token 仅能通过对应操作 GET 读取历史结果，不能重新访问业务或数据面。root fork 通过 `X-Tenant-ID` 指定资源租户；模板 root 发布必须提供显式 target owner。
 
-mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键异参返回 409；取消只结束等待，已接纳工作仍按服务生命周期推进。`Prefer: respond-async` 返回 202、原 operation JSON 与 `Location`；同步请求返回 Result。状态与冻结结果在同一 SQLite 读 snapshot 中查询，避免完成并发被误判为历史缺失。终态视图与工作流终态在同一事务冻结，后续 configure、续租、release 或重启不重新投影旧结果。
+mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键异参返回 409；取消只结束等待，已接纳工作仍按服务生命周期推进。`Prefer: respond-async` 返回 202、原 operation JSON 与 `Location`；同步请求返回 Result。状态与冻结结果在同一 SQLite 读 snapshot 中查询，避免完成并发被误判为历史缺失。终态视图与工作流终态在同一事务冻结，后续 configure、续租、release 或重启不重新投影旧结果。冻结记录不包含 HTTP 错误 DTO、诊断或 bearer token；HTTP 错误在响应时生成，token 在已授权查询时派生。包含 transport 字段的旧/损坏记录明确拒绝，不在原数据库中自动改写。
 
-HTTP body 上限 1 MiB，拒绝未知字段和多个 JSON 值。错误使用原 `code/message` JSON：invalid→400、forbidden→403、not_found→404、conflict→409、resource_exhausted→429、incompatible→422、result_unknown/manual_recovery_required→503、internal→500。Upgrade 缺头返回 426；非 HTTP/1.1 不升级。宿主内部 Cause 不穿透 HTTP 错误边界。
+HTTP body 上限 1 MiB，拒绝未知字段和多个 JSON 值。错误使用原 `code/message` JSON：invalid→400、forbidden→403、not_found→404、conflict→409、resource_exhausted→429、incompatible→422、result_unknown/manual_recovery_required→503、internal→500。Upgrade 缺头返回 426；非 HTTP/1.1 不升级。只有 HTTP adapter 负责生成 `ApiError`；已接纳 operation 的终态失败固定输出 `internal/internal service error`，不从持久化诊断文字推导类别。接纳阶段返回的标准 sentinel 仍按上表映射 HTTP 状态。内部统一使用 `errors.New` / `fmt.Errorf`，没有 `loom.Error`、`Code`、`Fail` 或 SDK `RPCError`。需要程序判断的固定条件使用标准 sentinel 与 `errors.Is`；不通过错误文本判断副作用是否发生。未分类宿主失败仅输出固定 internal 消息，底层诊断不穿透 HTTP 边界。
 
 默认新 lease 为 300 秒。暂停中的 checkpoint 复用原 pause receipt 和睡眠 publication，只增加 checkpoint binding，不唤醒或重新捕获。fork 的 count 为 1–32，省略取 1；支持 running/paused sandbox 或 checkpoint。running 来源只捕获一次供整批分支使用。接纳事务固定全部目标与业务 birth identity，并同时预留整批 slot、磁盘及宿主峰值；资源分配事务将整批 forecast 交给每个真实候选后才 dispatch。失败分支使用原 failed intent 的 discard，成功分支使用正常业务 release；父工作流持久链接各清理子操作，核验回收后才完成失败。各分支原激活结果独立冻结，父结果不会被后来续租或配置覆盖。
 
 ```nu
 havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token list
-open --raw claim.json | havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token --key claim-001 claim
+havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token --key claim-001 --request-file /private/claim.json claim
 havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token exec sandbox_id 'printf hello'
 ```
 
@@ -79,9 +81,9 @@ havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token ex
 
 管理 socket 所在目录必须由 daemon UID 控制且不可被 group/other 写入，socket 为 `0600`。HTTP header 不能构造管理身份；server 的 `ConnContext` 使用 Linux `SO_PEERCRED`，只接纳同 daemon UID 或 root。已有 listener 可达或身份不明时拒绝替换；死 socket 的恢复和 Close 都检查原 inode，保留被替换的路径。
 
-管理 adapter 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../api/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
+管理 adapter 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../types/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
 
-`loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 从 stdin 严格解析一个管理 intent。
+`loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
 
 ```nu
 loomctl --socket /private/haven-run/management.sock status
@@ -110,6 +112,6 @@ restore 只写新目录，先建立 `RECOVERY_REQUIRED`。review 验证备份组
 
 ## 验证范围
 
-`make integration` 显式使用 `integration` build tag 和刚构建的 Rust Unix fixture；缺少 fixture 环境是 FAIL。fixture 仅替代 VM/System/Admin 效果，并离线预置私有不可变输入镜像；不插入操作、成功结果、witness 或费用记录。所有接纳、终态、权限与资源责任使用真实 Haven/SQLite，Workload RPC 使用真实 Rust dispatcher。原四项 transport 断言保留，另测 HTTP 契约和长 runtime 路径。
+`just integration` 显式使用 `integration` build tag 和刚构建的 Rust Unix fixture；缺少 fixture 环境是 FAIL。fixture 仅替代 VM/System/Admin 效果，并离线预置私有不可变输入镜像；不插入操作、成功结果、witness 或费用记录。所有接纳、终态、权限与资源责任使用真实 Haven/SQLite，Workload RPC 使用真实 Rust dispatcher。原四项 transport 断言保留，另测 HTTP 契约和长 runtime 路径。
 
-`make smoke` 只启动一个真实 Haven，验证两个 CLI、配置优先级/更名拒绝、writer 排他、重启幂等、GC dry-run 的 epoch 和同一份离线 backup。它不启动 VM。当前源码的命令、结果与未运行项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；[阶段 E 证据](../plans/evidence/024-stage-e-entrypoints.md) 只绑定 E 完成树。
+`just smoke` 只启动一个真实 Haven，验证两个 CLI、配置优先级/更名拒绝、writer 排他、重启幂等、GC dry-run 的 epoch 和同一份离线 backup。它不启动 VM。当前源码的命令、结果与未运行项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；[阶段 E 证据](../plans/evidence/024-stage-e-entrypoints.md) 只绑定 E 完成树。

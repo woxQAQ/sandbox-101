@@ -1,22 +1,26 @@
 # Haven 资源集成契约
 
-宿主 module 为 `github.com/woxQAQ/haven`。`internal/haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [api](../api/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../api/management.go)、管理 UDS 与 `loomctl`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
+宿主 module 位于 `haven/`，路径为 `github.com/woxQAQ/haven`。`haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [types](../types/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../types/management.go)、管理 UDS 与 `loomctl`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
 
 配置、鉴权、CLI、统一离线备份与恢复命令见 [Haven control](haven-control.md)，业务资源和配额见 [Sandbox](../sandboxd/README.md)。本文维护资源协议与责任边界；[架构](architecture.md) 说明职责和锁，镜像格式见 [镜像物化](image-materialization.md)。
 
 ## 构建和依赖
 
-根 `go.mod` 的相对 replacements 指向 `protocol/gen` 与 `third_party/go-erofs`。protocol 和 operator 仍是独立 workspace modules。普通构建不初始化 reference submodules，也不修改第三方 provenance。
+根目录通过 `go.work` 连接 Haven、Loom、SDK、types、common、tools、protocol 和 operator。各 module 的本地 replacements 指向同一 checkout 中的依赖，支持独立 `GOWORK=off` 检查。普通构建不初始化 reference submodules，也不修改第三方 provenance。
 
 ```nu
-make build
-make test check test-race
-make integration
-make smoke
+just build
+just test check test-race
+just integration
+just smoke
 python3 -I scripts/check-architecture.py
 ```
 
-`make lint` 含 `go fix`；只读检查使用 `golangci-lint run ./... ./operator/... ./protocol/gen/...`。测试、runner 与实际材料边界见 [scripts](../scripts/README.md)。
+`just lint` 含 `go fix`；只读检查使用 `golangci-lint run ./haven/... ./loom/... ./sdk/... ./types/... ./common/... ./tools/... ./operator/... ./protocol/gen/...`。测试、runner 与实际材料边界见 [scripts](../scripts/README.md)。
+
+## 错误边界
+
+Loom 与 Haven 使用普通 Go error：固定消息用 `errors.New`，上下文用 `fmt.Errorf`。没有通用错误结构体、错误码类型或 `Fail` 工厂。确实需要分支的固定条件用标准 sentinel 和 `errors.Is`，错误文本不授权重放、absence 或回收。`types.ApiError` 仅由 HTTP adapter 生成，进入响应或公开 operation 的 HTTP JSON；冻结记录不保存该 DTO。未分类宿主诊断不会自动变成 tenant 404。guest `error_code` / `result_state` 继续作为协议 params 传递，SDK 不包装成单独的 Go 错误类型。
 
 ## Allocation results and mixed versions
 
@@ -25,6 +29,10 @@ operation、subordinate step、候选资源、预算和依赖在同一 SQLite ad
 公开 API 的认证 scope、稳定键和冻结 result 独立于资源 generation。内部 child 通过同库 parent link 接受请求、预算、完成证明与责任目的地，不复制一个远程 receipt 当作事实。SQL 拒写、零行写入、COMMIT 失败都保留原责任，不宣称半完成。
 
 旧双库、旧 prototype、早期 schema 或缺 witness 明确拒绝并保留人工恢复门禁。当前 format/schema 见 [Haven control](haven-control.md)；无推断式兼容、自动合库或目录扫描接管。
+
+## 操作结果交付
+
+`haven/publication.go` 只负责冻结记录的写入、读取和基础核验；完成工作流的同一事务调用它提交终态和结果。`operation_projection.go` 在该事务中构造业务视图，`operation_query.go` 负责权限核验、同一读 snapshot 内查询与按需 token 交付，`catalog_view.go` 负责业务 DTO 转换。查询终态不重新读取当前资源拼历史结果，fork 父结果使用各分支冻结的交付。错误诊断仍留在内部；失败状态由 HTTP adapter 转为固定 ApiError，不解析错误文本，也不从当前状态补造缺失交付。
 
 ## Snapshot and restore persistence
 
