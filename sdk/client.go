@@ -42,18 +42,19 @@ func New(endpoint, token string) *Client {
 	}
 }
 
-func (c *Client) call(ctx context.Context, method, path, key string, body, out any) error {
+func call[T any](ctx context.Context, c *Client, method, path, key string, body any) (T, error) {
+	var result T
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return result, err
 		}
 		reader = bytes.NewReader(payload)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.Endpoint+path, reader)
 	if err != nil {
-		return err
+		return result, err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.Token)
 	if c.Tenant != "" {
@@ -65,7 +66,7 @@ func (c *Client) call(ctx context.Context, method, path, key string, body, out a
 	}
 	response, err := c.HTTP.Do(request)
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer func() {
 		_ = response.Body.Close()
@@ -73,47 +74,36 @@ func (c *Client) call(ctx context.Context, method, path, key string, body, out a
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var failure types.ApiError
 		if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&failure) != nil {
-			return fmt.Errorf("haven HTTP %d", response.StatusCode)
+			return result, fmt.Errorf("haven HTTP %d", response.StatusCode)
 		}
-		return fmt.Errorf("%s: %s", failure.Code, failure.Message)
+		return result, fmt.Errorf("%s: %s", failure.Code, failure.Message)
 	}
-	return json.NewDecoder(response.Body).Decode(out)
+	err = json.NewDecoder(response.Body).Decode(&result)
+	return result, err
 }
 
 func (c *Client) Claim(ctx context.Context, key string, command types.Command) (types.Result, error) {
-	var result types.Result
-	err := c.call(ctx, "POST", "/v1/claim", key, command, &result)
-	return result, err
+	return call[types.Result](ctx, c, "POST", "/v1/claim", key, command)
 }
 
 func (c *Client) Change(ctx context.Context, id, key string, command types.Command) (types.Result, error) {
-	var result types.Result
-	err := c.call(ctx, "POST", "/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(command.Action), key, command, &result)
-	return result, err
+	return call[types.Result](ctx, c, "POST", "/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(command.Action), key, command)
 }
 
 func (c *Client) List(ctx context.Context) ([]types.Sandbox, error) {
-	var result []types.Sandbox
-	err := c.call(ctx, "GET", "/v1/sandboxes", "", nil, &result)
-	return result, err
+	return call[[]types.Sandbox](ctx, c, "GET", "/v1/sandboxes", "", nil)
 }
 
 func (c *Client) Get(ctx context.Context, id string) (types.Sandbox, error) {
-	var result types.Sandbox
-	err := c.call(ctx, "GET", "/v1/sandboxes/"+url.PathEscape(id), "", nil, &result)
-	return result, err
+	return call[types.Sandbox](ctx, c, "GET", "/v1/sandboxes/"+url.PathEscape(id), "", nil)
 }
 
 func (c *Client) Operation(ctx context.Context, id string) (types.Operation, error) {
-	var result types.Operation
-	err := c.call(ctx, "GET", "/v1/operations/"+url.PathEscape(id), "", nil, &result)
-	return result, err
+	return call[types.Operation](ctx, c, "GET", "/v1/operations/"+url.PathEscape(id), "", nil)
 }
 
 func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (types.Result, error) {
-	var result types.Result
-	err := c.call(ctx, "DELETE", "/v1/checkpoints/"+url.PathEscape(id), key, nil, &result)
-	return result, err
+	return call[types.Result](ctx, c, "DELETE", "/v1/checkpoints/"+url.PathEscape(id), key, nil)
 }
 
 func (c *Client) PutTemplate(ctx context.Context, key string, template types.Template, build bool) (types.Result, error) {
@@ -121,30 +111,22 @@ func (c *Client) PutTemplate(ctx context.Context, key string, template types.Tem
 	if build {
 		action = "template_build"
 	}
-	var result types.Result
-	err := c.call(ctx, "POST", "/v1/templates", key, types.Command{
+	return call[types.Result](ctx, c, "POST", "/v1/templates", key, types.Command{
 		Action:   action,
 		Template: &template,
-	}, &result)
-	return result, err
+	})
 }
 
 func (c *Client) PutTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error) {
-	var result types.Tenant
-	err := c.call(ctx, "POST", "/v1/tenants", "", tenant, &result)
-	return result, err
+	return call[types.Tenant](ctx, c, "POST", "/v1/tenants", "", tenant)
 }
 
 func (c *Client) Templates(ctx context.Context) ([]types.Template, error) {
-	var result []types.Template
-	err := c.call(ctx, "GET", "/v1/templates", "", nil, &result)
-	return result, err
+	return call[[]types.Template](ctx, c, "GET", "/v1/templates", "", nil)
 }
 
 func (c *Client) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
-	var result []types.Checkpoint
-	err := c.call(ctx, "GET", "/v1/checkpoints", "", nil, &result)
-	return result, err
+	return call[[]types.Checkpoint](ctx, c, "GET", "/v1/checkpoints", "", nil)
 }
 
 type Connection struct {
