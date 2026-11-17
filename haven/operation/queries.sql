@@ -81,6 +81,12 @@ WHERE status IN ('pending','running') ORDER BY operation_id;
 -- name: GetOperationTimes :one
 SELECT created_at, finished_at FROM operation_metadata WHERE operation_id=?;
 
+-- name: InsertOperationClock :execrows
+INSERT INTO operation_metadata (operation_id, created_at, finished_at) VALUES (?,?,?);
+
+-- name: FinishOperationClock :execrows
+UPDATE operation_metadata SET finished_at=? WHERE operation_id=? AND finished_at='';
+
 -- name: GetOperationProjection :one
 SELECT id, idem_key, scope_kind, scope_id, request_hash, request, status, body
 FROM operations WHERE id=?;

@@ -293,18 +293,6 @@ func (state *State) initialize() error {
 		if err := initializeMetadata(tx, state.identity); err != nil {
 			return err
 		}
-		for _, table := range epochTables {
-			for _, event := range []string{
-				"INSERT",
-				"UPDATE",
-				"DELETE",
-			} {
-				statement := fmt.Sprintf("CREATE TRIGGER epoch_%s_%s AFTER %s ON %s BEGIN UPDATE store_metadata SET epoch=epoch+1 WHERE singleton=1; END", table, event, event, table)
-				if _, err := tx.Exec(statement); err != nil {
-					return err
-				}
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -347,33 +335,10 @@ func (state *State) validate(database *sql.DB) error {
 			return fmt.Errorf("required table missing: %s: %v", table, err)
 		}
 	}
-	for _, trigger := range []string{
-		"credential_identity_immutable",
-		"credential_history_retained",
-		"operation_identity_immutable",
-		"operation_terminal_immutable",
-		"operation_history_retained",
-		"step_identity_immutable",
-		"step_terminal_immutable",
-		"step_history_retained",
-		"store_identity_immutable",
-		"deletion_identity_immutable",
-		"snapshot_owner_immutable",
-		"snapshot_owner_retained",
-		"operation_clock_insert",
-		"operation_clock_finish",
-		"operation_clock_identity_immutable",
-		"operation_clock_terminal_immutable",
-		"operation_clock_retained",
-		"publication_immutable",
-		"publication_retained",
-		"journal_immutable",
-		"journal_retained",
-	} {
-		var found int
-		if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?", trigger).Scan(&found); err != nil || found != 1 {
-			return fmt.Errorf("required persistence guard missing: %s: %v", trigger, err)
-		}
+	// The schema carries no triggers; any present one is foreign tampering.
+	var triggers int
+	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'").Scan(&triggers); err != nil || triggers != 0 {
+		return fmt.Errorf("foreign trigger present in store schema: %d: %v", triggers, err)
 	}
 	invalid, err := HasForeignKeyViolations(context.Background(), database)
 	if err != nil {
@@ -411,11 +376,36 @@ func (state *State) Checkpoint() error {
 		Identity: state.identity.Identity,
 	}
 	var err error
-	head.Epoch, err = state.Epoch(context.Background())
+	head.Epoch, err = state.advanceEpoch(context.Background())
 	if err != nil {
 		return err
 	}
 	return loom.WriteJSON(filepath.Join(state.directory, "HEAD.json"), head)
+}
+
+// advanceEpoch bumps the write counter and returns the new value. Every
+// workflow checkpoints after committing, so the epoch and the durable HEAD
+// move together and a restored store cannot pass the head check.
+func (state *State) advanceEpoch(ctx context.Context) (int64, error) {
+	tx, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	result, err := tx.ExecContext(ctx, "UPDATE store_metadata SET epoch=epoch+1 WHERE singleton=1")
+	if err != nil {
+		return 0, err
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		return 0, fmt.Errorf("epoch advance affected %d rows: %v", changed, err)
+	}
+	var epoch int64
+	if err = tx.QueryRowContext(ctx, "SELECT epoch FROM store_metadata WHERE singleton=1").Scan(&epoch); err != nil {
+		return 0, err
+	}
+	return epoch, tx.Commit()
 }
 
 func (state *State) Close() error {

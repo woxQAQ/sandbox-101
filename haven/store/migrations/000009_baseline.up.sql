@@ -19,17 +19,6 @@ CREATE TABLE operations (
 );
 CREATE TABLE operation_metadata(operation_id TEXT PRIMARY KEY REFERENCES operations(id),created_at TEXT NOT NULL,finished_at TEXT NOT NULL);
 CREATE TABLE operation_publications(operation_id TEXT PRIMARY KEY REFERENCES operations(id),body BLOB NOT NULL);
-CREATE TRIGGER operation_clock_insert AFTER INSERT ON operations BEGIN
- INSERT INTO operation_metadata VALUES(NEW.id,strftime('%Y-%m-%dT%H:%M:%fZ','now'),CASE WHEN NEW.status IN ('succeeded','failed') THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE '' END);
-END;
-CREATE TRIGGER operation_clock_finish AFTER UPDATE OF status ON operations WHEN NEW.status IN ('succeeded','failed') BEGIN
- UPDATE operation_metadata SET finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=NEW.id;
-END;
-CREATE TRIGGER operation_clock_identity_immutable BEFORE UPDATE OF operation_id,created_at ON operation_metadata BEGIN SELECT RAISE(ABORT,'operation clock identity is immutable'); END;
-CREATE TRIGGER operation_clock_terminal_immutable BEFORE UPDATE ON operation_metadata WHEN OLD.finished_at<>'' BEGIN SELECT RAISE(ABORT,'terminal operation clock is immutable'); END;
-CREATE TRIGGER operation_clock_retained BEFORE DELETE ON operation_metadata BEGIN SELECT RAISE(ABORT,'operation clock is retained'); END;
-CREATE TRIGGER publication_immutable BEFORE UPDATE ON operation_publications BEGIN SELECT RAISE(ABORT,'public result is immutable'); END;
-CREATE TRIGGER publication_retained BEFORE DELETE ON operation_publications BEGIN SELECT RAISE(ABORT,'public result is retained'); END;
 CREATE TABLE operation_steps (
  operation_id TEXT NOT NULL REFERENCES operations(id),
  step_key TEXT NOT NULL CHECK(step_key<>''),
@@ -42,20 +31,6 @@ CREATE TABLE operation_steps (
  body BLOB NOT NULL,
  PRIMARY KEY(operation_id,step_key)
 );
-CREATE TRIGGER operation_identity_immutable BEFORE UPDATE OF id,scope_kind,scope_id,idem_key,request_hash,request ON operations
- BEGIN SELECT RAISE(ABORT,'operation identity is immutable'); END;
-CREATE TRIGGER operation_terminal_immutable BEFORE UPDATE ON operations WHEN OLD.status IN ('succeeded','failed')
- BEGIN SELECT RAISE(ABORT,'operation terminal result is immutable'); END;
-CREATE TRIGGER operation_history_retained BEFORE DELETE ON operations
- BEGIN SELECT RAISE(ABORT,'operation history is retained'); END;
-CREATE TRIGGER step_identity_immutable BEFORE UPDATE OF operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance ON operation_steps
- BEGIN SELECT RAISE(ABORT,'step identity is immutable'); END;
-CREATE TRIGGER step_terminal_immutable BEFORE UPDATE ON operation_steps WHEN OLD.status IN ('succeeded','failed')
- BEGIN SELECT RAISE(ABORT,'step terminal result is immutable'); END;
-CREATE TRIGGER step_history_retained BEFORE DELETE ON operation_steps
- BEGIN SELECT RAISE(ABORT,'step history is retained'); END;
-CREATE TRIGGER store_identity_immutable BEFORE UPDATE OF singleton,format,version,identity,node_key_sha256 ON store_metadata
- BEGIN SELECT RAISE(ABORT,'store identity is immutable'); END;
 CREATE TABLE tenants(id TEXT PRIMARY KEY,token_hash TEXT NOT NULL UNIQUE,body BLOB NOT NULL);
 CREATE TABLE sandboxes(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,state TEXT NOT NULL,body BLOB NOT NULL);
 CREATE TABLE templates(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,body BLOB NOT NULL);
@@ -65,15 +40,7 @@ CREATE TABLE checkpoint_bindings(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,snapsh
 CREATE TABLE pool_slots(operation_id TEXT PRIMARY KEY REFERENCES operations(id),template_id TEXT NOT NULL,template_version TEXT NOT NULL,vm_id TEXT NOT NULL UNIQUE,status TEXT NOT NULL CHECK(status IN ('pending','ready','selected','cleanup')),body BLOB NOT NULL);
 CREATE TABLE warm(vm_id TEXT PRIMARY KEY,template_id TEXT NOT NULL,snapshot_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE snapshot_owners(snapshot_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,source_operation_id TEXT NOT NULL REFERENCES operations(id),source_kind TEXT NOT NULL CHECK(source_kind IN ('capture','root_import')));
-CREATE TRIGGER snapshot_owner_immutable BEFORE UPDATE ON snapshot_owners
- BEGIN SELECT RAISE(ABORT,'snapshot owner is immutable'); END;
-CREATE TRIGGER snapshot_owner_retained BEFORE DELETE ON snapshot_owners
- BEGIN SELECT RAISE(ABORT,'snapshot authorization history is retained'); END;
 CREATE TABLE operation_credentials(operation_id TEXT PRIMARY KEY REFERENCES operations(id),request_mac TEXT NOT NULL);
-CREATE TRIGGER credential_identity_immutable BEFORE UPDATE ON operation_credentials
- BEGIN SELECT RAISE(ABORT,'credential request identity is immutable'); END;
-CREATE TRIGGER credential_history_retained BEFORE DELETE ON operation_credentials
- BEGIN SELECT RAISE(ABORT,'credential request identity is retained'); END;
 CREATE TABLE sandbox_settings(sandbox_id TEXT PRIMARY KEY REFERENCES sandboxes(id),body BLOB NOT NULL);
 CREATE TABLE network_policies(vm_id TEXT PRIMARY KEY REFERENCES vms(id),instance TEXT NOT NULL,operation_id TEXT NOT NULL REFERENCES operations(id),body BLOB NOT NULL);
 CREATE TABLE configuration_fences(sandbox_id TEXT PRIMARY KEY,operation_id TEXT NOT NULL REFERENCES operations(id));
@@ -94,8 +61,4 @@ CREATE TABLE cleanup_intents(id TEXT PRIMARY KEY,operation_id TEXT NOT NULL REFE
 CREATE UNIQUE INDEX active_image_collector ON cleanup_intents(resource_kind,resource_id) WHERE resource_kind IN ('import_work','image_cache') AND status='pending';
 CREATE UNIQUE INDEX active_supply_collector ON cleanup_intents(resource_id) WHERE resource_kind='supply_cleanup' AND status='pending';
 CREATE TABLE deletion_intents(path TEXT PRIMARY KEY,operation_id TEXT NOT NULL,step_key TEXT NOT NULL,body BLOB NOT NULL,FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key));
-CREATE TRIGGER deletion_identity_immutable BEFORE UPDATE ON deletion_intents
- BEGIN SELECT RAISE(ABORT,'deletion receipt is immutable'); END;
 CREATE TABLE journal(seq INTEGER PRIMARY KEY AUTOINCREMENT,body BLOB NOT NULL,hash TEXT NOT NULL);
-CREATE TRIGGER journal_immutable BEFORE UPDATE ON journal BEGIN SELECT RAISE(ABORT,'audit history is immutable'); END;
-CREATE TRIGGER journal_retained BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT,'audit history is retained'); END;

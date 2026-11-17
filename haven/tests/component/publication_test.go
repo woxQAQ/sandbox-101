@@ -115,9 +115,6 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	if err != nil || !bytes.Equal(frozen, testfixture.Encode(current)) {
 		t.Fatal("reopen recomputed terminal result", current, err)
 	}
-	if _, err = reopened.State.Database().Exec("UPDATE operation_publications SET body='{}' WHERE operation_id=?", acceptedRecord.ID); err == nil {
-		t.Fatal("historical public result is mutable")
-	}
 }
 
 func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {

@@ -6,9 +6,9 @@
 
 `Workflow` 只借出 Database（query 与 BeginTx）、不可变 Directory/Reviewed 和 Checkpoint 函数。它没有 Close、key 或 writer-lock 能力；各用例仍使用同一个 State 和共享数据库，不能把它当作第二个生命周期所有者。
 
-`migrations/*.up.sql` 是表、索引与持久保护 trigger 的版本化来源。当前 `000009_baseline.up.sql` 对应单控制面 v9；运行时通过 embed 读取，sqlc 也直接读取同一目录。没有独立 `schema.go` 或生成后需要手工同步的 schema 副本。逐表 epoch trigger 仍由 store 初始化阶段按受控表集合建立。
+`migrations/*.up.sql` 是表与索引的版本化来源。当前 `000009_baseline.up.sql` 对应单控制面 v9；运行时通过 embed 读取，sqlc 也直接读取同一目录。没有独立 `schema.go` 或生成后需要手工同步的 schema 副本。schema 不含 trigger：不可变/保留不变量由写入路径的 RequireOne 与原谓词保证，operation 时钟由 `operation` 包在 Insert/Complete/Fail 的原事务中显式写入 `operation_metadata`，epoch 由 `Checkpoint` 在写 HEAD 前显式推进。
 
-`Migrate` 使用固定版本的 **goose v3.30.1 Provider**，接收原共享 `*sql.DB` 和初始化回调。goose 的 Go migration 在同一个事务中执行嵌入的 v9 baseline、SQLite `application_id` / `user_version`、store identity、epoch triggers，并记录 `goose_db_version`；由 goose 提交或回滚。采用 Go migration 是为了让动态节点身份与 schema 原子提交，SQL 仍只有上述一份来源，没有自写 migration 排序或版本 runner，也不使用进程全局注册表。
+`Migrate` 使用固定版本的 **goose v3.30.1 Provider**，接收原共享 `*sql.DB` 和初始化回调。goose 的 Go migration 在同一个事务中执行嵌入的 v9 baseline、SQLite `application_id` / `user_version`、store identity，并记录 `goose_db_version`；由 goose 提交或回滚。采用 Go migration 是为了让动态节点身份与 schema 原子提交，SQL 仍只有上述一份来源，没有自写 migration 排序或版本 runner，也不使用进程全局注册表。
 
 writer lock 仍由 State 持有，迁移完成后才执行原 checkpoint/HEAD 协议。初始化回调失败时，业务 schema、identity、PRAGMA 版本和 goose 的 v9 记录一起回滚；goose 自身的 version-zero bookkeeping 表可以保留，但它不表示 baseline 已应用。
 
@@ -24,8 +24,8 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 
 | 位置 | 允许的维护操作 |
 |---|---|
-| `state_linux.go:initialize` | 受控表集合的动态 epoch trigger 安装、`wal_checkpoint(FULL)` |
-| `state_linux.go:validate` | quick_check、application_id/user_version、sqlite_master 的必需 table/trigger 计数 |
+| `state_linux.go:initialize` | store identity 元数据初始化、`wal_checkpoint(FULL)` |
+| `state_linux.go:validate` | quick_check、application_id/user_version、sqlite_master 的必需 table 计数 |
 | `migrations.go:Migrate` | application_id/user_version、空库与 goose journal 存在性检查、Go migration 中嵌入的 baseline 与受控版本 PRAGMA |
 | `validation.go:HasForeignKeyViolations` | foreign_key_check |
 | `backup_linux.go:backup` | VACUUM INTO |

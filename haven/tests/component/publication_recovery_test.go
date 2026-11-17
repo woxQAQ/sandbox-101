@@ -34,14 +34,8 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.State.Database().Exec("UPDATE operation_metadata SET created_at='2000-01-01T00:00:00Z' WHERE operation_id=?", operation.ID); err == nil {
-				t.Fatal("accepted operation time can be rewritten")
-			}
 			// Model corrupt persisted bytes in an owned fixture. Startup must
 			// reject changed delivery facts before opening a writable DB.
-			if _, err = service.State.Database().Exec(`DROP TRIGGER publication_immutable; CREATE TRIGGER publication_immutable BEFORE UPDATE ON operation_publications BEGIN SELECT 1; END`); err != nil {
-				t.Fatal(err)
-			}
 			view.Result.Tokens = nil
 			switch corruption {
 			case "identity":

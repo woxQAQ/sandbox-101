@@ -111,7 +111,7 @@ func TestStoreProofRejectionPrecedesWritableConnection(t *testing.T) {
 func TestStoreMigrationHistoryRejectionIsReadOnly(t *testing.T) {
 	for name, damage := range map[string]string{
 		"missing":       "DROP TABLE goose_db_version",
-		"wrong version": "UPDATE goose_db_version SET version_id=10 WHERE version_id=9",
+		"wrong version": "UPDATE goose_db_version SET version_id=99 WHERE version_id=9",
 	} {
 		t.Run(name, func(t *testing.T) {
 			directory := filepath.Join(t.TempDir(), "state")

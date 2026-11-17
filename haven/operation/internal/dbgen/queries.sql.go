@@ -123,6 +123,23 @@ func (q *Queries) FinishLiveOperation(ctx context.Context, arg FinishLiveOperati
 	return result.RowsAffected()
 }
 
+const finishOperationClock = `-- name: FinishOperationClock :execrows
+UPDATE operation_metadata SET finished_at=? WHERE operation_id=? AND finished_at=''
+`
+
+type FinishOperationClockParams struct {
+	FinishedAt  string
+	OperationID string
+}
+
+func (q *Queries) FinishOperationClock(ctx context.Context, arg FinishOperationClockParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishOperationClock, arg.FinishedAt, arg.OperationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getCredentialMAC = `-- name: GetCredentialMAC :one
 SELECT request_mac FROM operation_credentials WHERE operation_id=?
 `
@@ -515,6 +532,24 @@ func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams
 		arg.Status,
 		arg.Body,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertOperationClock = `-- name: InsertOperationClock :execrows
+INSERT INTO operation_metadata (operation_id, created_at, finished_at) VALUES (?,?,?)
+`
+
+type InsertOperationClockParams struct {
+	OperationID string
+	CreatedAt   string
+	FinishedAt  string
+}
+
+func (q *Queries) InsertOperationClock(ctx context.Context, arg InsertOperationClockParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertOperationClock, arg.OperationID, arg.CreatedAt, arg.FinishedAt)
 	if err != nil {
 		return 0, err
 	}

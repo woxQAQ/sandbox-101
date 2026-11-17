@@ -165,12 +165,6 @@ func TestHavenSnapshotOwnerIsPermanent(t *testing.T) {
 	operation, _ := captureReady(t, service, "owner")
 	step := awaitCapture(t, service, operation.ID)
 	capturePublished(t, service, step, true)
-	if _, err := service.State.Database().Exec("UPDATE snapshot_owners SET tenant_id='other' WHERE snapshot_id=?", step.Input.Snapshot.ID); err == nil {
-		t.Fatal("snapshot authorization owner transferred")
-	}
-	if _, err := service.State.Database().Exec("DELETE FROM snapshot_owners WHERE snapshot_id=?", step.Input.Snapshot.ID); err == nil {
-		t.Fatal("snapshot authorization history deleted")
-	}
 	if _, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "other", step.Input.Snapshot.ID); err == nil {
 		t.Fatal("foreign tenant could read capture")
 	}
