@@ -7,11 +7,56 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
 )
+
+// ResourceUsage reads retained supply users through the caller's database snapshot.
+type ResourceUsage struct{}
+
+func (ResourceUsage) VMUsers(ctx context.Context, query store.DBTX, id string) (int64, error) {
+	return dbgen.New(query).CountWarmVM(ctx, id)
+}
+
+func (ResourceUsage) TemplateSnapshotUsers(ctx context.Context, query store.DBTX, id string) (int64, error) {
+	return dbgen.New(query).CountSnapshotUsers(ctx, id)
+}
+
+func (ResourceUsage) PoolSnapshotUsers(ctx context.Context, query store.DBTX, id string) (int64, error) {
+	return dbgen.New(query).CountWarmSnapshot(ctx, id)
+}
+
+// Reservation retains the template revision and original resource generation.
+// Current VM ownership cannot replace Source when validating a warm handoff.
+type PoolReservation struct {
+	Template  TemplateRecord          `json:"template"`
+	SandboxID string                  `json:"sandbox_id"`
+	VMID      string                  `json:"vm_id"`
+	Source    ownership.GenerationRef `json:"source"`
+	Instance  string                  `json:"instance,omitempty"`
+	CreatedAt time.Time               `json:"created_at"`
+}
+
+// UnresolvedTemplates verifies every catalog root against its frozen publisher.
+// The caller supplies the same snapshot used for all other GC root families.
+func UnresolvedTemplates(ctx context.Context, query store.DBTX) ([]string, error) {
+	rows, err := dbgen.New(query).ListTemplateIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var unresolved []string
+	catalog := NewTemplateCatalog(query)
+	for _, row := range rows {
+		if _, err = catalog.Owned(ctx, row.Tenant, row.ID); err != nil {
+			unresolved = append(unresolved, row.ID)
+		}
+	}
+	return unresolved, nil
+}
 
 // LoadTemplate decodes the frozen catalog value. Publication authorization is
 // checked separately by TemplateCatalog against the original supply workflow.
