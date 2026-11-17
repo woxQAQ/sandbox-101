@@ -11,14 +11,14 @@ import (
 // Reviewed metadata is immutable for this store lifetime.
 type AdmissionGate struct {
 	registration sync.Locker
-	closing      interface{ Closing() bool }
+	lifetime     *Lifetime
 	reviewed     bool
 }
 
-func NewAdmissionGate(registration sync.Locker, closing interface{ Closing() bool }, reviewed bool) AdmissionGate {
+func NewAdmissionGate(registration sync.Locker, lifetime *Lifetime, reviewed bool) AdmissionGate {
 	return AdmissionGate{
 		registration: registration,
-		closing:      closing,
+		lifetime:     lifetime,
 		reviewed:     reviewed,
 	}
 }
@@ -29,7 +29,7 @@ func (gate AdmissionGate) Check() error {
 	if gate.reviewed {
 		return fmt.Errorf("%w: reviewed metadata rollback does not authorize new effects", errs.ErrManualRecovery)
 	}
-	if gate.closing.Closing() {
+	if gate.lifetime.Closing() {
 		return fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
 	return nil
