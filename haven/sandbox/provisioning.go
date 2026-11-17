@@ -2,14 +2,19 @@ package sandbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/woxQAQ/haven/access"
+	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/ownership"
+	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply"
 )
 
 type ProvisionGuards interface {
@@ -121,4 +126,89 @@ func (service *VMProvisioning) Continue(id string) error {
 		return err
 	}
 	return service.activations.Continue(id)
+}
+
+// ClaimAdmission carries the sanitized command/settings and ephemeral host
+// credentials. Only the explicit frozen inputs and credential MAC are persisted.
+type ClaimAdmission struct {
+	Command  operation.Command
+	Settings Settings
+	MAC      string
+	Secrets  map[string]egress.Secret
+}
+
+// ProvisionAdmission joins one preflight request to its business transaction
+// participants. Supply's raw port cannot supply claim credentials or placement
+// on an existing sandbox.
+type ProvisionAdmission struct {
+	Request supply.ProvisionRequest
+	Claim   *ClaimAdmission
+	Target  *ProvisionTarget
+}
+
+type ProvisionTarget struct {
+	Activation    *ClaimAdmission
+	Identity      *ownership.Birth
+	SlotHolder    string
+	Budget        *quota.SlotBudget
+	NewSandboxID  string
+	Sandbox       ownership.Sandbox
+	SlotOperation string
+	Parent        machine.ResourceParent
+}
+
+// ProvisionCapacity is the node's fixed admission budget for VM reservations.
+type ProvisionCapacity struct {
+	MaxMemoryMiB int64
+	MaxVCPUs     int
+	SafetyBytes  int64
+}
+
+type provisionalTemplateParent interface {
+	ProvisioningTemplate() (supply.TemplateRecord, bool)
+}
+
+func provisionalTemplate(parent machine.ResourceParent) (supply.TemplateRecord, bool) {
+	if provider, ok := parent.(provisionalTemplateParent); ok {
+		return provider.ProvisioningTemplate()
+	}
+	return supply.TemplateRecord{}, false
+}
+
+// ProvisionSlotClaim binds the current sandbox and restore source to the
+// original funded slot holder. It is verified in the allocation transaction.
+type ProvisionSlotClaim struct {
+	Sandbox ownership.Sandbox
+	Source  machine.SnapshotSource
+	Holder  string
+}
+
+type ProvisionTargetValidator interface {
+	ValidateProvisionTarget(context.Context, *sql.Tx, ProvisionSlotClaim) (*machine.QuotaDestination, error)
+}
+
+func (parent *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, _ *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+	record, source, holder := claim.Sandbox, claim.Source, claim.Holder
+	if parent == nil || parent.Input.Command.Action != "resume" || record.State != "paused" || record.VMID != "" || record.Instance != "" || record.SnapshotID != source.Snapshot.ID || holder != "sleep:"+record.ID {
+		return nil, fmt.Errorf("%w: resume target differs from frozen sleep responsibility", errs.ErrConflict)
+	}
+	return &machine.QuotaDestination{
+		OperationID: parent.Parent.ID,
+		Kind:        "sleep",
+		ID:          record.ID,
+		SnapshotID:  record.SnapshotID,
+	}, nil
+}
+
+// AdmitRaw exposes only the undelivered build/refill subset of resource admission.
+// It shares the original transaction, gate, workers and continuous VM guard.
+func (service *VMProvisioning) AdmitRaw(ctx context.Context, request supply.ProvisionRequest, target supply.RawTarget) (operation.Record, error) {
+	return service.Admit(ctx, ProvisionAdmission{
+		Request: request,
+		Target: &ProvisionTarget{
+			NewSandboxID: target.NewSandboxID,
+			Budget:       target.Budget,
+			Parent:       target.Parent,
+		},
+	})
 }

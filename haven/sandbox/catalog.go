@@ -3,11 +3,13 @@ package sandbox
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
@@ -151,4 +153,94 @@ func (s *Catalog) Checkpoints(ctx context.Context, principal authorization.Princ
 		}
 	}
 	return out, err
+}
+
+// RunningSubject identifies a running sandbox with persisted settings. It does
+// not establish runtime readiness or a current proxy binding.
+type RunningSubject struct {
+	ID       string
+	TenantID string
+}
+
+func BoundSubjects(ctx context.Context, query store.DBTX) ([]RunningSubject, error) {
+	rows, err := dbgen.New(query).ListRunningSubjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var subjects []RunningSubject
+	for _, row := range rows {
+		subjects = append(subjects, RunningSubject{
+			ID:       row.ID,
+			TenantID: row.Tenant,
+		})
+	}
+	return subjects, nil
+}
+
+func (s *Catalog) Unfenced(ctx context.Context, id string) error {
+	_, err := LifecycleFence(ctx, s.database, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: sandbox configuration is fenced", errs.ErrConflict)
+}
+
+// ResourceForData verifies persisted source and instance readiness for an
+// authorized view. Callers separately check the lease and live runtime state.
+func (s *Catalog) ResourceForData(ctx context.Context, view View) (machine.ResourceStep, error) {
+	record, err := LoadSandbox(ctx, s.database, view.ID, view.TenantID)
+	if err != nil {
+		return machine.ResourceStep{}, err
+	}
+	source, err := machine.LoadResourceStep(ctx, s.database, record.SourceOperation)
+	if err != nil {
+		return source, err
+	}
+	resource, current, owner, err := machine.LoadVM(ctx, s.database, source)
+	if err != nil {
+		return source, err
+	}
+	if source.Status != "succeeded" || source.State.Witness != view.Instance || current != view.Instance || owner != "" || !resource.Verified || !resource.AgentReady || resource.Deleting {
+		return source, fmt.Errorf("%w: sandbox instance is not verified ready", errs.ErrConflict)
+	}
+	return source, nil
+}
+
+type CapabilityLookup struct {
+	queries *dbgen.Queries
+}
+
+func NewCapabilityLookup(db store.DBTX) *CapabilityLookup {
+	return &CapabilityLookup{
+		queries: dbgen.New(db),
+	}
+}
+
+// FindCapability includes retired identities only for historical operation
+// authorization. Decoding stops at the matching capability, preserving the
+// original ordered lookup's failure boundary.
+func (r *CapabilityLookup) FindCapability(ctx context.Context, retired bool, matches func(ownership.Sandbox) bool) (ownership.Sandbox, error) {
+	var bodies [][]byte
+	var err error
+	if retired {
+		bodies, err = r.queries.ListAllCapabilities(ctx)
+	} else {
+		bodies, err = r.queries.ListActiveCapabilities(ctx)
+	}
+	if err != nil {
+		return ownership.Sandbox{}, err
+	}
+	for _, body := range bodies {
+		var record ownership.Sandbox
+		if err := json.Unmarshal(body, &record); err != nil {
+			return ownership.Sandbox{}, err
+		}
+		if matches(record) {
+			return record, nil
+		}
+	}
+	return ownership.Sandbox{}, sql.ErrNoRows
 }

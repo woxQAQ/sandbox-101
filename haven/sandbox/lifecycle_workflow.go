@@ -472,3 +472,186 @@ func (service *Lifecycle) runLifecycle(step LifecycleStep) (runErr error) {
 		return fmt.Errorf("%w: unsupported lifecycle workflow", errs.ErrInvalid)
 	}
 }
+
+func checkReleaseCaptures(ctx context.Context, tx *sql.Tx, input LifecycleInput) error {
+	source, err := machine.LoadResourceStep(ctx, tx, input.Source.OperationID)
+	if err != nil {
+		return err
+	}
+	current, err := machine.FailedCaptureReferences(ctx, tx, source)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, input.CaptureFailures) {
+		return fmt.Errorf("release failed capture responsibilities changed")
+	}
+	return nil
+}
+
+func checkRollbackCaptures(ctx context.Context, tx *sql.Tx, input LifecycleInput) error {
+	source, err := machine.LoadResourceStep(ctx, tx, input.Source.OperationID)
+	if err != nil {
+		return err
+	}
+	refs, err := machine.PendingPublishedCaptures(ctx, tx, source)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(refs, input.Rollback.RawCaptures) {
+		return fmt.Errorf("rollback original capture responsibilities changed")
+	}
+	for _, ref := range refs {
+		capture, err := machine.LoadCapture(ctx, tx, ref.OperationID)
+		if err != nil {
+			return err
+		}
+		if err = machine.CaptureCleanupProof(ctx, tx, capture, machine.CaptureCleanupTarget{
+			VMID:     source.Candidate,
+			Instance: input.SourceInstance,
+			Status:   "pending",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CompleteLifecycleActivation transfers active sandbox ownership in the same
+// transaction that publishes running, after the resource child has committed.
+func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation ActivationStep) error {
+	lifecycle, err := LoadLifecycle(ctx, tx, activation.OperationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	action := lifecycle.Input.Command.Action
+	if action != "resume" && action != "rollback" {
+		return nil
+	}
+	if operation.Terminal(lifecycle.Status) || lifecycle.Input.Sandbox.ID != activation.Input.SandboxID || lifecycle.Input.OwnerTenantID != activation.Input.TenantID {
+		return fmt.Errorf("%w: activation no longer owns lifecycle handoff", errs.ErrConflict)
+	}
+	role := "clone"
+	if action == "rollback" {
+		role = "restore"
+	}
+	link, status, err := machine.LoadResourceLink(ctx, tx, lifecycle.OperationID, role)
+	if err != nil {
+		return err
+	}
+	if status != "succeeded" || link.ChildID != activation.Input.ResourceOperation {
+		return fmt.Errorf("%w: activation clone link changed", errs.ErrConflict)
+	}
+	snapshot := lifecycle.Input.Sandbox.SnapshotID
+	switch action {
+	case "resume":
+		if snapshot == "" {
+			return fmt.Errorf("%w: resume sleep snapshot missing", errs.ErrManualRecovery)
+		}
+		if err = quota.New(tx).RemoveResourceReference(ctx, quota.ResourceReference{
+			Kind:       "snapshot",
+			ID:         snapshot,
+			HolderKind: "sleep",
+			HolderID:   activation.Input.SandboxID,
+		}); err != nil {
+			return err
+		}
+		if err = quota.New(tx).RemoveCostReference(ctx, quota.CostReference{
+			TenantID:   activation.Input.TenantID,
+			Kind:       "snapshot",
+			Key:        snapshot,
+			HolderKind: "active_use",
+			HolderID:   "sleep:" + activation.Input.SandboxID,
+		}); err != nil {
+			return err
+		}
+	case "rollback":
+		if err = RetireRollbackLease(ctx, tx, lifecycle); err != nil {
+			return err
+		}
+		snapshot = lifecycle.Input.Rollback.Checkpoint.SnapshotID
+	}
+	return store.RequireOne(dbgen.New(tx).CompleteLiveStep(ctx, dbgen.CompleteLiveStepParams{
+		OperationID: lifecycle.OperationID,
+		StepKey:     "lifecycle",
+		InputHash:   lifecycle.Hash,
+		Body: operation.Encode(LifecycleState{
+			Phase:      "complete",
+			SnapshotID: snapshot,
+		}),
+	}))
+}
+
+// failLifecycle commits failure only from a durable child terminal result.
+// An effect error with a pending child retains an unresolved accepted intent.
+func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	current, err := LoadLifecycle(service.ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if operation.Terminal(current.Status) {
+		return nil
+	}
+	if current.Hash != step.Hash {
+		return fmt.Errorf("%w: lifecycle failure input changed", errs.ErrManualRecovery)
+	}
+	operations := operation.New(tx)
+	failed, err := dbgen.New(tx).CountFailedLifecycleChildren(service.ctx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if failed == 0 {
+		return nil
+	}
+	fence, err := LifecycleFence(service.ctx, tx, step.Input.Sandbox.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if fence != step.OperationID {
+		return nil
+	}
+	status, body, err := operations.ResultState(service.ctx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if status == "succeeded" {
+		return fmt.Errorf("%w: successful lifecycle cannot adopt failed child", errs.ErrManualRecovery)
+	}
+	next := current.State
+	next.Phase = "failed"
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+		OperationID: step.OperationID,
+		StepKey:     "lifecycle",
+		InputHash:   step.Hash,
+		Body:        operation.Encode(next),
+	})); err != nil {
+		return err
+	}
+	if !operation.Terminal(status) {
+		var result operation.Result
+		if err = json.Unmarshal(body, &result); err != nil {
+			return err
+		}
+		result.Error = "sandbox workflow failed; resource responsibility retained"
+		if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+			return err
+		}
+	}
+	if err = service.committer.Commit(tx); err != nil {
+		return err
+	}
+	return service.store.Checkpoint()
+}

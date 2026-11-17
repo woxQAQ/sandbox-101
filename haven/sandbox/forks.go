@@ -3,8 +3,11 @@ package sandbox
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
@@ -13,7 +16,10 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/ownership"
+	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply"
 )
 
 type ForkBackend interface {
@@ -195,4 +201,201 @@ func (service *Forks) runResourceLink(parent, role string) (machine.ResourceLink
 		}
 		return err
 	})
+}
+
+// A fork group owns the whole requested batch before any capture or allocation.
+// Source contains either a completed snapshot or the exact generation to capture.
+type ForkInput struct {
+	RequestTenantID string                  `json:"request_tenant_id"`
+	OwnerTenantID   string                  `json:"owner_tenant_id"`
+	Command         operation.Command       `json:"command"`
+	Template        supply.TemplateRecord   `json:"template"`
+	Settings        Settings                `json:"settings"`
+	Targets         []ownership.Sandbox     `json:"targets"`
+	SourceSandbox   *ownership.Sandbox      `json:"source_sandbox,omitempty"`
+	Source          *machine.ResourceStep   `json:"source,omitempty"`
+	Snapshot        *machine.SnapshotSource `json:"snapshot,omitempty"`
+	Checkpoint      *Checkpoint             `json:"checkpoint,omitempty"`
+}
+
+type ForkState struct {
+	Phase    string                  `json:"phase"`
+	Snapshot *machine.SnapshotSource `json:"snapshot,omitempty"`
+	Children []string                `json:"children,omitempty"`
+	Error    string                  `json:"error,omitempty"`
+}
+
+type ForkStep struct {
+	OperationID string
+	Hash        string
+	Status      string
+	Input       ForkInput
+	State       ForkState
+}
+
+func LoadFork(ctx context.Context, query store.DBTX, id string) (ForkStep, error) {
+	step := ForkStep{
+		OperationID: id,
+	}
+	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "fork_group",
+	})
+	if err != nil {
+		record = dbgen.GetStepRow{}
+	}
+	payload, body := record.Input, record.Body
+	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
+	step.Hash, step.Status = record.InputHash, record.Status
+	if err != nil {
+		return step, err
+	}
+	if operation.Digest(payload) != step.Hash {
+		return step, fmt.Errorf("fork group input changed")
+	}
+	if err = json.Unmarshal(payload, &step.Input); err != nil {
+		return step, err
+	}
+	if err = json.Unmarshal(body, &step.State); err != nil {
+		return step, err
+	}
+	if action != "fork" || candidate != id || expected != "" || step.Input.Command.Action != "fork" || len(step.Input.Targets) < 1 || len(step.Input.Targets) > 32 || len(step.Input.Targets) != step.Input.Command.Count || (step.Input.Source == nil) == (step.Input.Snapshot == nil) {
+		return step, fmt.Errorf("fork group source or batch identity changed")
+	}
+	ids := map[string]bool{}
+	for _, target := range step.Input.Targets {
+		if target.TenantID != step.Input.OwnerTenantID || target.OperationID != id || target.State != "provisioning" || target.VMID != "" || target.SourceOperation != "" || target.Identity.TemplateID != step.Input.Template.ID || target.Identity.Shape != step.Input.Template.Config.Shape || target.Identity.Epoch == "" || ids[target.ID] {
+			return step, fmt.Errorf("fork placement identity changed")
+		}
+		ids[target.ID] = true
+	}
+	if len(step.State.Children) != 0 && len(step.State.Children) != len(step.Input.Targets) {
+		return step, fmt.Errorf("fork child batch is incomplete")
+	}
+	switch step.State.Phase {
+	case "admitted", "captured", "allocated", "compensating", "complete", "failed":
+	default:
+		return step, fmt.Errorf("fork group phase is unknown")
+	}
+	return step, nil
+}
+
+type forkAdmission struct {
+	gate     execution.AdmissionGate
+	history  machine.SnapshotProofs
+	capacity ProvisionCapacity
+	Parent   operation.Record
+	Input    ForkInput
+	MAC      string
+	Free     int64
+}
+
+type forkBranchAdmission struct {
+	Group  ForkStep
+	Target ownership.Sandbox
+	Index  int
+}
+
+func (parent *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	child, kind, candidate := request.Child, request.Kind, request.Candidate
+	if parent.Input.Source == nil || kind != "capture" {
+		return fmt.Errorf("%w: fork capture dependency changed", errs.ErrConflict)
+	}
+	source, err := machine.LoadResourceStep(ctx, tx, parent.Input.Source.OperationID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(source, *parent.Input.Source) || child.Result.VMID != source.Candidate || child.Result.SandboxID != source.Input.SandboxID || candidate != child.Result.SnapshotID {
+		return fmt.Errorf("%w: fork capture original source changed", errs.ErrConflict)
+	}
+	parent.Parent.Result.SnapshotID = child.Result.SnapshotID
+	if err = parent.admitIntent(ctx, tx); err != nil {
+		return err
+	}
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID:      parent.Parent.ID,
+		Role:             "capture",
+		ExpectedInstance: parent.Input.Source.State.Witness,
+	}, request)
+}
+
+func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+	target, source, holder := claim.Sandbox, claim.Source, claim.Holder
+	group, err := LoadFork(ctx, tx, parent.Group.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	if group.Hash != parent.Group.Hash || operation.Terminal(group.Status) || group.State.Phase != "captured" || !reflect.DeepEqual(group.State.Snapshot, parent.Group.State.Snapshot) || group.State.Snapshot == nil || !reflect.DeepEqual(*group.State.Snapshot, source) || parent.Index < 0 || parent.Index >= len(group.Input.Targets) || !reflect.DeepEqual(group.Input.Targets[parent.Index], target) || holder != forkSlotHolder(group.OperationID, target.ID) {
+		return nil, fmt.Errorf("%w: fork placement no longer owns its prefunded slot", errs.ErrConflict)
+	}
+	settings, err := LoadSettings(ctx, tx, target.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(settings, group.Input.Settings) {
+		return nil, fmt.Errorf("%w: fork placement settings changed", errs.ErrConflict)
+	}
+	return nil, nil
+}
+
+func (parent *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	if request.Kind != "clone" || request.Child.Result.SandboxID != parent.Target.ID {
+		return fmt.Errorf("%w: fork branch resource identity changed", errs.ErrConflict)
+	}
+	if err := store.RequireOne(dbgen.New(tx).DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
+		SandboxID: parent.Target.ID,
+		Body:      operation.Encode(parent.Group.Input.Settings),
+	})); err != nil {
+		return err
+	}
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID: parent.Group.OperationID,
+		Role:        fmt.Sprintf("branch:%d", parent.Index),
+	}, request)
+}
+
+func forkSlotHolder(group, sandbox string) string {
+	return "fork:" + group + ":" + sandbox
+}
+
+func forkTargetIDs(input ForkInput) []string {
+	ids := make([]string, len(input.Targets))
+	for index, target := range input.Targets {
+		ids[index] = target.ID
+	}
+	return ids
+}
+
+func (service *Forks) saveFork(step *ForkStep, state ForkState) error {
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+		OperationID:  step.OperationID,
+		StepKey:      "fork_group",
+		InputHash:    step.Hash,
+		PreviousBody: operation.Encode(step.State),
+		NewBody:      operation.Encode(state),
+	})); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	step.State = state
+	return service.store.Checkpoint()
+}
+
+func (service *Forks) forkSecrets(group ForkStep) {
+	service.access.CopyOperationSecrets(group.OperationID, group.State.Children...)
+}
+
+func sameForkTargets(first, second []string) bool {
+	return slices.Equal(first, second)
 }

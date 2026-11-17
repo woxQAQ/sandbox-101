@@ -1,7 +1,9 @@
 package sandbox
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -232,4 +234,244 @@ func (service *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 	lock.Lock()
 	defer lock.Unlock()
 	return service.activations.Continue(step.OperationID)
+}
+
+func RetireWarmClaimLease(ctx context.Context, tx *sql.Tx, parent WarmClaimStep) error {
+	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.Pool.Template.TenantID, machine.SourceLease{
+		SnapshotID:  parent.Input.Restore.Snapshot.ID,
+		OperationID: parent.OperationID,
+		StepKey:     "warm_claim",
+	})
+}
+
+// CompleteWarmClaim transfers the selected pool responsibility in the caller's
+// activation transaction. A later publication failure rolls back the handoff.
+func CompleteWarmClaim(ctx context.Context, tx *sql.Tx, activation ActivationStep) error {
+	parent, err := LoadWarmClaim(ctx, tx, activation.OperationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if operation.Terminal(parent.Status) || parent.Input.Pool.SandboxID != activation.Input.SandboxID || parent.Input.Pool.Template.TenantID != activation.Input.TenantID {
+		return fmt.Errorf("warm completion current claim changed")
+	}
+	switch activation.Input.Attempt {
+	case "warm":
+		if parent.State.Phase != "selected" || activation.Input.ResourceOperation != parent.Input.Source.OperationID || activation.Input.ExpectedInstance != parent.Input.Pool.Instance {
+			return fmt.Errorf("warm completion original selection changed")
+		}
+		reservation, status, err := supply.LoadPoolReservation(ctx, tx, parent.Input.PoolID)
+		if err != nil {
+			return err
+		}
+		if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) {
+			return fmt.Errorf("warm completion pool responsibility changed")
+		}
+		if err = supply.RetireSelectedReservation(ctx, tx, parent.Input.PoolID, operation.Encode(reservation)); err != nil {
+			return err
+		}
+	case "golden":
+		link, status, err := machine.LoadResourceLink(ctx, tx, parent.OperationID, "fallback")
+		if err != nil {
+			return err
+		}
+		if status != "succeeded" || parent.State.Phase != "warm_retired" || link.ChildID != activation.Input.ResourceOperation {
+			return fmt.Errorf("fallback completion lacks original clone handoff")
+		}
+		released, status, err := machine.LoadResourceLink(ctx, tx, parent.OperationID, "warm_release")
+		if err != nil {
+			return err
+		}
+		if status != "succeeded" {
+			return fmt.Errorf("fallback completion lacks warm retirement")
+		}
+		retired, err := machine.LoadResourceStep(ctx, tx, released.ChildID)
+		if err != nil {
+			return err
+		}
+		if retired.Status != "succeeded" || retired.State.Phase != "complete" || retired.Input.SourceOperation != parent.Input.Source.OperationID {
+			return fmt.Errorf("fallback warm retirement receipt changed")
+		}
+		if err = supply.RequireRetiredWarm(ctx, tx, parent.Input.PoolID); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown warm claim activation attempt")
+	}
+	if err = RetireWarmClaimLease(ctx, tx, parent); err != nil {
+		return err
+	}
+	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(ctx, dbgen.CompleteUnchangedStepParams{
+		OperationID:  parent.OperationID,
+		StepKey:      "warm_claim",
+		InputHash:    parent.Hash,
+		PreviousBody: operation.Encode(parent.State),
+		NewBody: operation.Encode(WarmClaimState{
+			Phase: "complete",
+		}),
+	})); err != nil {
+		return err
+	}
+	resource, err := machine.LoadResourceStep(ctx, tx, activation.Input.ResourceOperation)
+	if err != nil {
+		return err
+	}
+	body, err := operation.New(tx).LiveBody(ctx, parent.OperationID)
+	if err != nil {
+		return err
+	}
+	var result operation.Result
+	if err = json.Unmarshal(body, &result); err != nil {
+		return err
+	}
+	result.VMID = resource.Candidate
+	result.ResourceReady = true
+	return operation.New(tx).ReplaceLiveBody(ctx, parent.OperationID, operation.Encode(result))
+}
+
+func (service *WarmClaims) failWarmClaim(step WarmClaimStep) error {
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	current, err := LoadWarmClaim(service.ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if current.Hash != step.Hash {
+		return fmt.Errorf("warm failure intent changed")
+	}
+	if operation.Terminal(current.Status) {
+		return nil
+	}
+	known := false
+	if _, status, lookup := machine.LoadResourceLink(service.ctx, tx, step.OperationID, "fallback"); lookup == nil {
+		known = status == "failed"
+	} else if !errors.Is(lookup, sql.ErrNoRows) {
+		return lookup
+	}
+	activation, err := LoadActivation(service.ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	known = known || (activation.Input.Attempt == "golden" && activation.Status == "failed")
+	if !known {
+		return nil
+	}
+	fence, err := LifecycleFence(service.ctx, tx, step.Input.Pool.SandboxID)
+	if err != nil {
+		return err
+	}
+	if fence != step.OperationID {
+		return nil
+	}
+	operations := operation.New(tx)
+	status, body, err := operations.ResultState(service.ctx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+		OperationID: step.OperationID,
+		StepKey:     "warm_claim",
+		InputHash:   step.Hash,
+		Body: operation.Encode(WarmClaimState{
+			Phase: "failed",
+		}),
+	})); err != nil {
+		return err
+	}
+	if !operation.Terminal(status) {
+		var result operation.Result
+		if err = json.Unmarshal(body, &result); err != nil {
+			return err
+		}
+		result.Error = "warm claim fallback failed; resource responsibility retained"
+		if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+			return err
+		}
+	}
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+		ID:           "warm_claim:" + step.OperationID,
+		OperationID:  step.OperationID,
+		ResourceKind: "warm_claim",
+		ResourceID:   step.Input.Pool.SandboxID,
+		Body:         operation.Encode(step.Input),
+	})); err != nil {
+		return err
+	}
+	if err = service.committer.Commit(tx); err != nil {
+		return err
+	}
+	return service.store.Checkpoint()
+}
+
+// RetireSupersededIn joins warm pool/lease retirement to the release transaction.
+// The caller retains transaction, publication and checkpoint ownership.
+func (service *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) error {
+	parent, err := LoadWarmClaim(service.ctx, tx, release.Input.PriorFence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if parent.Input.Pool.SandboxID != release.Input.Sandbox.ID || parent.Input.Pool.Template.TenantID != release.Input.OwnerTenantID {
+		return fmt.Errorf("release superseded warm claim scope changed")
+	}
+	if parent.Status == "succeeded" {
+		return fmt.Errorf("completed warm claim retained a configuration fence")
+	}
+	reservation, status, err := supply.LoadPoolReservation(service.ctx, tx, parent.Input.PoolID)
+	if err == nil {
+		if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) || release.Input.Sandbox.VMID != reservation.VMID {
+			return fmt.Errorf("release superseded pool responsibility changed")
+		}
+		if err = supply.RetireSelectedReservation(service.ctx, tx, parent.Input.PoolID, operation.Encode(reservation)); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err = RetireWarmClaimLease(service.ctx, tx, parent); err != nil {
+		return err
+	}
+	operations := operation.New(tx)
+	if !operation.Terminal(parent.Status) {
+		if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+			OperationID: parent.OperationID,
+			StepKey:     "warm_claim",
+			InputHash:   parent.Hash,
+			Body: operation.Encode(WarmClaimState{
+				Phase: "superseded",
+			}),
+		})); err != nil {
+			return err
+		}
+	}
+	state, body, err := operations.ResultState(service.ctx, parent.OperationID)
+	if err != nil {
+		return err
+	}
+	if !operation.Terminal(state) {
+		var result operation.Result
+		if err = json.Unmarshal(body, &result); err != nil {
+			return err
+		}
+		result.Error = "warm claim superseded by release"
+		if err = operations.FailResult(service.ctx, parent.OperationID, operation.Encode(result)); err != nil {
+			return err
+		}
+	}
+	return dbgen.New(tx).CompletePendingCleanupIfPresent(service.ctx, dbgen.CompletePendingCleanupIfPresentParams{
+		ID:           "warm_claim:" + parent.OperationID,
+		OperationID:  parent.OperationID,
+		ResourceKind: "warm_claim",
+	})
 }
