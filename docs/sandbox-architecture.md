@@ -1,6 +1,6 @@
 # Sandbox 架构
 
-Haven 将 VM/快照资源编排为租户独占、可认领、休眠、分支和释放的环境。业务与资源事实共享唯一 SQLite；Loom 只执行明确宿主效果。当前入口见 [Haven control](haven-control.md)，HTTP/SDK 与配额矩阵见 [Sandbox 契约](../sandboxd/README.md)，资源持久协议见 [集成契约](engine-integration.md)。
+Haven 将 VM/快照资源编排为租户独占、可认领、休眠、分支和释放的环境。业务与资源事实共享唯一 SQLite；Loom 只执行明确宿主效果。当前入口见 [Haven control](haven-control.md)，HTTP/SDK 与配额矩阵见 [Sandbox 契约](../haven/sandbox/api.md)，资源持久协议见 [集成契约](engine-integration.md)。
 
 当前范围为单宿主。Cold、Golden、Warm 表示供给路径，不承诺未实测的毫秒延迟；gossip、跨节点恢复、远端快照归档未实现。历史 [验收记录](acceptance.md) 不证明后续 Haven 树。
 
@@ -34,7 +34,7 @@ prepare_template/fork 的重置不通用清理已有应用进程的内存、身�
 
 warm birth 是零 sandbox slot 的资源历史；claim 的 SlotAssignment 与 sandbox birth 独立记录。池内实例不接触租户凭据、NIC off。坏 warm 先固定 cleanup，精确退休后才转 fallback；unknown 保留原费用和池位。ordinary 首次 target=0，后续保持发布 target；root 显式 owner 才能修改。refill 使用 owner 的有限普通预算，缺 owner 不建账，失败走持久 backoff。
 
-`quota_resources` 为总量来源，`quota_refs` 为真实 holder/依赖/cleanup。访问终止、字段清空、catalog/path 消失都不证明退款。D 为可写盘 MiB，M 为捕获 RAM；snapshot 同 tenant/SID 去重 D+M，clone backing 存在时保留。root 请求计可信 owner，maintenance 不绕普通 owner 预算。完整 [责任矩阵](../sandboxd/README.md#durable-quota-responsibility) 单独维护。
+`quota_resources` 为总量来源，`quota_refs` 为真实 holder/依赖/cleanup。访问终止、字段清空、catalog/path 消失都不证明退款。D 为可写盘 MiB，M 为捕获 RAM；snapshot 同 tenant/SID 去重 D+M，clone backing 存在时保留。root 请求计可信 owner，maintenance 不绕普通 owner 预算。完整 [责任矩阵](../haven/sandbox/api.md#durable-quota-responsibility) 单独维护。
 
 ## 生命周期与分支
 
@@ -85,7 +85,7 @@ configure admission 原子记录持久 fence，并在保存新 settings 前撤�
 | Admin 2046 | Haven | activate、prepare_template、quiesce |
 | Workload 2048 | Haven 鉴权 byte relay / SDK | 非特权 exec/process/session/PTY、文件/树、watch、port forward |
 
-租户不能选择 relay vsock port。HTTP/1.1 Upgrade 保留预读字节、half-close、有界缓冲与背压，宿主不解析 guest frame。SDK 串行 RPC，区分排队取消与已发送取消；未知副作用不自动重试。详细语义见 [Guest](../guest/README.md)、[Protocol](../protocol/README.md) 和 [SDK](../sandboxd/README.md#raw-protocol-and-sdk)。
+租户不能选择 relay vsock port。HTTP/1.1 Upgrade 保留预读字节、half-close、有界缓冲与背压，宿主不解析 guest frame。SDK 串行 RPC，区分排队取消与已发送取消；未知副作用不自动重试。详细语义见 [Guest](../guest/README.md)、[Protocol](../protocol/README.md) 和 [SDK](../haven/sandbox/api.md#raw-protocol-and-sdk)。
 
 none/relay NIC off；direct 必须 off → policy → Admin/Workload → on → final admission。direct 只支持 canonical IPv4 CIDR/flow，拒绝 hostname 与 host-only secret；实例更换不继承授权，旧 callback 只能退休原实例。网络机制见 [网络策略](network-policy.md)。
 

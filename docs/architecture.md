@@ -44,7 +44,7 @@ image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、cap
 
 架构门禁同时检查实际 Go import graph 和编译源码 AST：禁止 controller 绕过用例或回指 App、业务层手写 SQL、跨领域 dbgen 导入，以及根兼容 facade。仅保留逐函数/逐语句审阅的 SQLite 维护例外。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
 
-业务 API 与客户端契约见 [Sandbox](../sandboxd/README.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [验收记录](acceptance.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
+业务 API 与客户端契约见 [Sandbox](../haven/sandbox/api.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [验收记录](acceptance.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
 
 ## 职责与执行边界
 

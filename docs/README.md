@@ -18,12 +18,11 @@
 
 | 任务 | 文档 |
 |---|---|
-| Sandbox HTTP、令牌、SDK、配额责任、Preview | [sandboxd API](../sandboxd/README.md) |
-| Relay、CONNECT、SOCKS、凭据与代理资源限制 | [Egress](../sandboxd/egress/README.md) |
+| Sandbox HTTP、令牌、SDK、配额责任、Preview | [Sandbox API](../haven/sandbox/api.md) |
+| Relay、CONNECT、SOCKS、凭据与代理资源限制 | [Egress](../haven/egress/README.md) |
 | RPC 编码、方法与权限门户 | [Protocol](../protocol/README.md) |
 | Guest 构建、根切换、exec ledger 与树传输 | [Guest](../guest/README.md) |
-| Engine 宿主部署、资源预算与恢复 | [Host](../deploy/host/README.md) |
-| sandboxd 部署、密钥文件与备份 | [Deployment](../deploy/sandboxd/README.md) |
+| Haven 宿主部署、资源预算、密钥与恢复 | [Host](../deploy/host/README.md) |
 | 测试工具、输入材料与各 runner 范围 | [Scripts](../scripts/README.md) |
 | Kubernetes operator 集成 | [Operator](../operator/README.md) |
 | 已运行验收、材料与限制 | [验收记录](acceptance.md) |

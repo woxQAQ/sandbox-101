@@ -2,7 +2,7 @@
 
 默认构建产物为 `bin/haven`、`bin/havenctl`、`bin/loomctl`。Haven 同时持有业务与资源控制事实，只有一份 `haven.db`、node key、HEAD 和 writer lock。Loom 执行明确指定的宿主效果，不打开控制数据库。
 
-旧 Go 控制模块、daemon 与 engine UDS facade 已删除；workspace、CI、VM runner 和部署示例使用单 Haven。`sandboxd/` 仅保留文档索引指向的契约/导航 README，没有 Go module 或运行路径。既有部署没有切换，旧 state 不自动迁移。历史双 daemon 生产验收不证明当前 Haven 入口已通过生产验收。
+旧 Go 控制模块、daemon 与 engine UDS facade 已删除；workspace、CI、VM runner 和部署示例使用单 Haven。业务 API 与配额契约见 [Sandbox API](../haven/sandbox/api.md)，代理契约见 [Egress](../haven/egress/README.md)。既有部署没有切换，旧 state 不自动迁移。历史双 daemon 生产验收不证明当前 Haven 入口已通过生产验收。
 
 ```mermaid
 flowchart LR

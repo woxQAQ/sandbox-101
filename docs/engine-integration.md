@@ -2,7 +2,7 @@
 
 宿主 module 位于 `haven/`，路径为 `github.com/woxQAQ/haven`。`haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [types](../types/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../types/management.go)、管理 UDS 与 `loomctl`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
 
-配置、鉴权、CLI、统一离线备份与恢复命令见 [Haven control](haven-control.md)，业务资源和配额见 [Sandbox](../sandboxd/README.md)。本文维护资源协议与责任边界；[架构](architecture.md) 说明职责和锁，镜像格式见 [镜像物化](image-materialization.md)。
+配置、鉴权、CLI、统一离线备份与恢复命令见 [Haven control](haven-control.md)，业务资源和配额见 [Sandbox](../haven/sandbox/api.md)。本文维护资源协议与责任边界；[架构](architecture.md) 说明职责和锁，镜像格式见 [镜像物化](image-materialization.md)。
 
 ## 构建和依赖
 
@@ -59,7 +59,7 @@ snapshot 的 D+M 费用与 catalog/路径是不同事实。显式 snapshot delet
 
 ### 容量
 
-保守 admission 使用完整上界，reflink、稀疏分配或预计共享收益均不减免未知效果责任。tenant 的 D/M 费用见 [配额责任](../sandboxd/README.md#durable-quota-responsibility)；host reservations 还覆盖 runtime、capture/restore 复制、导入 staging/cache/metadata 与空间 margin。预算不能替代实际 byte/inode quota。
+保守 admission 使用完整上界，reflink、稀疏分配或预计共享收益均不减免未知效果责任。tenant 的 D/M 费用见 [配额责任](../haven/sandbox/api.md#durable-quota-responsibility)；host reservations 还覆盖 runtime、capture/restore 复制、导入 staging/cache/metadata 与空间 margin。预算不能替代实际 byte/inode quota。
 
 ## Reference-aware garbage collection
 

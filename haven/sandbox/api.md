@@ -1,6 +1,6 @@
 # Haven Sandbox API 与生命周期
 
-本路径保留文档索引入口，当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module，没有 sandboxd Go module 或独立 daemon。入口与配置见 [Haven control](../docs/haven-control.md)，宿主部署见 [Host](../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/httpapi/`；业务和资源工作流共享 `haven` 的唯一 store。
+当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module。入口与配置见 [Haven control](../../docs/haven-control.md)，宿主部署见 [Host](../../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/httpapi/`；业务和资源工作流共享 `haven` 的唯一 store。包内职责与事务边界见 [Sandbox 业务责任](README.md)。
 
 ## Tokens、幂等和错误
 
@@ -74,17 +74,17 @@ rollback 保留逻辑 sandbox 身份，但回滚 guest ledger；跨 rollback 的
 
 ## Raw protocol and SDK
 
-使用 `Connection: Upgrade` / `Upgrade: sandbox-v1`。101 后为有界背压的双向原始流，保留预读字节与 half-close；宿主不解释 Workload frame。System 2047、Admin 2046 不对租户开放，Workload 固定 2048。协议为四字节 big-endian 长度前缀 protobuf，frame 最大 8 MiB、chunk 64 KiB；port_forward 必须是新连接的首请求，ready 后完全 raw duplex，无最终 protobuf frame。详细方法见 [Protocol](../protocol/README.md) 与 [Guest](../guest/README.md)。
+使用 `Connection: Upgrade` / `Upgrade: sandbox-v1`。101 后为有界背压的双向原始流，保留预读字节与 half-close；宿主不解释 Workload frame。System 2047、Admin 2046 不对租户开放，Workload 固定 2048。协议为四字节 big-endian 长度前缀 protobuf，frame 最大 8 MiB、chunk 64 KiB；port_forward 必须是新连接的首请求，ready 后完全 raw duplex，无最终 protobuf frame。详细方法见 [Protocol](../../protocol/README.md) 与 [Guest](../../guest/README.md)。
 
 ```go
 import (
-    "github.com/woxQAQ/haven/api"
     "github.com/woxQAQ/haven/sdk"
+    "github.com/woxQAQ/haven/types"
 )
 
 client := sdk.New("https://sandbox.example", tenantToken)
-result, err := client.Claim(ctx, "persisted-claim-key", api.Command{
-    TemplateID: "python", TTLSeconds: 300, Policy: api.Policy{Mode: "none"},
+result, err := client.Claim(ctx, "persisted-claim-key", types.Command{
+    TemplateID: "python", TTLSeconds: 300, Policy: types.Policy{Mode: "none"},
 })
 ```
 
@@ -128,10 +128,10 @@ D=64、M=128 时，cold=64，checkpoint/resume peak=256，running 单 branch for
 
 ## Egress、配置与 Preview
 
-relay 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../haven/egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/relay NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
+relay 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/relay NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
 
 configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 settings。runtime/guest/bind/SQL 失败保留阻断；自动 rebind/reconcile 不清 fence。最终 running/result/settings/fence retirement 原子提交，失败撤销新 binding。迟到 worker 或旧 direct callback 不影响后继实例。
 
 数据 setup、最终 downstream Hijack 和上下游连接均参与配置 guard、revocation registry 与 shutdown。Preview 绑定 tenant/sandbox/epoch/port/expiry，期限不超 lease；移除 Authorization/Cookie，强制 no-referrer。当前没有每 sandbox 浏览器 origin。
 
-当前 schema 见 [Haven control](../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。组件/Rust/native/capture/kernel/KVM/production 证据分列，历史 [验收](../docs/acceptance.md) 不证明当前树。
+当前 schema 见 [Haven control](../../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。组件/Rust/native/capture/kernel/KVM/production 证据分列，历史 [验收](../../docs/acceptance.md) 不证明当前树。

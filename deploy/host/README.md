@@ -1,6 +1,6 @@
 # Haven 宿主部署
 
-本目录提供专用 Linux KVM 宿主的部署示例。一个 `haven` 进程独占控制 store，提供业务 HTTP 和私有管理 UDS；`havenctl`、`loomctl` 只调用协议。配置与离线恢复见 [Haven 控制契约](../../docs/haven-control.md)，业务 API 与配额见 [Sandbox 契约](../../sandboxd/README.md)。本次源码迁移没有停止或切换既有部署；旧 state 不自动合并、发现或接管。
+本目录提供专用 Linux KVM 宿主的部署示例。一个 `haven` 进程独占控制 store，提供业务 HTTP 和私有管理 UDS；`havenctl`、`loomctl` 只调用协议。配置与离线恢复见 [Haven 控制契约](../../docs/haven-control.md)，业务 API 与配额见 [Sandbox 契约](../../haven/sandbox/api.md)。本次源码迁移没有停止或切换既有部署；旧 state 不自动合并、发现或接管。
 
 ## 宿主、VMM 与材料
 

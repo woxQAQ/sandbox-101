@@ -1,5 +1,7 @@
 # Sandbox 业务责任
 
+业务 HTTP、令牌、SDK 与配额责任见 [Sandbox API 契约](api.md)。
+
 sandbox 拥有 claim/configuration、activation、生命周期、checkpoint binding、warm claim、fork、业务投递与 provisioning coordinator。物理 generation、capture、stop 和删除由 machine 执行，模板与 pool 由 supply 持有。SandboxRequests 保留原 action 路由；SupplyCommands 只暴露模板/refill 接纳，不引入总 Service 回指。
 
 ## 证明与原子交接
