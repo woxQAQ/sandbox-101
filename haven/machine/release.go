@@ -33,12 +33,7 @@ func (service *VMDeletion) AdmitRelease(ctx context.Context, request ReleaseRequ
 }
 
 func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
-	if service.
-		ownership ==
-		nil || service.handoff ==
-		nil ||
-		service.
-			usage == nil {
+	if service.ownership == nil || service.handoff == nil || service.usage == nil {
 		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
