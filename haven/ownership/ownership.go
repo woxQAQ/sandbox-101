@@ -1,3 +1,7 @@
+// Package ownership holds the frozen value definitions shared across
+// capability packages. sandbox, machine and supply each own private tables,
+// so types mutually referenced by their proofs live here instead of creating
+// an import between capabilities. No database, no runtime behavior.
 package ownership
 
 import (
