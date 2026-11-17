@@ -58,7 +58,10 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -93,7 +96,12 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 	if authority, ok := parent.(LifecycleParentAuthority); ok {
 		input.Lifecycle = authority.LifecycleOperation()
 	}
-	if err = AdmitResourceParent(ctx, tx, parent, accepted, "capture_discard", source.Input.Snapshot.ID, hash); err != nil {
+	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
+		Child:       accepted,
+		Kind:        "capture_discard",
+		Candidate:   source.Input.Snapshot.ID,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	payload := operation.Encode(input)
@@ -104,7 +112,7 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 		Phase:       "admitted",
 		Status:      "pending",
 	}
-	if err = service.captureDiscardProof(ctx, tx, step, true); err != nil {
+	if err = service.captureDiscardAdmissionProof(ctx, tx, step); err != nil {
 		return empty, err
 	}
 	operations := operation.New(tx)
@@ -170,7 +178,7 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.captureDiscardProof(ctx, tx, step, false); err != nil {
+	if err = service.captureDiscardProof(ctx, tx, step); err != nil {
 		return empty, err
 	}
 	if err = service.fault("capture_discard_admission_before_commit"); err != nil {

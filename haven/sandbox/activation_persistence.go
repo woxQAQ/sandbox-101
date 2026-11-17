@@ -100,13 +100,24 @@ func (service *Activations) commitActivationPolicy(step ActivationStep, source m
 				return fmt.Errorf("network policy replacement lacks original stopped generation")
 			}
 		}
-		if err = machine.CompleteDirectReplacement(service.ctx, tx, previous, step.OperationID, source.Candidate, instance); err != nil {
+		if err = machine.CompleteDirectReplacement(service.ctx, tx, machine.DirectPolicyReplacement{
+			PriorOperationID: previous,
+			OperationID:      step.OperationID,
+			VMID:             source.Candidate,
+			Instance:         instance,
+		}); err != nil {
 			return err
 		}
 	} else if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
 		return lookup
 	}
-	if err = machine.ArmDirectRetirement(service.ctx, tx, step.ResourceProof(), source, policy); err != nil {
+	activation := step.ResourceProof()
+	if err = machine.ArmDirectRetirement(service.ctx, tx, step.OperationID, machine.DirectRetirementInput{
+		Source:         source,
+		ActivationHash: activation.Hash,
+		ActivationKey:  activation.Key,
+		Policy:         policy,
+	}); err != nil {
 		return err
 	}
 	if err = machine.RecordPolicyWitness(service.ctx, tx, machine.NetworkPolicyRecord{

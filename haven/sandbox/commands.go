@@ -20,7 +20,11 @@ type SandboxCommands struct {
 }
 
 func NewSandboxCommands(maxTTL time.Duration, identity *operation.CommandIdentity, registry *access.Registry) *SandboxCommands {
-	return &SandboxCommands{Identity: identity, access: registry, maxTTL: maxTTL}
+	return &SandboxCommands{
+		Identity: identity,
+		access:   registry,
+		maxTTL:   maxTTL,
+	}
 }
 
 func (service *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, error) {

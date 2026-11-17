@@ -21,28 +21,16 @@ import (
 // AdmitCapture fixes the source instance, destination, authorization and peak
 // responsibility before any pause. Sandbox checkpoint/pause publication is separate.
 func (service *Captures) AdmitCapture(ctx context.Context, request CaptureRequest) (operation.Record, error) {
-	if service.
-		ownership ==
-		nil {
-		return operation.
-			Record{}, fmt.
-			Errorf("%w: required Captures capability port unavailable",
-
-				errs.ErrManualRecovery)
+	if service.ownership == nil {
+		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
 	return service.AdmitForParent(ctx, request, nil)
 }
 
 func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, parent ResourceParent) (operation.Record, error) {
-	if service.
-		ownership ==
-		nil {
-		return operation.
-			Record{}, fmt.
-			Errorf("%w: required Captures capability port unavailable",
-
-				errs.ErrManualRecovery)
+	if service.ownership == nil {
+		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
 	var empty operation.Record
@@ -54,7 +42,10 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		Request CaptureRequest
 	}{"snapshot", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -78,7 +69,10 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -164,7 +158,12 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		CPU:          cpu,
 	}
 	payload := operation.Encode(input)
-	if err = AdmitResourceParent(ctx, tx, parent, accepted, "capture", publication.ID, hash); err != nil {
+	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
+		Child:       accepted,
+		Kind:        "capture",
+		Candidate:   publication.ID,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	operations := operation.New(tx)

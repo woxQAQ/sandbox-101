@@ -14,9 +14,17 @@ type StopParentAuthority interface {
 	StopLifecycle() (operationID string, allowRunning bool)
 }
 
+// StopParentProof compares the stop intent, immutable resource birth and current
+// sandbox ownership in the caller's original transaction.
+type StopParentProof struct {
+	Step    StopStep
+	Source  ResourceStep
+	Sandbox ownership.Sandbox
+}
+
 // StopOwnershipReader validates the original lifecycle, stop link and sandbox
 // fence before returning the expected frozen business state. It never writes.
 type StopOwnershipReader interface {
 	SandboxOwnershipReader
-	VerifyStopParent(context.Context, store.DBTX, StopStep, ResourceStep, ownership.Sandbox) (string, error)
+	VerifyStopParent(context.Context, store.DBTX, StopParentProof) (string, error)
 }

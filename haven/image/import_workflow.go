@@ -9,11 +9,23 @@ import (
 
 	"github.com/woxQAQ/haven/image/internal/dbgen"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/store"
 )
+
+// preparedWork is formed only after the phase has checked its frozen plan and
+// preparation receipt. The effects retain those exact values through the call.
+func (step imageImportStep) preparedWork(state string) imageimport.ImportWork {
+	return imageimport.ImportWork{
+		StateRoot:   state,
+		OperationID: step.OperationID,
+		Plan:        *step.Input.Plan,
+		Boundary:    *step.State.Boundary,
+	}
+}
 
 func (service *Images) runImageImport(step imageImportStep) (returned error) {
 	if operation.Terminal(step.Status) {
@@ -53,7 +65,7 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 			if err := service.saveImageImport(&step, "staging_intent"); err != nil {
 				return err
 			}
-			if err := imageimport.StageImageImport(service.ctx, service.directory, step.OperationID, *step.Input.Plan, *step.State.Boundary); err != nil {
+			if err := step.preparedWork(service.directory).Stage(service.ctx); err != nil {
 				return err
 			}
 			if err := service.saveImageImport(&step, "staged"); err != nil {
@@ -72,7 +84,10 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 				if err := service.saveImageImport(&step, "layer_intent"); err != nil {
 					return err
 				}
-				proof, err := imageimport.MaterializeImageLayer(service.ctx, service.directory, step.OperationID, *step.Input.Plan, *step.State.Boundary, len(step.State.Layers), step.Input.Options.MaxBytes-bytes, step.Input.Options.MaxFiles-files)
+				proof, err := step.preparedWork(service.directory).MaterializeLayer(service.ctx, len(step.State.Layers), host.LayerLimits{
+					MaxBytes: step.Input.Options.MaxBytes - bytes,
+					MaxFiles: step.Input.Options.MaxFiles - files,
+				})
 				if err != nil {
 					return err
 				}
@@ -88,7 +103,7 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 			if err := service.saveImageImport(&step, "output_intent"); err != nil {
 				return err
 			}
-			proof, err := imageimport.BuildImageImportOutput(service.ctx, service.directory, step.OperationID, *step.Input.Plan, *step.State.Boundary, step.State.Layers)
+			proof, err := step.preparedWork(service.directory).BuildOutput(service.ctx, step.State.Layers)
 			if err != nil {
 				return err
 			}
@@ -103,7 +118,7 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 			if step.State.Boundary == nil || step.State.Proof == nil {
 				return fmt.Errorf("image publication lacks output proof")
 			}
-			if err := imageimport.VerifyImportedImage(service.ctx, service.directory, filepath.Join(step.Input.Work, "output"), *step.State.Boundary, *step.State.Proof); err != nil {
+			if err := step.State.Proof.Verify(service.ctx, service.directory, filepath.Join(step.Input.Work, "output"), *step.State.Boundary); err != nil {
 				return err
 			}
 			if err := service.saveImageImport(&step, "publish_intent"); err != nil {
@@ -113,7 +128,7 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 			if step.State.Boundary == nil || step.State.Proof == nil {
 				return fmt.Errorf("image publication lacks frozen rename proof")
 			}
-			if err := imageimport.PublishImportedImage(service.ctx, service.directory, step.OperationID, *step.State.Boundary, *step.State.Proof); err != nil {
+			if err := step.State.Proof.Publish(service.ctx, service.directory, step.OperationID, *step.State.Boundary); err != nil {
 				return err
 			}
 			if err := service.fault("image_import_renamed"); err != nil {
@@ -189,7 +204,7 @@ func (service *Images) completeImageImport(step imageImportStep) error {
 	if plan == nil || proof.Manifest.Digest != step.Input.Options.Digest || proof.Manifest.Layout != step.Input.Options.Materialization || proof.Manifest.Builder != plan.Builder || !reflect.DeepEqual(proof.Manifest.Tools, plan.Tools) {
 		return fmt.Errorf("image publication differs from frozen plan")
 	}
-	if err := imageimport.VerifyImportedImage(service.ctx, service.directory, step.Input.Target, *step.State.Boundary, *proof); err != nil {
+	if err := proof.Verify(service.ctx, service.directory, step.Input.Target, *step.State.Boundary); err != nil {
 		return err
 	}
 	service.admission.Lock()

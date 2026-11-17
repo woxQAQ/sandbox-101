@@ -40,17 +40,26 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := machine.ColdRequest{
+			request := machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "supply",
 				TemplateID: "cold",
 			}
 			frozen := testfixture.Encode(struct {
 				Action  string
-				Request machine.ColdRequest
+				Request machine.FreshRequest
 			}{"claim", request})
-			operation, err := service.VMProvisioning.Admit(ctx, "tenant", request.Key, frozen, testfixture.Digest(frozen), template, imageManifest, nil, nil, &sandbox.ProvisionTarget{
-				Budget: &budget,
+			operation, err := service.VMProvisioning.Admit(ctx, sandbox.ProvisionAdmission{
+				Request: supply.ProvisionRequest{
+					TenantID: "tenant",
+					Key:      request.Key,
+					Frozen:   frozen,
+					Template: template,
+					Image:    imageManifest,
+				},
+				Target: &sandbox.ProvisionTarget{
+					Budget: &budget,
+				},
 			})
 			if err != nil {
 				t.Fatal(err)

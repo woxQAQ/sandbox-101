@@ -1,6 +1,6 @@
 package machine
 
-type ColdRequest struct {
+type FreshRequest struct {
 	TenantID   string `json:"tenant_id"`
 	Key        string `json:"key"`
 	TemplateID string `json:"template_id"`

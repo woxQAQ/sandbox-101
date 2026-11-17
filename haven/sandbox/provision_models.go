@@ -6,6 +6,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/supply"
 )
 
 // ClaimAdmission carries the sanitized command/settings and ephemeral host
@@ -15,6 +16,15 @@ type ClaimAdmission struct {
 	Settings Settings
 	MAC      string
 	Secrets  map[string]egress.Secret
+}
+
+// ProvisionAdmission joins one preflight request to its business transaction
+// participants. Supply's raw port cannot supply claim credentials or placement
+// on an existing sandbox.
+type ProvisionAdmission struct {
+	Request supply.ProvisionRequest
+	Claim   *ClaimAdmission
+	Target  *ProvisionTarget
 }
 
 type ProvisionTarget struct {

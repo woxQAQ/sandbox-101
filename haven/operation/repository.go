@@ -83,10 +83,10 @@ func (r *Repository) RequestID(ctx context.Context, tenant, key string) (string,
 
 // Cached resolves the original scoped request. A matching key alone cannot
 // authorize replay: both the stored checksum and the requested hash must match.
-func (r *Repository) Cached(ctx context.Context, kind, scope, key, hash string) (Record, bool, error) {
+func (r *Repository) Cached(ctx context.Context, scope Scope, key, hash string) (Record, bool, error) {
 	row, err := r.queries.GetScopedRequest(ctx, dbgen.GetScopedRequestParams{
-		ScopeKind: kind,
-		ScopeID:   scope,
+		ScopeKind: scope.Kind,
+		ScopeID:   scope.ID,
 		IdemKey:   key,
 	})
 	record := Record{

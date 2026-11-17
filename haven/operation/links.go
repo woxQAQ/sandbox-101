@@ -40,11 +40,20 @@ func (r *Repository) StepStatus(ctx context.Context, id, key string) (string, er
 	})
 }
 
-func (r *Repository) CompletePendingLink(ctx context.Context, parent, key, status string, body []byte) error {
+// LinkCompletion fixes the child status and body written to one pending parent
+// dependency. Completion still uses the original conditional SQL update.
+type LinkCompletion struct {
+	OperationID string
+	StepKey     string
+	Status      string
+	Body        []byte
+}
+
+func (r *Repository) CompletePendingLink(ctx context.Context, completion LinkCompletion) error {
 	return store.RequireOne(r.queries.CompletePendingLink(ctx, dbgen.CompletePendingLinkParams{
-		OperationID: parent,
-		StepKey:     key,
-		Status:      status,
-		Body:        body,
+		OperationID: completion.OperationID,
+		StepKey:     completion.StepKey,
+		Status:      completion.Status,
+		Body:        completion.Body,
 	}))
 }

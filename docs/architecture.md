@@ -28,19 +28,19 @@ flowchart TD
     Sandbox --> Machine[machine]
     Supply --> Machine
     Machine --> Image[image]
-    Capabilities --> Collection[collection / node]
+    Capabilities --> GC[gc / node]
     Composition --> Capabilities
     Capabilities --> Shared[共享 execution / access]
     Capabilities --> Store[原 DBTX / 唯一 store.State]
 ```
 
-image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。data 保持 live 接纳、连接、lease 与 preview；collection 组合各 owner 的 GC 事实，node 执行管理用例。internal/maintenance 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内冻结全部未发布终态。
+image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。dataplane 保持 live 接纳、连接、lease 与 preview；gc 组合各 owner 的 GC 事实，node 执行管理用例。internal/maintenance 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内冻结全部未发布终态。
 
 私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v9 schema、trigger、冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
 
 旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。门禁按 Go 类型核对 step namespace，并按 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
 
-`store.State` 独占数据库、writer lock、node key 与 HEAD。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`access.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 data.Audits、data.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
+`store.State` 独占数据库、writer lock、node key 与 HEAD。各能力构造函数通过本能力的 `Dependencies` 明确接收原 guards、Lifetime/Workers、证明与协作端口，运行配置由独立 options 或故障注入参数传入；构造过程只装配这些依赖，不从通用容器查找或回填缺失端口。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`access.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 dataplane.Audits、dataplane.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
 
 架构门禁同时检查实际 Go import graph 和编译源码 AST：禁止 controller 绕过用例或回指 App、业务层手写 SQL、跨领域 dbgen 导入，以及根兼容 facade。仅保留逐函数/逐语句审阅的 SQLite 维护例外。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
 

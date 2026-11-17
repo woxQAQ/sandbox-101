@@ -19,7 +19,7 @@ type DirectBackend interface {
 	Network(context.Context, loom.Resource, bool) error
 }
 
-type DirectPolicyGuards interface {
+type DirectPoliciesGuards interface {
 	Admission() execution.Guard
 	Configuration(string) execution.Guard
 }
@@ -30,13 +30,19 @@ type DirectPolicyGuards interface {
 type DirectPolicies struct {
 	store      store.Workflow
 	admission  execution.Guard
-	guards     DirectPolicyGuards
+	guards     DirectPoliciesGuards
 	proofs     ResourceProofs
 	backend    DirectBackend
 	faultPoint func(string) error
 }
 
-func NewDirectPolicies(state *store.State, guards DirectPolicyGuards, proofs ResourceProofs, backend DirectBackend, fault func(string) error) *DirectPolicies {
+type DirectPoliciesDependencies struct {
+	Guards  DirectPoliciesGuards
+	Proofs  ResourceProofs
+	Backend DirectBackend
+}
+
+func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependencies, fault func(string) error) *DirectPolicies {
 	return &DirectPolicies{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -44,10 +50,10 @@ func NewDirectPolicies(state *store.State, guards DirectPolicyGuards, proofs Res
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		admission:  guards.Admission(),
-		guards:     guards,
-		proofs:     proofs,
-		backend:    backend,
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		proofs:     dependencies.Proofs,
+		backend:    dependencies.Backend,
 		faultPoint: fault,
 	}
 }

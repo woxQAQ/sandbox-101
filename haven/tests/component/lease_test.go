@@ -19,7 +19,9 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	id := claim.Result.SandboxID
@@ -68,7 +70,7 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	}); err == nil {
 		t.Fatal("stale deadline revoked renewed lease")
 	}
-	if _, err = service.Data.DataReady(context.Background(), principal, id); err != nil {
+	if _, err = service.Dataplane.Ready(context.Background(), principal, id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -85,7 +87,9 @@ func TestHavenLeaseReaper(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			id := claim.Result.SandboxID

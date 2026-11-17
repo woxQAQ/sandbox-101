@@ -54,7 +54,7 @@ func RequireTemplateOwner(ctx context.Context, query store.DBTX, id, tenant stri
 
 // reservePublication advances the publication pointer without transferring the
 // permanent tenant. The comparison and conditional upsert share the caller's tx.
-func reservePublication(ctx context.Context, query store.DBTX, desired TemplateRecord, previous *TemplateRecord, operationID string) error {
+func (desired TemplateRecord) reservePublication(ctx context.Context, query store.DBTX, previous *TemplateRecord, operationID string) error {
 	current, err := CurrentTemplate(ctx, query, desired.ID)
 	if err != nil {
 		return err

@@ -25,7 +25,9 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			source := claimSandbox(t, service, "source", nil, egress.Policy{
+			source := (sandboxClaims{
+				App: service,
+			}).claim(t, "source", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

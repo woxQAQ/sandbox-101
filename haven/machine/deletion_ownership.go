@@ -24,10 +24,18 @@ type DeletionOwnershipReader interface {
 	ResumeDestination(context.Context, *sql.Tx, *QuotaDestination) (ResumeDestinationProof, error)
 }
 
+// SandboxTermination keeps the authenticated tenant predicate separate from the
+// serialized sandbox body while fixing the operation that takes termination.
+type SandboxTermination struct {
+	Sandbox     ownership.Sandbox
+	OperationID string
+	TenantID    string
+}
+
 // DeletionParticipant joins the physical deletion transaction. It neither
 // commits nor checkpoints, dispatches effects, or obtains workflow locks.
 type DeletionParticipant interface {
-	TerminateSandbox(context.Context, *sql.Tx, ownership.Sandbox, string, string) error
+	TerminateSandbox(context.Context, *sql.Tx, SandboxTermination) error
 	CompleteRelease(context.Context, *sql.Tx, ResourceStep) error
 	RestoreResumeSlot(context.Context, *sql.Tx, *QuotaDestination, string) error
 	RestorePausedSandbox(context.Context, *sql.Tx, *QuotaDestination) error

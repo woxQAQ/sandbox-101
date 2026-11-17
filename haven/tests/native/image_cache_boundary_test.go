@@ -34,7 +34,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			work, err := service.GarbageCollection.CollectGarbage(ctx, root, "work", types.GCOptions{
+			work, err := service.GC.Collect(ctx, root, "work", types.GCOptions{
 				Budget: 15 * time.Second,
 			})
 			if err != nil || len(work.Collected) != 1 {
@@ -65,7 +65,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 			} else {
 				interrupt.Store(true)
 			}
-			report, err := service.GarbageCollection.CollectGarbage(ctx, root, "cache", types.GCOptions{
+			report, err := service.GC.Collect(ctx, root, "cache", types.GCOptions{
 				Budget: 15 * time.Second,
 			})
 			if err != nil || len(report.Collected) != 0 {

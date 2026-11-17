@@ -82,7 +82,10 @@ func (service *VMDeletion) discardGenerationSet(step DiscardStep) ([]ResourceSte
 	if _, err = service.discardProof(service.ctx, tx, step); err != nil {
 		return nil, err
 	}
-	return service.proofs.CleanupGenerations(service.ctx, tx, step.Input.Source, "cleanup", step.OperationID+":discard")
+	return service.proofs.CleanupGenerations(service.ctx, tx, step.Input.Source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":discard",
+	})
 }
 
 func (service *VMDeletion) runDiscard(step DiscardStep) error {
@@ -323,7 +326,10 @@ func (service *VMDeletion) completeDiscard(step DiscardStep) error {
 		return err
 	}
 	source, input := step.Input.Source, step.Input
-	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, "cleanup", step.OperationID+":discard")
+	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":discard",
+	})
 	if err != nil {
 		return err
 	}
@@ -375,7 +381,7 @@ func (service *VMDeletion) completeDiscard(step DiscardStep) error {
 			return err
 		}
 	}
-	if err = RetireVMPolicy(service.ctx, tx, generations, step.OperationID, service.proofs); err != nil {
+	if err = service.proofs.RetireVMPolicy(service.ctx, tx, generations, step.OperationID); err != nil {
 		return err
 	}
 	for _, generation := range generations {

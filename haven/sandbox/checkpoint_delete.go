@@ -71,7 +71,7 @@ func (service *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal a
 	}{"checkpoint_delete", operation.SanitizedCommand(command)})
 	input := operation.Encode(struct {
 		Checkpoint  Checkpoint
-		Publication machine.Source
+		Publication machine.SnapshotSource
 	}{checkpoint, publication})
 	operations := operation.New(tx)
 	references := quota.New(tx)

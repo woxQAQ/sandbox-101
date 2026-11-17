@@ -33,7 +33,10 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 		Request machine.RestoreRequest
 	}{"restore", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -70,7 +73,10 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -212,7 +218,12 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 		BackingHolder:  accepted.ID,
 		StopOperation:  request.StopOperationID,
 	}
-	if err = machine.AdmitResourceParent(ctx, tx, parent, accepted, "restore", resource.VMID, hash); err != nil {
+	if err = machine.AdmitResourceParent(ctx, tx, parent, machine.ResourceAdmission{
+		Child:       accepted,
+		Kind:        "restore",
+		Candidate:   resource.VMID,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	previous := destination
@@ -235,10 +246,19 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	}); err != nil {
 		return empty, err
 	}
-	if err = machine.AdmitProvisionIntent(ctx, tx, accepted.ID, "restore", request.ExpectedInstance, input); err != nil {
+	if err = machine.AdmitProvisionIntent(ctx, tx, machine.ProvisionIntent{
+		OperationID:      accepted.ID,
+		Action:           "restore",
+		ExpectedInstance: request.ExpectedInstance,
+		Input:            input,
+	}); err != nil {
 		return empty, err
 	}
-	if err = machine.ClaimRestoreGeneration(ctx, tx, resource.VMID, request.ExpectedInstance, accepted.ID, operation.Encode(currentMachine)); err != nil {
+	if err = machine.ClaimRestoreGeneration(ctx, tx, machine.RestoreGenerationClaim{
+		ExpectedInstance: request.ExpectedInstance,
+		OperationID:      accepted.ID,
+		VM:               currentMachine,
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).ReuseSandboxForProvision(ctx, dbgen.ReuseSandboxForProvisionParams{
@@ -280,7 +300,7 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	}); err != nil {
 		return empty, err
 	}
-	if err = machine.PinSnapshotSource(ctx, tx, request.TenantID, machine.Lease{
+	if err = machine.PinSnapshotSource(ctx, tx, request.TenantID, machine.SourceLease{
 		SnapshotID:  request.SnapshotID,
 		OperationID: accepted.ID,
 		StepKey:     "resource",

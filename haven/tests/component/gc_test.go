@@ -39,7 +39,7 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT epoch FROM store_metadata").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	report, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "", types.GCOptions{
@@ -52,7 +52,7 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT epoch FROM store_metadata").Scan(&after); err != nil || before != after {
 		t.Fatal("dry-run changed metadata", before, after, err)
 	}
-	result, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	result, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "gc", types.GCOptions{
@@ -77,7 +77,9 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -92,7 +94,7 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protected, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	protected, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "", types.GCOptions{
@@ -108,7 +110,7 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	report, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "gc", types.GCOptions{

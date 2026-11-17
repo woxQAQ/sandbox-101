@@ -20,7 +20,7 @@ The namespace-local nft `ct count` budget is shared across outbound/reply traffi
 
 ## Haven activation and exact retirement
 
-`machine.DirectPolicies` owns binding verification, immutable teardown and retirement recovery. `ArmDirectRetirement`, `CompleteDirectReplacement` and `RetireVMPolicy` coordinate responsibility in the caller's original transaction. Machine consumes private network-policy, retirement-step and cleanup queries; sandbox owns activation and business binding. Its stateless ActivationHistory reader supplies frozen activation identity through the caller's DBTX. See the [capability migration evidence](../plans/evidence/027-capability-map.md).
+`machine.DirectPolicies` owns binding verification, immutable teardown and retirement recovery. `ArmDirectRetirement`, `CompleteDirectReplacement` and `ResourceProofs.RetireVMPolicy` coordinate responsibility in the caller's original transaction. Arming consumes the original `DirectRetirementInput`; replacement names the prior and succeeding operations together with the exact VM/instance in `DirectPolicyReplacement`. These values preserve the existing frozen format and add no policy modes. Machine consumes private network-policy, retirement-step and cleanup queries; sandbox owns activation and business binding. Its stateless ActivationHistory reader supplies frozen activation identity through the caller's DBTX. See the [capability migration evidence](../plans/evidence/027-capability-map.md).
 
 The sequence in `haven/activation.go` is:
 

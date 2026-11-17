@@ -40,7 +40,7 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 		if !reflect.DeepEqual(current, source.State.Proof.Manifest) {
 			return nil, fmt.Errorf("published image catalog changed")
 		}
-		if err = imageimport.VerifyImportedImage(service.ctx, service.directory, source.Input.Target, *source.State.Boundary, *source.State.Proof); err != nil {
+		if err = source.State.Proof.Verify(service.ctx, service.directory, source.Input.Target, *source.State.Boundary); err != nil {
 			return nil, err
 		}
 	} else {
@@ -53,7 +53,14 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 			return nil, err
 		}
 	}
-	work, err := imageimport.InspectWorkDeletion(service.ctx, service.directory, source.OperationID, *source.Input.Plan, *source.State.Boundary, published)
+	prepared := source.preparedWork(service.directory)
+	var work loom.DeletionIntent
+	var err error
+	if published {
+		work, err = prepared.InspectPublishedWorkDeletion(service.ctx)
+	} else {
+		work, err = prepared.InspectUnpublishedWorkDeletion(service.ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +76,7 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 			if source.State.Proof == nil {
 				return nil, fmt.Errorf("failed import final directory lacks original output proof")
 			}
-			intent, err := imageimport.InspectUnpublishedImageDeletion(service.ctx, service.directory, source.Input.Target, *source.State.Boundary, *source.State.Proof)
+			intent, err := source.State.Proof.InspectUnpublishedDeletion(service.ctx, service.directory, source.Input.Target, *source.State.Boundary)
 			if err != nil {
 				return nil, err
 			}

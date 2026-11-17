@@ -145,5 +145,9 @@ func InspectVMSetDeletion(ctx context.Context, stateRoot string, members []VMDel
 			files[relative+"/ch/"+name] = 0
 		}
 	}
-	return inspectVMFileTopology(ctx, stateRoot, first, directories, files, fixed)
+	return inspectArtifactTopology(ctx, stateRoot, first.Dir, ArtifactTopology{
+		Directories: directories,
+		Files:       files,
+		Fixed:       fixed,
+	})
 }

@@ -82,8 +82,12 @@ func TestHavenTenantCredentialUpdateRejectsSQL(t *testing.T) {
 func TestHavenTenantCheckpointFailureRetainsCommittedCredential(t *testing.T) {
 	service := newTenantFixture(t)
 	failure := errors.New("fixture checkpoint unavailable")
-	service.Tenants = authorization.NewTenants(authorization.New(service.State.Database()), service.Admission, service.Lifetime, false, func() error {
-		return failure
+	service.Tenants = authorization.NewTenants(authorization.New(service.State.Database()), authorization.TenantDependencies{
+		Admission: service.Admission,
+		Lifetime:  service.Lifetime,
+		Checkpoint: func() error {
+			return failure
+		},
 	})
 	tenant := types.Tenant{
 		ID:            "private-tenant",

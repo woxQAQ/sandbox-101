@@ -81,7 +81,11 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	if err := os.Mkdir(layout, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := kvmRuntimeLayer(t, layout, kernel, guest, rootfs)
+	base := kvmRuntimeLayer(t, layout, kvmGuestMaterials{
+		Kernel:         kernel,
+		GuestDirectory: guest,
+		RootFS:         rootfs,
+	})
 	meta := kvmMetadataLayers(t, layout)
 	cross := hardEntry("fixture/cross-layer-hard", "fixture/regular")
 	cross.header.Mode = 0o644
@@ -255,19 +259,17 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			})
 			vm.api(t, "vm.boot", nil)
 			vm.ready(t, ctx, false)
-			vm.rpc(
-				t,
-				2046,
-				"activate",
-				map[string]any{
+			vm.rpc(t, kvmGuestRequest{
+				Port:   2046,
+				Method: "activate",
+				Params: map[string]any{
 					"sandbox_id":     "fixture",
 					"network":        "none",
 					"env":            map[string]any{},
 					"reset_identity": true,
 					"hostname":       "fixture",
 				},
-				nil,
-			)
+			})
 			fileViewChecks := kvmFileViewChecks
 			if materialization == LayeredEROFSLayout {
 				fileViewChecks += `
@@ -394,7 +396,14 @@ func kvmTool(t *testing.T, tool string, args ...string) []byte {
 	return out
 }
 
-func kvmRuntimeLayer(t *testing.T, layout, kernel, guest, rootfs string) ociLayerFixture {
+type kvmGuestMaterials struct {
+	Kernel         string
+	GuestDirectory string
+	RootFS         string
+}
+
+func kvmRuntimeLayer(t *testing.T, layout string, materials kvmGuestMaterials) ociLayerFixture {
+	kernel, guest, rootfs := materials.Kernel, materials.GuestDirectory, materials.RootFS
 	t.Helper()
 	var err error
 	rootfs, err = filepath.EvalSymlinks(rootfs)
@@ -716,7 +725,11 @@ func TestKVMRootfsOCI(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			layer := kvmRuntimeLayer(t, layout, filepath.Join(guest, "kernel"), guest, rootfs)
+			layer := kvmRuntimeLayer(t, layout, kvmGuestMaterials{
+				Kernel:         filepath.Join(guest, "kernel"),
+				GuestDirectory: guest,
+				RootFS:         rootfs,
+			})
 			image := putOCIManifest(t, layout, "provider-independent-runtime", []ociLayerFixture{
 				layer,
 			})
@@ -999,13 +1012,15 @@ func (vm *kvmMachine) ready(t *testing.T, ctx context.Context, restored bool) {
 	}
 }
 
-func (vm *kvmMachine) rpc(
-	t *testing.T,
-	port int,
-	method string,
-	params map[string]any,
-	data []byte,
-) (map[string]any, string) {
+type kvmGuestRequest struct {
+	Port   int
+	Method string
+	Params map[string]any
+	Data   []byte
+}
+
+func (vm *kvmMachine) rpc(t *testing.T, request kvmGuestRequest) (map[string]any, string) {
+	port, method, params, data := request.Port, request.Method, request.Params, request.Data
 	t.Helper()
 	conn, err := net.DialTimeout("unix", vm.vsock, 5*time.Second)
 	if err != nil {
@@ -1123,12 +1138,21 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	vm.rpc(t, 2048, "tree_push", map[string]any{
-		"path": "/workspace/tree-original",
-	}, archive.Bytes())
-	_, pulled := vm.rpc(t, 2048, "tree_pull", map[string]any{
-		"path": "/workspace/tree-original",
-	}, nil)
+	vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "tree_push",
+		Params: map[string]any{
+			"path": "/workspace/tree-original",
+		},
+		Data: archive.Bytes(),
+	})
+	_, pulled := vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "tree_pull",
+		Params: map[string]any{
+			"path": "/workspace/tree-original",
+		},
+	})
 	reader := tar.NewReader(strings.NewReader(pulled))
 	found := false
 	for {
@@ -1152,9 +1176,14 @@ func (vm *kvmMachine) treeRoundtrip(t *testing.T) {
 	if !found {
 		t.Fatal("actual guest pull omitted regular file")
 	}
-	vm.rpc(t, 2048, "tree_push", map[string]any{
-		"path": "/workspace/tree-copy",
-	}, []byte(pulled))
+	vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "tree_push",
+		Params: map[string]any{
+			"path": "/workspace/tree-copy",
+		},
+		Data: []byte(pulled),
+	})
 	vm.exec(t, `set -eu
 export PATH=/bin
 for tree in /workspace/tree-original /workspace/tree-copy; do
@@ -1167,15 +1196,23 @@ for tree in /workspace/tree-original /workspace/tree-copy; do
 done
 printf 'guest-tree-roundtrip-ok\n'
 `)
-	_, copied := vm.rpc(t, 2048, "fs_read", map[string]any{
-		"path": "/workspace/tree-copy/file",
-	}, nil)
+	_, copied := vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "fs_read",
+		Params: map[string]any{
+			"path": "/workspace/tree-copy/file",
+		},
+	})
 	if !bytes.Equal([]byte(copied), content) {
 		t.Fatal("binary file changed during guest tree roundtrip")
 	}
-	_, raw := vm.rpc(t, 2048, "fs_read", map[string]any{
-		"path": "/workspace/tree-copy/xattr-value",
-	}, nil)
+	_, raw := vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "fs_read",
+		Params: map[string]any{
+			"path": "/workspace/tree-copy/xattr-value",
+		},
+	})
 	if !bytes.Equal([]byte(raw), xattr) {
 		t.Fatal("binary user xattr changed during guest tree roundtrip")
 	}
@@ -1183,9 +1220,13 @@ printf 'guest-tree-roundtrip-ok\n'
 
 func (vm *kvmMachine) exec(t *testing.T, command string) {
 	t.Helper()
-	params, out := vm.rpc(t, 2048, "exec", map[string]any{
-		"command": command,
-	}, nil)
+	params, out := vm.rpc(t, kvmGuestRequest{
+		Port:   2048,
+		Method: "exec",
+		Params: map[string]any{
+			"command": command,
+		},
+	})
 	if exit, ok := params["exit_code"].(float64); !ok || exit != 0 {
 		t.Fatalf("guest command failed: %v output %q command:\n%s", params, out, command)
 	}

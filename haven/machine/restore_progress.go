@@ -33,10 +33,10 @@ func (service *Provisioning) saveRestore(step *ResourceStep, next ResourceState)
 		return err
 	}
 	if next.DiskIdentity != nil && step.State.DiskIdentity == nil {
-		previous := Version{
+		previous := RetainedVersion{
 			Resource: step.Input.Resource,
 		}
-		version := Version{
+		version := RetainedVersion{
 			Resource:     step.Input.Resource,
 			DiskIdentity: next.DiskIdentity,
 		}

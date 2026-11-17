@@ -46,7 +46,14 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	service, scoped, principal, _ := transportFixtureRoot(t, false, guest)
 	guest.fail.Store(true)
 	command := []byte(`{"template_id":"fixture","policy":{"mode":"none"}}`)
-	payload := controlHTTP(t, scoped.Endpoint, "POST", "/v1/claim", "transport-token", "failed-delivery", command, true, 202)
+	payload := controlHTTP(t, scoped.Endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Key:    "failed-delivery",
+		Body:   command,
+		Prefer: "respond-async",
+	}, 202)
 	var accepted types.Operation
 	if err := json.Unmarshal(payload, &accepted); err != nil {
 		t.Fatal(err)
@@ -75,12 +82,22 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	}
 	var persisted []byte
 	for attempt := 0; attempt < 2; attempt++ {
-		payload = controlHTTP(t, scoped.Endpoint, "POST", "/v1/claim", "transport-token", "failed-delivery", command, false, 500)
+		payload = controlHTTP(t, scoped.Endpoint, contractRequest{
+			Method: "POST",
+			Path:   "/v1/claim",
+			Token:  "transport-token",
+			Key:    "failed-delivery",
+			Body:   command,
+		}, 500)
 		var failure types.ApiError
 		if err = json.Unmarshal(payload, &failure); err != nil || !reflect.DeepEqual(&failure, view.Error) {
 			t.Fatal("synchronous retry changed the failure", failure, err)
 		}
-		payload = controlHTTP(t, scoped.Endpoint, "GET", "/v1/operations/"+accepted.ID, "transport-token", "", nil, false, 200)
+		payload = controlHTTP(t, scoped.Endpoint, contractRequest{
+			Method: "GET",
+			Path:   "/v1/operations/" + accepted.ID,
+			Token:  "transport-token",
+		}, 200)
 		if bytes.Contains(payload, []byte(privatePath)) || bytes.Contains(payload, []byte("private-host-input")) {
 			t.Fatal("HTTP operation leaked a private diagnostic")
 		}

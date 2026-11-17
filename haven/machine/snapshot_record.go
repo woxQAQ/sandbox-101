@@ -29,9 +29,9 @@ type SnapshotRecord struct {
 	Manifest       *Manifest `json:"manifest,omitempty"`
 }
 
-// Source retains immutable provenance without importing a resource workflow.
+// SnapshotSource retains immutable provenance without importing a resource workflow.
 // The application must verify the original capture and current responsibility.
-type Source struct {
+type SnapshotSource struct {
 	Snapshot         SnapshotRecord    `json:"snapshot"`
 	CaptureOperation string            `json:"capture_operation"`
 	CaptureHash      string            `json:"capture_hash"`

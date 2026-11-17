@@ -68,7 +68,7 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	var source *machine.Source
+	var source *machine.SnapshotSource
 	if spec.SnapshotID != "" {
 		captured, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, spec.TenantID, spec.SnapshotID)
 		if err != nil {
@@ -131,16 +131,22 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 		MAC:    mac,
 		Role:   "cold",
 	}
-	request := machine.ColdRequest{
+	request := machine.FreshRequest{
 		TenantID:   spec.TenantID,
 		Key:        parent.ID + ":cold",
 		TemplateID: spec.ID,
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request machine.ColdRequest
+		Request machine.FreshRequest
 	}{"claim", request})
-	child, err := service.provisioning.AdmitRaw(ctx, spec.TenantID, request.Key, frozen, operation.Digest(frozen), input.Template, manifest, nil, RawTarget{
+	child, err := service.provisioning.AdmitRaw(ctx, ProvisionRequest{
+		TenantID: spec.TenantID,
+		Key:      request.Key,
+		Frozen:   frozen,
+		Template: input.Template,
+		Image:    manifest,
+	}, RawTarget{
 		NewSandboxID: input.SandboxID,
 		Budget: &quota.SlotBudget{
 			Kind:  "build_slot",
@@ -216,7 +222,7 @@ func (service *Supply) admitTemplatePut(ctx context.Context, parent operation.Re
 	}); err != nil {
 		return operation.Record{}, err
 	}
-	if err = reservePublication(ctx, tx, input.Template, input.Previous, parent.ID); err != nil {
+	if err = input.Template.reservePublication(ctx, tx, input.Previous, parent.ID); err != nil {
 		return operation.Record{}, err
 	}
 	if err = service.publishTemplate(ctx, tx, SupplyStep{

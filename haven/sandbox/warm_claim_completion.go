@@ -16,7 +16,7 @@ import (
 )
 
 func RetireWarmClaimLease(ctx context.Context, tx *sql.Tx, parent WarmClaimStep) error {
-	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.Pool.Template.TenantID, machine.Lease{
+	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.Pool.Template.TenantID, machine.SourceLease{
 		SnapshotID:  parent.Input.Restore.Snapshot.ID,
 		OperationID: parent.OperationID,
 		StepKey:     "warm_claim",

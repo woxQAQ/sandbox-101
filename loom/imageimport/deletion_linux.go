@@ -11,24 +11,29 @@ import (
 	"github.com/woxQAQ/haven/loom/host"
 )
 
-func InspectWorkDeletion(ctx context.Context, state, operation string, plan ImageImportPlan, boundary ImageImportBoundary, published bool) (loom.DeletionIntent, error) {
-	var empty loom.DeletionIntent
+// inputDeletionTopology fixes the original staged inputs. Output custody is
+// selected by separate entrypoints after the caller verifies publication state.
+func (work ImportWork) inputDeletionTopology() (loom.ArtifactTopology, error) {
+	var empty loom.ArtifactTopology
+	state, operation, plan, boundary := work.StateRoot, work.OperationID, work.Plan, work.Boundary
 	if err := VerifyImageImportBoundary(state, operation, boundary, false); err != nil {
 		return empty, err
 	}
-	directories := map[string]bool{
-		".":                  true,
-		"input":              true,
-		"input/blobs":        true,
-		"input/blobs/sha256": true,
+	topology := loom.ArtifactTopology{
+		Directories: map[string]bool{
+			".":                  true,
+			"input":              true,
+			"input/blobs":        true,
+			"input/blobs/sha256": true,
+		},
+		Files: map[string]os.FileMode{},
+		Fixed: map[string]loom.FileIdentity{
+			".": boundary.Work,
+		},
 	}
-	fixed := map[string]loom.FileIdentity{
-		".": boundary.Work,
-	}
-	files := map[string]os.FileMode{}
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
-		files["input/oci-layout"] = 0
-		files["input/index.json"] = 0
+		topology.Files["input/oci-layout"] = 0
+		topology.Files["input/index.json"] = 0
 	}
 	for _, digest := range []string{
 		plan.Options.Digest,
@@ -38,42 +43,56 @@ func InspectWorkDeletion(ctx context.Context, state, operation string, plan Imag
 		if err != nil {
 			return empty, err
 		}
-		files[filepath.Join("input", "blobs", "sha256", name)] = 0
+		topology.Files[filepath.Join("input", "blobs", "sha256", name)] = 0
 	}
 	for _, layer := range plan.Layers {
-		files[filepath.Join("input", "blobs", "sha256", layer.Digest[7:])] = 0
+		topology.Files[filepath.Join("input", "blobs", "sha256", layer.Digest[7:])] = 0
 	}
-	if !published {
-		directories["output"] = true
-		fixed["output"] = boundary.Output
-		names := []string{
-			"kernel",
-			"initramfs",
-			"fsmeta.erofs",
-			"fsmeta.map.json",
-			"image.json",
-		}
-		if plan.Options.Materialization == host.MergedOCIEROFSLayout {
-			names = []string{
-				"kernel",
-				"initramfs",
-				"root.erofs",
-				"image.json",
-			}
-		}
-		for _, name := range names {
-			files[filepath.Join("output", name)] = 0
-		}
-	}
-	return loom.InspectOwnedArtifactTopology(ctx, state, boundary.Path, directories, files, fixed)
+	return topology, nil
 }
 
-func InspectUnpublishedImageDeletion(ctx context.Context, state, path string, boundary ImageImportBoundary, proof ImageImportProof) (loom.DeletionIntent, error) {
+func (work ImportWork) InspectPublishedWorkDeletion(ctx context.Context) (loom.DeletionIntent, error) {
+	topology, err := work.inputDeletionTopology()
+	if err != nil {
+		return loom.DeletionIntent{}, err
+	}
+	return loom.InspectOwnedArtifactTopology(ctx, work.StateRoot, work.Boundary.Path, topology)
+}
+
+func (work ImportWork) InspectUnpublishedWorkDeletion(ctx context.Context) (loom.DeletionIntent, error) {
+	topology, err := work.inputDeletionTopology()
+	if err != nil {
+		return loom.DeletionIntent{}, err
+	}
+	topology.Directories["output"] = true
+	topology.Fixed["output"] = work.Boundary.Output
+	names := []string{
+		"kernel",
+		"initramfs",
+		"fsmeta.erofs",
+		"fsmeta.map.json",
+		"image.json",
+	}
+	if work.Plan.Options.Materialization == host.MergedOCIEROFSLayout {
+		names = []string{
+			"kernel",
+			"initramfs",
+			"root.erofs",
+			"image.json",
+		}
+	}
+	for _, name := range names {
+		topology.Files[filepath.Join("output", name)] = 0
+	}
+	return loom.InspectOwnedArtifactTopology(ctx, work.StateRoot, work.Boundary.Path, topology)
+}
+
+func (proof ImageImportProof) InspectUnpublishedDeletion(ctx context.Context, state, path string, boundary ImageImportBoundary) (loom.DeletionIntent, error) {
 	var empty loom.DeletionIntent
 	if path != filepath.Join(state, "images", proof.Manifest.Digest[7:]) {
 		return empty, fmt.Errorf("unpublished image deletion path changed")
 	}
-	if err := VerifyImportedImage(ctx, state, path, boundary, proof); err != nil {
+	if err := proof.Verify(ctx, state, path, boundary); err != nil {
 		return empty, err
 	}
 	files := map[string]os.FileMode{
@@ -82,10 +101,14 @@ func InspectUnpublishedImageDeletion(ctx context.Context, state, path string, bo
 	for name := range proof.Manifest.Files {
 		files[name] = 0
 	}
-	return loom.InspectOwnedArtifactTopology(ctx, state, path, map[string]bool{
-		".": true,
-	}, files, map[string]loom.FileIdentity{
-		".": boundary.Output,
+	return loom.InspectOwnedArtifactTopology(ctx, state, path, loom.ArtifactTopology{
+		Directories: map[string]bool{
+			".": true,
+		},
+		Files: files,
+		Fixed: map[string]loom.FileIdentity{
+			".": boundary.Output,
+		},
 	})
 }
 
@@ -136,14 +159,18 @@ func InspectCacheDeletion(ctx context.Context, state string, witness ImageCacheW
 	if err := VerifyCacheWitness(ctx, state, witness); err != nil {
 		return empty, err
 	}
-	return loom.InspectOwnedArtifactTopology(ctx, state, witness.Path, map[string]bool{
-		".": true,
-	}, map[string]os.FileMode{
-		"layer.erofs": 0,
-		"layer.json":  0,
-	}, map[string]loom.FileIdentity{
-		".":           witness.Directory,
-		"layer.erofs": witness.Data,
-		"layer.json":  witness.Receipt,
+	return loom.InspectOwnedArtifactTopology(ctx, state, witness.Path, loom.ArtifactTopology{
+		Directories: map[string]bool{
+			".": true,
+		},
+		Files: map[string]os.FileMode{
+			"layer.erofs": 0,
+			"layer.json":  0,
+		},
+		Fixed: map[string]loom.FileIdentity{
+			".":           witness.Directory,
+			"layer.erofs": witness.Data,
+			"layer.json":  witness.Receipt,
+		},
 	})
 }

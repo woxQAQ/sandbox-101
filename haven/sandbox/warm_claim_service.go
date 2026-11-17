@@ -22,6 +22,12 @@ type WarmClaimGuards interface {
 }
 
 type WarmClaimDependencies struct {
+	Guards       WarmClaimGuards
+	Gate         execution.AdmissionGate
+	Workers      *execution.Workers
+	Registry     *access.Registry
+	Proofs       machine.ResourceProofs
+	Committer    *operation.Committer
 	Activations  *Activations
 	Provisioning *VMProvisioning
 	Deletion     *machine.VMDeletion
@@ -49,7 +55,7 @@ type WarmClaims struct {
 	committer    *operation.Committer
 }
 
-func NewWarmClaims(state *store.State, guards WarmClaimGuards, gate execution.AdmissionGate, workers *execution.Workers, registry *access.Registry, proofs machine.ResourceProofs, dependencies WarmClaimDependencies, fault func(string) error, committer *operation.Committer) *WarmClaims {
+func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault func(string) error) *WarmClaims {
 	return &WarmClaims{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -57,19 +63,20 @@ func NewWarmClaims(state *store.State, guards WarmClaimGuards, gate execution.Ad
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          workers.Context(),
-		admission:    guards.Admission(),
-		gate:         gate,
-		guards:       guards,
-		workers:      workers,
-		access:       registry,
-		proofs:       proofs,
+		ctx:          dependencies.Workers.Context(),
+		admission:    dependencies.Guards.Admission(),
+		gate:         dependencies.Gate,
+		guards:       dependencies.Guards,
+		workers:      dependencies.Workers,
+		access:       dependencies.Registry,
+		proofs:       dependencies.Proofs,
 		activations:  dependencies.Activations,
 		provisioning: dependencies.Provisioning,
 		deletion:     dependencies.Deletion,
 		policies:     dependencies.Policies,
 		links:        dependencies.Links,
-		faultPoint:   fault, committer: committer,
+		faultPoint:   fault,
+		committer:    dependencies.Committer,
 	}
 }
 

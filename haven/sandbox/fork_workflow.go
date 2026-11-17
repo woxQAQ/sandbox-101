@@ -14,6 +14,7 @@ import (
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply"
 )
 
 func (service *Forks) runForkGroup(step ForkStep) error {
@@ -124,7 +125,7 @@ func (service *Forks) captureForkSource(step *ForkStep, link machine.ResourceLin
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.State, step.State) {
 		return fmt.Errorf("%w: fork capture handoff changed", errs.ErrConflict)
 	}
-	if err = machine.PinSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.Lease{
+	if err = machine.PinSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
 		SnapshotID:  source.Snapshot.ID,
 		OperationID: step.OperationID,
 		StepKey:     "fork_group",
@@ -217,12 +218,22 @@ func (service *Forks) allocateFork(step *ForkStep) error {
 			Command:  step.Input.Command,
 			Settings: step.Input.Settings,
 		}
-		child, err := service.provisioning.AdmitIn(service.ctx, tx, request.TenantID, request.Key, frozen, operation.Digest(frozen), step.Input.Template, manifest, &source, nil, &ProvisionTarget{
-			Sandbox:       target,
-			SlotOperation: step.OperationID,
-			SlotHolder:    forkSlotHolder(step.OperationID, target.ID),
-			Parent:        parent,
-			Activation:    activation,
+		child, err := service.provisioning.AdmitIn(service.ctx, tx, ProvisionAdmission{
+			Request: supply.ProvisionRequest{
+				TenantID: request.TenantID,
+				Key:      request.Key,
+				Frozen:   frozen,
+				Template: step.Input.Template,
+				Image:    manifest,
+				Restore:  &source,
+			},
+			Target: &ProvisionTarget{
+				Sandbox:       target,
+				SlotOperation: step.OperationID,
+				SlotHolder:    forkSlotHolder(step.OperationID, target.ID),
+				Parent:        parent,
+				Activation:    activation,
+			},
 		}, free)
 		if err != nil {
 			return err
@@ -301,7 +312,10 @@ func (service *Forks) completeFork(step ForkStep) error {
 					return fmt.Errorf("%w: fork retirement has no successful child receipt", errs.ErrManualRecovery)
 				}
 				if link.Kind == "discard" {
-					if err = retireForkDiscard(service.ctx, tx, step, index, link); err != nil {
+					if err = (forkCleanupAdmission{
+						Group: step,
+						Index: index,
+					}).retireDiscard(service.ctx, tx, link); err != nil {
 						return err
 					}
 				}
@@ -328,7 +342,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 		}
 	}
 	if step.State.Snapshot != nil {
-		if err = machine.ReleaseSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.Lease{
+		if err = machine.ReleaseSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
 			SnapshotID:  step.State.Snapshot.Snapshot.ID,
 			OperationID: step.OperationID,
 			StepKey:     "fork_group",

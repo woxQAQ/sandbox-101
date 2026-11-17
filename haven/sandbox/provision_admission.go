@@ -8,119 +8,35 @@ import (
 	"path/filepath"
 	"reflect"
 
-	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/supply"
 )
 
 // AdmitIn joins resource intent and all charges to the caller's transaction.
 // A batch commits every destination before dispatching any effect.
-func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID, key string, frozen []byte, hash string, selected supply.TemplateRecord, manifest host.ImageManifest, restore *machine.Source, claim *ClaimAdmission, target *ProvisionTarget, free int64) (operation.Record, error) {
+func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
 	var empty operation.Record
-	request := machine.ColdRequest{
-		TenantID:   tenantID,
-		Key:        key,
-		TemplateID: selected.ID,
+	request := admission.Request
+	tenantID, frozen := request.TenantID, request.Frozen
+	hash := operation.Digest(frozen)
+	selected, manifest, restore := request.Template, request.Image, request.Restore
+	claim, target := admission.Claim, admission.Target
+	if err := service.verifyProvisionSources(ctx, tx, admission); err != nil {
+		return empty, err
 	}
-	if claim != nil {
-		current, err := supply.NewTemplateCatalog(tx).Owned(ctx, tenantID, selected.ID)
-		if err != nil {
-			return empty, err
-		}
-		if !reflect.DeepEqual(current, selected) {
-			return empty, fmt.Errorf("%w: template publication changed during preflight", errs.ErrConflict)
-		}
-	}
-	provisional := false
-	if target != nil {
-		if declared, ok := provisionalTemplate(target.Parent); ok {
-			if !reflect.DeepEqual(declared, selected) {
-				return empty, fmt.Errorf("%w: provisional resource template differs from supply intent", errs.ErrConflict)
-			}
-			provisional = true
-		}
-	}
-	if restore == nil && !provisional {
-		catalog := supply.NewTemplateCatalog(tx)
-		loader := catalog.Cold
-		if claim != nil {
-			loader = catalog.Owned
-		}
-		current, err := loader(ctx, request.TenantID, request.TemplateID)
-		if err != nil {
-			return empty, err
-		}
-		if !reflect.DeepEqual(current, selected) {
-			return empty, fmt.Errorf("%w: template publication changed during preflight", errs.ErrConflict)
-		}
-	} else if restore != nil {
-		current, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, tenantID, restore.Snapshot.ID)
-		if err != nil {
-			return empty, err
-		}
-		if !reflect.DeepEqual(current, *restore) {
-			return empty, fmt.Errorf("%w: snapshot publication changed during preflight", errs.ErrConflict)
-		}
-	}
-	currentImage, err := image.LoadManifest(ctx, tx, selected.Config.Image)
+	allocation, err := service.checkProvisionBudget(ctx, tx, admission, free)
 	if err != nil {
 		return empty, err
 	}
-	if !reflect.DeepEqual(currentImage, manifest) {
-		return empty, fmt.Errorf("%w: image publication changed during preflight", errs.ErrConflict)
-	}
-	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)
-	if err != nil {
-		return empty, err
-	}
-	usage, err := quota.New(tx).Usage(ctx, request.TenantID)
-	if err != nil {
-		return empty, err
-	}
-	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 {
-		return empty, fmt.Errorf("invalid tenant budget")
-	}
-	reuseSlot := target != nil && target.Sandbox.ID != ""
-	budget := quota.SlotBudget{
-		Kind:  "sandbox_slot",
-		Units: 1,
-	}
-	if target != nil && target.Budget != nil {
-		budget = *target.Budget
-	}
-	if (budget.Kind != "sandbox_slot" && budget.Kind != "build_slot") || budget.Units < 0 || budget.Units > 1 {
-		return empty, fmt.Errorf("%w: invalid slot budget", errs.ErrInvalid)
-	}
-	newSlots := budget.Units
-	if reuseSlot {
-		newSlots = 0
-	}
-	if usage.Slots > tenant.MaxSandboxes || newSlots > tenant.MaxSandboxes-usage.Slots || usage.StorageMiB > tenant.MaxStorageMiB || selected.Config.Shape.DiskMiB > tenant.MaxStorageMiB-usage.StorageMiB {
-		return empty, fmt.Errorf("%w: tenant quota exhausted", errs.ErrExhausted)
-	}
-	reserved, err := quota.New(tx).ReservedCapacity(ctx)
-	if err != nil {
-		return empty, err
-	}
+	budget, reuseSlot := allocation.Slot, allocation.ReuseSlot
+	vmBytes, restoreBytes := allocation.VMBytes, allocation.RestoreBytes
 	shape := selected.Config.Shape
-	vmBytes := shape.DiskMiB << 20
-	var restoreBytes int64
-	if restore != nil {
-		vmBytes += shape.MemoryMiB << 20
-		restoreBytes = (shape.MemoryMiB + shape.DiskMiB + 64) << 20
-	}
-	if reserved.Bytes > free || service.capacity.SafetyBytes > free-reserved.Bytes || vmBytes+restoreBytes > free-reserved.Bytes-service.capacity.SafetyBytes || reserved.MemoryMiB > service.capacity.MaxMemoryMiB || shape.MemoryMiB+128 > service.capacity.MaxMemoryMiB-reserved.MemoryMiB || reserved.CPUs > int64(service.capacity.MaxVCPUs) || int64(shape.VCPUs) > int64(service.capacity.MaxVCPUs)-reserved.CPUs {
-		return empty, fmt.Errorf("%w: host reservation exhausted", errs.ErrExhausted)
-	}
 	slot, err := machine.AvailableNetworkSlot(ctx, tx)
 	if err != nil {
 		return empty, err
@@ -179,7 +95,11 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID
 		if restore == nil || !ok || target.SlotOperation == "" || target.SlotHolder == "" || !reflect.DeepEqual(current, target.Sandbox) {
 			return empty, fmt.Errorf("%w: provision target ownership changed", errs.ErrConflict)
 		}
-		failure, err := validator.ValidateProvisionTarget(ctx, tx, current, *restore, target.SlotHolder)
+		failure, err := validator.ValidateProvisionTarget(ctx, tx, ProvisionSlotClaim{
+			Sandbox: current,
+			Source:  *restore,
+			Holder:  target.SlotHolder,
+		})
 		if err != nil {
 			return empty, err
 		}
@@ -198,7 +118,12 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID
 		input.SlotOperation = target.SlotOperation
 		input.SlotAssignment = current.SlotAssignment
 		input.FailureSlotDestination = failure
-		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, accepted, action, resource.VMID, hash); err != nil {
+		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, machine.ResourceAdmission{
+			Child:       accepted,
+			Kind:        action,
+			Candidate:   resource.VMID,
+			RequestHash: hash,
+		}); err != nil {
 			return empty, err
 		}
 	}
@@ -241,7 +166,11 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID
 	}); err != nil {
 		return empty, err
 	}
-	if err = machine.AdmitProvisionIntent(ctx, tx, accepted.ID, action, "", input); err != nil {
+	if err = machine.AdmitProvisionIntent(ctx, tx, machine.ProvisionIntent{
+		OperationID: accepted.ID,
+		Action:      action,
+		Input:       input,
+	}); err != nil {
 		return empty, err
 	}
 	if !reuseSlot {
@@ -274,7 +203,12 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID
 		}
 	}
 	if target != nil && !reuseSlot && target.Parent != nil {
-		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, accepted, action, resource.VMID, hash); err != nil {
+		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, machine.ResourceAdmission{
+			Child:       accepted,
+			Kind:        action,
+			Candidate:   resource.VMID,
+			RequestHash: hash,
+		}); err != nil {
 			return empty, err
 		}
 	}
@@ -348,7 +282,7 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, tenantID
 		}); err != nil {
 			return empty, err
 		}
-		if err = machine.PinSnapshotSource(ctx, tx, tenantID, machine.Lease{
+		if err = machine.PinSnapshotSource(ctx, tx, tenantID, machine.SourceLease{
 			SnapshotID:  restore.Snapshot.ID,
 			OperationID: accepted.ID,
 			StepKey:     "resource",

@@ -31,10 +31,13 @@ func (proofs ResourceProofs) Snapshots() SnapshotProofs {
 }
 
 func (proofs ResourceProofs) GenerationHistory(ctx context.Context, tx *sql.Tx, step ResourceStep) ([]ResourceStep, error) {
-	return proofs.GenerationHistoryAt(ctx, tx, step, "active_use", "sandbox:"+step.Input.SandboxID)
+	return proofs.GenerationHistoryAt(ctx, tx, step, quota.Holder{
+		Kind: "active_use",
+		ID:   "sandbox:" + step.Input.SandboxID,
+	})
 }
 
-func (proofs ResourceProofs) GenerationHistoryAt(ctx context.Context, tx *sql.Tx, step ResourceStep, holderKind, holderID string) ([]ResourceStep, error) {
+func (proofs ResourceProofs) GenerationHistoryAt(ctx context.Context, tx *sql.Tx, step ResourceStep, holder quota.Holder) ([]ResourceStep, error) {
 	seen := map[string]bool{
 		step.OperationID: true,
 	}
@@ -54,7 +57,7 @@ func (proofs ResourceProofs) GenerationHistoryAt(ctx context.Context, tx *sql.Tx
 		if prior.Hash != reference.InputHash || prior.Status != "succeeded" || prior.State.Phase != "complete" || prior.State.Witness == "" || prior.State.Witness != prior.Input.Resource.Instance || prior.Candidate != step.Candidate || prior.Input.SandboxID != step.Input.SandboxID || prior.Input.TenantID != step.Input.TenantID || prior.Input.Resource.Config.Image != step.Input.Resource.Config.Image || !reflect.DeepEqual(prior.Input.Resource.Config.Shape, step.Input.Resource.Config.Shape) || prior.Input.Resource.NetworkToken != step.Input.Resource.NetworkToken || prior.Input.Resource.Slot != step.Input.Resource.Slot || prior.Input.RuntimeBytes != step.Input.RuntimeBytes || prior.Input.SlotOperation != step.Input.SlotOperation {
 			return nil, fmt.Errorf("retained generation lineage changed")
 		}
-		if err = proofs.VerifyGenerationAt(ctx, tx, prior, holderKind, holderID); err != nil {
+		if err = proofs.VerifyGenerationAt(ctx, tx, prior, holder); err != nil {
 			return nil, err
 		}
 		history = append(history, prior)
@@ -63,10 +66,13 @@ func (proofs ResourceProofs) GenerationHistoryAt(ctx context.Context, tx *sql.Tx
 }
 
 func (proofs ResourceProofs) VerifyGeneration(ctx context.Context, tx *sql.Tx, source ResourceStep) error {
-	return proofs.VerifyGenerationAt(ctx, tx, source, "active_use", "sandbox:"+source.Input.SandboxID)
+	return proofs.VerifyGenerationAt(ctx, tx, source, quota.Holder{
+		Kind: "active_use",
+		ID:   "sandbox:" + source.Input.SandboxID,
+	})
 }
 
-func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx, source ResourceStep, holderKind, holderID string) error {
+func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx, source ResourceStep, holder quota.Holder) error {
 	if err := proofs.snapshots.ValidateResource(source); err != nil {
 		return err
 	}
@@ -74,21 +80,27 @@ func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx,
 		return fmt.Errorf("completed generation lacks historical witness")
 	}
 
-	body, err := VersionHistory(ctx, tx, source.OperationID, source.Candidate, source.Key)
+	body, err := VersionHistory(ctx, tx, GenerationIdentity{
+		VMID:        source.Candidate,
+		OperationID: source.OperationID,
+	}, source.Key)
 	if err != nil {
 		return err
 	}
-	var version Version
+	var version RetainedVersion
 	if err := json.Unmarshal(body, &version); err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(version, Version{
+	if !reflect.DeepEqual(version, RetainedVersion{
 		Resource:     source.Input.Resource,
 		DiskIdentity: source.State.DiskIdentity,
 	}) {
 		return fmt.Errorf("retained version identity changed")
 	}
-	if body, err = InstanceHistory(ctx, tx, source.State.Witness, source.Candidate, source.OperationID); err != nil {
+	if body, err = InstanceHistory(ctx, tx, GenerationIdentity{
+		VMID:        source.Candidate,
+		OperationID: source.OperationID,
+	}, source.State.Witness); err != nil {
 		return err
 	}
 	var instance VMRecord
@@ -103,7 +115,7 @@ func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx,
 		Kind:            "vm_disk",
 		Key:             source.Input.DiskKey,
 		SourceOperation: source.OperationID,
-	}, source.Input.Resource.Config.Shape.DiskMiB, holderKind, holderID)
+	}, source.Input.Resource.Config.Shape.DiskMiB, holder)
 	if err != nil || count != 1 {
 		return fmt.Errorf("retained generation disk responsibility missing: %v", err)
 	}
@@ -113,8 +125,8 @@ func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-func (proofs ResourceProofs) CleanupGenerations(ctx context.Context, tx *sql.Tx, source ResourceStep, holderKind, holderID string) ([]ResourceStep, error) {
-	history, err := proofs.GenerationHistoryAt(ctx, tx, source, holderKind, holderID)
+func (proofs ResourceProofs) CleanupGenerations(ctx context.Context, tx *sql.Tx, source ResourceStep, holder quota.Holder) ([]ResourceStep, error) {
+	history, err := proofs.GenerationHistoryAt(ctx, tx, source, holder)
 	if err != nil {
 		return nil, err
 	}

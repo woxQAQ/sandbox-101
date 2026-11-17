@@ -6,7 +6,6 @@ import (
 
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/store"
 )
 
@@ -15,7 +14,8 @@ type StopHistory struct {
 	OwnershipHistory
 }
 
-func (StopHistory) VerifyStopParent(ctx context.Context, query store.DBTX, step machine.StopStep, source machine.ResourceStep, record ownership.Sandbox) (string, error) {
+func (StopHistory) VerifyStopParent(ctx context.Context, query store.DBTX, proof machine.StopParentProof) (string, error) {
+	step, source, record := proof.Step, proof.Source, proof.Sandbox
 	parent, err := LoadLifecycle(ctx, query, step.Input.Lifecycle)
 	if err != nil {
 		return "", err

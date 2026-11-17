@@ -37,6 +37,8 @@ just smoke
 
 Binaries go to `bin/{haven,havenctl,loomctl}`. Test, vet and race recipes cover Haven, Loom, SDK, types, common, tools and protocol modules; workspace lint also includes operator. `just test-race` retains the 10-minute per-package timeout. `just integration` builds the actual Rust Unix fixture and tests Haven/SQLite, HTTP and guest RPC. `just smoke` starts one real daemon in private state and checks both CLIs, writer exclusion, configuration, restart, GC and offline backup. Neither boots a VM.
 
+`just check-funcparams` runs the pinned Go function parameter detector from the tools module. It reports functions with at least five parameters across the workspace, including operator and tests, while excluding generated protobuf and sqlc code. Findings exit with status 1; scan errors exit with status 2. This is an independent check; extra detector flags can be passed as `just check-funcparams -min 8 -output json`.
+
 Haven's versioned SQL migrations are the shared input for runtime initialization and sqlc. After changing domain SQL, run `just generate-sql` and `just check-sql`; generated bindings are checked in, so ordinary builds do not need sqlc. The check generates in a private temporary directory and detects missing, changed and unexpected files. See [store migrations](haven/store/README.md) for version and transaction boundaries.
 
 The architecture gate checks the compiled import graph and Go AST, including controller dependencies, root facade removal and raw SQL boundaries. Its negative fixtures verify rejection; reviewed SQLite maintenance exceptions are listed in the store contract.

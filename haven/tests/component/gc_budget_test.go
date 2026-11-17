@@ -45,7 +45,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, root, "bounded", types.GCOptions{
+	report, err := service.GC.Collect(ctx, root, "bounded", types.GCOptions{
 		Batch:  1,
 		Budget: 20 * time.Second,
 	})
@@ -62,7 +62,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 	}
 	canceled, stop := context.WithCancel(ctx)
 	stop()
-	if _, err = service.GarbageCollection.CollectGarbage(canceled, root, "canceled", types.GCOptions{
+	if _, err = service.GC.Collect(canceled, root, "canceled", types.GCOptions{
 		Batch: 1,
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled collector continued admission", err)
@@ -70,7 +70,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM operations").Scan(&after); err != nil || before != after {
 		t.Fatal("canceled collector wrote an intent", before, after, err)
 	}
-	report, err = service.GarbageCollection.CollectGarbage(ctx, root, "rest", types.GCOptions{
+	report, err = service.GC.Collect(ctx, root, "rest", types.GCOptions{
 		Budget: 20 * time.Second,
 	})
 	if err != nil || len(report.Collected) != 1 {

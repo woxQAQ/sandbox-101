@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/collection"
 	"github.com/woxQAQ/haven/execution"
+	"github.com/woxQAQ/haven/gc"
 	image "github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom/imageimport"
@@ -27,7 +27,7 @@ type ManagementDependencies struct {
 	Availability  *execution.Availability
 	Operations    *operation.Operations
 	Images        *image.Images
-	Collection    *collection.GarbageCollection
+	GC            *gc.Collector
 	SupplyCleanup *supply.SupplyCleanup
 }
 
@@ -37,7 +37,7 @@ type Management struct {
 	availability  *execution.Availability
 	operations    *operation.Operations
 	images        *image.Images
-	collection    *collection.GarbageCollection
+	collector     *gc.Collector
 	supplyCleanup *supply.SupplyCleanup
 }
 
@@ -47,7 +47,7 @@ func NewManagement(metadata NodeMetadata, dependencies ManagementDependencies) *
 		availability:  dependencies.Availability,
 		operations:    dependencies.Operations,
 		images:        dependencies.Images,
-		collection:    dependencies.Collection,
+		collector:     dependencies.GC,
 		supplyCleanup: dependencies.SupplyCleanup,
 	}
 }
@@ -113,7 +113,7 @@ func (service *Management) Manage(ctx context.Context, principal authorization.P
 		if request.GC == nil || request.Import != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: gc requires only gc options", errs.ErrInvalid)
 		}
-		report, err := service.collection.CollectGarbage(ctx, principal, request.Key, *request.GC)
+		report, err := service.collector.Collect(ctx, principal, request.Key, *request.GC)
 		response.GC = &report
 		return response, err
 	case "supply_cleanup":

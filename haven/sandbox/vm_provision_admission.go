@@ -20,17 +20,20 @@ import (
 
 // AdmitCold freezes a tenant-owned template and all resource identities with its
 // slot, disk budget and source reference. Delivery remains separately fenced.
-func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.ColdRequest) (operation.Record, error) {
+func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
 	var empty operation.Record
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.TemplateID == "" {
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request machine.ColdRequest
+		Request machine.FreshRequest
 	}{"claim", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -53,7 +56,15 @@ func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.Co
 	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	return service.Admit(ctx, request.TenantID, request.Key, frozen, hash, selected, manifest, nil, nil, nil)
+	return service.Admit(ctx, ProvisionAdmission{
+		Request: supply.ProvisionRequest{
+			TenantID: request.TenantID,
+			Key:      request.Key,
+			Frozen:   frozen,
+			Template: selected,
+			Image:    manifest,
+		},
+	})
 }
 
 func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
@@ -66,7 +77,10 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 		Request machine.CloneRequest
 	}{"clone", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -100,14 +114,26 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	return service.Admit(ctx, request.TenantID, request.Key, frozen, hash, supply.TemplateRecord{
-		TenantID: request.TenantID,
-		Config:   config,
-	}, manifest, &source, nil, nil)
+	return service.Admit(ctx, ProvisionAdmission{
+		Request: supply.ProvisionRequest{
+			TenantID: request.TenantID,
+			Key:      request.Key,
+			Frozen:   frozen,
+			Template: supply.TemplateRecord{
+				TenantID: request.TenantID,
+				Config:   config,
+			},
+			Image:   manifest,
+			Restore: &source,
+		},
+	})
 }
 
-func (service *VMProvisioning) Admit(ctx context.Context, tenantID, key string, frozen []byte, hash string, selected supply.TemplateRecord, manifest host.ImageManifest, restore *machine.Source, claim *ClaimAdmission, target *ProvisionTarget) (operation.Record, error) {
+func (service *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
 	var empty operation.Record
+	request, claim := admission.Request, admission.Claim
+	tenantID, key := request.TenantID, request.Key
+	hash := operation.Digest(request.Frozen)
 	free, err := loom.FreeBytes(service.store.Directory)
 	if err != nil {
 		return empty, err
@@ -133,7 +159,10 @@ func (service *VMProvisioning) Admit(ctx context.Context, tenantID, key string, 
 			return empty, lookup
 		}
 	}
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", tenantID, key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   tenantID,
+	}, key, hash); found || err != nil {
 		if claim != nil && found && err == nil && !operation.Terminal(cached.Status) {
 			service.access.SetOperationSecrets(cached.ID, claim.Secrets)
 		}
@@ -142,7 +171,7 @@ func (service *VMProvisioning) Admit(ctx context.Context, tenantID, key string, 
 		}
 		return cached, err
 	}
-	accepted, err := service.AdmitIn(ctx, tx, tenantID, key, frozen, hash, selected, manifest, restore, claim, target, free)
+	accepted, err := service.AdmitIn(ctx, tx, admission, free)
 	if err != nil {
 		return empty, err
 	}

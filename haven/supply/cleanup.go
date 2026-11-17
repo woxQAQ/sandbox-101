@@ -38,7 +38,18 @@ type SupplyCleanup struct {
 	faultPoint func(string) error
 }
 
-func NewSupplyCleanup(state *store.State, guards SupplyCleanupGuards, gate execution.AdmissionGate, workers *execution.Workers, proofs machine.ResourceProofs, stops *machine.VMStops, captures *machine.CaptureDiscard, deletion *machine.VMDeletion, fault func(string) error, ownership CleanupOwnershipReader) *SupplyCleanup {
+type SupplyCleanupDependencies struct {
+	Guards    SupplyCleanupGuards
+	Gate      execution.AdmissionGate
+	Workers   *execution.Workers
+	Proofs    machine.ResourceProofs
+	Stops     *machine.VMStops
+	Captures  *machine.CaptureDiscard
+	Deletion  *machine.VMDeletion
+	Ownership CleanupOwnershipReader
+}
+
+func NewSupplyCleanup(state *store.State, dependencies SupplyCleanupDependencies, fault func(string) error) *SupplyCleanup {
 	return &SupplyCleanup{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -46,17 +57,17 @@ func NewSupplyCleanup(state *store.State, guards SupplyCleanupGuards, gate execu
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        workers.Context(),
+		ctx:        dependencies.Workers.Context(),
 		nodeID:     state.Identity().Identity,
-		admission:  guards.Admission(),
-		gate:       gate,
-		guards:     guards,
-		workers:    workers,
-		proofs:     proofs,
-		stops:      stops,
-		captures:   captures,
-		deletion:   deletion,
-		ownership:  ownership,
+		admission:  dependencies.Guards.Admission(),
+		gate:       dependencies.Gate,
+		guards:     dependencies.Guards,
+		workers:    dependencies.Workers,
+		proofs:     dependencies.Proofs,
+		stops:      dependencies.Stops,
+		captures:   dependencies.Captures,
+		deletion:   dependencies.Deletion,
+		ownership:  dependencies.Ownership,
 		faultPoint: fault,
 	}
 }

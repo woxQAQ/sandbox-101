@@ -43,7 +43,11 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Bind(context.Background(), "s", "t", base, Policy{
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "s",
+		TenantID:  "t",
+		VSockPath: base,
+	}, Policy{
 		Mode: "relay",
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -63,7 +67,11 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if err := other.Bind(context.Background(), "s", "t", base, Policy{
+	if err := other.Bind(context.Background(), BindingTarget{
+		SandboxID: "s",
+		TenantID:  "t",
+		VSockPath: base,
+	}, Policy{
 		Mode: "relay",
 	}, nil); err == nil {
 		t.Fatal("replaced a live socket")

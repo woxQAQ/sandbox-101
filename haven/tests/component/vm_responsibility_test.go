@@ -29,7 +29,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	var workers sync.WaitGroup
 	for range 16 {
 		workers.Go(func() {
-			operation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+			operation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "concurrent",
 				TemplateID: "cold",
@@ -66,7 +66,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 		}
 		return nil
 	})
-	operation, err := service.VMProvisioning.AdmitCold(ctx, machine.ColdRequest{
+	operation, err := service.VMProvisioning.AdmitCold(ctx, machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "cancel-wait",
 		TemplateID: "cold",
@@ -125,7 +125,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 			if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM operation_steps").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "denied",
 				TemplateID: "cold",

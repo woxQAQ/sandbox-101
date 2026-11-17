@@ -42,7 +42,14 @@ func TestLayerValidationRejectsTraversalSpecialFilesAndBounds(t *testing.T) {
 		},
 	} {
 		file, diff := layerFixture(t, h)
-		if _, _, err := validateLayer(file, v1.MediaTypeImageLayer, diff, 1<<20, 100); err == nil {
+		if _, _, err := validateLayer(layerInput{
+			Path:      file,
+			MediaType: v1.MediaTypeImageLayer,
+			DiffID:    diff,
+		}, layerLimits{
+			MaxBytes: 1 << 20,
+			MaxFiles: 100,
+		}); err == nil {
 			t.Fatalf("unsafe header accepted %+v", h)
 		}
 	}
@@ -51,18 +58,36 @@ func TestLayerValidationRejectsTraversalSpecialFilesAndBounds(t *testing.T) {
 		Typeflag: tar.TypeReg,
 		Size:     1024,
 	})
-	if _, _, err := validateLayer(file, v1.MediaTypeImageLayer, diff, 100, 100); err == nil {
+	if _, _, err := validateLayer(layerInput{
+		Path:      file,
+		MediaType: v1.MediaTypeImageLayer,
+		DiffID:    diff,
+	}, layerLimits{
+		MaxBytes: 100,
+		MaxFiles: 100,
+	}); err == nil {
 		t.Fatal("expanded-byte bound ignored")
 	}
-	if _, _, err := validateLayer(file, v1.MediaTypeImageLayer, diff, 1<<20, 0); err == nil {
+	if _, _, err := validateLayer(layerInput{
+		Path:      file,
+		MediaType: v1.MediaTypeImageLayer,
+		DiffID:    diff,
+	}, layerLimits{
+		MaxBytes: 1 << 20,
+		MaxFiles: 0,
+	}); err == nil {
 		t.Fatal("file count bound ignored")
 	}
 	if _, _, err := validateLayer(
-		file,
-		v1.MediaTypeImageLayer,
-		"sha256:"+string(bytes.Repeat([]byte("0"), 64)),
-		1<<20,
-		100,
+		layerInput{
+			Path:      file,
+			MediaType: v1.MediaTypeImageLayer,
+			DiffID:    "sha256:" + string(bytes.Repeat([]byte("0"), 64)),
+		},
+		layerLimits{
+			MaxBytes: 1 << 20,
+			MaxFiles: 100,
+		},
 	); err == nil {
 		t.Fatal("diff_id mismatch accepted")
 	}
@@ -99,45 +124,61 @@ func TestLayerValidationKeepsSafeLinksAndWhiteouts(t *testing.T) {
 			Mode:     0o777,
 		},
 	)
-	if _, n, err := validateLayer(file, v1.MediaTypeImageLayer, diff, 1<<20, 100); err != nil || n != 6 {
+	if _, n, err := validateLayer(layerInput{
+		Path:      file,
+		MediaType: v1.MediaTypeImageLayer,
+		DiffID:    diff,
+	}, layerLimits{
+		MaxBytes: 1 << 20,
+		MaxFiles: 100,
+	}); err != nil || n != 6 {
 		t.Fatalf("valid layer rejected n=%d %v", n, err)
 	}
 }
 
 func TestLayerValidationPreservesLinuxBackslashNames(t *testing.T) {
-	for _, merged := range []bool{
-		false,
-		true,
+	file, diff := layerFixture(
+		t,
+		&tar.Header{
+			Name:     `system-systemd\x2dcryptsetup.slice`,
+			Typeflag: tar.TypeReg,
+			Mode:     0o644,
+		},
+		&tar.Header{
+			Name:     "alias",
+			Typeflag: tar.TypeLink,
+			Linkname: `system-systemd\x2dcryptsetup.slice`,
+			Mode:     0o644,
+		},
+	)
+	if _, n, err := validateLayer(layerInput{
+		Path:      file,
+		MediaType: v1.MediaTypeImageLayer,
+		DiffID:    diff,
+	}, layerLimits{
+		MaxBytes: 1 << 20,
+		MaxFiles: 10,
+	}); err != nil || n != 2 {
+		t.Fatalf("valid Linux name rejected: entries=%d %v", n, err)
+	}
+	for _, name := range []string{
+		`../system\x2dslice`,
+		`safe/../system\x2dslice`,
+		`/system\x2dslice`,
 	} {
-		file, diff := layerFixture(
-			t,
-			&tar.Header{
-				Name:     `system-systemd\x2dcryptsetup.slice`,
-				Typeflag: tar.TypeReg,
-				Mode:     0o644,
-			},
-			&tar.Header{
-				Name:     "alias",
-				Typeflag: tar.TypeLink,
-				Linkname: `system-systemd\x2dcryptsetup.slice`,
-				Mode:     0o644,
-			},
-		)
-		if _, n, err := validateLayerFor(file, v1.MediaTypeImageLayer, diff, 1<<20, 10, merged); err != nil || n != 2 {
-			t.Fatalf("valid Linux name rejected (merged=%v): entries=%d %v", merged, n, err)
-		}
-		for _, name := range []string{
-			`../system\x2dslice`,
-			`safe/../system\x2dslice`,
-			`/system\x2dslice`,
-		} {
-			file, diff := layerFixture(t, &tar.Header{
-				Name:     name,
-				Typeflag: tar.TypeReg,
-			})
-			if _, _, err := validateLayerFor(file, v1.MediaTypeImageLayer, diff, 1<<20, 10, merged); err == nil {
-				t.Fatalf("traversal accepted: %q", name)
-			}
+		file, diff := layerFixture(t, &tar.Header{
+			Name:     name,
+			Typeflag: tar.TypeReg,
+		})
+		if _, _, err := validateLayer(layerInput{
+			Path:      file,
+			MediaType: v1.MediaTypeImageLayer,
+			DiffID:    diff,
+		}, layerLimits{
+			MaxBytes: 1 << 20,
+			MaxFiles: 10,
+		}); err == nil {
+			t.Fatalf("traversal accepted: %q", name)
 		}
 	}
 }

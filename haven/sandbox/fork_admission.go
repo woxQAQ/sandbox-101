@@ -319,11 +319,11 @@ func (parent *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error 
 	}); err != nil {
 		return err
 	}
-	if err := reserveForkTargets(ctx, tx, parent.Parent, input, parent.Free, parent.capacity); err != nil {
+	if err := parent.reserveTargets(ctx, tx); err != nil {
 		return err
 	}
 	if input.Snapshot != nil {
-		return machine.PinSnapshotSource(ctx, tx, input.OwnerTenantID, machine.Lease{
+		return machine.PinSnapshotSource(ctx, tx, input.OwnerTenantID, machine.SourceLease{
 			SnapshotID:  input.Snapshot.Snapshot.ID,
 			OperationID: parent.Parent.ID,
 			StepKey:     "fork_group",

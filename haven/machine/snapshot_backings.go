@@ -8,18 +8,22 @@ import (
 
 	"github.com/woxQAQ/haven/machine/internal/dbgen"
 	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/store"
 )
 
 // Backings enumerates explicit retained users. No name or current VM query
 // substitutes for their immutable material and lease handoff proof.
-func (proofs SnapshotProofs) Backings(ctx context.Context, tx *sql.Tx, source Source) ([]ResourceStep, error) {
+func (proofs SnapshotProofs) Backings(ctx context.Context, tx *sql.Tx, source SnapshotSource) ([]ResourceStep, error) {
 	holders, err := quota.New(tx).ResourceHolderIDs(ctx, "snapshot", source.Snapshot.ID, "backing")
 	if err != nil {
 		return nil, err
 	}
 	var result []ResourceStep
 	for _, holder := range holders {
-		id, err := dbgen.New(tx).RestoreBackingOperation(ctx, dbgen.RestoreBackingOperationParams{HolderID: holder, SnapshotID: source.Snapshot.ID})
+		id, err := dbgen.New(tx).RestoreBackingOperation(ctx, dbgen.RestoreBackingOperationParams{
+			HolderID:   holder,
+			SnapshotID: source.Snapshot.ID,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -39,4 +43,8 @@ func (proofs SnapshotProofs) Backings(ctx context.Context, tx *sql.Tx, source So
 		result = append(result, step)
 	}
 	return result, nil
+}
+
+func BackingRoots(ctx context.Context, query store.DBTX) ([]string, error) {
+	return dbgen.New(query).ListBackingPaths(ctx)
 }

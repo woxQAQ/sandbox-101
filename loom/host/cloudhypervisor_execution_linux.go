@@ -118,8 +118,13 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 				},
 			},
 		}
-		if _, err = b.api(ctx, r, "PUT", "vm.restore", body, []int{
-			int(tap.Fd()),
+		if _, err = b.api(ctx, r, vmmRequest{
+			Method:   "PUT",
+			Endpoint: "vm.restore",
+			Payload:  body,
+			FDs: []int{
+				int(tap.Fd()),
+			},
 		}); err != nil {
 			return err
 		}
@@ -176,7 +181,11 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 		},
 	}
 	if !obs.Configured {
-		if _, err = b.api(ctx, r, "PUT", "vm.create", body, nil); err != nil {
+		if _, err = b.api(ctx, r, vmmRequest{
+			Method:   "PUT",
+			Endpoint: "vm.create",
+			Payload:  body,
+		}); err != nil {
 			return err
 		}
 	}
@@ -186,7 +195,10 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 	if err = b.arm(r); err != nil {
 		return err
 	}
-	_, err = b.api(ctx, r, "PUT", "vm.boot", nil, nil)
+	_, err = b.api(ctx, r, vmmRequest{
+		Method:   "PUT",
+		Endpoint: "vm.boot",
+	})
 	return err
 }
 
@@ -194,7 +206,10 @@ func (b *CloudHypervisor) Boot(ctx context.Context, r Resource, restore bool) er
 // TAP before boot through vm.add-net, which accepts descriptors. Omitting mtu
 // avoids SIOCSIFMTU in the unprivileged VMM; the engine configured it beforehand.
 func (b *CloudHypervisor) ensureColdNetwork(ctx context.Context, r Resource, tap *os.File) error {
-	data, err := b.api(ctx, r, "GET", "vm.info", nil, nil)
+	data, err := b.api(ctx, r, vmmRequest{
+		Method:   "GET",
+		Endpoint: "vm.info",
+	})
 	if err != nil {
 		return err
 	}
@@ -229,8 +244,13 @@ func (b *CloudHypervisor) ensureColdNetwork(ctx context.Context, r Resource, tap
 		"offload_ufo":  false,
 		"offload_csum": false,
 	}
-	_, err = b.api(ctx, r, "PUT", "vm.add-net", network, []int{
-		int(tap.Fd()),
+	_, err = b.api(ctx, r, vmmRequest{
+		Method:   "PUT",
+		Endpoint: "vm.add-net",
+		Payload:  network,
+		FDs: []int{
+			int(tap.Fd()),
+		},
 	})
 	return err
 }
@@ -296,12 +316,18 @@ func (b *CloudHypervisor) validateCOW(r Resource) error {
 }
 
 func (b *CloudHypervisor) Pause(ctx context.Context, r Resource) error {
-	_, err := b.api(ctx, r, "PUT", "vm.pause", nil, nil)
+	_, err := b.api(ctx, r, vmmRequest{
+		Method:   "PUT",
+		Endpoint: "vm.pause",
+	})
 	return err
 }
 
 func (b *CloudHypervisor) Resume(ctx context.Context, r Resource) error {
-	_, err := b.api(ctx, r, "PUT", "vm.resume", nil, nil)
+	_, err := b.api(ctx, r, vmmRequest{
+		Method:   "PUT",
+		Endpoint: "vm.resume",
+	})
 	return err
 }
 
@@ -329,26 +355,27 @@ func (b *CloudHypervisor) Capture(ctx context.Context, r Resource, dst string) e
 	if owner.Uid != b.opts.UID || owner.Gid != b.opts.GID || st.Mode().Perm() != 0o700 {
 		return errors.New("capture writer leaf was not prepared")
 	}
-	_, err = b.api(
-		ctx,
-		r,
-		"PUT",
-		"vm.snapshot",
-		map[string]string{
+	_, err = b.api(ctx, r, vmmRequest{
+		Method:   "PUT",
+		Endpoint: "vm.snapshot",
+		Payload: map[string]string{
 			"destination_url": "file:///capture/" + filepath.ToSlash(rel),
 		},
-		nil,
-	)
+	})
 	return err
 }
 
-func (b *CloudHypervisor) api(
-	ctx context.Context,
-	r Resource,
-	method, endpoint string,
-	input any,
-	fds []int,
-) ([]byte, error) {
+// vmmRequest binds a Cloud Hypervisor HTTP command to its JSON payload and
+// SCM_RIGHTS descriptors, which must travel with that same command.
+type vmmRequest struct {
+	Method   string
+	Endpoint string
+	Payload  any
+	FDs      []int
+}
+
+func (b *CloudHypervisor) api(ctx context.Context, r Resource, request vmmRequest) ([]byte, error) {
+	method, endpoint, input, fds := request.Method, request.Endpoint, request.Payload, request.FDs
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	conn, err := unixsocket.Dial(ctx, filepath.Join(r.RunDir, "io", "api.sock"))

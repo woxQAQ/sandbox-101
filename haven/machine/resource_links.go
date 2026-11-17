@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 
+	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine/internal/dbgen"
 	"github.com/woxQAQ/haven/operation"
@@ -43,31 +45,38 @@ func LoadResourceLink(ctx context.Context, database store.DBTX, parent, role str
 	return link, record.Status, nil
 }
 
-func InsertResourceLink(ctx context.Context, tx *sql.Tx, parent, role, instance string, child operation.Record, kind, candidate, hash string) error {
+// ResourceLinkTarget names the parent responsibility receiving a child link.
+type ResourceLinkTarget struct {
+	OperationID      string
+	Role             string
+	ExpectedInstance string
+}
+
+func InsertResourceLink(ctx context.Context, tx *sql.Tx, target ResourceLinkTarget, request ResourceAdmission) error {
 	link := ResourceLink{
-		ChildID:     child.ID,
-		Kind:        kind,
-		RequestHash: hash,
-		Candidate:   candidate,
+		ChildID:     request.Child.ID,
+		Kind:        request.Kind,
+		RequestHash: request.RequestHash,
+		Candidate:   request.Candidate,
 	}
 	payload := operation.Encode(link)
 	return store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         parent,
-		StepKey:             "link:" + role,
+		OperationID:         target.OperationID,
+		StepKey:             "link:" + target.Role,
 		Action:              "resource_link",
 		InputHash:           operation.Digest(payload),
 		Input:               payload,
-		CandidateResourceID: candidate,
-		ExpectedInstance:    instance,
+		CandidateResourceID: request.Candidate,
+		ExpectedInstance:    target.ExpectedInstance,
 		Status:              "pending",
 		Body:                operation.Encode("admitted"),
 	}))
 }
 
-// CompleteResourceLink verifies the original child dependency in the caller's
+// Complete verifies the original child dependency in the caller's
 // transaction. The returned flag reports a write requiring commit/checkpoint.
 // It neither runs the child nor commits or checkpoints the store.
-func CompleteResourceLink(ctx context.Context, tx *sql.Tx, parent, role string, link ResourceLink) (bool, error) {
+func (link ResourceLink) Complete(ctx context.Context, tx *sql.Tx, parent, role string) (bool, error) {
 	current, status, err := LoadResourceLink(ctx, tx, parent, role)
 	if err != nil {
 		return false, err
@@ -102,8 +111,80 @@ func CompleteResourceLink(ctx context.Context, tx *sql.Tx, parent, role string, 
 	if !operation.Terminal(childStatus) {
 		return false, errs.ErrInterrupted
 	}
-	if err = operations.CompletePendingLink(ctx, parent, "link:"+role, childStatus, operation.Encode("complete")); err != nil {
+	if err = operations.CompletePendingLink(ctx, operation.LinkCompletion{
+		OperationID: parent,
+		StepKey:     "link:" + role,
+		Status:      childStatus,
+		Body:        operation.Encode("complete"),
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// ResourceLinks coordinates child receipts in the parent's workflow. The parent
+// supplies its domain child execution; locks, transactions and HEAD are shared.
+type ResourceLinks struct {
+	store     store.Workflow
+	ctx       context.Context
+	admission execution.Guard
+}
+
+func NewResourceLinks(state *store.State, admission execution.Guard, ctx context.Context) *ResourceLinks {
+	return &ResourceLinks{
+		store: store.Workflow{
+			Database:   state.Database(),
+			Checkpoint: state.Checkpoint,
+		},
+		ctx:       ctx,
+		admission: admission,
+	}
+}
+
+func (service *ResourceLinks) Complete(parent, role string, link ResourceLink) error {
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	changed, err := link.Complete(service.ctx, tx, parent, role)
+	if err != nil || !changed {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return service.store.Checkpoint()
+}
+
+func (service *ResourceLinks) Run(parent, role string, run func(ResourceLink) error) (ResourceLink, error) {
+	link, status, err := LoadResourceLink(service.ctx, service.store.Database, parent, role)
+	if err != nil {
+		return link, err
+	}
+	if status == "failed" {
+		return link, fmt.Errorf("%w: retained lifecycle resource failed", errs.ErrConflict)
+	}
+	if status == "succeeded" {
+		return link, nil
+	}
+	runErr := run(link)
+	if errors.Is(runErr, errs.ErrInterrupted) {
+		return link, runErr
+	}
+	if err = service.Complete(parent, role, link); err != nil {
+		return link, errors.Join(err, runErr)
+	}
+	_, status, err = LoadResourceLink(service.ctx, service.store.Database, parent, role)
+	if err != nil {
+		return link, err
+	}
+	if status != "succeeded" {
+		return link, fmt.Errorf("%w: retained lifecycle resource failed", errs.ErrConflict)
+	}
+	return link, nil
 }

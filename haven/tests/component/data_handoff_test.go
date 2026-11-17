@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
@@ -20,12 +21,14 @@ func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	acceptedRecord := claimSandbox(t, service, "handoff", nil, egress.Policy{
+	acceptedRecord := (sandboxClaims{
+		App: service,
+	}).claim(t, "handoff", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	upstream, err := service.Data.Connect(ctx, principal, acceptedRecord.Result.SandboxID)
+	upstream, err := service.Dataplane.Connect(ctx, principal, acceptedRecord.Result.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +50,15 @@ func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	accepted := false
-	downstream, err := service.Data.AttachData(ctx, principal, acceptedRecord.Result.SandboxID, upstream, func() (net.Conn, error) {
-		accepted = true
-		one, two := net.Pipe()
-		_ = two.Close()
-		return one, nil
+	downstream, err := service.Dataplane.Attach(ctx, principal, dataplane.HandoffRequest{
+		SandboxID: acceptedRecord.Result.SandboxID,
+		Upstream:  upstream,
+		Accept: func() (net.Conn, error) {
+			accepted = true
+			one, two := net.Pipe()
+			_ = two.Close()
+			return one, nil
+		},
 	})
 	if !errors.Is(err, errs.ErrConflict) || accepted || downstream != nil {
 		t.Fatal("late HTTP handoff accepted a superseded upstream", accepted, err)

@@ -34,18 +34,16 @@ func (m ImageManifest) sharedLayered() bool {
 // later in the same tar. Headers retain OCI operations separately from payload
 // names, so a cache never has to resolve a lower-layer or forward hardlink.
 // Native mkfs owns payload extents; the library owns final inode/chunk encoding.
-func buildSharedLayerCache(
-	ctx context.Context,
-	state, input, media, builder, diff string,
-	size, entries int64,
-) (layerCache, error) {
+func BuildSharedLayerCache(ctx context.Context, state string, request LayerCacheRequest) (LayerCache, error) {
+	input, media := request.Input.Path, request.Input.MediaType
+	builder, diff := request.Builder, request.Input.DiffID
 	cached := layerCache{
 		Format:  1,
 		Profile: sharedLayerProfile,
 		Builder: builder,
 		DiffID:  diff,
-		Bytes:   size,
-		Entries: entries,
+		Bytes:   request.Bytes,
+		Entries: request.Entries,
 	}
 	parent := filepath.Join(state, "layer-cache", builder[7:])
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -86,35 +84,7 @@ func buildSharedLayerCache(
 	if err = os.Remove(normalized); err != nil {
 		return cached, err
 	}
-	cached.SHA256, err = digestFile(filepath.Join(stage, "layer.erofs"))
-	if err != nil {
-		return cached, err
-	}
-	if err = writeJSON(filepath.Join(stage, "layer.json"), cached); err != nil {
-		return cached, err
-	}
-	if err = sealTree(stage); err != nil {
-		return cached, err
-	}
-	if err = syncTree(stage); err != nil {
-		return cached, err
-	}
-	if _, err = os.Lstat(filepath.Join(parent, diff[7:])); !os.IsNotExist(err) {
-		return cached, errors.New("layer cache destination already exists")
-	}
-	if err = os.Rename(stage, filepath.Join(parent, diff[7:])); err != nil {
-		return cached, err
-	}
-	for _, dir := range []string{
-		parent,
-		filepath.Dir(parent),
-		state,
-	} {
-		if err = syncDir(dir); err != nil {
-			return cached, err
-		}
-	}
-	return loadLayerCache(state, builder, diff)
+	return publishLayerCache(state, stage, cached)
 }
 
 //nolint:staticcheck // Preserve binary xattrs while regenerating PAX records for renamed payloads.
@@ -424,7 +394,8 @@ func currentMetadata(w *erofs.Writer, n string) (fs.FileInfo, error) {
 }
 
 //nolint:staticcheck // Cached tar headers retain legacy regular-file types.
-func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts []ImageArtifact, builder string) error {
+func MaterializeSharedFsmeta(ctx context.Context, input FsmetaLayers, builder string) error {
+	state, out, artifacts := input.StateRoot, input.Output, input.Artifacts
 	f, err := os.OpenFile(filepath.Join(out, "fsmeta.erofs"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return err

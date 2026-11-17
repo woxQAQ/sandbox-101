@@ -100,11 +100,24 @@ func tarPath(s string) error {
 	return nil
 }
 
-func validateLayer(file, media, diffID string, maxBytes, maxFiles int64) (int64, int64, error) {
-	return validateLayerFor(file, media, diffID, maxBytes, maxFiles, false)
+// LayerInput identifies the compressed file and its expected uncompressed digest.
+// MediaType selects decompression; DiffID authenticates the complete tar stream.
+type LayerInput struct {
+	Path      string
+	MediaType string
+	DiffID    string
 }
 
-func validateLayerFor(file, media, diffID string, maxBytes, maxFiles int64, merged bool) (int64, int64, error) {
+// LayerLimits bounds the complete uncompressed stream and its tar entry count.
+type LayerLimits struct {
+	MaxBytes int64
+	MaxFiles int64
+}
+
+// ValidateLayer applies the same OCI preflight to both materializers.
+func ValidateLayer(input LayerInput, limits LayerLimits) (int64, int64, error) {
+	file, media, diffID := input.Path, input.MediaType, input.DiffID
+	maxBytes, maxFiles := limits.MaxBytes, limits.MaxFiles
 	f, err := os.Open(file)
 	if err != nil {
 		return 0, 0, err

@@ -34,6 +34,12 @@ type SandboxOptions struct {
 }
 
 type SandboxDependencies struct {
+	Guards       SandboxGuards
+	Workers      *execution.Workers
+	Closing      interface{ Closing() bool }
+	Registry     *access.Registry
+	History      machine.SnapshotProofs
+	Committer    *operation.Committer
 	Commands     *SandboxCommands
 	Availability *execution.Availability
 	Operations   *operation.Operations
@@ -65,7 +71,7 @@ type Sandboxes struct {
 	committer    *operation.Committer
 }
 
-func NewSandboxes(state *store.State, guards SandboxGuards, workers *execution.Workers, closing interface{ Closing() bool }, registry *access.Registry, history machine.SnapshotProofs, dependencies SandboxDependencies, options SandboxOptions, committer *operation.Committer) *Sandboxes {
+func NewSandboxes(state *store.State, dependencies SandboxDependencies, options SandboxOptions) *Sandboxes {
 	return &Sandboxes{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -73,13 +79,13 @@ func NewSandboxes(state *store.State, guards SandboxGuards, workers *execution.W
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          workers.Context(),
-		admission:    guards.Admission(),
-		guards:       guards,
-		workers:      workers,
-		closing:      closing,
-		access:       registry,
-		history:      history,
+		ctx:          dependencies.Workers.Context(),
+		admission:    dependencies.Guards.Admission(),
+		guards:       dependencies.Guards,
+		workers:      dependencies.Workers,
+		closing:      dependencies.Closing,
+		access:       dependencies.Registry,
+		history:      dependencies.History,
 		commands:     dependencies.Commands,
 		availability: dependencies.Availability,
 		operations:   dependencies.Operations,
@@ -87,7 +93,8 @@ func NewSandboxes(state *store.State, guards SandboxGuards, workers *execution.W
 		warmClaims:   dependencies.WarmClaims,
 		provisioning: dependencies.Provisioning,
 		policies:     dependencies.Policies,
-		opts:         options, committer: committer,
+		opts:         options,
+		committer:    dependencies.Committer,
 	}
 }
 
@@ -99,7 +106,10 @@ func (service *Sandboxes) fault(point string) error {
 }
 
 func (service *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, admission.MAC, admission.Secrets)
+	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+		MAC:     admission.MAC,
+		Secrets: admission.Secrets,
+	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		service.dispatch(accepted.ID)
 	}

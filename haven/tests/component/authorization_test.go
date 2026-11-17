@@ -18,10 +18,14 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	tenant := authorization.Principal{
 		TenantID: "tenant",
 	}
-	first := claimSandbox(t, service, "one", nil, egress.Policy{
+	first := (sandboxClaims{
+		App: service,
+	}).claim(t, "one", nil, egress.Policy{
 		Mode: "none",
 	})
-	second := claimSandbox(t, service, "two", nil, egress.Policy{
+	second := (sandboxClaims{
+		App: service,
+	}).claim(t, "two", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

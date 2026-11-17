@@ -20,7 +20,9 @@ type Committer struct {
 }
 
 func NewCommitter(project Projector) *Committer {
-	return &Committer{project: project}
+	return &Committer{
+		project: project,
+	}
 }
 
 func (committer *Committer) Commit(tx *sql.Tx) error {

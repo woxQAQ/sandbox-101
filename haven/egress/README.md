@@ -14,7 +14,11 @@ if err != nil {
     return err
 }
 
-err = manager.Bind(ctx, sandboxID, tenantID, vmVsockPath,
+err = manager.Bind(ctx, egress.BindingTarget{
+    SandboxID: sandboxID,
+    TenantID: tenantID,
+    VSockPath: vmVsockPath,
+},
     egress.Policy{
         Mode: "relay",
         AllowedHosts: []string{"api.example.com"},

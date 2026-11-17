@@ -101,7 +101,10 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 		Request ImageCleanupRequest
 	}{"image_cleanup", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.database).Cached(ctx, "node", service.nodeID, key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.database).Cached(ctx, operation.Scope{
+		Kind: "node",
+		ID:   service.nodeID,
+	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}

@@ -7,9 +7,19 @@ import (
 	"path/filepath"
 )
 
+// CaptureRawDeletionTarget proves only the original raw tree after independent
+// snapshot publication; the published snapshot is never part of this target.
+type CaptureRawDeletionTarget struct {
+	Resource    Resource
+	OperationID string
+	Boundary    *CaptureBoundary
+	Digests     map[string]string
+}
+
 // InspectPublishedCaptureRawDeletion owns only the original raw boundary. The
 // independently published snapshot is outside this deletion topology.
-func InspectPublishedCaptureRawDeletion(ctx context.Context, stateRoot string, r Resource, operation string, boundary *CaptureBoundary, digests map[string]string) (DeletionIntent, error) {
+func InspectPublishedCaptureRawDeletion(ctx context.Context, stateRoot string, target CaptureRawDeletionTarget) (DeletionIntent, error) {
+	r, operation, boundary, digests := target.Resource, target.OperationID, target.Boundary, target.Digests
 	var empty DeletionIntent
 	raw := filepath.Join(r.Dir, "capture", operation)
 	if !ValidResourceID(r.VMID, "vm-") || r.Dir != filepath.Join(stateRoot, "vms", r.VMID) || !ValidResourceID(operation, "op-") || boundary == nil || boundary.Path != raw || boundary.Parent.Inode == 0 {
@@ -27,13 +37,15 @@ func InspectPublishedCaptureRawDeletion(ctx context.Context, stateRoot string, r
 			return empty, fmt.Errorf("published capture artifact digest missing")
 		}
 	}
-	intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{
-		Dir: raw,
-	}, map[string]bool{
-		".":  true,
-		"ch": true,
-	}, files, map[string]FileIdentity{
-		".": boundary.Parent,
+	intent, _, err := inspectArtifactTopology(ctx, stateRoot, raw, ArtifactTopology{
+		Directories: map[string]bool{
+			".":  true,
+			"ch": true,
+		},
+		Files: files,
+		Fixed: map[string]FileIdentity{
+			".": boundary.Parent,
+		},
 	})
 	if err != nil {
 		return empty, err

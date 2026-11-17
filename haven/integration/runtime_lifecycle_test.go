@@ -99,17 +99,17 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 	}
 	// FUSE provides reclaimable file cache while its owned storage process writes
 	// to the bounded tmpfs. Snapshot storage must not consume the VMM's RAM quota.
-	filesystem := startProcess(
-		t,
-		artifacts,
-		"bindfs",
-		"bindfs",
-		"-f",
-		"-o",
-		"nosuid,nodev",
-		"/run/p/backing",
-		"/run/p/e",
-	)
+	filesystem := startProcess(t, artifacts, processCommand{
+		Name:   "bindfs",
+		Binary: "bindfs",
+		Args: []string{
+			"-f",
+			"-o",
+			"nosuid,nodev",
+			"/run/p/backing",
+			"/run/p/e",
+		},
+	})
 	t.Cleanup(func() {
 		filesystem.stop(t)
 	})
@@ -236,7 +236,14 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		t.Fatalf("exactly one OCI manifest required: %v", err)
 	}
 	image := index.Manifests[0].Digest
-	store, err := startHaven(t, ctx, artifacts, materials, cgroup, ioMax, layout, image)
+	store, err := startHaven(t, ctx, havenLaunch{
+		Artifacts: artifacts,
+		Materials: materials,
+		Cgroup:    cgroup,
+		IOMax:     ioMax,
+		Layout:    layout,
+		Image:     image,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +253,12 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 	ec := newVMInventory(t, "/run/p/e", backend)
 	defer ec.Close()
 	client := store.client
-	token := store.token
+	scenario := runtimeScenario{
+		Client:    client,
+		Inventory: ec,
+		Artifacts: artifacts,
+		Image:     image,
+	}
 	tokenPath := "/run/p/root-token"
 	endpoint := client.Endpoint
 	// D is each distinct writable disk; S is each distinct SID's D+M charge.
@@ -265,7 +277,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		(2*diskMiB + snapshotMiB) + // golden and claimed warm
 		(4*diskMiB + 2*snapshotMiB) // TCP resource sequence
 	// Root only bypasses manual admission comparisons; refill uses owner quota.
-	putOwnerBudget(t, ctx, client, token, maxSandboxes, maxStorageMiB)
+	store.putOwnerBudget(t, ctx, maxSandboxes, maxStorageMiB)
 	client.Tenant = "root"
 	t.Setenv("SANDBOX_E2E_TENANT", "root")
 	t.Setenv("SANDBOX_E2E_ENDPOINT", endpoint)
@@ -331,7 +343,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 			t.Fatalf("VMM not verified/ready: %+v: %v", before, err)
 		}
 		recordVMMProof(t, artifacts, "before", before)
-		identity := guestExec(t, ctx, client, claim.Sandbox.ID, "cat /etc/machine-id")
+		identity := scenario.guestExec(t, ctx, claim.Sandbox.ID, "cat /etc/machine-id")
 		conn, err := client.Connect(ctx, claim.Sandbox.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -357,7 +369,11 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		if err := syscall.Kill(before.PID, 0); err != nil {
 			t.Fatalf("VMM died with Haven: %v", err)
 		}
-		store.process = startProcess(t, artifacts, "haven-2", "/run/p/bin/haven", store.args...)
+		store.process = startProcess(t, artifacts, processCommand{
+			Name:   "haven-2",
+			Binary: "/run/p/bin/haven",
+			Args:   store.args,
+		})
 		awaitProcess(t, ctx, store.process, func(attempt context.Context) error {
 			_, err := client.List(attempt)
 			return err
@@ -369,7 +385,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 			t.Fatalf("daemon restart did not adopt the exact live VMM: before=%+v after=%+v: %v", before, after, err)
 		}
 		recordVMMProof(t, artifacts, "after", after)
-		if actual := guestExec(t, ctx, client, claim.Sandbox.ID, "cat /etc/machine-id"); actual != identity {
+		if actual := scenario.guestExec(t, ctx, claim.Sandbox.ID, "cat /etc/machine-id"); actual != identity {
 			t.Fatalf("daemon restart changed guest identity: before=%q after=%q", identity, actual)
 		}
 		conn, err = client.Connect(ctx, claim.Sandbox.ID)
@@ -405,23 +421,17 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 	}
 	if t.Run("TestMicroVMLifecycle", TestMicroVMLifecycle) {
 		if t.Run("golden-and-warm-provisioning", func(t *testing.T) {
-			verifyProvisioningTiers(t, ctx, client, ec, artifacts, image)
+			scenario.verifyProvisioningTiers(t, ctx)
 		}) {
 			t.Run("real-guest-tcp", func(t *testing.T) {
-				probeGuestTCP(t, ctx, client, ec, artifacts, image)
+				scenario.probeGuestTCP(t, ctx)
 			})
 		}
 	}
 }
 
-func putOwnerBudget(
-	t *testing.T,
-	ctx context.Context,
-	client *sdk.Client,
-	rootBearer string,
-	slots int,
-	storageMiB int64,
-) {
+func (store *runningHaven) putOwnerBudget(t *testing.T, ctx context.Context, slots int, storageMiB int64) {
+	client, rootBearer := store.client, store.token
 	t.Helper()
 	// Omit Token: the generated ordinary credential is intentionally ignored.
 	payload, err := json.Marshal(struct {
@@ -466,13 +476,17 @@ func putOwnerBudget(
 	}
 }
 
-func verifyProvisioningTiers(
-	t *testing.T,
-	ctx context.Context,
-	client *sdk.Client,
-	ec *vmInventory,
-	artifacts, image string,
-) {
+// runtimeScenario keeps a single provisioned-host acceptance target and its
+// owned observations together. Each operation retains its own context budget.
+type runtimeScenario struct {
+	Client    *sdk.Client
+	Inventory *vmInventory
+	Artifacts string
+	Image     string
+}
+
+func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx context.Context) {
+	client, ec, artifacts, image := scenario.Client, scenario.Inventory, scenario.Artifacts, scenario.Image
 	t.Helper()
 	template := types.Template{
 		ID:    "runtime-tiers",
@@ -534,16 +548,15 @@ func verifyProvisioningTiers(
 	if golden.Sandbox.ProvisionSource != "golden" {
 		t.Fatalf("expected real golden clone claim, got %q", golden.Sandbox.ProvisionSource)
 	}
-	if got := guestExec(
+	if got := scenario.guestExec(
 		t,
 		ctx,
-		client,
 		golden.Sandbox.ID,
 		"cat /workspace/template-warmup; printf ':%s' \"$PROVISIONING_TIER\"",
 	); got != "prepared:golden" {
 		t.Fatalf("golden clone lost warmup/activation: %q", got)
 	}
-	goldenIdentity := guestExec(t, ctx, client, golden.Sandbox.ID, "cat /etc/machine-id")
+	goldenIdentity := scenario.guestExec(t, ctx, golden.Sandbox.ID, "cat /etc/machine-id")
 	if _, err := client.Change(
 		ctx,
 		golden.Sandbox.ID,
@@ -620,16 +633,15 @@ func verifyProvisioningTiers(
 			err,
 		)
 	}
-	if got := guestExec(
+	if got := scenario.guestExec(
 		t,
 		ctx,
-		client,
 		warm.Sandbox.ID,
 		"cat /workspace/template-warmup; printf ':%s' \"$PROVISIONING_TIER\"",
 	); got != "prepared:warm" {
 		t.Fatalf("warm claim lost template data or activation environment: %q", got)
 	}
-	warmIdentity := guestExec(t, ctx, client, warm.Sandbox.ID, "cat /etc/machine-id")
+	warmIdentity := scenario.guestExec(t, ctx, warm.Sandbox.ID, "cat /etc/machine-id")
 	if len(strings.TrimSpace(warmIdentity)) != 32 || warmIdentity == goldenIdentity {
 		t.Fatal("golden and warm claims did not receive independent guest identities")
 	}
@@ -812,7 +824,14 @@ type daemonProcess struct {
 	stopped bool
 }
 
-func startProcess(t *testing.T, artifacts, name, binary string, args ...string) *daemonProcess {
+type processCommand struct {
+	Name   string
+	Binary string
+	Args   []string
+}
+
+func startProcess(t *testing.T, artifacts string, command processCommand) *daemonProcess {
+	name, binary, args := command.Name, command.Binary, command.Args
 	t.Helper()
 	log, err := os.OpenFile(filepath.Join(artifacts, name+".log"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -876,7 +895,8 @@ func awaitProcess(t *testing.T, ctx context.Context, process *daemonProcess, rea
 	}
 }
 
-func guestExec(t *testing.T, ctx context.Context, client *sdk.Client, id, command string) string {
+func (scenario runtimeScenario) guestExec(t *testing.T, ctx context.Context, id, command string) string {
+	client := scenario.Client
 	t.Helper()
 	conn, err := client.Connect(ctx, id)
 	if err != nil {

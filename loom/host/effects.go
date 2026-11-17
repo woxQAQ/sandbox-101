@@ -82,32 +82,8 @@ func LoadLayerCache(state, builder, diff string) (LayerCache, error) {
 	return loadLayerCache(state, builder, diff)
 }
 
-func BuildLayerCache(ctx context.Context, state, input, media, builder, diff string, size, entries int64) (LayerCache, error) {
-	return buildLayerCache(ctx, state, input, media, builder, diff, size, entries)
-}
-
-func BuildSharedLayerCache(ctx context.Context, state, input, media, builder, diff string, size, entries int64) (LayerCache, error) {
-	return buildSharedLayerCache(ctx, state, input, media, builder, diff, size, entries)
-}
-
-func ValidateLayer(file, media, diff string, maxBytes, maxFiles int64) (int64, int64, error) {
-	return validateLayer(file, media, diff, maxBytes, maxFiles)
-}
-
-func ValidateLayerFor(file, media, diff string, maxBytes, maxFiles int64, merged bool) (int64, int64, error) {
-	return validateLayerFor(file, media, diff, maxBytes, maxFiles, merged)
-}
-
 func MaterializeMergedOCI(ctx context.Context, input, output, digest string) error {
 	return materializeMergedOCI(ctx, input, output, digest)
-}
-
-func MaterializeSharedFsmeta(ctx context.Context, state, output string, artifacts []ImageArtifact, builder string) error {
-	return materializeSharedFsmeta(ctx, state, output, artifacts, builder)
-}
-
-func MaterializeFsmeta(ctx context.Context, state, output string, artifacts []ImageArtifact, digest string) error {
-	return materializeFsmeta(ctx, state, output, artifacts, digest)
 }
 
 func RunImageTool(ctx context.Context, work, tool string, args ...string) error {
@@ -128,10 +104,6 @@ func SharedHeaders(image fs.FS, receipt LayerCache) ([]tar.Header, error) {
 
 func CacheHeader(header tar.Header) CachedHeader {
 	return cacheHeader(header)
-}
-
-func DataArtifact(builder, diff, hash, receipt string, index int) ImageArtifact {
-	return dataArtifact(builder, diff, hash, receipt, index)
 }
 
 func ValidateLayerEntry(header *tar.Header, entries map[string]byte, whiteouts map[string]bool) error {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/woxQAQ/haven/data"
+	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/operation"
@@ -19,10 +19,12 @@ import (
 type ResumeWorkflow func(string) (bool, error)
 
 type MaintenanceDependencies struct {
+	Lifetime     *execution.Lifetime
+	Workers      *execution.Workers
 	Availability *execution.Availability
 	Lifecycle    *sandbox.Lifecycle
 	Supply       *supply.Supply
-	Data         *data.Data
+	Dataplane    *dataplane.Plane
 	Provisioning *sandbox.VMProvisioning
 }
 
@@ -37,21 +39,21 @@ type Maintenance struct {
 	availability *execution.Availability
 	lifecycle    *sandbox.Lifecycle
 	supply       *supply.Supply
-	data         *data.Data
+	plane        *dataplane.Plane
 	provisioning *sandbox.VMProvisioning
 }
 
-func NewMaintenance(state *store.State, lifetime *execution.Lifetime, workers *execution.Workers, routes []ResumeWorkflow, dependencies MaintenanceDependencies) *Maintenance {
+func NewMaintenance(state *store.State, dependencies MaintenanceDependencies, routes []ResumeWorkflow) *Maintenance {
 	return &Maintenance{
 		operations:   operation.New(state.Database()),
 		reviewed:     state.Reviewed(),
-		lifetime:     lifetime,
-		workers:      workers,
+		lifetime:     dependencies.Lifetime,
+		workers:      dependencies.Workers,
 		routes:       slices.Clone(routes),
 		availability: dependencies.Availability,
 		lifecycle:    dependencies.Lifecycle,
 		supply:       dependencies.Supply,
-		data:         dependencies.Data,
+		plane:        dependencies.Dataplane,
 		provisioning: dependencies.Provisioning,
 	}
 }
@@ -83,7 +85,7 @@ func (service *Maintenance) Reconcile() error {
 	for _, operationID := range pending {
 		service.Dispatch(operationID)
 	}
-	return service.data.ReconcileBindings()
+	return service.plane.ReconcileBindings()
 }
 
 func (service *Maintenance) Maintain(ctx context.Context) error {

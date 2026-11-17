@@ -52,7 +52,10 @@ func LoadCapture(ctx context.Context, query store.DBTX, operationID string) (Cap
 	step := CaptureStep{
 		OperationID: operationID,
 	}
-	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{OperationID: operationID, StepKey: "capture"})
+	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: operationID,
+		StepKey:     "capture",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

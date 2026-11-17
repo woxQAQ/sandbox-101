@@ -8,10 +8,10 @@ import (
 
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
 )
 
-func admitRollbackLease(ctx context.Context, tx *sql.Tx, parent operation.Record, input LifecycleInput, proofs machine.SnapshotProofs) error {
+func (admission *LifecycleAdmission) admitRollbackLease(ctx context.Context, tx *sql.Tx) error {
+	parent, input, proofs := admission.Parent, admission.Input, admission.History
 	if input.Command.Action != "rollback" || input.Rollback == nil {
 		return fmt.Errorf("%w: rollback lease requires frozen source", errs.ErrInvalid)
 	}
@@ -32,7 +32,7 @@ func admitRollbackLease(ctx context.Context, tx *sql.Tx, parent operation.Record
 	if err = checkRollbackCaptures(ctx, tx, input); err != nil {
 		return err
 	}
-	return machine.PinSnapshotSource(ctx, tx, input.OwnerTenantID, machine.Lease{
+	return machine.PinSnapshotSource(ctx, tx, input.OwnerTenantID, machine.SourceLease{
 		SnapshotID:  checkpoint.SnapshotID,
 		OperationID: parent.ID,
 		StepKey:     "lifecycle",
@@ -44,7 +44,7 @@ func RetireRollbackLease(ctx context.Context, tx *sql.Tx, parent LifecycleStep) 
 	if source == nil {
 		return fmt.Errorf("%w: rollback source lease proof missing", errs.ErrManualRecovery)
 	}
-	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.OwnerTenantID, machine.Lease{
+	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.OwnerTenantID, machine.SourceLease{
 		SnapshotID:  source.Checkpoint.SnapshotID,
 		OperationID: parent.OperationID,
 		StepKey:     "lifecycle",

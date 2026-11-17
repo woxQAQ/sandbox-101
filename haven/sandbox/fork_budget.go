@@ -32,7 +32,9 @@ func forkFunding(input ForkInput) forkBudget {
 	}
 }
 
-func reserveForkTargets(ctx context.Context, tx *sql.Tx, acceptedOperation operation.Record, input ForkInput, free int64, capacity ProvisionCapacity) error {
+func (parent *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) error {
+	acceptedOperation, input := parent.Parent, parent.Input
+	free, capacity := parent.Free, parent.capacity
 	budget := forkFunding(input)
 	tenant, err := authorization.New(tx).Limits(ctx, input.OwnerTenantID)
 	if err != nil {

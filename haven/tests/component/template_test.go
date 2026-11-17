@@ -224,7 +224,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(claim, err)
 	}
-	sandbox, err := service.Data.DataReady(ctx, principal, claim.Result.SandboxID)
+	sandbox, err := service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID)
 	if err != nil || sandbox.State != "running" || sandbox.TemplateID != "golden" {
 		t.Fatal(sandbox, err)
 	}

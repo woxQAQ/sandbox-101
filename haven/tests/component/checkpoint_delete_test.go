@@ -19,7 +19,9 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -73,7 +75,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	report, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "gc", types.GCOptions{
@@ -86,7 +88,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots),SUM(storage_mib) FROM quota_resources").Scan(&slots, &storage); err != nil || slots != 1 || storage != 256 {
 		t.Fatal("snapshot backing responsibility retired early", slots, storage, err)
 	}
-	if _, err = service.Data.DataReady(ctx, principal, fork.Result.SandboxID); err != nil {
+	if _, err = service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID); err != nil {
 		t.Fatal("checkpoint deletion invalidated independent fork", err)
 	}
 	if _, err = service.SandboxRequests.Execute(ctx, principal, "fork-release", operation.Command{

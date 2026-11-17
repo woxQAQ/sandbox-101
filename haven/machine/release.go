@@ -67,7 +67,10 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operations.Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -127,7 +130,10 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	if err != nil {
 		return empty, err
 	}
-	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, "active_use", "sandbox:"+record.ID)
+	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
+		Kind: "active_use",
+		ID:   "sandbox:" + record.ID,
+	})
 	if err != nil {
 		return empty, err
 	}
@@ -169,7 +175,12 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 			input.SlotDestination = destination
 		}
 	}
-	if err = AdmitResourceParent(ctx, tx, parent, accepted, "release", record.VMID, hash); err != nil {
+	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
+		Child:       accepted,
+		Kind:        "release",
+		Candidate:   record.VMID,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	if err = operations.Insert(ctx, operation.Admission{
@@ -209,7 +220,11 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.handoff.TerminateSandbox(ctx, tx, record, accepted.ID, record.TenantID); err != nil {
+	if err = service.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
+		Sandbox:     record,
+		OperationID: accepted.ID,
+		TenantID:    record.TenantID,
+	}); err != nil {
 		return empty, err
 	}
 	currentMachine.Deleting = true

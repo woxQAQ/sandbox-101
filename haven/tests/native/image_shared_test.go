@@ -304,20 +304,27 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	e := newNativeImageFixture(t)
 	defer e.Close()
 	input := filepath.Join(layout, "blobs", "sha256", layer.descriptor.Digest.Encoded())
-	n, count, err := validateLayer(input, layer.descriptor.MediaType, layer.diff.String(), 4<<20, 1000)
+	n, count, err := validateLayer(layerInput{
+		Path:      input,
+		MediaType: layer.descriptor.MediaType,
+		DiffID:    layer.diff.String(),
+	}, layerLimits{
+		MaxBytes: 4 << 20,
+		MaxFiles: 1000,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := buildLayerCache(
-		ctx,
-		e.opts.StateDir,
-		input,
-		layer.descriptor.MediaType,
-		builder,
-		layer.diff.String(),
-		n,
-		count,
-	)
+	cache, err := buildLayerCache(ctx, e.opts.StateDir, layerCacheRequest{
+		Input: layerInput{
+			Path:      input,
+			MediaType: layer.descriptor.MediaType,
+			DiffID:    layer.diff.String(),
+		},
+		Builder: builder,
+		Bytes:   n,
+		Entries: count,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,8 +336,12 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err = os.MkdirAll(out, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err = materializeFsmeta(ctx, e.opts.StateDir, out, []ImageArtifact{
-		artifact,
+	if err = materializeFsmeta(ctx, fsmetaLayers{
+		StateRoot: e.opts.StateDir,
+		Output:    out,
+		Artifacts: []ImageArtifact{
+			artifact,
+		},
 	}, image); err != nil {
 		t.Fatal(err)
 	}

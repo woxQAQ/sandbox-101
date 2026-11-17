@@ -30,7 +30,7 @@ type LifecycleInput struct {
 type RollbackInput struct {
 	RawCaptures []ownership.GenerationRef `json:"raw_captures,omitempty"`
 	Checkpoint  Checkpoint                `json:"checkpoint"`
-	Source      machine.Source            `json:"source"`
+	Source      machine.SnapshotSource    `json:"source"`
 }
 
 type LifecycleState struct {
@@ -50,7 +50,10 @@ func LoadLifecycle(ctx context.Context, database store.DBTX, id string) (Lifecyc
 	step := LifecycleStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "lifecycle"})
+	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "lifecycle",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

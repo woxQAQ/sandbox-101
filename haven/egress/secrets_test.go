@@ -271,7 +271,11 @@ func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {
 			Placeholder: "Bearer phantom",
 		},
 	}
-	if err := m.Bind(context.Background(), "s", "t", "/tmp/unused", Policy{
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "s",
+		TenantID:  "t",
+		VSockPath: "/tmp/unused",
+	}, Policy{
 		Mode: "relay",
 	}, secrets); err == nil {
 		t.Fatal("credentials activated without an audit sink")

@@ -13,20 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
 )
 
 // These public addresses exist only on the fresh outer namespace's loopback.
 // Every probe crosses the real guest virtio/TAP, namespace policy and SNAT;
 // the namespace has no external interface or route to the actual Internet.
-func probeGuestTCP(
-	t *testing.T,
-	ctx context.Context,
-	client *sdk.Client,
-	ec *vmInventory,
-	artifacts, image string,
-) {
+func (scenario runtimeScenario) probeGuestTCP(t *testing.T, ctx context.Context) {
+	client, ec, artifacts, image := scenario.Client, scenario.Inventory, scenario.Artifacts, scenario.Image
 	t.Helper()
 	const allowed, denied = "93.184.216.34", "93.184.216.35"
 	for _, address := range []string{
@@ -151,7 +145,7 @@ func probeGuestTCP(
 			"tool=$(/bin/readlink /bin/cat); if \"${tool%%/*}/timeout\" 4 /bin/sh -c '%s'; then printf allowed; else printf blocked; fi",
 			strings.ReplaceAll(script, "'", "'\\''"),
 		)
-		got := guestExec(t, ctx, client, sandbox.ID, command)
+		got := scenario.guestExec(t, ctx, sandbox.ID, command)
 		if got != map[bool]string{
 			true:  "allowed",
 			false: "blocked",
@@ -211,7 +205,7 @@ func probeGuestTCP(
 		t.Fatal(err)
 	}
 	// Connecting performs the actual sandbox auto-resume and instance rebind.
-	guestExec(t, ctx, client, direct.ID, "printf resumed")
+	scenario.guestExec(t, ctx, direct.ID, "printf resumed")
 	resumed, err := client.Get(ctx, direct.ID)
 	if err != nil {
 		t.Fatal(err)

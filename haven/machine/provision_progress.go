@@ -61,11 +61,11 @@ func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		}
 	}
 	if step.Action == "cold_start" && phase == "prepared" {
-		previous := Version{
+		previous := RetainedVersion{
 			Resource:     step.Input.Resource,
 			DiskIdentity: step.State.DiskIdentity,
 		}
-		version := Version{
+		version := RetainedVersion{
 			Resource:     step.Input.Resource,
 			DiskIdentity: next.DiskIdentity,
 		}

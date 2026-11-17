@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/data"
+	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/node"
 	"github.com/woxQAQ/haven/operation"
@@ -31,13 +31,13 @@ type Services struct {
 	Delivery       *sandbox.OperationDelivery
 	Tenants        *authorization.Tenants
 	Requests       *sandbox.SandboxRequests
-	Data           *data.Data
+	Dataplane      *dataplane.Plane
 	Management     *node.Management
 }
 
 type Adapter struct {
 	requests       *sandbox.SandboxRequests
-	data           *data.Data
+	plane          *dataplane.Plane
 	authentication *authorization.Authentication
 	catalog        *sandbox.Catalog
 	templates      *supply.TemplateCatalog
@@ -49,7 +49,7 @@ type Adapter struct {
 func New(dependencies Services) http.Handler {
 	adapter := &Adapter{
 		requests:       dependencies.Requests,
-		data:           dependencies.Data,
+		plane:          dependencies.Dataplane,
 		authentication: dependencies.Authentication,
 		catalog:        dependencies.Catalog,
 		templates:      dependencies.Templates,

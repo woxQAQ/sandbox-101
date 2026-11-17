@@ -32,9 +32,12 @@ func (proofs SnapshotProofs) ValidateResource(step ResourceStep) error {
 	return ValidateResourceStep(proofs.directory, step)
 }
 
-func (proofs SnapshotProofs) LoadRestoreSource(ctx context.Context, query store.DBTX, tenant, id string) (Source, error) {
-	var source Source
-	row, err := dbgen.New(query).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{ID: id, TenantID: tenant})
+func (proofs SnapshotProofs) LoadRestoreSource(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotSource, error) {
+	var source SnapshotSource
+	row, err := dbgen.New(query).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{
+		ID:       id,
+		TenantID: tenant,
+	})
 	if err != nil {
 		return source, err
 	}
@@ -60,7 +63,7 @@ func (proofs SnapshotProofs) LoadRestoreSource(ctx context.Context, query store.
 	return source, nil
 }
 
-func (proofs SnapshotProofs) ValidateSnapshotPublication(source Source, tenant string, capture CaptureStep) error {
+func (proofs SnapshotProofs) ValidateSnapshotPublication(source SnapshotSource, tenant string, capture CaptureStep) error {
 	publication := source.Snapshot
 	if capture.Hash != source.CaptureHash || capture.OperationID != source.CaptureOperation || capture.State.Boundary == nil || capture.State.Boundary.Publication != source.Publication {
 		return fmt.Errorf("restore publication history identity changed")
@@ -87,7 +90,7 @@ func (proofs SnapshotProofs) ValidateSnapshotPublication(source Source, tenant s
 	return nil
 }
 
-func (proofs SnapshotProofs) ValidateRestoreSource(source Source, tenant string, capture CaptureStep) error {
+func (proofs SnapshotProofs) ValidateRestoreSource(source SnapshotSource, tenant string, capture CaptureStep) error {
 	if err := proofs.ValidateSnapshotPublication(source, tenant, capture); err != nil {
 		return err
 	}
@@ -98,9 +101,12 @@ func (proofs SnapshotProofs) ValidateRestoreSource(source Source, tenant string,
 	return nil
 }
 
-func (proofs SnapshotProofs) SnapshotPublication(ctx context.Context, query store.DBTX, tenant, id string) (Source, error) {
-	var source Source
-	row, err := dbgen.New(query).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{ID: id, TenantID: tenant})
+func (proofs SnapshotProofs) SnapshotPublication(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotSource, error) {
+	var source SnapshotSource
+	row, err := dbgen.New(query).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{
+		ID:       id,
+		TenantID: tenant,
+	})
 	if err != nil {
 		return source, err
 	}

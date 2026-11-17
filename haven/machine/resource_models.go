@@ -35,7 +35,7 @@ type ResourceInput struct {
 	RuntimeBytes           int64                     `json:"runtime_bytes"`
 	BackingHolder          string                    `json:"backing_holder,omitempty"`
 	RestoreMaterials       *loom.RestoreMaterials    `json:"restore_materials,omitempty"`
-	Restore                *Source                   `json:"restore,omitempty"`
+	Restore                *SnapshotSource           `json:"restore,omitempty"`
 	Captures               []CaptureStep             `json:"captures,omitempty"`
 	DiskIdentity           *loom.FileIdentity        `json:"disk_identity,omitempty"`
 	Resource               loom.Resource             `json:"resource"`
@@ -70,7 +70,10 @@ type ResourceStep struct {
 }
 
 func LoadResourceStep(ctx context.Context, query store.DBTX, id string) (ResourceStep, error) {
-	row, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "resource"})
+	row, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "resource",
+	})
 	if err != nil {
 		row = dbgen.GetStepRow{}
 	}
@@ -100,4 +103,15 @@ func LoadResourceStep(ctx context.Context, query store.DBTX, id string) (Resourc
 		return step, fmt.Errorf("resource step candidate proof missing")
 	}
 	return step, nil
+}
+
+func SlotDestinationHolder(destination *QuotaDestination) string {
+	switch destination.Kind {
+	case "sleep":
+		return "sleep:" + destination.ID
+	case "claim":
+		return "claim:" + destination.OperationID
+	default:
+		return ""
+	}
 }

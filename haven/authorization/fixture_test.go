@@ -26,8 +26,13 @@ func newTenantFixture(t *testing.T) *tenantFixture {
 	lifetime := execution.NewLifetime(context.Background())
 	gate := &sync.Mutex{}
 	fixture := &tenantFixture{
-		State:          state,
-		Tenants:        authorization.NewTenants(authorization.New(state.Database()), gate, lifetime, state.Reviewed(), state.Checkpoint),
+		State: state,
+		Tenants: authorization.NewTenants(authorization.New(state.Database()), authorization.TenantDependencies{
+			Admission:  gate,
+			Lifetime:   lifetime,
+			Reviewed:   state.Reviewed(),
+			Checkpoint: state.Checkpoint,
+		}),
 		Authentication: authorization.NewAuthentication("fixture-root-token", authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign),
 		Admission:      gate,
 		Lifetime:       lifetime,

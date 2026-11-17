@@ -19,11 +19,24 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	return service.AdmitForParent(ctx, principal, key, command, nil)
+// LifecycleRequest binds the authenticated scope, stable key and command before
+// selecting any parent transaction participant.
+type LifecycleRequest struct {
+	Principal authorization.Principal
+	Key       string
+	Command   operation.Command
 }
 
-func (service *Lifecycle) AdmitForParent(ctx context.Context, principal authorization.Principal, key string, command operation.Command, upper machine.ResourceParent) (operation.Record, error) {
+func (service *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+	return service.AdmitForParent(ctx, LifecycleRequest{
+		Principal: principal,
+		Key:       key,
+		Command:   command,
+	}, nil)
+}
+
+func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest, upper machine.ResourceParent) (operation.Record, error) {
+	principal, key, command := request.Principal, request.Key, request.Command
 	var empty operation.Record
 	if key == "" || len(key) > 256 || command.SandboxID == "" || principal.TenantID == "" || (principal.SandboxID != "" && (principal.SandboxID != command.SandboxID || command.Action != "release")) {
 		return empty, fmt.Errorf("%w: lifecycle request requires scoped sandbox and key", errs.ErrInvalid)
@@ -117,9 +130,6 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, principal authoriz
 	if command.Action == "checkpoint" && sandboxRecord.State == "paused" {
 		return service.admitPausedCheckpoint(ctx, parent, input, mac)
 	}
-	if command.Action == "release" && sandboxRecord.State == "paused" {
-		return service.admitPausedRelease(ctx, parent, input, mac, upper)
-	}
 	admission := &LifecycleAdmission{
 		History: service.proofs.Snapshots(),
 		Upper:   upper,
@@ -127,6 +137,9 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, principal authoriz
 		Input:   input,
 		MAC:     mac,
 		Role:    "capture",
+	}
+	if command.Action == "release" && sandboxRecord.State == "paused" {
+		return service.admitPausedRelease(ctx, admission)
 	}
 	var child operation.Record
 	if command.Action == "release" {

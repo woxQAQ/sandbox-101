@@ -35,7 +35,10 @@ func (service *VMDeletion) releaseGenerationSet(step ResourceStep) ([]ResourceSt
 	if err != nil {
 		return nil, err
 	}
-	return service.proofs.CleanupGenerations(service.ctx, tx, source, "cleanup", step.OperationID+":resource")
+	return service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":resource",
+	})
 }
 
 func (service *VMDeletion) runRelease(step ResourceStep) error {
@@ -283,7 +286,10 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	if err != nil {
 		return err
 	}
-	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, "cleanup", step.OperationID+":resource")
+	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":resource",
+	})
 	if err != nil {
 		return err
 	}
@@ -377,7 +383,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 			return err
 		}
 	}
-	if err = RetireVMPolicy(service.ctx, tx, generations, step.OperationID, service.proofs); err != nil {
+	if err = service.proofs.RetireVMPolicy(service.ctx, tx, generations, step.OperationID); err != nil {
 		return err
 	}
 	for _, generation := range generations {

@@ -22,7 +22,9 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	acceptedRecord := claimSandbox(t, service, "public-claim", nil, egress.Policy{
+	acceptedRecord := (sandboxClaims{
+		App: service,
+	}).claim(t, "public-claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	original, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
@@ -126,7 +128,9 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	acceptedRecord := claimSandbox(t, service, "claim-before-publication-fault", nil, egress.Policy{
+	acceptedRecord := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim-before-publication-fault", nil, egress.Policy{
 		Mode: "relay",
 	})
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER reject_public_delivery BEFORE INSERT ON operation_publications BEGIN SELECT RAISE(ABORT,'publication blocked'); END`); err != nil {
@@ -145,7 +149,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, principal, configure.ID); err == nil {
 		t.Fatal("publication fault returned success")
 	}
-	if _, err = service.Data.DataReady(ctx, principal, acceptedRecord.Result.SandboxID); err == nil {
+	if _, err = service.Dataplane.Ready(ctx, principal, acceptedRecord.Result.SandboxID); err == nil {
 		t.Fatal("failed public completion reopened data")
 	}
 	proxy.Mu.Lock()

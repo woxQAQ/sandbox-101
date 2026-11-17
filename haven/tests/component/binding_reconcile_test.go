@@ -22,7 +22,9 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 			true:  "tracked",
 		}[tracked], func(t *testing.T) {
 			service, _, guest, manager := testapp.SandboxFixture(t)
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			principal := authorization.Principal{
@@ -30,7 +32,7 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			connection, err := service.Data.Connect(ctx, principal, claim.Result.SandboxID)
+			connection, err := service.Dataplane.Connect(ctx, principal, claim.Result.SandboxID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -86,7 +88,9 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *testing.T) {
 	parallelLifecycle(t)
 	service, _, _, manager := testapp.SandboxFixture(t)
-	claim := claimSandbox(t, service, "binding-diagnostic", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "binding-diagnostic", nil, egress.Policy{
 		Mode: "none",
 	})
 	failure := errors.New("fixture cannot revoke residual binding")
@@ -123,7 +127,9 @@ func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "relay",
 		AllowedHosts: []string{
 			"unused.invalid",
@@ -142,7 +148,7 @@ func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
 	if !bound {
 		t.Fatal("restart returned before saved proxy was rebound")
 	}
-	after, err := service.Data.DataReady(ctx, principal, before.ID)
+	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
 	if err != nil || after.Instance != before.Instance || after.VMID != before.VMID || !after.Deadline.Equal(before.Deadline) {
 		t.Fatal("restart rebind changed identity or lease", before, after, err)
 	}

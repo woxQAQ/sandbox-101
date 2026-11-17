@@ -17,9 +17,21 @@ type RawTarget struct {
 	Parent       machine.ResourceParent
 }
 
+// ProvisionRequest carries the frozen caller request and its preflight materials.
+// The coordinator derives the request hash from Frozen; it is never supplied
+// independently. Restore is present only for a clone allocation.
+type ProvisionRequest struct {
+	TenantID string
+	Key      string
+	Frozen   []byte
+	Template TemplateRecord
+	Image    host.ImageManifest
+	Restore  *machine.SnapshotSource
+}
+
 // RawProvisioner retains the shared admission transaction and VM guard domain.
 // Supply owns its template parent; the resource coordinator owns child execution.
 type RawProvisioner interface {
-	AdmitRaw(context.Context, string, string, []byte, string, TemplateRecord, host.ImageManifest, *machine.Source, RawTarget) (operation.Record, error)
+	AdmitRaw(context.Context, ProvisionRequest, RawTarget) (operation.Record, error)
 	Continue(string) error
 }

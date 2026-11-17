@@ -96,11 +96,11 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	if err != nil {
 		return currentMachine, err
 	}
-	var version Version
+	var version RetainedVersion
 	if err = json.Unmarshal(retained.Body, &version); err != nil {
 		return currentMachine, err
 	}
-	if retained.ID != source.OperationID || retained.OperationID != source.OperationID || retained.StepKey != source.Key || !reflect.DeepEqual(version, Version{
+	if retained.ID != source.OperationID || retained.OperationID != source.OperationID || retained.StepKey != source.Key || !reflect.DeepEqual(version, RetainedVersion{
 		Resource:     source.Input.Resource,
 		DiskIdentity: source.State.DiskIdentity,
 	}) {
@@ -123,7 +123,10 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	if err = CheckTransferredCaptures(service.ctx, tx, step); err != nil {
 		return currentMachine, err
 	}
-	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, "cleanup", step.OperationID+":resource")
+	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":resource",
+	})
 	if err != nil {
 		return currentMachine, err
 	}

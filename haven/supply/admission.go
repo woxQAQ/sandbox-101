@@ -31,10 +31,11 @@ func (parent *SupplyAdmission) ProvisioningTemplate() (TemplateRecord, bool) {
 	return parent.Input.Template, true
 }
 
-func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, hash string) error {
+func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
 	if admission == nil {
 		return nil
 	}
+	child := request.Child
 	input, parent := admission.Input, admission.Parent
 	existing, err := LoadSupply(ctx, tx, parent.ID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -115,7 +116,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 			return err
 		}
 		if input.Command.Action == "template_build" {
-			if err = reservePublication(ctx, tx, input.Template, input.Previous, parent.ID); err != nil {
+			if err = input.Template.reservePublication(ctx, tx, input.Previous, parent.ID); err != nil {
 				return err
 			}
 		} else {
@@ -163,5 +164,8 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 			}
 		}
 	}
-	return machine.InsertResourceLink(ctx, tx, parent.ID, admission.Role, "", child, kind, candidate, hash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID: parent.ID,
+		Role:        admission.Role,
+	}, request)
 }

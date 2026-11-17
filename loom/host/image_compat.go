@@ -244,7 +244,9 @@ func materializeMergedOCI(ctx context.Context, input, out, digest string) (err e
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, os.RemoveAll(stage)) }()
+	defer func() {
+		err = errors.Join(err, os.RemoveAll(stage))
+	}()
 	root := filepath.Join(stage, "root")
 	umoci, err := exec.LookPath("umoci")
 	if err != nil {

@@ -7,6 +7,13 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+// Scope keeps an operation's durable authorization kind and identity together.
+// The caller must still establish authority before querying that scope.
+type Scope struct {
+	Kind string
+	ID   string
+}
+
 // RequestIdentity keeps the original request alongside its current status.
 // Readers verify the stored bytes; current resource ownership cannot replace it.
 type RequestIdentity struct {

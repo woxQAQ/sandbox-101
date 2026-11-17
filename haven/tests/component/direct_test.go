@@ -77,7 +77,8 @@ type directEgress struct {
 	cleanups  map[string]func() error
 }
 
-func (manager *directEgress) Bind(ctx context.Context, id, tenant, path string, policy egress.Policy, secrets map[string]egress.Secret) error {
+func (manager *directEgress) Bind(ctx context.Context, target egress.BindingTarget, policy egress.Policy, secrets map[string]egress.Secret) error {
+	id, tenant, path := target.SandboxID, target.TenantID, target.VSockPath
 	if policy.Mode == "direct" {
 		cleanup, err := manager.service.DirectBindings.InstallDirect(ctx, egress.Binding{
 			SandboxID: id,
@@ -92,7 +93,7 @@ func (manager *directEgress) Bind(ctx context.Context, id, tenant, path string, 
 		manager.cleanups[id] = cleanup
 		manager.cleanupMu.Unlock()
 	}
-	return manager.EgressFixture.Bind(ctx, id, tenant, path, policy, secrets)
+	return manager.EgressFixture.Bind(ctx, target, policy, secrets)
 }
 
 func (manager *directEgress) Revoke(id string) error {
@@ -171,7 +172,9 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	}
-	claim := claimSandbox(t, service, "claim", nil, direct)
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, direct)
 	waitFixtureWorker(t, service, claim.ID)
 	runtime.policyMu.Lock()
 	events := append([]string(nil), runtime.events...)
@@ -225,7 +228,7 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	if before != after {
 		t.Fatal("old binding cleanup mutated successor policy", before, after)
 	}
-	sandbox, err := service.Data.DataReady(ctx, principal, claim.Result.SandboxID)
+	sandbox, err := service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +248,9 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
 		AllowedCIDRs: []string{
 			"8.8.8.8/32",
@@ -298,7 +303,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err = service.Data.DataReady(ctx, principal, claim.Result.SandboxID); err == nil {
+	if _, err = service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID); err == nil {
 		t.Fatal("retirement removed failed configuration fence")
 	}
 	if _, err = service.SandboxRequests.Execute(ctx, principal, "repair", operation.Command{

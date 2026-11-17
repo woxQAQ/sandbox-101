@@ -6,9 +6,18 @@ import (
 	"path/filepath"
 )
 
+// SnapshotDeletionTarget binds the published snapshot identity to its frozen
+// directory inode and exact artifact digests.
+type SnapshotDeletionTarget struct {
+	ID          string
+	Publication FileIdentity
+	Files       map[string]string
+}
+
 // InspectSnapshotDeletion requires the original published directory and fixed
 // artifact digests before recording the first precise deletion receipt.
-func InspectSnapshotDeletion(ctx context.Context, stateRoot, id string, publication FileIdentity, files map[string]string) (DeletionIntent, error) {
+func InspectSnapshotDeletion(ctx context.Context, stateRoot string, target SnapshotDeletionTarget) (DeletionIntent, error) {
+	id, publication, files := target.ID, target.Publication, target.Files
 	var empty DeletionIntent
 	if !ValidResourceID(id, "snap-") || publication.Inode == 0 || len(files) != 4 {
 		return empty, fmt.Errorf("snapshot deletion publication proof missing")
@@ -43,7 +52,7 @@ func InspectSnapshotDeletion(ctx context.Context, stateRoot, id string, publicat
 		}
 		allowed[name] = files[name]
 	}
-	paths, err := OwnedFiles(ctx, stateRoot, path, allowed, true)
+	paths, err := OwnedDirectoryFiles(ctx, stateRoot, path, allowed)
 	if err != nil {
 		return empty, err
 	}

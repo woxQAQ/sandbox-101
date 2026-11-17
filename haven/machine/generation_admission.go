@@ -65,7 +65,7 @@ func RetainGenerationIntent(ctx context.Context, tx *sql.Tx, owner string, recor
 		VmID:        record.Resource.VMID,
 		OperationID: owner,
 		StepKey:     "resource",
-		Body: operation.Encode(Version{
+		Body: operation.Encode(RetainedVersion{
 			Resource: record.Resource,
 		}),
 	}))

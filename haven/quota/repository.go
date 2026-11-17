@@ -8,6 +8,13 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+// Holder identifies one durable responsibility destination. Kind and ID travel
+// together when verifying a cost against its original owner.
+type Holder struct {
+	Kind string
+	ID   string
+}
+
 // ResourceReference names a holder that prevents a resource from becoming
 // unreachable. It is distinct from the holder of a tenant's charged cost.
 type ResourceReference struct {
@@ -39,15 +46,15 @@ func New(query store.DBTX) *Repository {
 
 // CountStorageCostReference checks the original storage charge and its holder.
 // Slot units are not part of this historical disk proof.
-func (r *Repository) CountStorageCostReference(ctx context.Context, cost CostIdentity, storageMiB int64, holderKind, holderID string) (int64, error) {
+func (r *Repository) CountStorageCostReference(ctx context.Context, cost CostIdentity, storageMiB int64, holder Holder) (int64, error) {
 	return r.queries.CountStorageCostReference(ctx, dbgen.CountStorageCostReferenceParams{
 		TenantID:          cost.TenantID,
 		Kind:              cost.Kind,
 		ResourceKey:       cost.Key,
 		StorageMib:        storageMiB,
 		SourceOperationID: cost.SourceOperation,
-		HolderKind:        holderKind,
-		HolderID:          holderID,
+		HolderKind:        holder.Kind,
+		HolderID:          holder.ID,
 	})
 }
 

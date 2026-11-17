@@ -58,11 +58,11 @@ sql:
         omit_unused_structs: true
   - engine: sqlite
     schema: store/migrations
-    queries: collection/workflows.sql
+    queries: gc/workflows.sql
     gen:
       go:
         package: dbgen
-        out: collection/internal/dbgen
+        out: gc/internal/dbgen
         omit_unused_structs: true
   - engine: sqlite
     schema: store/migrations

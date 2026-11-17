@@ -41,7 +41,7 @@ func (service *CaptureDiscard) checkCaptureDiscard(step CaptureDiscardStep) erro
 	if !reflect.DeepEqual(current, step) {
 		return fmt.Errorf("capture discard current intent changed")
 	}
-	return service.captureDiscardProof(service.ctx, tx, step, false)
+	return service.captureDiscardProof(service.ctx, tx, step)
 }
 
 func (service *CaptureDiscard) inspectCaptureDiscardSource(step CaptureDiscardStep) error {
@@ -49,7 +49,7 @@ func (service *CaptureDiscard) inspectCaptureDiscardSource(step CaptureDiscardSt
 	tx, err := service.store.Database.BeginTx(service.ctx, nil)
 	var history []ResourceStep
 	if err == nil {
-		err = service.captureDiscardProof(service.ctx, tx, step, false)
+		err = service.captureDiscardProof(service.ctx, tx, step)
 		if err == nil {
 			history, err = service.proofs.GenerationHistory(service.ctx, tx, step.Input.Source.Input.Source)
 		}
@@ -96,7 +96,12 @@ func (service *CaptureDiscard) captureDiscardReceipts(step *CaptureDiscardStep) 
 		return nil, fmt.Errorf("capture discard incomplete durable receipt set")
 	}
 	source := step.Input.Source
-	intents, err := loom.InspectCaptureDeletion(service.ctx, service.store.Directory, source.Input.Source.Input.Resource, source.OperationID, source.Input.Snapshot.ID, source.State.Boundary)
+	intents, err := loom.InspectCaptureDeletion(service.ctx, service.store.Directory, loom.CaptureDeletionTarget{
+		Resource:    source.Input.Source.Input.Resource,
+		OperationID: source.OperationID,
+		SnapshotID:  source.Input.Snapshot.ID,
+		Boundary:    source.State.Boundary,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +124,7 @@ func (service *CaptureDiscard) captureDiscardReceipts(step *CaptureDiscardStep) 
 	if !reflect.DeepEqual(current, *step) {
 		return nil, fmt.Errorf("capture discard receipt intent changed")
 	}
-	if err = service.captureDiscardProof(service.ctx, tx, *step, false); err != nil {
+	if err = service.captureDiscardProof(service.ctx, tx, *step); err != nil {
 		return nil, err
 	}
 
@@ -232,7 +237,7 @@ func (service *CaptureDiscard) markCaptureDiscardRemoved(step *CaptureDiscardSte
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.captureDiscardProof(service.ctx, tx, *step, false); err != nil {
+	if err = service.captureDiscardProof(service.ctx, tx, *step); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).ReplaceRunningStepBody(service.ctx, dbgen.ReplaceRunningStepBodyParams{
@@ -271,7 +276,7 @@ func (service *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) e
 	if !reflect.DeepEqual(current, step) || step.Phase != "files_removed" {
 		return fmt.Errorf("capture discard completion changed")
 	}
-	if err = service.captureDiscardProof(service.ctx, tx, step, false); err != nil {
+	if err = service.captureDiscardProof(service.ctx, tx, step); err != nil {
 		return err
 	}
 	source := step.Input.Source

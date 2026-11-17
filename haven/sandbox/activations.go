@@ -24,7 +24,7 @@ type ActivationGuest interface {
 }
 
 type EgressBindings interface {
-	Bind(context.Context, string, string, string, egress.Policy, map[string]egress.Secret) error
+	Bind(context.Context, egress.BindingTarget, egress.Policy, map[string]egress.Secret) error
 	Revoke(string) error
 }
 
@@ -41,6 +41,16 @@ type ActivationOptions struct {
 	CAPEM   string
 	Epoch   string
 	Fault   func(string) error
+}
+
+// ActivationDependencies names the shared guards, lifetime and publication
+// authority borrowed while activating a sandbox.
+type ActivationDependencies struct {
+	Guards    ActivationGuards
+	Lifetime  *execution.Lifetime
+	Registry  *access.Registry
+	Proofs    machine.ResourceProofs
+	Committer *operation.Committer
 }
 
 // Activations establishes guest delivery under a frozen configuration. The
@@ -62,7 +72,7 @@ type Activations struct {
 	committer  *operation.Committer
 }
 
-func NewActivations(state *store.State, guards ActivationGuards, lifetime *execution.Lifetime, registry *access.Registry, proofs machine.ResourceProofs, options ActivationOptions, committer *operation.Committer) *Activations {
+func NewActivations(state *store.State, dependencies ActivationDependencies, options ActivationOptions) *Activations {
 	return &Activations{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -70,18 +80,19 @@ func NewActivations(state *store.State, guards ActivationGuards, lifetime *execu
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        lifetime.Context(),
-		admission:  guards.Admission(),
-		guards:     guards,
-		proofs:     proofs,
+		ctx:        dependencies.Lifetime.Context(),
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		proofs:     dependencies.Proofs,
 		backend:    options.Backend,
 		guest:      options.Guest,
 		egress:     options.Egress,
 		caPEM:      options.CAPEM,
 		epoch:      options.Epoch,
-		access:     registry,
+		access:     dependencies.Registry,
 		sign:       state.Sign,
-		faultPoint: options.Fault, committer: committer,
+		faultPoint: options.Fault,
+		committer:  dependencies.Committer,
 	}
 }
 

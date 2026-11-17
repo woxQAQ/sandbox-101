@@ -45,9 +45,15 @@ type SupplyOptions struct {
 	Fault   func(string) error
 }
 
-// SupplyDependencies names the business capabilities needed for template
-// publication and warm pool production. Each service retains its own custody.
+// SupplyDependencies names the shared execution mechanisms and capabilities
+// needed for template publication and warm pool production. Each service retains
+// its own custody.
 type SupplyDependencies struct {
+	Guards       SupplyGuards
+	Gate         execution.AdmissionGate
+	Workers      *execution.Workers
+	Proofs       machine.ResourceProofs
+	Committer    *operation.Committer
 	Commands     *operation.CommandIdentity
 	Availability *execution.Availability
 	Provisioning RawProvisioner
@@ -80,7 +86,7 @@ type Supply struct {
 	committer    *operation.Committer
 }
 
-func NewSupply(state *store.State, guards SupplyGuards, gate execution.AdmissionGate, workers *execution.Workers, proofs machine.ResourceProofs, dependencies SupplyDependencies, options SupplyOptions, committer *operation.Committer) *Supply {
+func NewSupply(state *store.State, dependencies SupplyDependencies, options SupplyOptions) *Supply {
 	return &Supply{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -88,12 +94,12 @@ func NewSupply(state *store.State, guards SupplyGuards, gate execution.Admission
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          workers.Context(),
-		admission:    guards.Admission(),
-		gate:         gate,
-		guards:       guards,
-		workers:      workers,
-		proofs:       proofs,
+		ctx:          dependencies.Workers.Context(),
+		admission:    dependencies.Guards.Admission(),
+		gate:         dependencies.Gate,
+		guards:       dependencies.Guards,
+		workers:      dependencies.Workers,
+		proofs:       dependencies.Proofs,
 		commands:     dependencies.Commands,
 		availability: dependencies.Availability,
 		provisioning: dependencies.Provisioning,
@@ -103,7 +109,7 @@ func NewSupply(state *store.State, guards SupplyGuards, gate execution.Admission
 		policies:     dependencies.Policies,
 		links:        dependencies.Links,
 		opts:         options,
-		committer:    committer,
+		committer:    dependencies.Committer,
 	}
 }
 
@@ -115,7 +121,9 @@ func (service *Supply) fault(point string) error {
 }
 
 func (service *Supply) existing(ctx context.Context, principal authorization.Principal, key, mac string) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Existing(ctx, principal, key, mac, nil)
+	accepted, found, err := service.commands.Existing(ctx, principal, key, operation.CommandCredentials{
+		MAC: mac,
+	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		service.dispatch(accepted.ID)
 	}

@@ -16,9 +16,21 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
+// WarmClaimRequest carries the prepared claim credentials and the concrete
+// golden publication used to verify ready-pool selection and fallback custody.
+type WarmClaimRequest struct {
+	Principal authorization.Principal
+	Key       string
+	Admission ClaimAdmission
+	Template  supply.TemplateRecord
+	Restore   machine.SnapshotSource
+}
+
 // Admit borrows the caller's tenant request guard and selects a ready warm
 // allocation atomically. A false found result permits the original cold path.
-func (service *WarmClaims) Admit(ctx context.Context, principal authorization.Principal, key string, admission ClaimAdmission, selectedTemplate supply.TemplateRecord, restore machine.Source) (operation.Record, bool, error) {
+func (service *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.Record, bool, error) {
+	principal, key, admission := request.Principal, request.Key, request.Admission
+	selectedTemplate, restore := request.Template, request.Restore
 	var empty operation.Record
 	service.admission.Lock()
 	defer service.admission.Unlock()
@@ -190,7 +202,7 @@ func (service *WarmClaims) Admit(ctx context.Context, principal authorization.Pr
 	if err = supply.SelectWarm(ctx, tx, poolID, selected); err != nil {
 		return empty, false, err
 	}
-	if err = machine.PinSnapshotSource(ctx, tx, selectedTemplate.TenantID, machine.Lease{
+	if err = machine.PinSnapshotSource(ctx, tx, selectedTemplate.TenantID, machine.SourceLease{
 		SnapshotID:  selectedTemplate.SnapshotID,
 		OperationID: accepted.ID,
 		StepKey:     "warm_claim",

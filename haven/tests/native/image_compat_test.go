@@ -113,13 +113,21 @@ func TestActualOCIUsesPrivateWorkDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(t, layout, "host-tools", []ociLayerFixture{layer})
-	for _, materialization := range []string{LayeredEROFSLayout, MergedOCIEROFSLayout} {
+	image := putOCIManifest(t, layout, "host-tools", []ociLayerFixture{
+		layer,
+	})
+	for _, materialization := range []string{
+		LayeredEROFSLayout,
+		MergedOCIEROFSLayout,
+	} {
 		t.Run(materialization, func(t *testing.T) {
 			e := nativeImageFixtureAt(t, filepath.Join(t.TempDir(), "state with spaces"))
 			manifest, err := e.ImportOCI(context.Background(), ImportOptions{
-				Layout: layout, Digest: image, Materialization: materialization,
-				MaxBytes: 4 << 20, MaxFiles: 1000,
+				Layout:          layout,
+				Digest:          image,
+				Materialization: materialization,
+				MaxBytes:        4 << 20,
+				MaxFiles:        1000,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -551,7 +559,14 @@ func TestMergedOCIPreflight(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			file, diff := layerFixture(t, header)
-			if _, _, err := validateLayerFor(file, v1.MediaTypeImageLayer, diff, 1<<20, 100, true); err == nil {
+			if _, _, err := validateLayer(layerInput{
+				Path:      file,
+				MediaType: v1.MediaTypeImageLayer,
+				DiffID:    diff,
+			}, layerLimits{
+				MaxBytes: 1 << 20,
+				MaxFiles: 100,
+			}); err == nil {
 				t.Fatal("compatibility bypassed security preflight")
 			}
 		})
@@ -566,25 +581,31 @@ func TestMergedOCIPreflight(t *testing.T) {
 		"files": {1 << 20, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := validateLayerFor(
-				file,
-				v1.MediaTypeImageLayer,
-				diff,
-				limits[0],
-				limits[1],
-				true,
+			if _, _, err := validateLayer(
+				layerInput{
+					Path:      file,
+					MediaType: v1.MediaTypeImageLayer,
+					DiffID:    diff,
+				},
+				layerLimits{
+					MaxBytes: limits[0],
+					MaxFiles: limits[1],
+				},
 			); err == nil {
 				t.Fatal("compatibility bypassed resource bounds")
 			}
 		})
 	}
-	if _, _, err := validateLayerFor(
-		file,
-		v1.MediaTypeImageLayer,
-		"sha256:"+strings.Repeat("0", 64),
-		1<<20,
-		100,
-		true,
+	if _, _, err := validateLayer(
+		layerInput{
+			Path:      file,
+			MediaType: v1.MediaTypeImageLayer,
+			DiffID:    "sha256:" + strings.Repeat("0", 64),
+		},
+		layerLimits{
+			MaxBytes: 1 << 20,
+			MaxFiles: 100,
+		},
 	); err == nil {
 		t.Fatal("compatibility bypassed diff_id validation")
 	}

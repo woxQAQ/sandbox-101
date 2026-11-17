@@ -42,7 +42,17 @@ func New(endpoint, token string) *Client {
 	}
 }
 
-func call[T any](ctx context.Context, c *Client, method, path, key string, body any) (T, error) {
+// controlRequest describes one control-plane HTTP message. Authentication and
+// transport remain attached to the client that sends it.
+type controlRequest struct {
+	Method string
+	Path   string
+	Key    string
+	Body   any
+}
+
+func call[T any](ctx context.Context, c *Client, message controlRequest) (T, error) {
+	method, path, key, body := message.Method, message.Path, message.Key, message.Body
 	var result T
 	var reader io.Reader
 	if body != nil {
@@ -83,27 +93,50 @@ func call[T any](ctx context.Context, c *Client, method, path, key string, body 
 }
 
 func (c *Client) Claim(ctx context.Context, key string, command types.Command) (types.Result, error) {
-	return call[types.Result](ctx, c, "POST", "/v1/claim", key, command)
+	return call[types.Result](ctx, c, controlRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Key:    key,
+		Body:   command,
+	})
 }
 
 func (c *Client) Change(ctx context.Context, id, key string, command types.Command) (types.Result, error) {
-	return call[types.Result](ctx, c, "POST", "/v1/sandboxes/"+url.PathEscape(id)+"/"+url.PathEscape(command.Action), key, command)
+	return call[types.Result](ctx, c, controlRequest{
+		Method: "POST",
+		Path:   "/v1/sandboxes/" + url.PathEscape(id) + "/" + url.PathEscape(command.Action),
+		Key:    key,
+		Body:   command,
+	})
 }
 
 func (c *Client) List(ctx context.Context) ([]types.Sandbox, error) {
-	return call[[]types.Sandbox](ctx, c, "GET", "/v1/sandboxes", "", nil)
+	return call[[]types.Sandbox](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes",
+	})
 }
 
 func (c *Client) Get(ctx context.Context, id string) (types.Sandbox, error) {
-	return call[types.Sandbox](ctx, c, "GET", "/v1/sandboxes/"+url.PathEscape(id), "", nil)
+	return call[types.Sandbox](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes/" + url.PathEscape(id),
+	})
 }
 
 func (c *Client) Operation(ctx context.Context, id string) (types.Operation, error) {
-	return call[types.Operation](ctx, c, "GET", "/v1/operations/"+url.PathEscape(id), "", nil)
+	return call[types.Operation](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/operations/" + url.PathEscape(id),
+	})
 }
 
 func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (types.Result, error) {
-	return call[types.Result](ctx, c, "DELETE", "/v1/checkpoints/"+url.PathEscape(id), key, nil)
+	return call[types.Result](ctx, c, controlRequest{
+		Method: "DELETE",
+		Path:   "/v1/checkpoints/" + url.PathEscape(id),
+		Key:    key,
+	})
 }
 
 func (c *Client) PutTemplate(ctx context.Context, key string, template types.Template, build bool) (types.Result, error) {
@@ -111,22 +144,37 @@ func (c *Client) PutTemplate(ctx context.Context, key string, template types.Tem
 	if build {
 		action = "template_build"
 	}
-	return call[types.Result](ctx, c, "POST", "/v1/templates", key, types.Command{
-		Action:   action,
-		Template: &template,
+	return call[types.Result](ctx, c, controlRequest{
+		Method: "POST",
+		Path:   "/v1/templates",
+		Key:    key,
+		Body: types.Command{
+			Action:   action,
+			Template: &template,
+		},
 	})
 }
 
 func (c *Client) PutTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error) {
-	return call[types.Tenant](ctx, c, "POST", "/v1/tenants", "", tenant)
+	return call[types.Tenant](ctx, c, controlRequest{
+		Method: "POST",
+		Path:   "/v1/tenants",
+		Body:   tenant,
+	})
 }
 
 func (c *Client) Templates(ctx context.Context) ([]types.Template, error) {
-	return call[[]types.Template](ctx, c, "GET", "/v1/templates", "", nil)
+	return call[[]types.Template](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/templates",
+	})
 }
 
 func (c *Client) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
-	return call[[]types.Checkpoint](ctx, c, "GET", "/v1/checkpoints", "", nil)
+	return call[[]types.Checkpoint](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/checkpoints",
+	})
 }
 
 type Connection struct {

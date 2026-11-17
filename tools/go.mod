@@ -5,6 +5,7 @@ go 1.26.5
 tool (
 	github.com/sqlc-dev/sqlc/cmd/sqlc
 	github.com/woxQAQ/haven/tools/structfmt
+	github.com/woxQAQ/long-funcparam-detectorgo
 )
 
 require golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
@@ -42,6 +43,7 @@ require (
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/wasilibs/go-pgquery v0.0.0-20250409022910-10ac41983c07 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
+	github.com/woxQAQ/long-funcparam-detectorgo v0.0.0-20261113055126-cdb409678806 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect

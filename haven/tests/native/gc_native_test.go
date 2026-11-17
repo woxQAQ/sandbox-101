@@ -51,7 +51,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	work := fixture.importWork(t, published.Digest)
-	if _, err := fixture.service.GarbageCollection.CollectGarbage(ctx, root, "native-dry", types.GCOptions{
+	if _, err := fixture.service.GC.Collect(ctx, root, "native-dry", types.GCOptions{
 		DryRun: true,
 		Budget: 20 * time.Second,
 	}); err != nil {
@@ -68,7 +68,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	}
 	var deferred []types.GCItem
 	for index := range 3 {
-		report, err := fixture.service.GarbageCollection.CollectGarbage(ctx, root, string(rune('a'+index)), types.GCOptions{
+		report, err := fixture.service.GC.Collect(ctx, root, string(rune('a'+index)), types.GCOptions{
 			Budget: 20 * time.Second,
 		})
 		if err != nil {
@@ -115,7 +115,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 		})
 	}
 	for index := range 10 {
-		_, err := fixture.service.GarbageCollection.CollectGarbage(ctx, root, "concurrent-"+string(rune('a'+index)), types.GCOptions{
+		_, err := fixture.service.GC.Collect(ctx, root, "concurrent-"+string(rune('a'+index)), types.GCOptions{
 			Budget: 20 * time.Second,
 		})
 		if err != nil && !errors.Is(err, errs.ErrConflict) {

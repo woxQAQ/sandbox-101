@@ -38,7 +38,19 @@ type VMDeletion struct {
 	usage      VMUsageReader
 }
 
-func NewVMDeletion(state *store.State, guards VMGuards, lifetime *execution.Lifetime, workers *execution.Workers, proofs ResourceProofs, backend DeletionBackend, fault func(string) error, committer *operation.Committer, ownership DeletionOwnershipReader, handoff DeletionParticipant, usage VMUsageReader) *VMDeletion {
+type VMDeletionDependencies struct {
+	Guards    VMGuards
+	Lifetime  *execution.Lifetime
+	Workers   *execution.Workers
+	Proofs    ResourceProofs
+	Backend   DeletionBackend
+	Committer *operation.Committer
+	Ownership DeletionOwnershipReader
+	Handoff   DeletionParticipant
+	Usage     VMUsageReader
+}
+
+func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, fault func(string) error) *VMDeletion {
 	return &VMDeletion{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -46,17 +58,18 @@ func NewVMDeletion(state *store.State, guards VMGuards, lifetime *execution.Life
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        workers.Context(),
-		admission:  guards.Admission(),
-		guards:     guards,
-		lifetime:   lifetime,
-		workers:    workers,
-		proofs:     proofs,
-		backend:    backend,
-		ownership:  ownership,
-		handoff:    handoff,
-		usage:      usage,
-		faultPoint: fault, committer: committer,
+		ctx:        dependencies.Workers.Context(),
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		lifetime:   dependencies.Lifetime,
+		workers:    dependencies.Workers,
+		proofs:     dependencies.Proofs,
+		backend:    dependencies.Backend,
+		ownership:  dependencies.Ownership,
+		handoff:    dependencies.Handoff,
+		usage:      dependencies.Usage,
+		faultPoint: fault,
+		committer:  dependencies.Committer,
 	}
 }
 

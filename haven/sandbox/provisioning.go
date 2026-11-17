@@ -24,6 +24,21 @@ type ProvisionOptions struct {
 	Fault    func(string) error
 }
 
+// ProvisionDependencies supplies the coordinator's shared execution owners and
+// physical capabilities. Construction does not select workflow modes.
+type ProvisionDependencies struct {
+	Guards      ProvisionGuards
+	Lifetime    *execution.Lifetime
+	Gate        execution.AdmissionGate
+	Workers     *execution.Workers
+	Registry    *access.Registry
+	Proofs      machine.ResourceProofs
+	Activations *Activations
+	Policies    *machine.DirectPolicies
+	Committer   *operation.Committer
+	Physical    *machine.Provisioning
+}
+
 // VMProvisioning admits and executes cold/clone/restore intents using the shared
 // admission gate and workers. It owns no independent shutdown or runner state.
 type VMProvisioning struct {
@@ -45,7 +60,7 @@ type VMProvisioning struct {
 	physical    *machine.Provisioning
 }
 
-func NewVMProvisioning(state *store.State, guards ProvisionGuards, lifetime *execution.Lifetime, gate execution.AdmissionGate, workers *execution.Workers, registry *access.Registry, proofs machine.ResourceProofs, activations *Activations, policies *machine.DirectPolicies, options ProvisionOptions, committer *operation.Committer, physical *machine.Provisioning) *VMProvisioning {
+func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, options ProvisionOptions) *VMProvisioning {
 	return &VMProvisioning{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -53,20 +68,21 @@ func NewVMProvisioning(state *store.State, guards ProvisionGuards, lifetime *exe
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:         lifetime.Context(),
-		lifetime:    lifetime,
-		admission:   guards.Admission(),
-		guards:      guards,
-		proofs:      proofs,
-		gate:        gate,
-		workers:     workers,
-		access:      registry,
-		policies:    policies,
+		ctx:         dependencies.Lifetime.Context(),
+		lifetime:    dependencies.Lifetime,
+		admission:   dependencies.Guards.Admission(),
+		guards:      dependencies.Guards,
+		proofs:      dependencies.Proofs,
+		gate:        dependencies.Gate,
+		workers:     dependencies.Workers,
+		access:      dependencies.Registry,
+		policies:    dependencies.Policies,
 		backend:     options.Backend,
-		activations: activations,
-		physical:    physical,
+		activations: dependencies.Activations,
+		physical:    dependencies.Physical,
 		capacity:    options.Capacity,
-		faultPoint:  options.Fault, committer: committer,
+		faultPoint:  options.Fault,
+		committer:   dependencies.Committer,
 	}
 }
 

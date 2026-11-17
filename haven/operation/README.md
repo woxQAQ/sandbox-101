@@ -1,6 +1,6 @@
 # Operation 身份与冻结协议
 
-operation 保存 operation 的公共身份、幂等、终态、通用链接头及 publication/recovery 协议。业务资格与 step/cleanup/deletion 行族查询属于 image、machine、supply、sandbox、collection 各自的私有 sqlc；相同物理表不代表共享业务写权限。
+operation 保存 operation 的公共身份、幂等、终态、通用链接头及 publication/recovery 协议。业务资格与 step/cleanup/deletion 行族查询属于 image、machine、supply、sandbox、gc 各自的私有 sqlc；相同物理表不代表共享业务写权限。
 
 `Command`、`EnvVar` 和 `TemplateSpec` 是跨用例使用的冻结命令结构。`TemplateSpec` 表示命令中的模板规格；它不读取或授权模板 catalog。类型移动保留字段顺序、JSON tags、nil 与摘要，不替换 wire DTO。`EnvVar.Inject` 使用 authorization 的原注入描述值；进入持久请求前仍由业务入口净化 secret。
 

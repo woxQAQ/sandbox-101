@@ -103,12 +103,17 @@ func (fixture *nativeImageFixture) importWork(t *testing.T, imageID string) stri
 // These names keep the retained native scenarios readable while calling the
 // resource effects directly; they contain no control state or publication logic.
 type (
-	ImageManifest   = host.ImageManifest
-	ImageArtifact   = host.ImageArtifact
-	ImportOptions   = imageimport.ImageImportOptions
-	layerCache      = host.LayerCache
-	cachedHeader    = host.CachedHeader
-	headerAttribute = host.HeaderAttribute
+	ImageManifest         = host.ImageManifest
+	ImageArtifact         = host.ImageArtifact
+	ImportOptions         = imageimport.ImageImportOptions
+	layerCache            = host.LayerCache
+	layerInput            = host.LayerInput
+	layerCacheRequest     = host.LayerCacheRequest
+	fsmetaLayers          = host.FsmetaLayers
+	layerArtifactIdentity = host.LayerArtifactIdentity
+	layerLimits           = host.LayerLimits
+	cachedHeader          = host.CachedHeader
+	headerAttribute       = host.HeaderAttribute
 )
 
 const (
@@ -126,7 +131,6 @@ var (
 	blob               = host.Blob
 	readBlobJSON       = host.ReadBlobJSON
 	validateLayer      = host.ValidateLayer
-	validateLayerFor   = host.ValidateLayerFor
 	validateLayerEntry = host.ValidateLayerEntry
 	buildLayerCache    = host.BuildLayerCache
 	materializeFsmeta  = host.MaterializeFsmeta

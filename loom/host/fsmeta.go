@@ -55,16 +55,17 @@ func layerUUID(diff string) string {
 	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
 }
 
-func dataArtifact(builder, diff, hash, receipt string, index int) ImageArtifact {
+func DataArtifact(identity LayerArtifactIdentity, index int) ImageArtifact {
+	builder, diff := identity.Builder, identity.DiffID
 	return ImageArtifact{
 		Role:        "layer",
 		Path:        layerRelativePath(builder, diff),
-		SHA256:      hash,
+		SHA256:      identity.SHA256,
 		DiffID:      diff,
 		DeviceID:    index + 1,
 		GuestPath:   fmt.Sprintf("/sandbox/ro/data-%04d.erofs", index),
 		Serial:      fmt.Sprintf("sandbox-data-%04d", index),
-		CacheSHA256: receipt,
+		CacheSHA256: identity.CacheSHA256,
 	}
 }
 
@@ -122,7 +123,12 @@ func (m ImageManifest) validateLayered() error {
 				return bad()
 			}
 		}
-		if a != dataArtifact(m.Builder, diff, a.SHA256, a.CacheSHA256, i) {
+		if a != DataArtifact(LayerArtifactIdentity{
+			Builder:     m.Builder,
+			DiffID:      diff,
+			SHA256:      a.SHA256,
+			CacheSHA256: a.CacheSHA256,
+		}, i) {
 			return bad()
 		}
 	}

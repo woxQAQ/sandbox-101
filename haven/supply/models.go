@@ -14,14 +14,14 @@ import (
 )
 
 type SupplyInput struct {
-	RequesterRoot   bool              `json:"requester_root,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	RequestTenantID string            `json:"request_tenant_id"`
-	Command         operation.Command `json:"command"`
-	Template        TemplateRecord    `json:"template"`
-	Previous        *TemplateRecord   `json:"previous,omitempty"`
-	Source          *machine.Source   `json:"source,omitempty"`
-	SandboxID       string            `json:"sandbox_id"`
+	RequesterRoot   bool                    `json:"requester_root,omitempty"`
+	CreatedAt       time.Time               `json:"created_at"`
+	RequestTenantID string                  `json:"request_tenant_id"`
+	Command         operation.Command       `json:"command"`
+	Template        TemplateRecord          `json:"template"`
+	Previous        *TemplateRecord         `json:"previous,omitempty"`
+	Source          *machine.SnapshotSource `json:"source,omitempty"`
+	SandboxID       string                  `json:"sandbox_id"`
 }
 
 type SupplyState struct {
@@ -65,7 +65,10 @@ func LoadSupply(ctx context.Context, database store.DBTX, id string) (SupplyStep
 	step := SupplyStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "supply"})
+	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "supply",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
@@ -94,7 +97,10 @@ func LoadSupplyCleanup(ctx context.Context, database store.DBTX, id string) (Sup
 	step := SupplyCleanupStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "supply_cleanup"})
+	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "supply_cleanup",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

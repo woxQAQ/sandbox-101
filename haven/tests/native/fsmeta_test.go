@@ -482,7 +482,12 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 	m.Layers[0], m.Layers[1] = m.Layers[1], m.Layers[0]
 	for i := range 2 {
 		a := original.Artifacts[2-i]
-		m.Artifacts[i+1] = dataArtifact(m.Builder, m.DiffIDs[i], a.SHA256, a.CacheSHA256, i)
+		m.Artifacts[i+1] = dataArtifact(layerArtifactIdentity{
+			Builder:     m.Builder,
+			DiffID:      m.DiffIDs[i],
+			SHA256:      a.SHA256,
+			CacheSHA256: a.CacheSHA256,
+		}, i)
 	}
 	if err := m.Verify(dir, original.Digest); err == nil {
 		t.Fatal("manifest reordered without rebuilding device_table accepted")

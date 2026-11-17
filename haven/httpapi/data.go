@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -39,12 +40,12 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 		})
 		return
 	}
-	if _, err := adapter.data.DataReady(r.Context(), principal, id); err != nil {
+	if _, err := adapter.plane.Ready(r.Context(), principal, id); err != nil {
 		writeError(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	upstream, err := adapter.data.Connect(ctx, principal, id)
+	upstream, err := adapter.plane.Connect(ctx, principal, id)
 	cancel()
 	if err != nil {
 		writeError(w, err)
@@ -55,10 +56,14 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := adapter.data.AttachData(r.Context(), principal, id, upstream, func() (net.Conn, error) {
-		var err error
-		raw, buffer, err = hijacker.Hijack()
-		return raw, err
+	downstream, err := adapter.plane.Attach(r.Context(), principal, dataplane.HandoffRequest{
+		SandboxID: id,
+		Upstream:  upstream,
+		Accept: func() (net.Conn, error) {
+			var err error
+			raw, buffer, err = hijacker.Hijack()
+			return raw, err
+		},
 	})
 	if err != nil {
 		if raw == nil {
@@ -116,7 +121,11 @@ func (adapter *Adapter) createPreview(w http.ResponseWriter, r *http.Request, pr
 	if ttl == 0 {
 		ttl = 300
 	}
-	path, err := adapter.data.PreviewURL(r.Context(), principal, id, port, time.Duration(ttl)*time.Second)
+	path, err := adapter.plane.PreviewURL(r.Context(), principal, dataplane.PreviewRequest{
+		SandboxID: id,
+		Port:      port,
+		TTL:       time.Duration(ttl) * time.Second,
+	})
 	respond(w, map[string]string{
 		"url": path,
 	}, err)
@@ -133,19 +142,19 @@ func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	target, err := adapter.data.ResolvePreview(r.Context(), body, signature)
+	target, err := adapter.plane.ResolvePreview(r.Context(), body, signature)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if _, err = adapter.data.DataReady(r.Context(), target.Principal, target.SandboxID); err != nil {
+	if _, err = adapter.plane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
 		writeError(w, err)
 		return
 	}
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return adapter.data.Forward(ctx, target.Principal, target.SandboxID, target.Port)
+			return adapter.plane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
 		},
 	}
 	defer transport.CloseIdleConnections()

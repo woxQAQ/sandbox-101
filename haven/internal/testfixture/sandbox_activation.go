@@ -75,14 +75,14 @@ type EgressFixture struct {
 	Before func(string) error
 }
 
-func (manager *EgressFixture) Bind(_ context.Context, id, _, _ string, _ egress.Policy, secrets map[string]egress.Secret) error {
+func (manager *EgressFixture) Bind(_ context.Context, target egress.BindingTarget, _ egress.Policy, secrets map[string]egress.Secret) error {
 	if manager.Before != nil {
 		if err := manager.Before("bind"); err != nil {
 			return err
 		}
 	}
 	manager.Mu.Lock()
-	manager.Binds[id] = secrets
+	manager.Binds[target.SandboxID] = secrets
 	manager.Mu.Unlock()
 	return nil
 }

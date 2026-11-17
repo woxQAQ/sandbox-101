@@ -23,7 +23,9 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 	} {
 		t.Run(mode, func(t *testing.T) {
 			service, backend, _, _ := testapp.SandboxFixture(t)
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_link_completion BEFORE UPDATE OF status ON operation_steps WHEN OLD.action='resource_link' AND NEW.status='succeeded' BEGIN SELECT RAISE(%s); END", mode)); err != nil {

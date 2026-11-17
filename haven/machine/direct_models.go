@@ -35,7 +35,10 @@ func LoadDirectRetirement(ctx context.Context, query store.DBTX, id string) (Dir
 	step := DirectRetirementStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "direct_retirement"})
+	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "direct_retirement",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

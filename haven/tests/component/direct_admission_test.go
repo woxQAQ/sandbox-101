@@ -27,7 +27,9 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	}
-	claim := claimSandbox(t, service, "claim", nil, policy)
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, policy)
 	waitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -38,7 +40,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	runtime.policyMu.Lock()
 	runtime.policy[before.VMID] = nil
 	runtime.policyMu.Unlock()
-	if _, err = service.Data.DataReady(ctx, principal, before.ID); err == nil {
+	if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err == nil {
 		t.Fatal("data admission accepted missing host policy")
 	}
 	key := "network-revalidate:" + service.Access.Epoch() + ":" + before.ID + ":" + claim.ID
@@ -49,7 +51,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, principal, acceptedRecord); err != nil {
 		t.Fatal(err)
 	}
-	after, err := service.Data.DataReady(ctx, principal, before.ID)
+	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
 	if err != nil || after.Instance != before.Instance || !after.Deadline.Equal(before.Deadline) {
 		t.Fatal("saved policy repair changed identity or lease", before, after, err)
 	}
@@ -87,7 +89,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	if current != count {
 		t.Fatal("stale observer changed host networking")
 	}
-	final, err := service.Data.DataReady(ctx, principal, before.ID)
+	final, err := service.Dataplane.Ready(ctx, principal, before.ID)
 	if err != nil || !reflect.DeepEqual(final.Policy, newerPolicy) {
 		t.Fatal(final, err)
 	}
@@ -104,7 +106,9 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
 		AllowedCIDRs: []string{
 			"8.8.8.8/32",

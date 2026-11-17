@@ -26,7 +26,9 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := claimSandbox(t, service, "source", map[string]operation.EnvVar{
+	source := (sandboxClaims{
+		App: service,
+	}).claim(t, "source", map[string]operation.EnvVar{
 		"SOURCE_ONLY": {
 			Value: "not-inherited",
 		},
@@ -96,7 +98,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 					t.Fatal(sandbox)
 				}
 				seen[sandbox.ID] = true
-				ready, err := service.Data.DataReady(ctx, principal, sandbox.ID)
+				ready, err := service.Dataplane.Ready(ctx, principal, sandbox.ID)
 				if err != nil || len(ready.Env) != 0 || ready.Policy.Mode != "none" {
 					t.Fatal("fork inherited source environment or lost source policy", ready, err)
 				}
@@ -130,7 +132,9 @@ func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := claimSandbox(t, service, "source", nil, egress.Policy{
+	source := (sandboxClaims{
+		App: service,
+	}).claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	if _, err := service.Tenants.PutTenant(context.Background(), authorization.Principal{
@@ -169,7 +173,9 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	source := claimSandbox(t, service, "source", nil, egress.Policy{
+	source := (sandboxClaims{
+		App: service,
+	}).claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	var failed atomic.Bool
@@ -210,7 +216,9 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := claimSandbox(t, service, "source", nil, egress.Policy{
+	source := (sandboxClaims{
+		App: service,
+	}).claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	checkpoint, err := service.SandboxRequests.Execute(context.Background(), principal, "checkpoint", operation.Command{

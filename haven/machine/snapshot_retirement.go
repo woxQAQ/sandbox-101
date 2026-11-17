@@ -19,10 +19,13 @@ import (
 // RetireDeletedSnapshot runs only after a durable catalog deletion or a backing
 // retirement. Retained fees need an independent physical receipt, never an absent
 // catalog alone. Legacy private fixtures without that receipt remain charged.
-func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source Source, history SnapshotProofs) error {
+func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSource, history SnapshotProofs) error {
 	operations := operation.New(tx)
 	responsibilities := quota.New(tx)
-	cleanup, err := dbgen.New(tx).GetRetainedCleanup(ctx, dbgen.GetRetainedCleanupParams{ResourceKind: "snapshot", ResourceID: source.Snapshot.ID})
+	cleanup, err := dbgen.New(tx).GetRetainedCleanup(ctx, dbgen.GetRetainedCleanupParams{
+		ResourceKind: "snapshot",
+		ResourceID:   source.Snapshot.ID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

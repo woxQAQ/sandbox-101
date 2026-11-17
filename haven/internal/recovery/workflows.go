@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/woxQAQ/haven/collection"
+	"github.com/woxQAQ/haven/gc"
 	image "github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
@@ -45,7 +45,7 @@ func validateWorkflowProof(ctx context.Context, database store.DBTX, origin stor
 	case item.Key == "direct_retirement":
 		_, proofErr = machine.LoadDirectRetirement(ctx, database, item.OperationID)
 	case item.Key == "gc":
-		_, proofErr = collection.LoadGC(ctx, database, item.OperationID)
+		_, proofErr = gc.Load(ctx, database, item.OperationID)
 	case item.Key == "stop":
 		_, proofErr = machine.LoadStop(ctx, database, item.OperationID)
 	case item.Key == "discard":

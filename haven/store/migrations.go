@@ -72,9 +72,11 @@ func Migrate(ctx context.Context, db *sql.DB, initialize func(*sql.Tx) error) er
 			}
 			return nil
 		},
-	}, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error {
-		return errors.New("store history cannot be downgraded")
-	}})
+	}, &goose.GoFunc{
+		RunTx: func(context.Context, *sql.Tx) error {
+			return errors.New("store history cannot be downgraded")
+		},
+	})
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db, nil,
 		goose.WithDisableGlobalRegistry(true), goose.WithGoMigrations(baseline),
 		goose.WithLogger(goose.NopLogger()))

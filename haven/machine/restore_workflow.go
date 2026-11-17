@@ -53,7 +53,18 @@ func (service *Provisioning) runClone(step ResourceStep) error {
 			if step.State.Phase != "restore_prepare_intent" {
 				return service.failStep(step, fmt.Errorf("unproved restore phase changed"))
 			}
-			boundary, err := loom.PrepareRestore(r, step.OperationID, source.Snapshot.Dir, source.Snapshot.Manifest.Files, step.Action == "clone")
+			request := loom.RestorePreparation{
+				Resource:    r,
+				OperationID: step.OperationID,
+				Source:      source.Snapshot.Dir,
+				Digests:     source.Snapshot.Manifest.Files,
+			}
+			var boundary *loom.RestoreBoundary
+			if step.Action == "clone" {
+				boundary, err = loom.PrepareClone(request)
+			} else {
+				boundary, err = loom.PrepareRestore(request)
+			}
 			if err != nil {
 				return service.failStep(step, err)
 			}

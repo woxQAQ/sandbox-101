@@ -62,7 +62,10 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operations.Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -115,7 +118,12 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 			VMID:      source.Candidate,
 		},
 	}
-	if err = AdmitResourceParent(ctx, tx, parent, accepted, "discard", source.Candidate, hash); err != nil {
+	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
+		Child:       accepted,
+		Kind:        "discard",
+		Candidate:   source.Candidate,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	payload := operation.Encode(input)
@@ -179,7 +187,11 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.handoff.TerminateSandbox(ctx, tx, record, accepted.ID, request.TenantID); err != nil {
+	if err = service.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
+		Sandbox:     record,
+		OperationID: accepted.ID,
+		TenantID:    request.TenantID,
+	}); err != nil {
 		return empty, err
 	}
 	for _, reference := range []struct {

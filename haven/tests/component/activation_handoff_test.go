@@ -25,7 +25,9 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			paused, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
@@ -67,7 +69,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if err != nil || retained.State != "paused" || retained.SnapshotID != before.SnapshotID {
 				t.Fatal("failed activation lost recoverable paused source", retained, err)
 			}
-			if _, err = service.Data.DataReady(ctx, principal, before.ID); err == nil {
+			if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err == nil {
 				t.Fatal("failed activation admitted data")
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER reject_activation_completion"); err != nil {
@@ -78,7 +80,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 				t.Fatal("explicit resume could not reuse retained sleep source", repaired, err)
 			}
 			checkResponsibility(0)
-			if _, err = service.Data.DataReady(ctx, principal, before.ID); err != nil {
+			if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err != nil {
 				t.Fatal("successful activation did not publish data readiness", err)
 			}
 			for _, original := range []operation.Record{

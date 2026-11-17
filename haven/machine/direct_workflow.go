@@ -14,18 +14,13 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, activation ActivationProof, source ResourceStep, policy *loom.NetworkPolicy) error {
-	if policy == nil {
+func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, operationID string, input DirectRetirementInput) error {
+	if input.Policy == nil {
 		return nil
 	}
-	input := DirectRetirementInput{
-		Source:         source,
-		ActivationHash: activation.Hash,
-		ActivationKey:  activation.Key,
-		Policy:         policy,
-	}
+	source := input.Source
 	payload := operation.Encode(input)
-	if existing, err := LoadDirectRetirement(ctx, tx, activation.OperationID); err == nil {
+	if existing, err := LoadDirectRetirement(ctx, tx, operationID); err == nil {
 		if existing.Hash != operation.Digest(payload) || existing.State.Phase != "armed" || operation.Terminal(existing.Status) {
 			return fmt.Errorf("direct retirement original arm changed")
 		}
@@ -35,7 +30,7 @@ func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, activation ActivationP
 	}
 
 	if err := store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         activation.OperationID,
+		OperationID:         operationID,
 		StepKey:             "direct_retirement",
 		Action:              "direct_retirement",
 		InputHash:           operation.Digest(payload),
@@ -50,15 +45,26 @@ func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, activation ActivationP
 		return err
 	}
 	return store.RequireOne(dbgen.New(tx).InsertArmedCleanup(ctx, dbgen.InsertArmedCleanupParams{
-		ID:           "direct_policy:" + activation.OperationID,
-		OperationID:  activation.OperationID,
+		ID:           "direct_policy:" + operationID,
+		OperationID:  operationID,
 		ResourceKind: "direct_policy",
 		ResourceID:   source.Candidate,
 		Body:         payload,
 	}))
 }
 
-func CompleteDirectReplacement(ctx context.Context, tx *sql.Tx, oldOperation, newOperation, vm, instance string) error {
+// DirectPolicyReplacement ties retirement of the prior activation to its exact
+// instance and the activation taking responsibility in the same transaction.
+type DirectPolicyReplacement struct {
+	PriorOperationID string
+	OperationID      string
+	VMID             string
+	Instance         string
+}
+
+func CompleteDirectReplacement(ctx context.Context, tx *sql.Tx, replacement DirectPolicyReplacement) error {
+	oldOperation, newOperation := replacement.PriorOperationID, replacement.OperationID
+	vm, instance := replacement.VMID, replacement.Instance
 	old, err := LoadDirectRetirement(ctx, tx, oldOperation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil

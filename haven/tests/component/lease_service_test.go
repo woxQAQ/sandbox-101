@@ -29,7 +29,9 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				principal := authorization.Principal{
 					TenantID: "tenant",
 				}
-				claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+				claim := (sandboxClaims{
+					App: service,
+				}).claim(t, "claim", nil, egress.Policy{
 					Mode: "none",
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -26,7 +26,8 @@ type (
 	}
 )
 
-func StageImageImport(ctx context.Context, state, operation string, plan ImageImportPlan, boundary ImageImportBoundary) error {
+func (work ImportWork) Stage(ctx context.Context) error {
+	state, operation, plan, boundary := work.StateRoot, work.OperationID, work.Plan, work.Boundary
 	if err := VerifyImageImportBoundary(state, operation, boundary, true); err != nil {
 		return err
 	}
@@ -82,7 +83,9 @@ func StageImageImport(ctx context.Context, state, operation string, plan ImageIm
 	return ctx.Err()
 }
 
-func MaterializeImageLayer(ctx context.Context, state, operation string, plan ImageImportPlan, boundary ImageImportBoundary, index int, bytesLeft, filesLeft int64) (ImageLayerProof, error) {
+func (work ImportWork) MaterializeLayer(ctx context.Context, index int, limits host.LayerLimits) (ImageLayerProof, error) {
+	state, operation, plan, boundary := work.StateRoot, work.OperationID, work.Plan, work.Boundary
+	bytesLeft, filesLeft := limits.MaxBytes, limits.MaxFiles
 	var proof ImageLayerProof
 	if err := VerifyImageImportBoundary(state, operation, boundary, true); err != nil {
 		return proof, err
@@ -93,7 +96,14 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 	layer := plan.Layers[index]
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
 		file := filepath.Join(boundary.Path, "input", "blobs", "sha256", layer.Digest[7:])
-		n, c, err := host.ValidateLayerFor(file, layer.MediaType, layer.DiffID, bytesLeft, filesLeft, true)
+		n, c, err := host.ValidateLayer(host.LayerInput{
+			Path:      file,
+			MediaType: layer.MediaType,
+			DiffID:    layer.DiffID,
+		}, host.LayerLimits{
+			MaxBytes: bytesLeft,
+			MaxFiles: filesLeft,
+		})
 		if err != nil {
 			return proof, err
 		}
@@ -114,11 +124,27 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 		cache = current
 	} else {
 		file := filepath.Join(boundary.Path, "input", "blobs", "sha256", layer.Digest[7:])
-		n, c, err := host.ValidateLayer(file, layer.MediaType, layer.DiffID, bytesLeft, filesLeft)
+		n, c, err := host.ValidateLayer(host.LayerInput{
+			Path:      file,
+			MediaType: layer.MediaType,
+			DiffID:    layer.DiffID,
+		}, host.LayerLimits{
+			MaxBytes: bytesLeft,
+			MaxFiles: filesLeft,
+		})
 		if err != nil {
 			return proof, err
 		}
-		cache, err = host.BuildSharedLayerCache(ctx, state, file, layer.MediaType, plan.Builder, layer.DiffID, n, c)
+		cache, err = host.BuildSharedLayerCache(ctx, state, host.LayerCacheRequest{
+			Input: host.LayerInput{
+				Path:      file,
+				MediaType: layer.MediaType,
+				DiffID:    layer.DiffID,
+			},
+			Builder: plan.Builder,
+			Bytes:   n,
+			Entries: c,
+		})
 		if err != nil {
 			return proof, err
 		}
@@ -164,7 +190,8 @@ func MaterializeImageLayer(ctx context.Context, state, operation string, plan Im
 	}, nil
 }
 
-func BuildImageImportOutput(ctx context.Context, state, operation string, plan ImageImportPlan, boundary ImageImportBoundary, layers []ImageLayerProof) (ImageImportProof, error) {
+func (work ImportWork) BuildOutput(ctx context.Context, layers []ImageLayerProof) (ImageImportProof, error) {
+	state, operation, plan, boundary := work.StateRoot, work.OperationID, work.Plan, work.Boundary
 	var proof ImageImportProof
 	if err := VerifyImageImportBoundary(state, operation, boundary, true); err != nil {
 		return proof, err
@@ -183,7 +210,11 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
 		err = host.MaterializeMergedOCI(ctx, filepath.Join(boundary.Path, "input"), output, plan.Options.Digest)
 	} else {
-		err = host.MaterializeSharedFsmeta(ctx, state, output, artifacts, plan.Builder)
+		err = host.MaterializeSharedFsmeta(ctx, host.FsmetaLayers{
+			StateRoot: state,
+			Output:    output,
+			Artifacts: artifacts,
+		}, plan.Builder)
 	}
 	if err != nil {
 		return proof, err
@@ -251,7 +282,7 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 	}, ctx.Err()
 }
 
-func VerifyImportedImage(ctx context.Context, state, path string, boundary ImageImportBoundary, proof ImageImportProof) error {
+func (proof ImageImportProof) Verify(ctx context.Context, state, path string, boundary ImageImportBoundary) error {
 	if !proof.Synced || proof.ManifestSHA256 == "" || boundary.Output.Inode == 0 {
 		return errors.New("image publication lacks fixed synced proof")
 	}
@@ -280,7 +311,7 @@ func VerifyImportedImage(ctx context.Context, state, path string, boundary Image
 	return proof.Manifest.VerifyLayeredArtifacts(state, path)
 }
 
-func PublishImportedImage(ctx context.Context, state, operation string, boundary ImageImportBoundary, proof ImageImportProof) error {
+func (proof ImageImportProof) Publish(ctx context.Context, state, operation string, boundary ImageImportBoundary) error {
 	if err := VerifyImageImportBoundary(state, operation, boundary, false); err != nil {
 		return err
 	}
@@ -299,7 +330,7 @@ func PublishImportedImage(ctx context.Context, state, operation string, boundary
 	_ = directory.Close()
 	target := filepath.Join(parent, name)
 	if _, err = os.Lstat(target); err == nil {
-		if err = VerifyImportedImage(ctx, state, target, boundary, proof); err != nil {
+		if err = proof.Verify(ctx, state, target, boundary); err != nil {
 			return err
 		}
 		return errors.Join(loom.SyncDir(parent), loom.SyncDir(boundary.Path), ctx.Err())
@@ -307,7 +338,7 @@ func PublishImportedImage(ctx context.Context, state, operation string, boundary
 		return err
 	}
 	output := filepath.Join(boundary.Path, "output")
-	if err = VerifyImportedImage(ctx, state, output, boundary, proof); err != nil {
+	if err = proof.Verify(ctx, state, output, boundary); err != nil {
 		return err
 	}
 	if err = os.Rename(output, target); err != nil {

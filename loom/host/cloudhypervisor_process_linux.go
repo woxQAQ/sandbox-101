@@ -233,7 +233,10 @@ func (b *CloudHypervisor) Inspect(ctx context.Context, r Resource) (Observation,
 	}
 	obs.PID = p.PID
 	obs.StartTime = p.StartTime
-	data, err := b.api(ctx, r, "GET", "vm.info", nil, nil)
+	data, err := b.api(ctx, r, vmmRequest{
+		Method:   "GET",
+		Endpoint: "vm.info",
+	})
 	if err != nil {
 		if errors.Is(err, errCHNotFound) {
 			return obs, nil
@@ -377,7 +380,10 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 			return errors.New("launcher did not publish a usable API; preserve scope and console.log")
 		case <-tick.C:
 			if _, alive, x := b.process(r); x == nil && alive {
-				if _, x = b.api(ctx, r, "GET", "vmm.ping", nil, nil); x == nil {
+				if _, x = b.api(ctx, r, vmmRequest{
+					Method:   "GET",
+					Endpoint: "vmm.ping",
+				}); x == nil {
 					return nil
 				}
 			}

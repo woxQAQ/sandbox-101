@@ -33,7 +33,7 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM operations").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+	report, err := service.GC.Collect(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, "gc", types.GCOptions{

@@ -24,7 +24,9 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "direct",
 				AllowedCIDRs: []string{
 					"8.8.8.8/32",
@@ -61,7 +63,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			if err = runtime.VerifyNetworkPolicy(ctx, source.Input.Resource, nil); err != nil {
 				t.Fatal("fixture did not cross policy removal boundary", err)
 			}
-			if _, err = service.Data.DataReady(ctx, principal, claim.Result.SandboxID); err == nil {
+			if _, err = service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID); err == nil {
 				t.Fatal("uncommitted retirement authorized data delivery")
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_direct_completion"); err != nil {

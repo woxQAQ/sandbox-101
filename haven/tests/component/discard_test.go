@@ -96,7 +96,13 @@ func awaitDiscard(t *testing.T, service *application.App, id string) machine.Dis
 	}
 }
 
-func discardSucceeded(t *testing.T, service *application.App, source machine.ResourceStep, discard machine.DiscardStep, original []byte) {
+type discardExpectation struct {
+	Source   machine.ResourceStep
+	Original []byte
+}
+
+func discardSucceeded(t *testing.T, service *application.App, discard machine.DiscardStep, expected discardExpectation) {
+	source, original := expected.Source, expected.Original
 	t.Helper()
 	if discard.Status != "succeeded" {
 		reason := service.Workers.Snapshot(discard.OperationID).Err
@@ -159,7 +165,10 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := awaitDiscard(t, service, operation.ID)
-			discardSucceeded(t, service, source, result, testfixture.Encode(original))
+			discardSucceeded(t, service, result, discardExpectation{
+				Source:   source,
+				Original: testfixture.Encode(original),
+			})
 			service = testapp.ReopenCloneService(t, service, backend)
 			cached, err := service.VMDeletion.AdmitDiscard(context.Background(), request)
 			if err != nil || cached.ID != operation.ID || cached.Status != "succeeded" {
@@ -215,7 +224,10 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
 			result := awaitDiscard(t, service, operation.ID)
-			discardSucceeded(t, service, source, result, testfixture.Encode(original))
+			discardSucceeded(t, service, result, discardExpectation{
+				Source:   source,
+				Original: testfixture.Encode(original),
+			})
 			if backend.Count("launch") != 1 {
 				t.Fatal("discard relaunched candidate")
 			}
@@ -266,7 +278,10 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 					t.Fatal(err)
 				}
 				service = testapp.ReopenCloneService(t, service, backend)
-				discardSucceeded(t, service, source, awaitDiscard(t, service, operation.ID), testfixture.Encode(original))
+				discardSucceeded(t, service, awaitDiscard(t, service, operation.ID), discardExpectation{
+					Source:   source,
+					Original: testfixture.Encode(original),
+				})
 			})
 		}
 	}

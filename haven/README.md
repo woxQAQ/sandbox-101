@@ -1,6 +1,6 @@
 # Haven 组装与测试
 
-Haven 按 image、machine、supply、sandbox、data、collection、node 组织业务用例与私有 sqlc。
+Haven 按 image、machine、supply、sandbox、dataplane、gc、node 组织业务用例与私有 sqlc。
 `internal/application` 是 daemon 和测试共用的组装入口；internal/publication、internal/recovery
 和 internal/maintenance 组合跨能力投影、只读验证与固定顺序的恢复。所有组件共用 store、
 execution/access 及关闭边界，HTTP 与管理 adapter 直接接收所需用例。

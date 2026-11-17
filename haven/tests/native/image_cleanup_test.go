@@ -60,7 +60,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 		Root:     true,
 		TenantID: "root",
 	}
-	report, err := service.GarbageCollection.CollectGarbage(ctx, root, "work", types.GCOptions{
+	report, err := service.GC.Collect(ctx, root, "work", types.GCOptions{
 		Budget: 20 * time.Second,
 	})
 	if err != nil || len(report.Collected) != 1 || report.Collected[0].Kind != "image_work" {
@@ -70,7 +70,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches),(SELECT COUNT(*) FROM reservations WHERE owner LIKE 'import:%'),(SELECT COUNT(*) FROM reservations WHERE owner LIKE 'cache:%')").Scan(&caches, &imports, &cacheCharges); err != nil || caches != 1 || imports != 0 || cacheCharges != 1 {
 		t.Fatal(caches, imports, cacheCharges, err)
 	}
-	report, err = service.GarbageCollection.CollectGarbage(ctx, root, "cache", types.GCOptions{
+	report, err = service.GC.Collect(ctx, root, "cache", types.GCOptions{
 		Budget: 20 * time.Second,
 	})
 	if err != nil || len(report.Collected) != 1 || report.Collected[0].Kind != "image_cache" {

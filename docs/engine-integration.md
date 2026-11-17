@@ -49,7 +49,7 @@ raw capture 有独立持久 cleanup。源 release 可接过该责任，确认 re
 
 ### Restore、clone 和 generation
 
-source manifest、读取 lease、目标身份、完整 shape、路径与复制预留在效果前固定。Loom 复制独立可写盘和私有 config/state，创建不可变 RAM hardlink并返回固定 hash/inode/fsync proof。来源 lease 到长期 backing 在完成事务内连续交接。
+source manifest、读取 lease、目标身份、完整 shape、路径与复制预留在效果前固定。`RestorePreparation` 整体传递候选、原 operation、source 路径与固定摘要；clone 准备入口可以创建已分配的新 VM 目录，restore 准备入口要求原逻辑 VM 目录仍存在，缺失时不创建替代物。Loom 复制独立可写盘和私有 config/state，创建不可变 RAM hardlink并返回固定 hash/inode/fsync proof。来源 lease 到长期 backing 在完成事务内连续交接。
 
 运行前及 restart adoption 必须核验真实 `/proc/PID/maps` 的 writable-private COW、完整范围、device/inode/offset；拒绝 shared mapping、缺段或 eager-copy fallback。stat/mapping device identity 不一致的 filesystem 不支持该恢复路径。已经运行的 writable disk 不得按历史 digest 重建或覆盖。
 
@@ -67,7 +67,7 @@ snapshot 的 D+M 费用与 catalog/路径是不同事实。显式 snapshot delet
 
 根包括 published image/snapshot、current VM、generation/backing、live/在途使用、未解决 step、source lease、pool 与独立 cleanup。规范化引用与原 step 关系必须完整。损坏/未知根保守阻断；未知目录与 cache child 只报告，不因名称、年龄、内容 hash 而接管。
 
-回收按原持久 authority 接纳，先保存删除 fence 和 inode receipt，Loom 核验无 reader/mapping、目录和所有允许 producer 文件，再 unlink/fsync；之后原子退休责任。部分 unlink 后重启仍沿同一 receipt。替换 inode、missing history 或未知效果保持费用；初次路径缺失不能自动制造删除证明。
+回收按原持久 authority 接纳，先保存删除 fence 和 inode receipt，Loom 核验无 reader/mapping、目录和所有允许 producer 文件，再 unlink/fsync；之后原子退休责任。`ArtifactTopology` 整体固定 producer 目录、文件类型和历史 inode，现场枚举只用于核验，不补造这些允许项。generation 集合是 VM 回收的唯一检查入口；没有保留单代旧规则。部分 unlink 后重启仍沿同一 receipt。替换 inode、missing history 或未知效果保持费用；初次路径缺失不能自动制造删除证明。
 
 可回收对象包括独立 supply/import/cache cleanup、内部 sleep snapshot 和符合完整 generation 协议的资源。published images、永久 authorization/idempotency/operation 历史保持保留。删除 snapshot catalog 不自动退还 clone backing 的责任，cleanup 也不重写原公开失败结果。
 

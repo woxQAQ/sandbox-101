@@ -30,7 +30,15 @@ type SnapshotDeletion struct {
 	faultPoint func(string) error
 }
 
-func NewSnapshotDeletion(state *store.State, proofs SnapshotProofs, guards SnapshotDeletionGuards, lifetime *execution.Lifetime, workers *execution.Workers, fault func(string) error, usage SnapshotUsageReader) *SnapshotDeletion {
+type SnapshotDeletionDependencies struct {
+	Proofs   SnapshotProofs
+	Guards   SnapshotDeletionGuards
+	Lifetime *execution.Lifetime
+	Workers  *execution.Workers
+	Usage    SnapshotUsageReader
+}
+
+func NewSnapshotDeletion(state *store.State, dependencies SnapshotDeletionDependencies, fault func(string) error) *SnapshotDeletion {
 	return &SnapshotDeletion{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -38,13 +46,13 @@ func NewSnapshotDeletion(state *store.State, proofs SnapshotProofs, guards Snaps
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		proofs:     proofs,
-		usage:      usage,
-		ctx:        workers.Context(),
-		admission:  guards.Admission(),
-		guards:     guards,
-		lifetime:   lifetime,
-		workers:    workers,
+		proofs:     dependencies.Proofs,
+		usage:      dependencies.Usage,
+		ctx:        dependencies.Workers.Context(),
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		lifetime:   dependencies.Lifetime,
+		workers:    dependencies.Workers,
 		faultPoint: fault,
 	}
 }

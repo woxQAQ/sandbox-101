@@ -23,7 +23,9 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 	} {
 		t.Run(corruption, func(t *testing.T) {
 			service, runtime, _, _ := testapp.SandboxFixture(t)
-			operation := claimSandbox(t, service, "public-corruption", nil, egress.Policy{
+			operation := (sandboxClaims{
+				App: service,
+			}).claim(t, "public-corruption", nil, egress.Policy{
 				Mode: "none",
 			})
 			view, err := service.Delivery.PublicOperation(context.Background(), authorization.Principal{

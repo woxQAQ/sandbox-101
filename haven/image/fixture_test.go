@@ -27,8 +27,12 @@ func newImageFixture(t *testing.T) *imageFixture {
 	workers := execution.NewWorkers(lifetime)
 	gate := execution.NewAdmissionGate(guards.Registration(), lifetime, state.Reviewed())
 	fixture := &imageFixture{
-		State:      state,
-		Images:     image.NewImages(state, guards, gate, workers, image.ImageOptions{}),
+		State: state,
+		Images: image.NewImages(state, image.ImageDependencies{
+			Guards:  guards,
+			Gate:    gate,
+			Workers: workers,
+		}, image.ImageOptions{}),
 		Operations: operation.NewOperations(state.Database(), workers, state.Identity().Identity),
 		Workers:    workers,
 	}

@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -24,7 +23,7 @@ type WarmClaimInput struct {
 	Pool            supply.PoolReservation `json:"pool"`
 	Source          machine.ResourceStep   `json:"source"`
 	Settings        Settings               `json:"settings"`
-	Restore         machine.Source         `json:"restore"`
+	Restore         machine.SnapshotSource `json:"restore"`
 }
 
 type WarmClaimState struct {
@@ -49,7 +48,10 @@ func LoadWarmClaim(ctx context.Context, query store.DBTX, id string) (WarmClaimS
 	step := WarmClaimStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "warm_claim"})
+	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "warm_claim",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
@@ -109,8 +111,4 @@ func CurrentSlotBudget(ctx context.Context, query store.DBTX, record ownership.S
 		Kind:  "sandbox_slot",
 		Units: 1,
 	}, nil
-}
-
-func (parent *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, hash string) error {
-	return admitWarmResource(ctx, tx, parent, child, kind, candidate, hash)
 }

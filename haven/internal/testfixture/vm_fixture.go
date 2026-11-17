@@ -121,12 +121,16 @@ func (backend *ColdRuntime) Launch(_ context.Context, resource loom.Resource, _ 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(directory) }()
+	defer func() {
+		_ = unix.Close(directory)
+	}()
 	socket, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Close(socket) }()
+	defer func() {
+		_ = unix.Close(socket)
+	}()
 	if err = unix.Bind(socket, &unix.SockaddrUnix{
 		Name: fmt.Sprintf("/proc/self/fd/%d/api.sock", directory),
 	}); err != nil {

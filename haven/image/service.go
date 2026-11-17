@@ -45,7 +45,13 @@ type Images struct {
 	workers     *execution.Workers
 }
 
-func NewImages(state *store.State, guards ImageGuards, gate execution.AdmissionGate, workers *execution.Workers, options ImageOptions) *Images {
+type ImageDependencies struct {
+	Guards  ImageGuards
+	Gate    execution.AdmissionGate
+	Workers *execution.Workers
+}
+
+func NewImages(state *store.State, dependencies ImageDependencies, options ImageOptions) *Images {
 	return &Images{
 		database:    state.Database(),
 		directory:   state.Directory(),
@@ -54,11 +60,11 @@ func NewImages(state *store.State, guards ImageGuards, gate execution.AdmissionG
 		safetyBytes: options.SafetyBytes,
 		checkpoint:  state.Checkpoint,
 		faultPoint:  options.Fault,
-		ctx:         workers.Context(),
-		guards:      guards,
-		admission:   guards.Admission(),
-		gate:        gate,
-		workers:     workers,
+		ctx:         dependencies.Workers.Context(),
+		guards:      dependencies.Guards,
+		admission:   dependencies.Guards.Admission(),
+		gate:        dependencies.Gate,
+		workers:     dependencies.Workers,
 	}
 }
 

@@ -30,7 +30,9 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 		Root:     true,
 		TenantID: "root",
 	}
-	running := claimSandbox(t, service, "running", nil, egress.Policy{
+	running := (sandboxClaims{
+		App: service,
+	}).claim(t, "running", nil, egress.Policy{
 		Mode: "none",
 	})
 	faults.Set(func(point string) error {
@@ -129,10 +131,10 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	}); err == nil {
 		t.Fatal("review granted new resource authority")
 	}
-	if _, err = reviewed.Data.DataReady(ctx, principal, running.Result.SandboxID); err == nil {
+	if _, err = reviewed.Dataplane.Ready(ctx, principal, running.Result.SandboxID); err == nil {
 		t.Fatal("review granted data readiness")
 	}
-	report, err := reviewed.GarbageCollection.CollectGarbage(ctx, root, "gc", types.GCOptions{})
+	report, err := reviewed.GC.Collect(ctx, root, "gc", types.GCOptions{})
 	if err != nil || !report.Blocked || len(report.Collected) != 0 {
 		t.Fatal("review granted collection authority", report, err)
 	}

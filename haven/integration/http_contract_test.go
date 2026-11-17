@@ -15,8 +15,18 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func controlHTTP(t *testing.T, endpoint, method, path, token, key string, body []byte, async bool, status int) []byte {
+type contractRequest struct {
+	Method string
+	Path   string
+	Token  string
+	Key    string
+	Body   []byte
+	Prefer string
+}
+
+func controlHTTP(t *testing.T, endpoint string, message contractRequest, status int) []byte {
 	t.Helper()
+	method, path, token, key, body := message.Method, message.Path, message.Token, message.Key, message.Body
 	request, err := http.NewRequest(method, endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -27,8 +37,8 @@ func controlHTTP(t *testing.T, endpoint, method, path, token, key string, body [
 	if key != "" {
 		request.Header.Set("Idempotency-Key", key)
 	}
-	if async {
-		request.Header.Set("Prefer", "respond-async")
+	if message.Prefer != "" {
+		request.Header.Set("Prefer", message.Prefer)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -57,18 +67,67 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		"/v1/sandboxes",
 		"/v1/unknown",
 	} {
-		controlHTTP(t, endpoint, "GET", path, "", "", nil, false, 404)
+		controlHTTP(t, endpoint, contractRequest{
+			Method: "GET",
+			Path:   path,
+		}, 404)
 	}
-	controlHTTP(t, endpoint, "PUT", "/v1/sandboxes", "transport-token", "", nil, false, 405)
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+firstID+"/connect", scoped.Token, "", nil, false, 426)
-	controlHTTP(t, endpoint, "GET", "/metrics", "transport-token", "", nil, false, 403)
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes", scoped.Token, "", nil, false, 409)
-	controlHTTP(t, endpoint, "POST", "/v1/sandboxes/"+firstID+"/checkpoint", scoped.Token, "scoped-forbidden", []byte(`{}`), false, 404)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "PUT",
+		Path:   "/v1/sandboxes",
+		Token:  "transport-token",
+	}, 405)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes/" + firstID + "/connect",
+		Token:  scoped.Token,
+	}, 426)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/metrics",
+		Token:  "transport-token",
+	}, 403)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes",
+		Token:  scoped.Token,
+	}, 409)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/sandboxes/" + firstID + "/checkpoint",
+		Token:  scoped.Token,
+		Key:    "scoped-forbidden",
+		Body:   []byte(`{}`),
+	}, 404)
 	command := []byte(`{"template_id":"fixture","policy":{"mode":"none"}}`)
-	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "", command, false, 400)
-	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "trailing", []byte(`{} {}`), false, 400)
-	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "unknown-field", []byte(`{"observed_generation":"private"}`), false, 400)
-	payload := controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "http-claim", command, true, 202)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Body:   command,
+	}, 400)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Key:    "trailing",
+		Body:   []byte(`{} {}`),
+	}, 400)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Key:    "unknown-field",
+		Body:   []byte(`{"observed_generation":"private"}`),
+	}, 400)
+	payload := controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Key:    "http-claim",
+		Body:   command,
+		Prefer: "respond-async",
+	}, 202)
 	var acceptedRecord types.Operation
 	if err := json.Unmarshal(payload, &acceptedRecord); err != nil {
 		t.Fatal(err)
@@ -109,8 +168,18 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if !bytes.Equal(expected, actual) {
 		t.Fatal("retry changed the successful public result")
 	}
-	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "http-claim", []byte(`{"template_id":"fixture","ttl_seconds":301,"policy":{"mode":"none"}}`), false, 409)
-	controlHTTP(t, endpoint, "GET", "/v1/operations/"+acceptedRecord.ID, acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID], "", nil, false, 404)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "POST",
+		Path:   "/v1/claim",
+		Token:  "transport-token",
+		Key:    "http-claim",
+		Body:   []byte(`{"template_id":"fixture","ttl_seconds":301,"policy":{"mode":"none"}}`),
+	}, 409)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/operations/" + acceptedRecord.ID,
+		Token:  acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID],
+	}, 404)
 	root := sdk.New(endpoint, "integration-root-token")
 	if value, err := root.Operation(ctx, acceptedRecord.ID); err != nil || value.ID != acceptedRecord.ID {
 		t.Fatal("administrator cannot read a tenant operation", value, err)
@@ -123,8 +192,16 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+acceptedRecord.Result.Sandbox.ID, foreign.Token, "", nil, false, 404)
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/missing", foreign.Token, "", nil, false, 404)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes/" + acceptedRecord.Result.Sandbox.ID,
+		Token:  foreign.Token,
+	}, 404)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes/missing",
+		Token:  foreign.Token,
+	}, 404)
 	scopedClient := sdk.New(endpoint, acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID])
 	released, err := scopedClient.Change(ctx, acceptedRecord.Result.Sandbox.ID, "self-release", types.Command{
 		Action: "release",
@@ -135,5 +212,9 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if terminal, err := scopedClient.Operation(ctx, released.OperationID); err != nil || terminal.Status != "succeeded" {
 		t.Fatal("retired capability lost its own release result", terminal, err)
 	}
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+acceptedRecord.Result.Sandbox.ID, scopedClient.Token, "", nil, false, 404)
+	controlHTTP(t, endpoint, contractRequest{
+		Method: "GET",
+		Path:   "/v1/sandboxes/" + acceptedRecord.Result.Sandbox.ID,
+		Token:  scopedClient.Token,
+	}, 404)
 }

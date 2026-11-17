@@ -24,13 +24,20 @@ type Tenants struct {
 	checkpoint func() error
 }
 
-func NewTenants(repository *Repository, admission sync.Locker, lifetime ClosingReader, reviewed bool, checkpoint func() error) *Tenants {
+type TenantDependencies struct {
+	Admission  sync.Locker
+	Lifetime   ClosingReader
+	Reviewed   bool
+	Checkpoint func() error
+}
+
+func NewTenants(repository *Repository, dependencies TenantDependencies) *Tenants {
 	return &Tenants{
 		repository: repository,
-		admission:  admission,
-		lifetime:   lifetime,
-		reviewed:   reviewed,
-		checkpoint: checkpoint,
+		admission:  dependencies.Admission,
+		lifetime:   dependencies.Lifetime,
+		reviewed:   dependencies.Reviewed,
+		checkpoint: dependencies.Checkpoint,
 	}
 }
 

@@ -89,19 +89,14 @@ func DigestFileContext(ctx context.Context, path string) (string, error) {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// OwnedFiles checks only the supplied candidate and exact allowlist. Unknown
-// names, special files or mounts retain the entire object.
-func OwnedFiles(ctx context.Context, stateRoot, path string, allowed map[string]string, directory bool) ([]string, error) {
+// OwnedDirectoryFiles checks only the supplied directory and exact allowlist.
+// Unknown names, special files or mounts retain the entire object.
+func OwnedDirectoryFiles(ctx context.Context, stateRoot, path string, allowed map[string]string) ([]string, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
-	if err := ValidatePath(ctx, stateRoot, path, directory); err != nil {
+	if err := ValidatePath(ctx, stateRoot, path, true); err != nil {
 		return nil, err
-	}
-	if !directory {
-		return []string{
-			path,
-		}, nil
 	}
 	directories := map[string]bool{
 		".": true,

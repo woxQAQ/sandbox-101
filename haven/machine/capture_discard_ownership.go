@@ -17,5 +17,6 @@ type LifecycleParentAuthority interface {
 // stop link and fence in the same snapshot used by physical retirement proofs.
 type CaptureDiscardOwnershipReader interface {
 	SandboxOwnershipReader
-	VerifyCaptureDiscardParent(context.Context, store.DBTX, CaptureDiscardStep, ownership.Sandbox, bool) (bool, error)
+	VerifyCaptureDiscardParent(context.Context, store.DBTX, CaptureDiscardStep, ownership.Sandbox) (bool, error)
+	VerifyCaptureDiscardLink(context.Context, store.DBTX, CaptureDiscardStep) error
 }

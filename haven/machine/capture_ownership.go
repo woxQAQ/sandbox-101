@@ -87,15 +87,18 @@ func (service *Captures) captureProof(ctx context.Context, tx *sql.Tx, step Capt
 	if stored.Published != 0 || stored.Deleting != 0 || !reflect.DeepEqual(record, publication) {
 		return currentMachine, fmt.Errorf("capture unpublished destination changed")
 	}
-	versionBody, err := VersionHistory(ctx, tx, source.OperationID, source.Candidate, source.Key)
+	versionBody, err := VersionHistory(ctx, tx, GenerationIdentity{
+		VMID:        source.Candidate,
+		OperationID: source.OperationID,
+	}, source.Key)
 	if err != nil {
 		return currentMachine, err
 	}
-	var version Version
+	var version RetainedVersion
 	if err = json.Unmarshal(versionBody, &version); err != nil {
 		return currentMachine, err
 	}
-	if !reflect.DeepEqual(version, Version{
+	if !reflect.DeepEqual(version, RetainedVersion{
 		Resource:     source.Input.Resource,
 		DiskIdentity: source.State.DiskIdentity,
 	}) {

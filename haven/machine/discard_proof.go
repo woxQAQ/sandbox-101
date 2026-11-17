@@ -83,7 +83,7 @@ func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input 
 	default:
 		var frozen struct {
 			Action  string
-			Request ColdRequest
+			Request FreshRequest
 		}
 		if err = json.Unmarshal(originalRequest, &frozen); err != nil {
 			return currentMachine, err
@@ -93,7 +93,10 @@ func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input 
 		}
 	}
 	var instanceBody, versionBody []byte
-	if instanceBody, err = InstanceHistory(ctx, tx, request.ExpectedInstance, source.Candidate, source.OperationID); err != nil {
+	if instanceBody, err = InstanceHistory(ctx, tx, GenerationIdentity{
+		VMID:        source.Candidate,
+		OperationID: source.OperationID,
+	}, request.ExpectedInstance); err != nil {
 		return currentMachine, err
 	}
 	var instance VMRecord
@@ -103,14 +106,17 @@ func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input 
 	if !reflect.DeepEqual(instance.Resource, source.Input.Resource) || instance.Verified || instance.AgentReady {
 		return currentMachine, fmt.Errorf("discard instance is not the original undelivered candidate")
 	}
-	if versionBody, err = VersionHistory(ctx, tx, source.OperationID, source.Candidate, source.Key); err != nil {
+	if versionBody, err = VersionHistory(ctx, tx, GenerationIdentity{
+		VMID:        source.Candidate,
+		OperationID: source.OperationID,
+	}, source.Key); err != nil {
 		return currentMachine, err
 	}
-	var version Version
+	var version RetainedVersion
 	if err = json.Unmarshal(versionBody, &version); err != nil {
 		return currentMachine, err
 	}
-	if !reflect.DeepEqual(version, Version{
+	if !reflect.DeepEqual(version, RetainedVersion{
 		Resource:     source.Input.Resource,
 		DiskIdentity: source.State.DiskIdentity,
 	}) {
@@ -193,7 +199,10 @@ func (service *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step Di
 	}
 	shape := source.Input.Resource.Config.Shape
 	vmBytes := source.Input.RuntimeBytes
-	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, "cleanup", step.OperationID+":discard")
+	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
+		Kind: "cleanup",
+		ID:   step.OperationID + ":discard",
+	})
 	if err != nil {
 		return currentMachine, err
 	}

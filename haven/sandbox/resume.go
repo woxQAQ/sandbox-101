@@ -115,15 +115,25 @@ func (service *Lifecycle) AdmitResume(ctx context.Context, principal authorizati
 		Action  string
 		Request machine.CloneRequest
 	}{"clone", request})
-	child, err := service.provisioning.Admit(ctx, sandboxRecord.TenantID, request.Key, frozen, operation.Digest(frozen), supply.TemplateRecord{
-		ID:       prior.Input.TemplateID,
-		TenantID: sandboxRecord.TenantID,
-		Config:   source.Snapshot.Manifest.Config,
-	}, manifest, &source, nil, &ProvisionTarget{
-		SlotHolder:    "sleep:" + sandboxRecord.ID,
-		Sandbox:       sandboxRecord,
-		SlotOperation: prior.Input.SlotOperation,
-		Parent:        admission,
+	child, err := service.provisioning.Admit(ctx, ProvisionAdmission{
+		Request: supply.ProvisionRequest{
+			TenantID: sandboxRecord.TenantID,
+			Key:      request.Key,
+			Frozen:   frozen,
+			Template: supply.TemplateRecord{
+				ID:       prior.Input.TemplateID,
+				TenantID: sandboxRecord.TenantID,
+				Config:   source.Snapshot.Manifest.Config,
+			},
+			Image:   manifest,
+			Restore: &source,
+		},
+		Target: &ProvisionTarget{
+			SlotHolder:    "sleep:" + sandboxRecord.ID,
+			Sandbox:       sandboxRecord,
+			SlotOperation: prior.Input.SlotOperation,
+			Parent:        admission,
+		},
 	})
 	if child.ID == "" {
 		return empty, err

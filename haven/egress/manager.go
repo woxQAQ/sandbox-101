@@ -176,15 +176,19 @@ func (m *Manager) CACertPEM() []byte {
 	return append([]byte(nil), m.caPEM...)
 }
 
+// BindingTarget identifies the sandbox, tenant and verified vsock endpoint to
+// which one policy and its ephemeral credentials will be bound.
+type BindingTarget struct {
+	SandboxID string
+	TenantID  string
+	VSockPath string
+}
+
 // Bind is synchronous: success means both relay sockets, or direct host rules,
 // are installed. ctx covers installation, not the lifetime of the binding.
 // To change a policy, Revoke first. Existing bindings are never silently reused.
-func (m *Manager) Bind(
-	ctx context.Context,
-	sandboxID, tenantID, vsockPath string,
-	policy Policy,
-	secrets map[string]Secret,
-) error {
+func (m *Manager) Bind(ctx context.Context, target BindingTarget, policy Policy, secrets map[string]Secret) error {
+	sandboxID, tenantID, vsockPath := target.SandboxID, target.TenantID, target.VSockPath
 	if sandboxID == "" || tenantID == "" {
 		return errors.New("egress: missing identity")
 	}

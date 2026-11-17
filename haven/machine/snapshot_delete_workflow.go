@@ -57,7 +57,11 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 	if !errors.Is(err, sql.ErrNoRows) || step.Phase != "admitted" {
 		return intent, fmt.Errorf("snapshot deletion receipt unavailable: %w", err)
 	}
-	intent, err = loom.InspectSnapshotDeletion(service.ctx, service.store.Directory, source.Snapshot.ID, source.Publication, source.Snapshot.Manifest.Files)
+	intent, err = loom.InspectSnapshotDeletion(service.ctx, service.store.Directory, loom.SnapshotDeletionTarget{
+		ID:          source.Snapshot.ID,
+		Publication: source.Publication,
+		Files:       source.Snapshot.Manifest.Files,
+	})
 	if err != nil {
 		return intent, err
 	}

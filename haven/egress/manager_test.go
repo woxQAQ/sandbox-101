@@ -73,14 +73,11 @@ func newTestManager(t *testing.T, opts Options, p Policy, secrets map[string]Sec
 			t.Error(err)
 		}
 	})
-	if err := m.Bind(
-		context.Background(),
-		"sandbox-1",
-		"tenant-1",
-		filepath.Join(dir, "vsock"),
-		p,
-		secrets,
-	); err != nil {
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "sandbox-1",
+		TenantID:  "tenant-1",
+		VSockPath: filepath.Join(dir, "vsock"),
+	}, p, secrets); err != nil {
 		t.Fatal(err)
 	}
 	b, ok := m.Binding("sandbox-1")
@@ -286,7 +283,11 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		"unknown",
 		"direct",
 	} {
-		if err := m.Bind(context.Background(), mode+"id", "t", "/tmp/not-used", Policy{
+		if err := m.Bind(context.Background(), BindingTarget{
+			SandboxID: mode + "id",
+			TenantID:  "t",
+			VSockPath: "/tmp/not-used",
+		}, Policy{
 			Mode: mode,
 		}, nil); err == nil {
 			t.Errorf("accepted mode %q", mode)
@@ -294,7 +295,11 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 	}
 	dir := t.TempDir()
 	base := filepath.Join(dir, "vsock")
-	if err := m.Bind(context.Background(), "none", "t", base, Policy{
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "none",
+		TenantID:  "t",
+		VSockPath: base,
+	}, Policy{
 		Mode: "none",
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -305,7 +310,11 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 	if err := os.WriteFile(base+"_2050", []byte("owner data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(context.Background(), "relay", "t", base, Policy{
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "relay",
+		TenantID:  "t",
+		VSockPath: base,
+	}, Policy{
 		Mode: "relay",
 	}, nil); err == nil {
 		t.Fatal("overwrote existing path")
@@ -333,7 +342,11 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer direct.Close()
-	if err := direct.Bind(context.Background(), "direct", "t", base, Policy{
+	if err := direct.Bind(context.Background(), BindingTarget{
+		SandboxID: "direct",
+		TenantID:  "t",
+		VSockPath: base,
+	}, Policy{
 		Mode: "direct",
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -377,7 +390,11 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := m.Bind(ctx, "s", "t", filepath.Join(dir, "vsock"), p, nil); err != nil {
+	if err := m.Bind(ctx, BindingTarget{
+		SandboxID: "s",
+		TenantID:  "t",
+		VSockPath: filepath.Join(dir, "vsock"),
+	}, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -387,13 +404,21 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal("binding changed after caller mutation or context cancellation")
 	}
-	if err := m.Bind(context.Background(), "s", "t", filepath.Join(dir, "vsock"), p, nil); err == nil {
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "s",
+		TenantID:  "t",
+		VSockPath: filepath.Join(dir, "vsock"),
+	}, p, nil); err == nil {
 		t.Fatal("duplicate binding was silently accepted")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(context.Background(), "s2", "t", filepath.Join(dir, "vsock"), p, nil); !errors.Is(err, ErrClosed) {
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "s2",
+		TenantID:  "t",
+		VSockPath: filepath.Join(dir, "vsock"),
+	}, p, nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed manager accepted binding: %v", err)
 	}
 }

@@ -204,8 +204,9 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 			Operations:     service.Operations,
 			Tenants:        service.Tenants,
 			Requests:       service.SandboxRequests,
-			Data:           service.Data,
-			Management:     service.Management, Delivery: service.Delivery,
+			Dataplane:      service.Dataplane,
+			Management:     service.Management,
+			Delivery:       service.Delivery,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -290,7 +291,7 @@ func maintain(ctx context.Context, cfg config.Daemon, service *application.App) 
 			return
 		case <-ticker.C:
 		case now := <-collect:
-			_, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+			_, err := service.GC.Collect(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "node-admin",
 			}, "gc:"+now.UTC().Format(time.RFC3339Nano), types.GCOptions{

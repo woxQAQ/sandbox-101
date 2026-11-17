@@ -34,7 +34,16 @@ type VMStops struct {
 	faultPoint func(string) error
 }
 
-func NewVMStops(state *store.State, guards VMGuards, lifetime *execution.Lifetime, workers *execution.Workers, proofs ResourceProofs, backend StopBackend, fault func(string) error, ownership StopOwnershipReader) *VMStops {
+type VMStopsDependencies struct {
+	Guards    VMGuards
+	Lifetime  *execution.Lifetime
+	Workers   *execution.Workers
+	Proofs    ResourceProofs
+	Backend   StopBackend
+	Ownership StopOwnershipReader
+}
+
+func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func(string) error) *VMStops {
 	return &VMStops{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -42,14 +51,14 @@ func NewVMStops(state *store.State, guards VMGuards, lifetime *execution.Lifetim
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        workers.Context(),
-		admission:  guards.Admission(),
-		guards:     guards,
-		lifetime:   lifetime,
-		workers:    workers,
-		proofs:     proofs,
-		backend:    backend,
-		ownership:  ownership,
+		ctx:        dependencies.Workers.Context(),
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		lifetime:   dependencies.Lifetime,
+		workers:    dependencies.Workers,
+		proofs:     dependencies.Proofs,
+		backend:    dependencies.Backend,
+		ownership:  dependencies.Ownership,
 		faultPoint: fault,
 	}
 }

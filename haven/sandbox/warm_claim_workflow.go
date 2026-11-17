@@ -13,6 +13,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply"
 )
 
 func (service *WarmClaims) setWarmClaimPhase(step *WarmClaimStep, phase string) error {
@@ -194,12 +195,22 @@ func (service *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 		}
 		identity := destination.Identity
 		identity.ProvisionSource = "golden"
-		if _, err = service.provisioning.Admit(service.ctx, template.TenantID, request.Key, frozen, operation.Digest(frozen), template, manifest, &source, nil, &ProvisionTarget{
-			Identity:      &identity,
-			Sandbox:       destination,
-			SlotOperation: step.Input.Source.Input.SlotOperation,
-			SlotHolder:    "claim:" + step.OperationID,
-			Parent:        parent,
+		if _, err = service.provisioning.Admit(service.ctx, ProvisionAdmission{
+			Request: supply.ProvisionRequest{
+				TenantID: template.TenantID,
+				Key:      request.Key,
+				Frozen:   frozen,
+				Template: template,
+				Image:    manifest,
+				Restore:  &source,
+			},
+			Target: &ProvisionTarget{
+				Identity:      &identity,
+				Sandbox:       destination,
+				SlotOperation: step.Input.Source.Input.SlotOperation,
+				SlotHolder:    "claim:" + step.OperationID,
+				Parent:        parent,
+			},
 		}); err != nil {
 			return err
 		}

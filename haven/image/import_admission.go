@@ -42,7 +42,10 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 		Options imageimport.ImageImportOptions
 	}{"image_import", options})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.database).Cached(ctx, "node", service.nodeID, key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.database).Cached(ctx, operation.Scope{
+		Kind: "node",
+		ID:   service.nodeID,
+	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}

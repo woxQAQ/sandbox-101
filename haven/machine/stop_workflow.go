@@ -69,7 +69,10 @@ func (service *VMStops) AdmitForParent(ctx context.Context, request StopRequest,
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}
@@ -118,7 +121,12 @@ func (service *VMStops) AdmitForParent(ctx context.Context, request StopRequest,
 		SourceHash:      source.Hash,
 	}
 	input.Lifecycle = lifecycle
-	if err = AdmitResourceParent(ctx, tx, parent, accepted, "stop", sandbox.VMID, hash); err != nil {
+	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
+		Child:       accepted,
+		Kind:        "stop",
+		Candidate:   sandbox.VMID,
+		RequestHash: hash,
+	}); err != nil {
 		return empty, err
 	}
 	payload := operation.Encode(input)
@@ -191,7 +199,11 @@ func (service *VMStops) stopProof(tx *sql.Tx, step StopStep) (ResourceStep, VMRe
 	}
 	state := "provisioning"
 	if step.Input.Lifecycle != "" {
-		state, err = service.ownership.VerifyStopParent(service.ctx, tx, step, source, record)
+		state, err = service.ownership.VerifyStopParent(service.ctx, tx, StopParentProof{
+			Step:    step,
+			Source:  source,
+			Sandbox: record,
+		})
 		if err != nil {
 			return source, currentMachine, err
 		}

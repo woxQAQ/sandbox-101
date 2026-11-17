@@ -69,10 +69,11 @@ func (admission *LifecycleAdmission) VerifyCaptureCleanup(ctx context.Context, t
 // AdmitResource commits the parent intent and its resource dependency in the
 // resource admission transaction. It never polls another service or infers a
 // missing resource receipt from a current query.
-func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, requestHash string) error {
+func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
 	if admission == nil {
 		return nil
 	}
+	child := request.Child
 	parent := admission.Parent
 	input := admission.Input
 
@@ -160,12 +161,17 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 			return err
 		}
 		if input.Rollback != nil {
-			if err = admitRollbackLease(ctx, tx, parent, input, admission.History); err != nil {
+			if err = admission.admitRollbackLease(ctx, tx); err != nil {
 				return err
 			}
 		}
 		if admission.Upper != nil {
-			if err = admission.Upper.AdmitResource(ctx, tx, parent, "lifecycle", input.Sandbox.ID, operation.Digest(frozen)); err != nil {
+			if err = admission.Upper.AdmitResource(ctx, tx, machine.ResourceAdmission{
+				Child:       parent,
+				Kind:        "lifecycle",
+				Candidate:   input.Sandbox.ID,
+				RequestHash: operation.Digest(frozen),
+			}); err != nil {
 				return err
 			}
 		}
@@ -183,5 +189,9 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 			return fmt.Errorf("%w: lifecycle configuration was superseded", errs.ErrConflict)
 		}
 	}
-	return machine.InsertResourceLink(ctx, tx, parent.ID, admission.Role, input.Sandbox.Instance, child, kind, candidate, requestHash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID:      parent.ID,
+		Role:             admission.Role,
+		ExpectedInstance: input.Sandbox.Instance,
+	}, request)
 }

@@ -118,14 +118,58 @@ func (boundary *RestoreBoundary) Close() error {
 	return result
 }
 
-// PrepareRestore creates only the explicit candidate and returns its observed
-// identities and fixed source checksums. Existing unproved versions are refused.
-// The caller commits this proof before invoking any CopyFile operation below.
-func PrepareRestore(resource Resource, operation, source string, digests map[string]string, createVM bool) (*RestoreBoundary, error) {
+// RestorePreparation binds an explicit version candidate to its fixed snapshot
+// inputs. Clone and existing-VM restore choose distinct directory preparation.
+type RestorePreparation struct {
+	Resource    Resource
+	OperationID string
+	Source      string
+	Digests     map[string]string
+}
+
+func (request RestorePreparation) validate() error {
+	resource, operation := request.Resource, request.OperationID
 	versionPath := filepath.Join(resource.Dir, "versions", operation)
 	if !ValidResourceID(operation, "op-") || resource.Disk != filepath.Join(versionPath, "disk.raw") || resource.RestoreDir != filepath.Join(versionPath, "restore") {
-		return nil, errors.New("restore candidate ownership mismatch")
+		return errors.New("restore candidate ownership mismatch")
 	}
+	return nil
+}
+
+// PrepareClone may create the explicitly allocated logical VM directory.
+func PrepareClone(request RestorePreparation) (*RestoreBoundary, error) {
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
+	root, err := OpenCaptureDir(request.Resource.Dir)
+	if os.IsNotExist(err) {
+		if err = os.Mkdir(request.Resource.Dir, 0o700); err == nil {
+			root, err = OpenCaptureDir(request.Resource.Dir)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return request.prepare(root)
+}
+
+// PrepareRestore requires the original logical VM directory to remain present.
+func PrepareRestore(request RestorePreparation) (*RestoreBoundary, error) {
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
+	root, err := OpenCaptureDir(request.Resource.Dir)
+	if err != nil {
+		return nil, err
+	}
+	return request.prepare(root)
+}
+
+// prepare returns the observed candidate identities and fixed source checksums.
+// The caller commits this proof before invoking any CopyFile operation below.
+func (request RestorePreparation) prepare(root *os.File) (*RestoreBoundary, error) {
+	resource, operation, source, digests := request.Resource, request.OperationID, request.Source, request.Digests
+	versionPath := filepath.Join(resource.Dir, "versions", operation)
 	boundary := &RestoreBoundary{
 		source: source,
 		Materials: &RestoreMaterials{
@@ -139,15 +183,6 @@ func PrepareRestore(resource Resource, operation, source string, digests map[str
 			_ = boundary.Close()
 		}
 	}()
-	root, err := OpenCaptureDir(resource.Dir)
-	if os.IsNotExist(err) && createVM {
-		if err = os.Mkdir(resource.Dir, 0o700); err == nil {
-			root, err = OpenCaptureDir(resource.Dir)
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
 	boundary.directories = append(boundary.directories, root)
 	versions, err := CaptureChild(root, "versions", 0o700)
 	if err != nil {

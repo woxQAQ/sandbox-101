@@ -57,7 +57,9 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					"old.invalid",
 				},
 			}
-			claim := claimSandbox(t, service, "claim", map[string]operation.EnvVar{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", map[string]operation.EnvVar{
 				"REVISION": {
 					Value: "old",
 				},
@@ -66,7 +68,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			connection, err := service.Data.Connect(context.Background(), principal, before.ID)
+			connection, err := service.Dataplane.Connect(context.Background(), principal, before.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +168,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					t.Fatal("failed configure retained old data connection")
 				}
 			}
-			if _, err = service.Data.DataReady(ctx, principal, before.ID); err == nil {
+			if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err == nil {
 				t.Fatal("failed configure admitted data")
 			}
 			runtime.Mu.Lock()

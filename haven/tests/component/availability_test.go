@@ -50,7 +50,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM operations WHERE scope_kind='tenant' AND scope_id=? AND idem_key=?", principal.TenantID, "after-drain").Scan(&admitted); err != nil || admitted != 0 {
 		t.Fatal("rejected claim left intent", admitted, err)
 	}
-	running, err := service.Data.DataReady(ctx, principal, original.Result.SandboxID)
+	running, err := service.Dataplane.Ready(ctx, principal, original.Result.SandboxID)
 	if err != nil || running.ID != original.Result.SandboxID || running.State != "running" {
 		t.Fatal("drain revoked an existing running sandbox", running, err)
 	}

@@ -33,7 +33,9 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			waitFixtureWorker(t, service, claim.ID)
@@ -53,7 +55,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			go func() {
-				connection, err := service.Data.Connect(ctx, principal, claim.Result.SandboxID)
+				connection, err := service.Dataplane.Connect(ctx, principal, claim.Result.SandboxID)
 				done <- result{connection, err}
 			}()
 			select {

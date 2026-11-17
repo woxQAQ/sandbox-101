@@ -54,7 +54,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				reason := service.Workers.Snapshot(claimed.ID).Err
 				t.Fatal(claimed, reason, err)
 			}
-			sandbox, err := service.Data.DataReady(ctx, principal, claimed.Result.SandboxID)
+			sandbox, err := service.Dataplane.Ready(ctx, principal, claimed.Result.SandboxID)
 			if err != nil || sandbox.State != "running" || sandbox.ID != refill.Result.SandboxID || (sandbox.VMID == refill.Result.VMID) == fallback {
 				t.Fatal(sandbox, refill, err)
 			}

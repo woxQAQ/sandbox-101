@@ -36,7 +36,10 @@ func LoadStop(ctx context.Context, database store.DBTX, id string) (StopStep, er
 	step := StopStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "stop"})
+	record, err := dbgen.New(database).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "stop",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

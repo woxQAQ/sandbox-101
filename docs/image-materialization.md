@@ -29,6 +29,12 @@ A new manifest referencing verified cached `diff_id`s can rebuild fsmeta and boo
 
 ## Shared data pipeline
 
+Both materializers use the same `host.ValidateLayer` preflight. `LayerInput` carries the file path, media type and expected uncompressed digest; `LayerLimits` carries the byte and entry bounds. Materialization mode does not select a weaker validation path.
+
+`LayerCacheRequest` carries the validated layer, its byte/entry counts and exact builder into the corresponding shared or legacy cache builder. Both builders use one publication step for data hashing, receipt creation, sealing, file/directory fsync and rename. `FsmetaLayers` keeps ordered external devices with their state root and private output directory; each materializer retains its own explicit builder or manifest identity. These internal values do not change receipts, builder profiles or published image formats.
+
+`imageimport.ImportWork` carries the original operation, frozen plan and prepared directory identities through staging, layer materialization and output construction. Haven separately verifies publication authority before choosing either published-work cleanup, which owns only inputs, or unpublished-work cleanup, which also checks the original output inode. The two cleanup entrypoints do not accept a publication-mode flag.
+
 The layered materializer requires matching erofs-utils versions **>=1.9.4 and <2**. The implementation has been exercised with erofs-utils 1.9.4. Loom uses the public Writer API of [go-erofs](../third_party/go-erofs/UPSTREAM.md) for per-image metadata composition.
 
 For each missing layer, preflight validates canonical sha256 descriptors, compressed-blob checksum and size, the complete uncompressed tar digest, decompression/entry bounds and supported metadata. Normalization writes a private tar with every regular entry version at an indexed `data/<entry-index>` name. Overwritten versions stay available because another hardlink may still refer to their inode. Original headers and OCI operations are encoded with standard `encoding/gob` as `headers.gob` in the same cache EROFS. Attribute maps are sorted before encoding; arbitrary binary capability/ACL values retain their bytes. The cache hash authenticates this index along with all payloads. Cached index decoding bounds its size using the authenticated receipt, checks entry counts and attribute ordering, revalidates headers and refuses trailing data.

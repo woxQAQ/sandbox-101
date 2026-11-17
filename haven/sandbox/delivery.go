@@ -22,7 +22,11 @@ type OperationDelivery struct {
 }
 
 func NewOperationDelivery(database *store.Database, operations *operation.Operations, authentication *authorization.Authentication) *OperationDelivery {
-	return &OperationDelivery{database: database, operations: operations, authentication: authentication}
+	return &OperationDelivery{
+		database:       database,
+		operations:     operations,
+		authentication: authentication,
+	}
 }
 
 // PublicOperation authorizes delivery of the original business view. Status and

@@ -158,7 +158,17 @@ type runningHaven struct {
 	args    []string
 }
 
-func startHaven(t *testing.T, ctx context.Context, artifacts, materials, cgroup, ioMax, layout, image string) (*runningHaven, error) {
+type havenLaunch struct {
+	Artifacts string
+	Materials string
+	Cgroup    string
+	IOMax     string
+	Layout    string
+	Image     string
+}
+
+func startHaven(t *testing.T, ctx context.Context, launch havenLaunch) (*runningHaven, error) {
+	artifacts, materials, cgroup, ioMax, layout, image := launch.Artifacts, launch.Materials, launch.Cgroup, launch.IOMax, launch.Layout, launch.Image
 	t.Helper()
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
@@ -192,7 +202,11 @@ func startHaven(t *testing.T, ctx context.Context, artifacts, materials, cgroup,
 		"--max-vcpus=8",
 	}
 	retainConsoles(t, artifacts, cgroup)
-	process := startProcess(t, artifacts, "haven-1", "/run/p/bin/haven", append(append([]string{}, args...), "--init")...)
+	process := startProcess(t, artifacts, processCommand{
+		Name:   "haven-1",
+		Binary: "/run/p/bin/haven",
+		Args:   append(append([]string{}, args...), "--init"),
+	})
 	t.Cleanup(func() {
 		process.stop(t)
 	})

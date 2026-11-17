@@ -30,7 +30,10 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 		Request SupplyCleanupRequest
 	}{"supply_cleanup", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, "node", service.nodeID, key, hash); found || err != nil {
+	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		Kind: "node",
+		ID:   service.nodeID,
+	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}

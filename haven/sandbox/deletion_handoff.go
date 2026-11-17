@@ -49,11 +49,12 @@ func (DeletionHandoff) RestorePausedSandbox(ctx context.Context, tx *sql.Tx, des
 	return RestorePausedSandbox(ctx, tx, destination)
 }
 
-func (DeletionHandoff) TerminateSandbox(ctx context.Context, tx *sql.Tx, record ownership.Sandbox, operationID, tenantID string) error {
-	record.State, record.OperationID = "terminated", operationID
+func (DeletionHandoff) TerminateSandbox(ctx context.Context, tx *sql.Tx, termination machine.SandboxTermination) error {
+	record := termination.Sandbox
+	record.State, record.OperationID = "terminated", termination.OperationID
 	return store.RequireOne(dbgen.New(tx).TerminateLiveSandbox(ctx, dbgen.TerminateLiveSandboxParams{
 		ID:     record.ID,
-		Tenant: tenantID,
+		Tenant: termination.TenantID,
 		Body:   operation.Encode(record),
 	}))
 }

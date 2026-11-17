@@ -9,11 +9,11 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (parent *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, record ownership.Sandbox, source machine.Source, holder string) (*machine.QuotaDestination, error) {
+func (parent *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, slot ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+	record, source, holder := slot.Sandbox, slot.Source, slot.Holder
 	claim, err := LoadWarmClaim(ctx, tx, parent.ParentID)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,8 @@ func (parent *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, t
 	return nil, nil
 }
 
-func admitWarmResource(ctx context.Context, tx *sql.Tx, parent *WarmClaimAdmission, child operation.Record, kind, candidate, hash string) error {
+func (parent *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	kind, candidate := request.Kind, request.Candidate
 	step, err := LoadWarmClaim(ctx, tx, parent.ParentID)
 	if err != nil {
 		return err
@@ -69,7 +70,11 @@ func admitWarmResource(ctx context.Context, tx *sql.Tx, parent *WarmClaimAdmissi
 	default:
 		return fmt.Errorf("%w: unsupported warm claim resource role", errs.ErrInvalid)
 	}
-	return machine.InsertResourceLink(ctx, tx, parent.ParentID, parent.Role, step.Input.Pool.Instance, child, kind, candidate, hash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID:      parent.ParentID,
+		Role:             parent.Role,
+		ExpectedInstance: step.Input.Pool.Instance,
+	}, request)
 }
 
 func validateWarmSlotDestination(ctx context.Context, tx *sql.Tx, resource machine.ResourceStep) error {

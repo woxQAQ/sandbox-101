@@ -72,7 +72,10 @@ func runImageTool(ctx context.Context, work, tool string, args ...string) error 
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = work
-	cmd.Env = []string{"PATH=" + hostToolPath(), "LC_ALL=C"}
+	cmd.Env = []string{
+		"PATH=" + hostToolPath(),
+		"LC_ALL=C",
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %w: %.4096s", tool, err, strings.TrimSpace(string(output)))
@@ -144,21 +147,24 @@ func loadLayerCache(state, builder, diff string) (layerCache, error) {
 func (c layerCache) artifact(state string, index int) (ImageArtifact, error) {
 	receipt := filepath.Join(state, filepath.Dir(layerRelativePath(c.Builder, c.DiffID)), "layer.json")
 	hash, err := digestFile(receipt)
-	return dataArtifact(c.Builder, c.DiffID, c.SHA256, hash, index), err
+	return DataArtifact(LayerArtifactIdentity{
+		Builder:     c.Builder,
+		DiffID:      c.DiffID,
+		SHA256:      c.SHA256,
+		CacheSHA256: hash,
+	}, index), err
 }
 
-func buildLayerCache(
-	ctx context.Context,
-	state, input, media, builder, diff string,
-	size, entries int64,
-) (layerCache, error) {
+func BuildLayerCache(ctx context.Context, state string, request LayerCacheRequest) (LayerCache, error) {
+	input, media := request.Input.Path, request.Input.MediaType
+	builder, diff := request.Builder, request.Input.DiffID
 	cached := layerCache{
 		Format:  1,
 		Profile: layerProfile,
 		Builder: builder,
 		DiffID:  diff,
-		Bytes:   size,
-		Entries: entries,
+		Bytes:   request.Bytes,
+		Entries: request.Entries,
 	}
 	parent := filepath.Join(state, "layer-cache", builder[7:])
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -195,39 +201,11 @@ func buildLayerCache(
 	if err = runImageTool(ctx, stage, "fsck.erofs", "--extract", filepath.Join(stage, "layer.erofs")); err != nil {
 		return cached, err
 	}
-	cached.SHA256, err = digestFile(filepath.Join(stage, "layer.erofs"))
-	if err != nil {
-		return cached, err
-	}
-	if err = writeJSON(filepath.Join(stage, "layer.json"), cached); err != nil {
-		return cached, err
-	}
-	if err = sealTree(stage); err != nil {
-		return cached, err
-	}
-	if err = syncTree(stage); err != nil {
-		return cached, err
-	}
-	dest := filepath.Join(parent, diff[7:])
-	if _, err = os.Lstat(dest); !os.IsNotExist(err) {
-		return cached, errors.New("layer cache destination already exists")
-	}
-	if err = os.Rename(stage, dest); err != nil {
-		return cached, err
-	}
-	for _, dir := range []string{
-		parent,
-		filepath.Dir(parent),
-		state,
-	} {
-		if err = syncDir(dir); err != nil {
-			return cached, err
-		}
-	}
-	return loadLayerCache(state, builder, diff)
+	return publishLayerCache(state, stage, cached)
 }
 
-func materializeFsmeta(ctx context.Context, state, out string, artifacts []ImageArtifact, manifestDigest string) error {
+func MaterializeFsmeta(ctx context.Context, input FsmetaLayers, manifestDigest string) error {
+	state, out, artifacts := input.StateRoot, input.Output, input.Artifacts
 	args := []string{
 		"--quiet",
 		"--workers=1",

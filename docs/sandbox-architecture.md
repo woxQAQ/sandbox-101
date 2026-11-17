@@ -57,7 +57,7 @@ stateDiagram-v2
 
 pause 先阻断接纳、撤销数据/出网，capture 完整 sleep snapshot，再删除原 VM，最后提交 paused。capture 失败保源，不降级为丢状态删除。paused release 不启动 VM。
 
-DataReady 在 sandbox 级接纳互斥下合并透明 resume；clone/激活后保留 sandbox identity、machine-id、进程/会话及 guest ledger，应用最新 settings/policy。running 发布同事务交接旧 sleep holder 给独立 cleanup；原 backing 费用继续存在。失败保留 sleep，新 intent 不修改旧失败结果。
+dataplane Ready 在 sandbox 级接纳互斥下合并透明 resume；clone/激活后保留 sandbox identity、machine-id、进程/会话及 guest ledger，应用最新 settings/policy。running 发布同事务交接旧 sleep holder 给独立 cleanup；原 backing 费用继续存在。失败保留 sleep，新 intent 不修改旧失败结果。
 
 checkpoint 在 running 源捕获新 SID，paused 源绑定原完整 sleep 而不唤醒。fork 接受 running/paused sandbox 或 checkpoint、count 1–32；running 源只捕获一次。整批 branch IDs、births、slot/storage/host peak 先冻结，并在一个 allocation 事务中承接责任后才执行。默认继承 source policy，不继承环境；分支通过 Admin 重置身份/env/ledger。失败 batch 沿原 branch 与 cleanup links 精确补偿，不凭当前对象推断未 dispatch。
 
@@ -75,7 +75,7 @@ supply、import/cache、snapshot/capture、direct policy 与 source lifecycle �
 
 configure admission 原子记录持久 fence，并在保存新 settings 前撤销旧 proxy/数据连接。runtime、guest、bind 或 SQL/COMMIT 失败保留 fence；自动 rebind/reconcile 不清除它。只有匹配的显式 configure 完成最终交付才原子清 fence，迟到 worker 不能清新 fence。
 
-数据接纳先查权限/state/lease/secret/fence，执行必要 resume/rebind；外部 Connect/Forward 后在短 configuration guard 中重核原实例、generation 与 policy，登记连接。HTTP downstream attach 同样 pin 原 admitted upstream，并受 guard 与 revocation registry 保护直到 Hijack。configure/expiry/shutdown 先发生时，迟到连接不能交付。正在 setup 与两个 handoff endpoint 都参与 shutdown custody，writer lock 最后释放。
+数据接纳先查权限/state/lease/secret/fence，执行必要 resume/rebind；外部 Connect/Forward 后在短 configuration guard 中重核原实例、generation 与 policy，登记连接。最终核验整体接收原 `access.ConnectionIdentity`，不从当前 settings 更新既有连接的授权。readiness 通过最终核验后才在同一个 guard 下执行 auto-renew；下游挂接与连接的周期性核验不续租，也没有 `renew` 模式参数。HTTP downstream attach 同样 pin 原 admitted upstream，并受 guard 与 revocation registry 保护直到 Hijack。configure/expiry/shutdown 先发生时，迟到连接不能交付。正在 setup 与两个 handoff endpoint 都参与 shutdown custody，writer lock 最后释放。
 
 ## RPC、出网与 Preview
 

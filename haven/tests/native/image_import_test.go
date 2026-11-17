@@ -175,7 +175,7 @@ func TestHavenActualOCIImportPublishesSingleCatalog(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			report, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
+			report, err := service.GC.Collect(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, "work-gc", types.GCOptions{

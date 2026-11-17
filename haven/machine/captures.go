@@ -42,7 +42,20 @@ type Captures struct {
 	faultPoint  func(string) error
 }
 
-func NewCaptures(state *store.State, guards CapturesGuards, lifetime *execution.Lifetime, workers *execution.Workers, backend CaptureBackend, safetyBytes int64, fault func(string) error, ownership SandboxOwnershipReader) *Captures {
+type CapturesDependencies struct {
+	Guards    CapturesGuards
+	Lifetime  *execution.Lifetime
+	Workers   *execution.Workers
+	Backend   CaptureBackend
+	Ownership SandboxOwnershipReader
+}
+
+type CapturesOptions struct {
+	SafetyBytes int64
+	Fault       func(string) error
+}
+
+func NewCaptures(state *store.State, dependencies CapturesDependencies, options CapturesOptions) *Captures {
 	return &Captures{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -50,15 +63,15 @@ func NewCaptures(state *store.State, guards CapturesGuards, lifetime *execution.
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:         workers.Context(),
-		admission:   guards.Admission(),
-		guards:      guards,
-		lifetime:    lifetime,
-		workers:     workers,
-		backend:     backend,
-		ownership:   ownership,
-		safetyBytes: safetyBytes,
-		faultPoint:  fault,
+		ctx:         dependencies.Workers.Context(),
+		admission:   dependencies.Guards.Admission(),
+		guards:      dependencies.Guards,
+		lifetime:    dependencies.Lifetime,
+		workers:     dependencies.Workers,
+		backend:     dependencies.Backend,
+		ownership:   dependencies.Ownership,
+		safetyBytes: options.SafetyBytes,
+		faultPoint:  options.Fault,
 	}
 }
 

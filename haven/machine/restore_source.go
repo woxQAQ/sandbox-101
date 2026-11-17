@@ -7,7 +7,7 @@ import (
 	"github.com/woxQAQ/haven/loom"
 )
 
-func VerifyRestoreSourceFiles(source Source) error {
+func VerifyRestoreSourceFiles(source SnapshotSource) error {
 	directory, err := loom.OpenCaptureDir(source.Snapshot.Dir)
 	if err != nil {
 		return err

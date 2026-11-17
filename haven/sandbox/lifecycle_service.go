@@ -37,6 +37,12 @@ type LifecycleOptions struct {
 }
 
 type LifecycleDependencies struct {
+	Guards         LifecycleGuards
+	Gate           execution.AdmissionGate
+	Workers        *execution.Workers
+	Registry       *access.Registry
+	Proofs         machine.ResourceProofs
+	Committer      *operation.Committer
 	Commands       *SandboxCommands
 	Activations    *Activations
 	WarmClaims     *WarmClaims
@@ -78,7 +84,7 @@ type Lifecycle struct {
 	committer      *operation.Committer
 }
 
-func NewLifecycle(state *store.State, guards LifecycleGuards, gate execution.AdmissionGate, workers *execution.Workers, registry *access.Registry, proofs machine.ResourceProofs, dependencies LifecycleDependencies, options LifecycleOptions, committer *operation.Committer) *Lifecycle {
+func NewLifecycle(state *store.State, dependencies LifecycleDependencies, options LifecycleOptions) *Lifecycle {
 	return &Lifecycle{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -86,13 +92,13 @@ func NewLifecycle(state *store.State, guards LifecycleGuards, gate execution.Adm
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:            workers.Context(),
-		admission:      guards.Admission(),
-		gate:           gate,
-		guards:         guards,
-		workers:        workers,
-		access:         registry,
-		proofs:         proofs,
+		ctx:            dependencies.Workers.Context(),
+		admission:      dependencies.Guards.Admission(),
+		gate:           dependencies.Gate,
+		guards:         dependencies.Guards,
+		workers:        dependencies.Workers,
+		access:         dependencies.Registry,
+		proofs:         dependencies.Proofs,
 		catalog:        NewCatalog(state.Database()),
 		commands:       dependencies.Commands,
 		activations:    dependencies.Activations,
@@ -105,7 +111,8 @@ func NewLifecycle(state *store.State, guards LifecycleGuards, gate execution.Adm
 		captureCleanup: dependencies.CaptureCleanup,
 		policies:       dependencies.Policies,
 		links:          dependencies.Links,
-		opts:           options, committer: committer,
+		opts:           options,
+		committer:      dependencies.Committer,
 	}
 }
 
@@ -117,7 +124,10 @@ func (service *Lifecycle) fault(point string) error {
 }
 
 func (service *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, admission.MAC, admission.Secrets)
+	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+		MAC:     admission.MAC,
+		Secrets: admission.Secrets,
+	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		service.dispatch(accepted.ID)
 	}

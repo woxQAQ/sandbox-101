@@ -9,7 +9,7 @@ import (
 
 // Egress is the portal lifecycle supplied by application construction.
 type Egress interface {
-	Bind(context.Context, string, string, string, egress.Policy, map[string]egress.Secret) error
+	Bind(context.Context, egress.BindingTarget, egress.Policy, map[string]egress.Secret) error
 	Revoke(string) error
 	Close() error
 }

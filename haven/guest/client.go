@@ -33,8 +33,20 @@ func Socket(resource loom.Resource) string {
 	return filepath.Join(resource.RunDir, "io", "vsock")
 }
 
-func guestControl(ctx context.Context, resource loom.Resource, port int, method string, params map[string]any) (map[string]any, error) {
-	result, err := loom.GuestControl(ctx, Socket(resource), port, requestID("rpc-"), method, params)
+// guestCommand leaves frame correlation with this client, independently of the
+// durable exec key carried by a workload command's parameters.
+type guestCommand struct {
+	Method string
+	Params map[string]any
+}
+
+func guestControl(ctx context.Context, resource loom.Resource, port int, command guestCommand) (map[string]any, error) {
+	method, params := command.Method, command.Params
+	result, err := loom.GuestControl(ctx, Socket(resource), port, loom.GuestControlRequest{
+		ID:     requestID("rpc-"),
+		Method: method,
+		Params: params,
+	})
 	if err == nil {
 		return result, nil
 	}
@@ -62,7 +74,10 @@ func guestControl(ctx context.Context, resource loom.Resource, port int, method 
 }
 
 func (Client) Info(ctx context.Context, resource loom.Resource) error {
-	result, err := guestControl(ctx, resource, 2048, "info", map[string]any{})
+	result, err := guestControl(ctx, resource, 2048, guestCommand{
+		Method: "info",
+		Params: map[string]any{},
+	})
 	if err != nil {
 		return err
 	}
@@ -77,19 +92,25 @@ func (Client) Activate(ctx context.Context, resource loom.Resource, activation A
 	for key, value := range activation.Env {
 		env[key] = value
 	}
-	_, err := guestControl(ctx, resource, 2046, "activate", map[string]any{
-		"sandbox_id":     activation.SandboxID,
-		"hostname":       activation.Hostname,
-		"reset_identity": activation.ResetIdentity,
-		"env":            env,
-		"network":        activation.Network,
-		"ca_pem":         activation.CAPEM,
+	_, err := guestControl(ctx, resource, 2046, guestCommand{
+		Method: "activate",
+		Params: map[string]any{
+			"sandbox_id":     activation.SandboxID,
+			"hostname":       activation.Hostname,
+			"reset_identity": activation.ResetIdentity,
+			"env":            env,
+			"network":        activation.Network,
+			"ca_pem":         activation.CAPEM,
+		},
 	})
 	return err
 }
 
 func (Client) PrepareTemplate(ctx context.Context, resource loom.Resource) error {
-	result, err := guestControl(ctx, resource, 2046, "prepare_template", map[string]any{})
+	result, err := guestControl(ctx, resource, 2046, guestCommand{
+		Method: "prepare_template",
+		Params: map[string]any{},
+	})
 	if err != nil {
 		return err
 	}
@@ -103,9 +124,12 @@ func (Client) Exec(ctx context.Context, resource loom.Resource, key, command str
 	if key == "" {
 		return fmt.Errorf("%w: warmup requires explicit exec identity", errs.ErrInvalid)
 	}
-	result, err := guestControl(ctx, resource, 2048, "exec", map[string]any{
-		"exec_key": key,
-		"command":  command,
+	result, err := guestControl(ctx, resource, 2048, guestCommand{
+		Method: "exec",
+		Params: map[string]any{
+			"exec_key": key,
+			"command":  command,
+		},
 	})
 	if err != nil {
 		if errors.Is(err, errs.ErrUnknown) || errors.Is(err, errs.ErrConflict) || errors.Is(err, errs.ErrExhausted) || errors.Is(err, errs.ErrManualRecovery) || errors.Is(err, errs.ErrInvalid) {

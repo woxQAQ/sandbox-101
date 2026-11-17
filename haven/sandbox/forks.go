@@ -34,6 +34,12 @@ type ForkOptions struct {
 }
 
 type ForkDependencies struct {
+	Guards       ForkGuards
+	Gate         execution.AdmissionGate
+	Workers      *execution.Workers
+	Registry     *access.Registry
+	History      machine.SnapshotProofs
+	Committer    *operation.Committer
 	Commands     *SandboxCommands
 	Availability *execution.Availability
 	Operations   *operation.Operations
@@ -70,7 +76,7 @@ type Forks struct {
 	committer    *operation.Committer
 }
 
-func NewForks(state *store.State, guards ForkGuards, gate execution.AdmissionGate, workers *execution.Workers, registry *access.Registry, history machine.SnapshotProofs, dependencies ForkDependencies, options ForkOptions, committer *operation.Committer) *Forks {
+func NewForks(state *store.State, dependencies ForkDependencies, options ForkOptions) *Forks {
 	return &Forks{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -78,13 +84,13 @@ func NewForks(state *store.State, guards ForkGuards, gate execution.AdmissionGat
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          workers.Context(),
-		admission:    guards.Admission(),
-		gate:         gate,
-		guards:       guards,
-		workers:      workers,
-		access:       registry,
-		history:      history,
+		ctx:          dependencies.Workers.Context(),
+		admission:    dependencies.Guards.Admission(),
+		gate:         dependencies.Gate,
+		guards:       dependencies.Guards,
+		workers:      dependencies.Workers,
+		access:       dependencies.Registry,
+		history:      dependencies.History,
 		catalog:      NewCatalog(state.Database()),
 		commands:     dependencies.Commands,
 		availability: dependencies.Availability,
@@ -95,7 +101,8 @@ func NewForks(state *store.State, guards ForkGuards, gate execution.AdmissionGat
 		lifecycle:    dependencies.Lifecycle,
 		policies:     dependencies.Policies,
 		links:        dependencies.Links,
-		opts:         options, committer: committer,
+		opts:         options,
+		committer:    dependencies.Committer,
 	}
 }
 
@@ -107,7 +114,10 @@ func (service *Forks) fault(point string) error {
 }
 
 func (service *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, admission.MAC, admission.Secrets)
+	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+		MAC:     admission.MAC,
+		Secrets: admission.Secrets,
+	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		service.dispatch(accepted.ID)
 	}

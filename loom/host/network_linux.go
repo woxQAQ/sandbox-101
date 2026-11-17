@@ -231,9 +231,16 @@ func (b *CloudHypervisor) networkInspect(ctx context.Context, r Resource) (bool,
 	return isUp(hostLink) || isUp(*tap) || isUp(*up), nil
 }
 
+type networkRoute struct {
+	Destination string
+	Gateway     string
+	Device      string
+}
+
 // ensureNetworkRoute accepts only an absent route or the route for the verified
 // namespace/link identity. Never replace an unrelated host route.
-func ensureNetworkRoute(ctx context.Context, ns, destination, gateway, device string) error {
+func ensureNetworkRoute(ctx context.Context, ns string, route networkRoute) error {
+	destination, gateway, device := route.Destination, route.Gateway, route.Device
 	run := func(args ...string) ([]byte, error) {
 		if ns != "" {
 			return netIP(ctx, ns, args...)
@@ -350,10 +357,18 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		if _, err = command(ctx, "ip", "link", "set", host, "up"); err != nil {
 			return err
 		}
-		if err = ensureNetworkRoute(ctx, ns, "default", hostIP, peer); err != nil {
+		if err = ensureNetworkRoute(ctx, ns, networkRoute{
+			Destination: "default",
+			Gateway:     hostIP,
+			Device:      peer,
+		}); err != nil {
 			return err
 		}
-		if err = ensureNetworkRoute(ctx, "", mapped+"/32", peerIP, host); err != nil {
+		if err = ensureNetworkRoute(ctx, "", networkRoute{
+			Destination: mapped + "/32",
+			Gateway:     peerIP,
+			Device:      host,
+		}); err != nil {
 			return err
 		}
 		_, err = netIP(ctx, ns, "link", "set", "tap0", "up")

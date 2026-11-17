@@ -51,7 +51,7 @@ func (service *Sandboxes) AdmitClaim(ctx context.Context, principal authorizatio
 	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	var source *machine.Source
+	var source *machine.SnapshotSource
 	var frozen []byte
 	if template.SnapshotID != "" {
 		snapshot, err := service.history.LoadRestoreSource(ctx, service.store.Database, principal.TenantID, template.SnapshotID)
@@ -77,18 +77,34 @@ func (service *Sandboxes) AdmitClaim(ctx context.Context, principal authorizatio
 	} else {
 		frozen = operation.Encode(struct {
 			Action  string
-			Request machine.ColdRequest
+			Request machine.FreshRequest
 			Claim   operation.Command
-		}{"claim", machine.ColdRequest{
+		}{"claim", machine.FreshRequest{
 			TenantID:   principal.TenantID,
 			Key:        key,
 			TemplateID: template.ID,
 		}, admission.Command})
 	}
 	if source != nil {
-		if warm, found, err := service.warmClaims.Admit(ctx, principal, key, *admission, template, *source); found || err != nil {
+		if warm, found, err := service.warmClaims.Admit(ctx, WarmClaimRequest{
+			Principal: principal,
+			Key:       key,
+			Admission: *admission,
+			Template:  template,
+			Restore:   *source,
+		}); found || err != nil {
 			return warm, err
 		}
 	}
-	return service.provisioning.Admit(ctx, principal.TenantID, key, frozen, operation.Digest(frozen), template, manifest, source, admission, nil)
+	return service.provisioning.Admit(ctx, ProvisionAdmission{
+		Request: supply.ProvisionRequest{
+			TenantID: principal.TenantID,
+			Key:      key,
+			Frozen:   frozen,
+			Template: template,
+			Image:    manifest,
+			Restore:  source,
+		},
+		Claim: admission,
+	})
 }

@@ -44,7 +44,10 @@ func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, reques
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, "tenant", request.TenantID, request.Key, hash); found || err != nil {
+	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   request.TenantID,
+	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
 		}

@@ -32,7 +32,8 @@ type forkBranchAdmission struct {
 	Index  int
 }
 
-func (parent *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, hash string) error {
+func (parent *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	child, kind, candidate := request.Child, request.Kind, request.Candidate
 	if parent.Input.Source == nil || kind != "capture" {
 		return fmt.Errorf("%w: fork capture dependency changed", errs.ErrConflict)
 	}
@@ -47,10 +48,15 @@ func (parent *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, chil
 	if err = parent.admitIntent(ctx, tx); err != nil {
 		return err
 	}
-	return machine.InsertResourceLink(ctx, tx, parent.Parent.ID, "capture", parent.Input.Source.State.Witness, child, kind, candidate, hash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID:      parent.Parent.ID,
+		Role:             "capture",
+		ExpectedInstance: parent.Input.Source.State.Witness,
+	}, request)
 }
 
-func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, target ownership.Sandbox, source machine.Source, holder string) (*machine.QuotaDestination, error) {
+func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+	target, source, holder := claim.Sandbox, claim.Source, claim.Holder
 	group, err := LoadFork(ctx, tx, parent.Group.OperationID)
 	if err != nil {
 		return nil, err
@@ -68,8 +74,8 @@ func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, 
 	return nil, nil
 }
 
-func (parent *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, hash string) error {
-	if kind != "clone" || child.Result.SandboxID != parent.Target.ID {
+func (parent *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	if request.Kind != "clone" || request.Child.Result.SandboxID != parent.Target.ID {
 		return fmt.Errorf("%w: fork branch resource identity changed", errs.ErrConflict)
 	}
 	if err := store.RequireOne(dbgen.New(tx).DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
@@ -78,7 +84,10 @@ func (parent *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx
 	})); err != nil {
 		return err
 	}
-	return machine.InsertResourceLink(ctx, tx, parent.Group.OperationID, fmt.Sprintf("branch:%d", parent.Index), "", child, kind, candidate, hash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID: parent.Group.OperationID,
+		Role:        fmt.Sprintf("branch:%d", parent.Index),
+	}, request)
 }
 
 func forkSlotHolder(group, sandbox string) string {

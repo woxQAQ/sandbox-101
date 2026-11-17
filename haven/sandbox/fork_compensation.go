@@ -21,7 +21,8 @@ type forkCleanupAdmission struct {
 	Index int
 }
 
-func (parent *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, child operation.Record, kind, candidate, hash string) error {
+func (parent *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	child, kind := request.Child, request.Kind
 	group, err := LoadFork(ctx, tx, parent.Group.OperationID)
 	if err != nil {
 		return err
@@ -37,7 +38,10 @@ func (parent *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.T
 	if current.Identity != target.Identity {
 		return fmt.Errorf("%w: fork cleanup birth ownership changed", errs.ErrManualRecovery)
 	}
-	return machine.InsertResourceLink(ctx, tx, group.OperationID, fmt.Sprintf("retire:%d", parent.Index), "", child, kind, candidate, hash)
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID: group.OperationID,
+		Role:        fmt.Sprintf("retire:%d", parent.Index),
+	}, request)
 }
 
 func (service *Forks) retireForkBranches(step ForkStep) error {
@@ -61,12 +65,16 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 					ExpectedInstance:  source.Input.Resource.Instance,
 				}, parent)
 			} else {
-				_, err = service.lifecycle.AdmitForParent(service.ctx, authorization.Principal{
-					Root:     true,
-					TenantID: target.TenantID,
-				}, step.OperationID+":release:"+target.ID, operation.Command{
-					Action:    "release",
-					SandboxID: target.ID,
+				_, err = service.lifecycle.AdmitForParent(service.ctx, LifecycleRequest{
+					Principal: authorization.Principal{
+						Root:     true,
+						TenantID: target.TenantID,
+					},
+					Key: step.OperationID + ":release:" + target.ID,
+					Command: operation.Command{
+						Action:    "release",
+						SandboxID: target.ID,
+					},
 				}, parent)
 			}
 			if err != nil {
@@ -85,7 +93,8 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 // Failed births have no successful generation to release. Their exact discard
 // receipt, current tombstone and original settings jointly authorize retiring the
 // business fence; a missing VM by itself grants no handoff authority.
-func retireForkDiscard(ctx context.Context, tx *sql.Tx, step ForkStep, index int, link machine.ResourceLink) error {
+func (parent forkCleanupAdmission) retireDiscard(ctx context.Context, tx *sql.Tx, link machine.ResourceLink) error {
+	step, index := parent.Group, parent.Index
 	discard, err := machine.LoadDiscard(ctx, tx, link.ChildID)
 	if err != nil {
 		return err

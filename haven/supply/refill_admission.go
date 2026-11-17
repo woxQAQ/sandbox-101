@@ -103,7 +103,14 @@ func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.
 		Action  string
 		Request machine.CloneRequest
 	}{"clone", request})
-	child, err := service.provisioning.AdmitRaw(ctx, selected.TenantID, request.Key, frozen, operation.Digest(frozen), selected, manifest, &source, RawTarget{
+	child, err := service.provisioning.AdmitRaw(ctx, ProvisionRequest{
+		TenantID: selected.TenantID,
+		Key:      request.Key,
+		Frozen:   frozen,
+		Template: selected,
+		Image:    manifest,
+		Restore:  &source,
+	}, RawTarget{
 		NewSandboxID: input.SandboxID,
 		Budget: &quota.SlotBudget{
 			Kind:  "sandbox_slot",

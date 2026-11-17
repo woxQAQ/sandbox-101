@@ -23,8 +23,21 @@ type CommandIdentity struct {
 	sign       func(...string) string
 }
 
-func NewCommandIdentity(ctx context.Context, operations *Repository, view *Operations, registry *access.Registry, sign func(...string) string) *CommandIdentity {
-	return &CommandIdentity{ctx: ctx, operations: operations, view: view, access: registry, sign: sign}
+type CommandIdentityDependencies struct {
+	Operations *Repository
+	View       *Operations
+	Registry   *access.Registry
+	Sign       func(...string) string
+}
+
+func NewCommandIdentity(ctx context.Context, dependencies CommandIdentityDependencies) *CommandIdentity {
+	return &CommandIdentity{
+		ctx:        ctx,
+		operations: dependencies.Operations,
+		view:       dependencies.View,
+		access:     dependencies.Registry,
+		sign:       dependencies.Sign,
+	}
 }
 
 func (service *CommandIdentity) CommandMAC(principal authorization.Principal, command Command) string {
@@ -37,9 +50,16 @@ func (service *CommandIdentity) CommandMAC(principal authorization.Principal, co
 	return role + ":" + service.sign("sandbox-command-v1", string(Encode(principal)), string(Encode(command)))
 }
 
+// CommandCredentials binds the stored credential MAC to the ephemeral secrets
+// supplied for that same retry. Secrets are restored only after MAC verification.
+type CommandCredentials struct {
+	MAC     string
+	Secrets map[string]egress.Secret
+}
+
 // Existing preserves scoped publication and original credential matching before
 // restoring the accepted request's in-memory secrets.
-func (service *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key, mac string, secrets map[string]egress.Secret) (Record, bool, error) {
+func (service *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (Record, bool, error) {
 	id, err := service.operations.RequestID(ctx, principal.TenantID, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, nil
@@ -51,11 +71,11 @@ func (service *CommandIdentity) Existing(ctx context.Context, principal authoriz
 	if err != nil {
 		return accepted, true, err
 	}
-	if err = service.MatchCredentials(id, mac); err != nil {
+	if err = service.MatchCredentials(id, credentials.MAC); err != nil {
 		return accepted, true, err
 	}
 	if !Terminal(accepted.Status) {
-		service.access.SetOperationSecrets(id, secrets)
+		service.access.SetOperationSecrets(id, credentials.Secrets)
 	}
 	return accepted, true, nil
 }

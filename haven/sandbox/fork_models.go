@@ -16,23 +16,23 @@ import (
 // A fork group owns the whole requested batch before any capture or allocation.
 // Source contains either a completed snapshot or the exact generation to capture.
 type ForkInput struct {
-	RequestTenantID string                `json:"request_tenant_id"`
-	OwnerTenantID   string                `json:"owner_tenant_id"`
-	Command         operation.Command     `json:"command"`
-	Template        supply.TemplateRecord `json:"template"`
-	Settings        Settings              `json:"settings"`
-	Targets         []ownership.Sandbox   `json:"targets"`
-	SourceSandbox   *ownership.Sandbox    `json:"source_sandbox,omitempty"`
-	Source          *machine.ResourceStep `json:"source,omitempty"`
-	Snapshot        *machine.Source       `json:"snapshot,omitempty"`
-	Checkpoint      *Checkpoint           `json:"checkpoint,omitempty"`
+	RequestTenantID string                  `json:"request_tenant_id"`
+	OwnerTenantID   string                  `json:"owner_tenant_id"`
+	Command         operation.Command       `json:"command"`
+	Template        supply.TemplateRecord   `json:"template"`
+	Settings        Settings                `json:"settings"`
+	Targets         []ownership.Sandbox     `json:"targets"`
+	SourceSandbox   *ownership.Sandbox      `json:"source_sandbox,omitempty"`
+	Source          *machine.ResourceStep   `json:"source,omitempty"`
+	Snapshot        *machine.SnapshotSource `json:"snapshot,omitempty"`
+	Checkpoint      *Checkpoint             `json:"checkpoint,omitempty"`
 }
 
 type ForkState struct {
-	Phase    string          `json:"phase"`
-	Snapshot *machine.Source `json:"snapshot,omitempty"`
-	Children []string        `json:"children,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	Phase    string                  `json:"phase"`
+	Snapshot *machine.SnapshotSource `json:"snapshot,omitempty"`
+	Children []string                `json:"children,omitempty"`
+	Error    string                  `json:"error,omitempty"`
 }
 
 type ForkStep struct {
@@ -47,7 +47,10 @@ func LoadFork(ctx context.Context, query store.DBTX, id string) (ForkStep, error
 	step := ForkStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "fork_group"})
+	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "fork_group",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

@@ -26,7 +26,16 @@ type CaptureDiscard struct {
 	faultPoint func(string) error
 }
 
-func NewCaptureDiscard(state *store.State, guards VMGuards, lifetime *execution.Lifetime, workers *execution.Workers, proofs ResourceProofs, inspector InstanceInspector, fault func(string) error, ownership CaptureDiscardOwnershipReader) *CaptureDiscard {
+type CaptureDiscardDependencies struct {
+	Guards    VMGuards
+	Lifetime  *execution.Lifetime
+	Workers   *execution.Workers
+	Proofs    ResourceProofs
+	Inspector InstanceInspector
+	Ownership CaptureDiscardOwnershipReader
+}
+
+func NewCaptureDiscard(state *store.State, dependencies CaptureDiscardDependencies, fault func(string) error) *CaptureDiscard {
 	return &CaptureDiscard{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -34,14 +43,14 @@ func NewCaptureDiscard(state *store.State, guards VMGuards, lifetime *execution.
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        workers.Context(),
-		admission:  guards.Admission(),
-		guards:     guards,
-		lifetime:   lifetime,
-		workers:    workers,
-		proofs:     proofs,
-		inspector:  inspector,
-		ownership:  ownership,
+		ctx:        dependencies.Workers.Context(),
+		admission:  dependencies.Guards.Admission(),
+		guards:     dependencies.Guards,
+		lifetime:   dependencies.Lifetime,
+		workers:    dependencies.Workers,
+		proofs:     dependencies.Proofs,
+		inspector:  dependencies.Inspector,
+		ownership:  dependencies.Ownership,
 		faultPoint: fault,
 	}
 }

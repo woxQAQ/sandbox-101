@@ -31,17 +31,30 @@ func NewManagement(socket string) *ManagementClient {
 }
 
 func (client *ManagementClient) Status(ctx context.Context) (types.NodeStatus, error) {
-	return call[types.NodeStatus](ctx, client.client, "GET", "/v1/status", "", nil)
+	return call[types.NodeStatus](ctx, client.client, controlRequest{
+		Method: "GET",
+		Path:   "/v1/status",
+	})
 }
 
 func (client *ManagementClient) Manage(ctx context.Context, request types.ManagementRequest) (types.ManagementResponse, error) {
-	return call[types.ManagementResponse](ctx, client.client, "POST", "/v1/manage", "", request)
+	return call[types.ManagementResponse](ctx, client.client, controlRequest{
+		Method: "POST",
+		Path:   "/v1/manage",
+		Body:   request,
+	})
 }
 
 func (client *ManagementClient) Operation(ctx context.Context, id string) (types.ManagementOperation, error) {
-	return call[types.ManagementOperation](ctx, client.client, "GET", "/v1/operations/"+url.PathEscape(id), "", nil)
+	return call[types.ManagementOperation](ctx, client.client, controlRequest{
+		Method: "GET",
+		Path:   "/v1/operations/" + url.PathEscape(id),
+	})
 }
 
 func (client *Client) Status(ctx context.Context) (types.NodeStatus, error) {
-	return call[types.NodeStatus](ctx, client, "GET", "/v1/status", "", nil)
+	return call[types.NodeStatus](ctx, client, controlRequest{
+		Method: "GET",
+		Path:   "/v1/status",
+	})
 }

@@ -91,26 +91,35 @@ func (s *Operations) Wait(ctx context.Context, principal authorization.Principal
 	if err != nil {
 		return Record{}, err
 	}
-	return s.wait(ctx, "tenant", tenant, id, principal.SandboxID)
+	return s.wait(ctx, Scope{
+		Kind: "tenant",
+		ID:   tenant,
+	}, id, principal.SandboxID)
 }
 
 // WaitAccepted waits for an already accepted tenant operation during workflow
 // orchestration. Its caller must separately verify frozen parent/child authority;
 // observing completion here does not grant permission to hand off responsibility.
 func (s *Operations) WaitAccepted(ctx context.Context, tenant, id string) (Record, error) {
-	return s.wait(ctx, "tenant", tenant, id, "")
+	return s.wait(ctx, Scope{
+		Kind: "tenant",
+		ID:   tenant,
+	}, id, "")
 }
 
 func (s *Operations) WaitManagement(ctx context.Context, principal authorization.Principal, id string) (Record, error) {
 	if !principal.Root || principal.SandboxID != "" {
 		return Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	return s.wait(ctx, "node", s.nodeID, id, "")
+	return s.wait(ctx, Scope{
+		Kind: "node",
+		ID:   s.nodeID,
+	}, id, "")
 }
 
-func (s *Operations) wait(ctx context.Context, kind, scope, id, sandbox string) (Record, error) {
+func (s *Operations) wait(ctx context.Context, scope Scope, id, sandbox string) (Record, error) {
 	for {
-		record, err := s.repository.Get(ctx, kind, scope, id)
+		record, err := s.repository.Get(ctx, scope.Kind, scope.ID, id)
 		if err != nil {
 			return record, err
 		}

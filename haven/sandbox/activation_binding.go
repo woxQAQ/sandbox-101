@@ -48,7 +48,11 @@ func (service *Activations) bindActivation(step ActivationStep, source machine.R
 	if err = service.RevokeSandbox(step.Input.SandboxID); err != nil {
 		return err
 	}
-	if err = service.egress.Bind(service.ctx, step.Input.SandboxID, step.Input.TenantID, guest.Socket(source.Input.Resource), step.Input.Settings.Policy, secrets); err != nil {
+	if err = service.egress.Bind(service.ctx, egress.BindingTarget{
+		SandboxID: step.Input.SandboxID,
+		TenantID:  step.Input.TenantID,
+		VSockPath: guest.Socket(source.Input.Resource),
+	}, step.Input.Settings.Policy, secrets); err != nil {
 		return err
 	}
 	service.access.Bind(step.Input.SandboxID, fingerprint, secrets)

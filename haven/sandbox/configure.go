@@ -16,6 +16,13 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+// configurationRequest freezes the original command and credential MAC before
+// preparing its replacement settings inside the admission transaction.
+type configurationRequest struct {
+	Command operation.Command
+	MAC     string
+}
+
 func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if principal.TenantID == "" || principal.SandboxID != "" || command.Action != "configure" || command.SandboxID == "" || key == "" || len(key) > 256 {
@@ -39,7 +46,10 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 	guard := service.guards.Configuration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	accepted, resource, paused, admissionErr := service.admitConfiguration(ctx, principal, key, command, mac)
+	accepted, resource, paused, admissionErr := service.admitConfiguration(ctx, principal, key, configurationRequest{
+		Command: command,
+		MAC:     mac,
+	})
 	if accepted.ID == "" || resource.VMID == "" {
 		return accepted, admissionErr
 	}
@@ -78,7 +88,8 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 	return accepted, nil
 }
 
-func (service *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, command operation.Command, mac string) (operation.Record, loom.Resource, bool, error) {
+func (service *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, request configurationRequest) (operation.Record, loom.Resource, bool, error) {
+	command, mac := request.Command, request.MAC
 	var empty operation.Record
 	var noResource loom.Resource
 	service.admission.Lock()
@@ -150,7 +161,10 @@ func (service *Sandboxes) admitConfiguration(ctx context.Context, principal auth
 	}{"configure", operation.SanitizedCommand(command)})
 	hash := operation.Digest(frozen)
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, "tenant", principal.TenantID, key, hash); found || err != nil {
+	if cached, found, err := operations.Cached(ctx, operation.Scope{
+		Kind: "tenant",
+		ID:   principal.TenantID,
+	}, key, hash); found || err != nil {
 		if err == nil {
 			var prior string
 			prior, err = operations.CredentialMAC(ctx, cached.ID)

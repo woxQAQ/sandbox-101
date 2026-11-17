@@ -7,10 +7,20 @@ import (
 	"path/filepath"
 )
 
+// CaptureDeletionTarget keeps failed-capture and possible publication custody
+// together. A missing boundary never grants ownership of existing material.
+type CaptureDeletionTarget struct {
+	Resource    Resource
+	OperationID string
+	SnapshotID  string
+	Boundary    *CaptureBoundary
+}
+
 // InspectCaptureDeletion inventories only the frozen failed capture boundary and
 // its possible publication destination. Existing material without a preparation
 // identity remains unowned; content checksums never create deletion authority.
-func InspectCaptureDeletion(ctx context.Context, stateRoot string, r Resource, operation, snapshot string, boundary *CaptureBoundary) ([]DeletionIntent, error) {
+func InspectCaptureDeletion(ctx context.Context, stateRoot string, target CaptureDeletionTarget) ([]DeletionIntent, error) {
+	r, operation, snapshot, boundary := target.Resource, target.OperationID, target.SnapshotID, target.Boundary
 	if !ValidResourceID(r.VMID, "vm-") || r.Dir != filepath.Join(stateRoot, "vms", r.VMID) || !ValidResourceID(operation, "op-") || !ValidResourceID(snapshot, "snap-") {
 		return nil, fmt.Errorf("invalid capture deletion resource")
 	}
@@ -65,9 +75,11 @@ func InspectCaptureDeletion(ctx context.Context, stateRoot string, r Resource, o
 				return nil, fmt.Errorf("existing capture directory lacks preparation proof: %v", err)
 			}
 		}
-		intent, _, err := inspectVMFileTopology(ctx, stateRoot, Resource{
-			Dir: path,
-		}, directories, files, fixed)
+		intent, _, err := inspectArtifactTopology(ctx, stateRoot, path, ArtifactTopology{
+			Directories: directories,
+			Files:       files,
+			Fixed:       fixed,
+		})
 		if err != nil {
 			return nil, err
 		}

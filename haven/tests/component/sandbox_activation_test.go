@@ -14,7 +14,14 @@ import (
 	"github.com/woxQAQ/haven/operation"
 )
 
-func claimSandbox(t *testing.T, service *application.App, key string, env map[string]operation.EnvVar, policy egress.Policy) operation.Record {
+// sandboxClaims borrows the App used by both claim admission and its operation
+// wait, keeping the test's execution target fixed across those steps.
+type sandboxClaims struct {
+	App *application.App
+}
+
+func (fixture sandboxClaims) claim(t *testing.T, key string, env map[string]operation.EnvVar, policy egress.Policy) operation.Record {
+	service := fixture.App
 	t.Helper()
 	acceptedOperation, err := service.Sandboxes.AdmitClaim(context.Background(), authorization.Principal{
 		TenantID: "tenant",
@@ -43,7 +50,9 @@ func claimSandbox(t *testing.T, service *application.App, key string, env map[st
 func TestHavenClaimDelivery(t *testing.T) {
 	parallelLifecycle(t)
 	service, runtime, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := claimSandbox(t, service, "claim", map[string]operation.EnvVar{
+	acceptedOperation := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", map[string]operation.EnvVar{
 		"VISIBLE": {
 			Value: "guest-value",
 		},
@@ -56,7 +65,7 @@ func TestHavenClaimDelivery(t *testing.T) {
 	if err != nil || sandboxView.State != "running" || sandboxView.Instance == "" || !time.Now().Before(sandboxView.Deadline) {
 		t.Fatal(sandboxView, err)
 	}
-	if _, err = service.Data.DataReady(context.Background(), authorization.Principal{
+	if _, err = service.Dataplane.Ready(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, sandboxView.ID); err != nil {
 		t.Fatal(err)
@@ -64,14 +73,14 @@ func TestHavenClaimDelivery(t *testing.T) {
 	if runtime.Count("launch") != 1 || len(guest.Activations) != 1 || guest.Activations[0].Env["VISIBLE"] != "guest-value" {
 		t.Fatal("claim bypassed or repeated guest activation")
 	}
-	conn, err := service.Data.Connect(context.Background(), authorization.Principal{
+	conn, err := service.Dataplane.Connect(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, sandboxView.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
-	if _, err = service.Data.Connect(context.Background(), authorization.Principal{
+	if _, err = service.Dataplane.Connect(context.Background(), authorization.Principal{
 		TenantID: "other",
 	}, sandboxView.ID); err == nil {
 		t.Fatal("foreign workload admission")
@@ -81,7 +90,9 @@ func TestHavenClaimDelivery(t *testing.T) {
 func TestHavenConfigureAdmission(t *testing.T) {
 	parallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := claimSandbox(t, service, "claim", nil, egress.Policy{
+	acceptedOperation := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	entered, finish := make(chan struct{}), make(chan struct{})
@@ -111,7 +122,7 @@ func TestHavenConfigureAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-entered
-	if _, err = service.Data.DataReady(context.Background(), authorization.Principal{
+	if _, err = service.Dataplane.Ready(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedOperation.Result.SandboxID); err == nil {
 		t.Fatal("configure fence allowed data")
@@ -143,7 +154,7 @@ func TestHavenConfigureAdmission(t *testing.T) {
 	}, newer.ID); err != nil {
 		t.Fatal(err)
 	}
-	sandboxView, err := service.Data.DataReady(ctx, authorization.Principal{
+	sandboxView, err := service.Dataplane.Ready(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedOperation.Result.SandboxID)
 	if err != nil || sandboxView.Env["VALUE"] != "new" {
@@ -169,7 +180,9 @@ func TestHavenSecretRestart(t *testing.T) {
 			},
 		},
 	}
-	acceptedOperation := claimSandbox(t, service, "secret-claim", env, egress.Policy{
+	acceptedOperation := (sandboxClaims{
+		App: service,
+	}).claim(t, "secret-claim", env, egress.Policy{
 		Mode: "relay",
 	})
 	for _, activation := range guest.Activations {
@@ -210,7 +223,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	t.Cleanup(func() {
 		_ = restarted.Close(context.Background())
 	})
-	if _, err = restarted.Data.DataReady(context.Background(), authorization.Principal{
+	if _, err = restarted.Dataplane.Ready(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedOperation.Result.SandboxID); err == nil {
 		t.Fatal("restart admitted missing host credentials")
@@ -235,7 +248,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	}, configured.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = restarted.Data.DataReady(ctx, authorization.Principal{
+	if _, err = restarted.Dataplane.Ready(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedOperation.Result.SandboxID); err != nil {
 		t.Fatal(err)

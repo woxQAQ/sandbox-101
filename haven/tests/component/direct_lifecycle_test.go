@@ -16,7 +16,9 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
 		AllowedCIDRs: []string{
 			"8.8.8.8/32",
@@ -44,7 +46,7 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	after, err := service.Data.DataReady(ctx, principal, before.ID)
+	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
 	if err != nil || after.Instance == before.Instance || after.VMID == before.VMID {
 		t.Fatal(before, after, err)
 	}
@@ -60,7 +62,7 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 	if current != count {
 		t.Fatal("old binding changed resumed instance networking")
 	}
-	if _, err = service.Data.DataReady(ctx, principal, before.ID); err != nil {
+	if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err != nil {
 		t.Fatal("old binding revoked resumed direct access", err)
 	}
 }

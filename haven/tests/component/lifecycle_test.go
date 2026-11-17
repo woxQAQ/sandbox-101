@@ -23,7 +23,9 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	runtime.Before = func(name string, _ loom.Resource) error {
@@ -165,7 +167,9 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -225,7 +229,9 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -255,7 +261,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 			reason := service.Workers.Snapshot(fork.ID).Err
 			t.Fatal(fork, reason, err)
 		}
-		sandbox, err := service.Data.DataReady(ctx, principal, fork.Result.SandboxID)
+		sandbox, err := service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID)
 		if err != nil || sandbox.State != "running" || sandbox.ID == claim.Result.SandboxID || sandbox.TenantID != "tenant" || sandbox.TemplateID != "cold" {
 			t.Fatal(sandbox, err)
 		}
@@ -288,7 +294,9 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -355,7 +363,9 @@ func TestHavenDataResumeConverges(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -369,7 +379,7 @@ func TestHavenDataResumeConverges(t *testing.T) {
 	completed := make(chan error, 8)
 	for range 8 {
 		go func() {
-			sandbox, err := service.Data.DataReady(ctx, authorization.Principal{
+			sandbox, err := service.Dataplane.Ready(ctx, authorization.Principal{
 				TenantID:  "tenant",
 				SandboxID: claim.Result.SandboxID,
 			}, claim.Result.SandboxID)
@@ -396,7 +406,9 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+	claim := (sandboxClaims{
+		App: service,
+	}).claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -419,7 +431,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 		reason := service.Workers.Snapshot(resumed.ID).Err
 		t.Fatal(resumed, reason, err)
 	}
-	after, err := service.Data.DataReady(ctx, principal, before.ID)
+	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
 	if err != nil || after.State != "running" || after.VMID == claim.Result.VMID || after.Instance == "" || after.SnapshotID != "" {
 		t.Fatal(after, err)
 	}
@@ -438,7 +450,9 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 	} {
 		t.Run(action, func(t *testing.T) {
 			service, _, _, _ := testapp.SandboxFixture(t)
-			claim := claimSandbox(t, service, "claim", nil, egress.Policy{
+			claim := (sandboxClaims{
+				App: service,
+			}).claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			acceptedRecord, err := service.SandboxRequests.Submit(context.Background(), authorization.Principal{

@@ -18,7 +18,7 @@ func (service *SupplyCleanup) completeResourceLink(parent, role string, link mac
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	changed, err := machine.CompleteResourceLink(service.ctx, tx, parent, role, link)
+	changed, err := link.Complete(service.ctx, tx, parent, role)
 	if err != nil || !changed {
 		return err
 	}

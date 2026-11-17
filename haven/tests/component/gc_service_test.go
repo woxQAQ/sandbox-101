@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/collection"
+	"github.com/woxQAQ/haven/gc"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/types"
 )
@@ -49,11 +49,11 @@ func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
 				Batch:  1,
 				Budget: 10 * time.Second,
 			}
-			report, err := service.GarbageCollection.CollectGarbage(ctx, root, "collect", options)
+			report, err := service.GC.Collect(ctx, root, "collect", options)
 			if err == nil || errors.Is(err, context.DeadlineExceeded) || report.OperationID == "" {
 				t.Fatal("GC did not expose rejected final progress", report, err)
 			}
-			before, err := collection.LoadGC(ctx, service.State.Database(), report.OperationID)
+			before, err := gc.Load(ctx, service.State.Database(), report.OperationID)
 			if err != nil || before.Status != "running" || before.State.Next != 1 || len(before.State.Report.Collected) != 1 || len(before.Input.Report.Candidates) != 1 {
 				t.Fatal("failed GC completion lost durable child progress", before, err)
 			}
@@ -66,11 +66,11 @@ func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER reject_gc_completion"); err != nil {
 				t.Fatal(err)
 			}
-			replayed, err := service.GarbageCollection.CollectGarbage(ctx, root, "collect", options)
+			replayed, err := service.GC.Collect(ctx, root, "collect", options)
 			if err != nil || replayed.OperationID != report.OperationID || len(replayed.Collected) != 1 || replayed.Collected[0].OperationID != childID {
 				t.Fatal("GC replay changed accepted pass or child result", replayed, err)
 			}
-			done, err := collection.LoadGC(ctx, service.State.Database(), report.OperationID)
+			done, err := gc.Load(ctx, service.State.Database(), report.OperationID)
 			if err != nil || done.Status != "succeeded" || done.Hash != before.Hash || !reflect.DeepEqual(done.Input, before.Input) || done.State.Next != before.State.Next {
 				t.Fatal("GC replay changed frozen inventory, budget or deadline", done, err)
 			}

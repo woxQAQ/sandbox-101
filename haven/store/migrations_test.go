@@ -22,7 +22,10 @@ func TestSQLiteMigrationTransaction(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	ctx := context.Background()
 	denied := errors.New("initialization failed after identity write")
-	for _, commit := range []bool{false, true} {
+	for _, commit := range []bool{
+		false,
+		true,
+	} {
 		err = store.Migrate(ctx, db, func(tx *sql.Tx) error {
 			if _, err := tx.Exec("INSERT INTO store_metadata VALUES(1,'fixture',9,'identity','key-hash',0)"); err != nil {
 				return err
@@ -58,7 +61,10 @@ func TestSQLiteMigrationTransaction(t *testing.T) {
 	if _, err = db.Exec("INSERT INTO tenants VALUES('owner','token-hash',x'7b7d')"); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.Migrate(ctx, db, func(*sql.Tx) error { t.Fatal("repeated migration ran initialization"); return nil }); err != nil {
+	if err = store.Migrate(ctx, db, func(*sql.Tx) error {
+		t.Fatal("repeated migration ran initialization")
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var count int

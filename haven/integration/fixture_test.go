@@ -523,8 +523,9 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Port) (*appli
 		Operations:     service.Operations,
 		Tenants:        service.Tenants,
 		Requests:       service.SandboxRequests,
-		Data:           service.Data,
-		Management:     service.Management, Delivery: service.Delivery,
+		Dataplane:      service.Dataplane,
+		Management:     service.Management,
+		Delivery:       service.Delivery,
 	}))
 	t.Cleanup(server.Close)
 	return service, sdk.New(server.URL, result.Result.Tokens[result.Result.Sandbox.ID]), principal, result.Result.Sandbox.ID

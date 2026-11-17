@@ -43,7 +43,7 @@ func coldServiceWithBackend(t *testing.T, fault func(string) error, factory func
 
 func coldClaim(t *testing.T, service *application.App, key string) operation.Record {
 	t.Helper()
-	acceptedOperation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+	acceptedOperation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        key,
 		TemplateID: "cold",

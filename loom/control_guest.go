@@ -63,10 +63,19 @@ func DialGuest(ctx context.Context, socket string, port int) (net.Conn, error) {
 	return conn, nil
 }
 
+// GuestControlRequest is one correlated control frame. Portal authorization and
+// durable mutation identities remain the caller's responsibility.
+type GuestControlRequest struct {
+	ID     string
+	Method string
+	Params map[string]any
+}
+
 // GuestControl performs one bounded, correlated control exchange. Diagnostics
 // contain no guest-provided text or request values. An error cannot prove that a
 // mutation did not happen, and keyed exec callers retain their original identity.
-func GuestControl(ctx context.Context, socket string, port int, id, method string, params map[string]any) (map[string]any, error) {
+func GuestControl(ctx context.Context, socket string, port int, call GuestControlRequest) (map[string]any, error) {
+	id, method, params := call.ID, call.Method, call.Params
 	conn, err := DialGuest(ctx, socket, port)
 	if err != nil {
 		return nil, err

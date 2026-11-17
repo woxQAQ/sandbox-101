@@ -39,7 +39,10 @@ func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDi
 	step := CaptureDiscardStep{
 		OperationID: id,
 	}
-	record, err := dbgen.New(q).GetStep(ctx, dbgen.GetStepParams{OperationID: id, StepKey: "capture_discard"})
+	record, err := dbgen.New(q).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "capture_discard",
+	})
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}

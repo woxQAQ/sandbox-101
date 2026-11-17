@@ -59,7 +59,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 	default:
 		var frozen struct {
 			Action  string
-			Request machine.ColdRequest
+			Request machine.FreshRequest
 		}
 		if err = json.Unmarshal(request.Request, &frozen); err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
@@ -108,17 +108,23 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 		return currentMachine, record, result, fmt.Errorf("image publication proof changed: %v", err)
 	}
 	var candidateBody, versionBody []byte
-	if candidateBody, err = machine.InstanceHistory(ctx, tx, currentMachine.Resource.Instance, currentMachine.Resource.VMID, step.OperationID); err != nil {
+	if candidateBody, err = machine.InstanceHistory(ctx, tx, machine.GenerationIdentity{
+		VMID:        currentMachine.Resource.VMID,
+		OperationID: step.OperationID,
+	}, currentMachine.Resource.Instance); err != nil {
 		return currentMachine, record, result, err
 	}
 	var candidate machine.VMRecord
 	if err = json.Unmarshal(candidateBody, &candidate); err != nil || !reflect.DeepEqual(candidate.Resource, currentMachine.Resource) {
 		return currentMachine, record, result, fmt.Errorf("instance candidate changed: %v", err)
 	}
-	if versionBody, err = machine.VersionHistory(ctx, tx, step.OperationID, step.Candidate, step.Key); err != nil {
+	if versionBody, err = machine.VersionHistory(ctx, tx, machine.GenerationIdentity{
+		VMID:        step.Candidate,
+		OperationID: step.OperationID,
+	}, step.Key); err != nil {
 		return currentMachine, record, result, err
 	}
-	var version machine.Version
+	var version machine.RetainedVersion
 	if err = json.Unmarshal(versionBody, &version); err != nil || !reflect.DeepEqual(version.Resource, currentMachine.Resource) || !reflect.DeepEqual(version.DiskIdentity, step.State.DiskIdentity) {
 		return currentMachine, record, result, fmt.Errorf("resource version changed: %v", err)
 	}

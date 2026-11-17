@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/operation"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
@@ -278,7 +279,11 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	}))
 	defer upstream.Close()
 	port := upstream.Listener.Addr().(*net.TCPAddr).Port
-	capability, err := service.Data.PreviewURL(context.Background(), principal, id, port, time.Minute)
+	capability, err := service.Dataplane.PreviewURL(context.Background(), principal, dataplane.PreviewRequest{
+		SandboxID: id,
+		Port:      port,
+		TTL:       time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

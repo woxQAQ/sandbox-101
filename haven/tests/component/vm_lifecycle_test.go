@@ -65,7 +65,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 				}
 				baseline[table] = count
 			}
-			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "atomic",
 				TemplateID: "cold",
@@ -109,7 +109,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 			t.Fatal("cold step did not complete", step.State)
 		}
 		coldResponsibility(t, service, operation, true)
-		original, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+		original, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 			TenantID:   "tenant",
 			Key:        "committed",
 			TemplateID: "cold",
@@ -117,7 +117,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 		if err != nil || original.ID != operation.ID {
 			t.Fatal("same-key replay lost original admission", err)
 		}
-		if _, err = service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+		if _, err = service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 			TenantID:   "tenant",
 			Key:        "committed",
 			TemplateID: "changed",
@@ -261,7 +261,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	backend.FailBoot = false
 	backend.Mu.Unlock()
 	service = resumeColdService(t, service, backend)
-	replayed, err := service.VMProvisioning.AdmitCold(context.Background(), machine.ColdRequest{
+	replayed, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "failed",
 		TemplateID: "cold",

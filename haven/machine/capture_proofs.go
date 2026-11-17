@@ -13,9 +13,18 @@ import (
 	"github.com/woxQAQ/haven/quota"
 )
 
+// CaptureCleanupTarget identifies the exact source instance and the retained
+// cleanup state expected at this transaction boundary.
+type CaptureCleanupTarget struct {
+	VMID     string
+	Instance string
+	Status   string
+}
+
 // CaptureCleanupProof checks historical publication separately from the current
 // cleanup destination. Publication never by itself retires raw VMM output.
-func CaptureCleanupProof(ctx context.Context, tx *sql.Tx, step CaptureStep, vm, instance, status string) error {
+func CaptureCleanupProof(ctx context.Context, tx *sql.Tx, step CaptureStep, target CaptureCleanupTarget) error {
+	vm, instance, status := target.VMID, target.Instance, target.Status
 	current, err := LoadCapture(ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -63,7 +72,11 @@ func ReleaseCaptures(ctx context.Context, tx *sql.Tx, vm, instance string) ([]Ca
 		if err != nil {
 			return nil, err
 		}
-		if err = CaptureCleanupProof(ctx, tx, step, vm, instance, "pending"); err != nil {
+		if err = CaptureCleanupProof(ctx, tx, step, CaptureCleanupTarget{
+			VMID:     vm,
+			Instance: instance,
+			Status:   "pending",
+		}); err != nil {
 			return nil, err
 		}
 		captures = append(captures, step)
@@ -81,7 +94,11 @@ func CheckTransferredCaptures(ctx context.Context, tx *sql.Tx, step ResourceStep
 		if capture.Input.Request.TenantID != step.Input.TenantID || capture.Input.Request.SandboxID != step.Input.SandboxID {
 			return fmt.Errorf("capture cleanup tenant or sandbox changed")
 		}
-		if err := CaptureCleanupProof(ctx, tx, capture, step.Candidate, step.ExpectedInstance, "transferred"); err != nil {
+		if err := CaptureCleanupProof(ctx, tx, capture, CaptureCleanupTarget{
+			VMID:     step.Candidate,
+			Instance: step.ExpectedInstance,
+			Status:   "transferred",
+		}); err != nil {
 			return err
 		}
 	}

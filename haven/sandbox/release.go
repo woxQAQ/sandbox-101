@@ -53,7 +53,8 @@ func pausedReceipt(ctx context.Context, q store.DBTX, current ownership.Sandbox,
 	return "", fmt.Errorf("%w: paused sandbox lacks original successful VM deletion proof", errs.ErrManualRecovery)
 }
 
-func (service *Lifecycle) admitPausedRelease(ctx context.Context, parent operation.Record, input LifecycleInput, mac string, upper machine.ResourceParent) (operation.Record, error) {
+func (service *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.Record, error) {
+	parent, input, mac, upper := admission.Parent, admission.Input, admission.MAC, admission.Upper
 	var empty operation.Record
 	service.admission.Lock()
 	defer service.admission.Unlock()
@@ -220,7 +221,12 @@ func (service *Lifecycle) admitPausedRelease(ctx context.Context, parent operati
 		}
 	}
 	if upper != nil {
-		if err = upper.AdmitResource(ctx, tx, parent, "lifecycle", input.Sandbox.ID, operation.Digest(frozen)); err != nil {
+		if err = upper.AdmitResource(ctx, tx, machine.ResourceAdmission{
+			Child:       parent,
+			Kind:        "lifecycle",
+			Candidate:   input.Sandbox.ID,
+			RequestHash: operation.Digest(frozen),
+		}); err != nil {
 			return empty, err
 		}
 	}

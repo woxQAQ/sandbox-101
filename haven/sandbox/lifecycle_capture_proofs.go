@@ -41,7 +41,11 @@ func checkRollbackCaptures(ctx context.Context, tx *sql.Tx, input LifecycleInput
 		if err != nil {
 			return err
 		}
-		if err = machine.CaptureCleanupProof(ctx, tx, capture, source.Candidate, input.SourceInstance, "pending"); err != nil {
+		if err = machine.CaptureCleanupProof(ctx, tx, capture, machine.CaptureCleanupTarget{
+			VMID:     source.Candidate,
+			Instance: input.SourceInstance,
+			Status:   "pending",
+		}); err != nil {
 			return err
 		}
 	}

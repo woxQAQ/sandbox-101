@@ -85,7 +85,7 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			if err != nil || claimed.Result.VMID != refill.Result.VMID || runtime.Count("launch") != launches {
 				t.Fatal("retry did not reuse the original warm resource", claimed, err)
 			}
-			ready, err := service.Data.DataReady(ctx, principal, claimed.Result.SandboxID)
+			ready, err := service.Dataplane.Ready(ctx, principal, claimed.Result.SandboxID)
 			if err != nil || ready.State != "running" || ready.VMID != refill.Result.VMID {
 				t.Fatal("retried claim did not complete activation", ready, err)
 			}

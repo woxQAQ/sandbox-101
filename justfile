@@ -42,6 +42,10 @@ lint:
     go fix {{packages}} ./operator/...
     golangci-lint run {{packages}} ./operator/...
 
+# Report Go functions with too many parameters; extra arguments are detector flags.
+check-funcparams *args:
+    GOWORK=off go -C tools tool long-funcparam-detectorgo -ignore dbgen -ignore sandbox.pb.go {{args}} ../haven ../loom ../sdk ../types ../common ../tools ../protocol/gen ../operator
+
 lint-fix:
     golangci-lint run --fix {{packages}} ./operator/...
 

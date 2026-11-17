@@ -24,17 +24,32 @@ type Provisioning struct {
 	committer  *operation.Committer
 }
 
-func NewProvisioning(state *store.State, ctx context.Context, admission execution.Guard, proofs ResourceProofs, backend ProvisionBackend, ownership ProvisionOwnershipReader, handoff ProvisionParticipant, fault func(string) error, committer *operation.Committer) *Provisioning {
+type ProvisioningDependencies struct {
+	Context   context.Context
+	Admission execution.Guard
+	Proofs    ResourceProofs
+	Backend   ProvisionBackend
+	Ownership ProvisionOwnershipReader
+	Handoff   ProvisionParticipant
+	Committer *operation.Committer
+}
+
+func NewProvisioning(state *store.State, dependencies ProvisioningDependencies, fault func(string) error) *Provisioning {
 	return &Provisioning{
-		store:      store.Workflow{Database: state.Database(), Directory: state.Directory(), Reviewed: state.Reviewed(), Checkpoint: state.Checkpoint},
-		ctx:        ctx,
-		admission:  admission,
-		proofs:     proofs,
-		backend:    backend,
-		ownership:  ownership,
-		handoff:    handoff,
+		store: store.Workflow{
+			Database:   state.Database(),
+			Directory:  state.Directory(),
+			Reviewed:   state.Reviewed(),
+			Checkpoint: state.Checkpoint,
+		},
+		ctx:        dependencies.Context,
+		admission:  dependencies.Admission,
+		proofs:     dependencies.Proofs,
+		backend:    dependencies.Backend,
+		ownership:  dependencies.Ownership,
+		handoff:    dependencies.Handoff,
 		faultPoint: fault,
-		committer:  committer,
+		committer:  dependencies.Committer,
 	}
 }
 

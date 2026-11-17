@@ -12,8 +12,8 @@ type VMRecord struct {
 	Deleting    bool              `json:"deleting"`
 }
 
-// Version retains the admitted resource and disk identity for one generation.
-type Version struct {
+// RetainedVersion retains the admitted resource and disk identity for one generation.
+type RetainedVersion struct {
 	Resource     loom.Resource      `json:"resource"`
 	DiskIdentity *loom.FileIdentity `json:"disk_identity,omitempty"`
 }
