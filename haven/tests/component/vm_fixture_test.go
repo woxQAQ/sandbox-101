@@ -58,7 +58,7 @@ func awaitColdWorker(t *testing.T, service *application.App, id string) machine.
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, last, seen := worker.Active, worker.Err, worker.Completed
 		step, err := machine.LoadResourceStep(context.Background(), service.State.Database(), id)
 		if err != nil {

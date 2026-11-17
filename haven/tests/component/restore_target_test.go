@@ -178,7 +178,7 @@ func targetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(stop.ID)
+		worker := service.Workers.State(stop.ID)
 		active, seen := worker.Active, worker.Completed
 		if !active && seen {
 			break
@@ -190,7 +190,7 @@ func targetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 	}
 	result, err := service.Operations.GetOperation(context.Background(), "tenant", stop.ID)
 	if err != nil || result.Status != "succeeded" {
-		reason := service.Workers.Snapshot(stop.ID).Err
+		reason := service.Workers.State(stop.ID).Err
 		t.Fatal("stop did not succeed", result, reason, err)
 	}
 	request := machine.RestoreRequest{
@@ -267,7 +267,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 			}
 			deleted := awaitDiscard(t, service, discard.ID)
 			if deleted.Status != "succeeded" {
-				reason := service.Workers.Snapshot(discard.ID).Err
+				reason := service.Workers.State(discard.ID).Err
 				t.Fatal("multi-version discard failed", deleted.State, reason)
 			}
 			original, err := machine.LoadResourceStep(context.Background(), service.State.Database(), acceptedOperation.ID)
@@ -344,7 +344,7 @@ func awaitStop(t *testing.T, service *application.App, id string) machine.StopSt
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, seen := worker.Active, worker.Completed
 		if !active && seen {
 			step, err := machine.LoadStop(context.Background(), service.State.Database(), id)
@@ -391,7 +391,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	}
 	restored := awaitColdWorker(t, service, second.ID)
 	if restored.Status != "succeeded" || len(restored.Input.Ancestors) != 2 {
-		reason := service.Workers.Snapshot(second.ID).Err
+		reason := service.Workers.State(second.ID).Err
 		t.Fatal(restored.State, reason)
 	}
 	var backing int
@@ -407,7 +407,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 		t.Fatal(err)
 	}
 	if proof := awaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
-		reason := service.Workers.Snapshot(release.ID).Err
+		reason := service.Workers.State(release.ID).Err
 		t.Fatal(proof.State, reason)
 	}
 	if backend.Count("launch") != 4 {
@@ -487,7 +487,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 			service = testapp.ReopenCloneService(t, service, backend)
 			done := awaitColdWorker(t, service, release.ID)
 			if done.Status != "succeeded" {
-				reason := service.Workers.Snapshot(release.ID).Err
+				reason := service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
 			}
 		})
@@ -510,7 +510,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 	}
 	deleted := awaitColdWorker(t, service, release.ID)
 	if deleted.Status != "succeeded" {
-		reason := service.Workers.Snapshot(release.ID).Err
+		reason := service.Workers.State(release.ID).Err
 		t.Fatal("multi-version release failed", deleted.State, reason)
 	}
 	var versions, instances int
@@ -526,7 +526,7 @@ func TestHavenRestoreStoppedTarget(t *testing.T) {
 	parallelLifecycle(t)
 	service, backend, acceptedOperation, step := targetFixture(t)
 	if step.Status != "succeeded" {
-		reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+		reason := service.Workers.State(acceptedOperation.ID).Err
 		t.Fatal("restore failed", step.State, reason)
 	}
 	if len(step.Input.Ancestors) != 1 || step.Candidate != acceptedOperation.Result.VMID || step.State.Witness == step.ExpectedInstance {

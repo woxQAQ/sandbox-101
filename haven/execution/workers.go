@@ -33,7 +33,7 @@ func (w *Workers) Context() context.Context {
 	return w.lifetime.Context()
 }
 
-func (w *Workers) Snapshot(id string) WorkerState {
+func (w *Workers) State(id string) WorkerState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.states[id]

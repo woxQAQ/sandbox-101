@@ -17,7 +17,7 @@ import (
 // WorkerReader observes process-local completion without granting dispatch or
 // shutdown authority. Durable status remains owned by the operation repository.
 type WorkerReader interface {
-	Snapshot(string) execution.WorkerState
+	State(string) execution.WorkerState
 }
 
 // Operations authorizes operation reads and waits for accepted work to settle.
@@ -126,7 +126,7 @@ func (o *Operations) wait(ctx context.Context, scope Scope, id, sandbox string) 
 		if sandbox != "" && record.Result.SandboxID != sandbox {
 			return Record{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 		}
-		worker := o.workers.Snapshot(id)
+		worker := o.workers.State(id)
 		terminal := record.Status == "succeeded" || record.Status == "failed"
 		// Synchronous delivery waits for the worker to release its workflow
 		// guard and finish the durable HEAD update before follow-up admission.

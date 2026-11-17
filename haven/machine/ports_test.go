@@ -125,7 +125,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 			if err := state.Database().QueryRowContext(ctx, "SELECT epoch FROM store_metadata WHERE singleton=1").Scan(&current); err != nil || current != epoch {
 				t.Fatalf("missing port mutated durable state: %d/%d %v", current, epoch, err)
 			}
-			worker := workers.Snapshot("retained")
+			worker := workers.State("retained")
 			if worker.Active || worker.Completed {
 				t.Fatalf("missing port dispatched work: %+v", worker)
 			}

@@ -80,7 +80,7 @@ func awaitDiscard(t *testing.T, service *application.App, id string) machine.Dis
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, seen := worker.Active, worker.Completed
 		step, err := machine.LoadDiscard(context.Background(), service.State.Database(), id)
 		if err != nil {
@@ -105,7 +105,7 @@ func discardSucceeded(t *testing.T, service *application.App, discard machine.Di
 	source, original := expected.Source, expected.Original
 	t.Helper()
 	if discard.Status != "succeeded" {
-		reason := service.Workers.Snapshot(discard.OperationID).Err
+		reason := service.Workers.State(discard.OperationID).Err
 		t.Fatal("discard did not complete", discard.State, reason)
 	}
 	if _, err := os.Lstat(source.Input.Resource.Dir); !os.IsNotExist(err) {

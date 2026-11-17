@@ -79,7 +79,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 			before := runtime.Count("capture")
 			acceptedOperation, err := service.SandboxRequests.Execute(ctx, principal, "fork-batch:"+kind, command)
 			if err != nil {
-				reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal(acceptedOperation, err, reason)
 			}
 			view, err := service.Delivery.PublicOperation(ctx, principal, acceptedOperation.ID)
@@ -194,7 +194,7 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 		},
 	})
 	if err == nil || acceptedOperation.Status != "failed" {
-		reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+		reason := service.Workers.State(acceptedOperation.ID).Err
 		t.Fatal(acceptedOperation, err, reason)
 	}
 	for _, id := range acceptedOperation.Result.SandboxIDs {
@@ -296,7 +296,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 			service = testapp.ReopenCloneServiceWithFault(fixtureOwner, service, service.Options.Backend, faults.Check)
 			result, err := service.Operations.Wait(ctx, principal, acceptedOperation.ID)
 			if err != nil || result.Status != "succeeded" || !slices.Equal(expected, result.Result.SandboxIDs) {
-				reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal("reopen changed batch targets or lost completion", result, err, reason)
 			}
 			view, err := service.Delivery.PublicOperation(ctx, principal, acceptedOperation.ID)

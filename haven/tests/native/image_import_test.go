@@ -155,7 +155,7 @@ func TestHavenActualOCIImportPublishesSingleCatalog(t *testing.T) {
 				TenantID: "root",
 			}, operation.ID)
 			if err != nil {
-				last := service.Workers.Snapshot(operation.ID).Err
+				last := service.Workers.State(operation.ID).Err
 				t.Fatal(result, err, last)
 			}
 			manifest, err := image.LoadManifest(ctx, service.State.Database(), options.Digest)
@@ -166,7 +166,7 @@ func TestHavenActualOCIImportPublishesSingleCatalog(t *testing.T) {
 				t.Fatal(err)
 			}
 			for {
-				active := service.Workers.Snapshot(operation.ID).Active
+				active := service.Workers.State(operation.ID).Active
 				if !active {
 					break
 				}
@@ -184,7 +184,7 @@ func TestHavenActualOCIImportPublishesSingleCatalog(t *testing.T) {
 			if err != nil || len(report.Collected) != 1 || report.Collected[0].Kind != "image_work" {
 				for _, item := range report.Deferred {
 					if item.OperationID != "" {
-						last := service.Workers.Snapshot(item.OperationID).Err
+						last := service.Workers.State(item.OperationID).Err
 						t.Log(item.Kind, item.OperationID, last)
 					}
 				}

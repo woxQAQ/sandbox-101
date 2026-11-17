@@ -30,7 +30,7 @@ func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
 	conflicting := request
 	conflicting.ExpectedInstance = testfixture.NewID("run-")
 	_, err = service.Captures.AdmitCapture(context.Background(), conflicting)
-	worker := service.Workers.Snapshot(accepted.ID)
+	worker := service.Workers.State(accepted.ID)
 	if !errors.Is(err, errs.ErrConflict) || worker.Active || worker.Completed || backend.Count("pause") != 0 || backend.Count("capture") != 0 {
 		t.Fatal("conflicting capture request dispatched retained work", worker, err)
 	}

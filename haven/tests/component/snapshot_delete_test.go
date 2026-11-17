@@ -76,7 +76,7 @@ func awaitSnapshotDelete(t *testing.T, service *application.App, id string) snap
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, seen := worker.Active, worker.Completed
 		step, err := loadSnapshotDelete(context.Background(), service.State.Database(), id)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 			acceptedOperation := admitSnapshotDeleteFixture(t, fixture)
 			done := awaitSnapshotDelete(t, service, acceptedOperation.ID)
 			if done.Status != "succeeded" {
-				reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal("snapshot delete failed", done.Phase, reason)
 			}
 			if _, err = os.Stat(done.Input.Source.Snapshot.Dir); !os.IsNotExist(err) {
@@ -169,7 +169,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 					t.Fatal(err)
 				}
 				if proof := awaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
-					reason := service.Workers.Snapshot(release.ID).Err
+					reason := service.Workers.State(release.ID).Err
 					t.Fatal("backing release failed", proof.State, reason)
 				}
 				want = 192
@@ -215,7 +215,7 @@ func TestHavenSnapshotDeleteConflictDoesNotDispatch(t *testing.T) {
 		Key:        "delete-snapshot",
 		SnapshotID: testfixture.NewID("snap-"),
 	})
-	worker := fixture.service.Workers.Snapshot(accepted.ID)
+	worker := fixture.service.Workers.State(accepted.ID)
 	if err == nil || worker.Active || worker.Completed {
 		t.Fatal("conflicting request dispatched retained deletion", err, worker)
 	}
@@ -258,7 +258,7 @@ func TestHavenSnapshotDeleteRecovery(t *testing.T) {
 			}
 			fixture.service = testapp.ReopenCloneService(t, fixture.service, fixture.backend)
 			if step := awaitSnapshotDelete(t, fixture.service, acceptedOperation.ID); step.Status != "succeeded" {
-				reason := fixture.service.Workers.Snapshot(acceptedOperation.ID).Err
+				reason := fixture.service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal(step.Phase, reason)
 			}
 			snapshotDeleteCost(t, fixture, 0)

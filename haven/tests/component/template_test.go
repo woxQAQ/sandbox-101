@@ -62,7 +62,7 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 		TemplateID: "golden",
 	})
 	if err != nil {
-		reason := service.Workers.Snapshot(refill.ID).Err
+		reason := service.Workers.State(refill.ID).Err
 		t.Fatal(refill, reason, err)
 	}
 	var slots, storage, warm, pool int
@@ -155,7 +155,7 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(acceptedRecord.ID)
+		worker := service.Workers.State(acceptedRecord.ID)
 		active, reason := worker.Active, worker.Err
 		if !active && reason != nil {
 			break
@@ -203,7 +203,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 		Template: &spec,
 	})
 	if err != nil {
-		reason := service.Workers.Snapshot(acceptedRecord.ID).Err
+		reason := service.Workers.State(acceptedRecord.ID).Err
 		t.Fatal(acceptedRecord, reason, err)
 	}
 	published, err := service.TemplateCatalog.GetTemplate(ctx, principal, "golden")

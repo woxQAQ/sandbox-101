@@ -62,7 +62,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 		})
 	}
 	callers.Wait()
-	worker := service.Workers.Snapshot(accepted.ID)
+	worker := service.Workers.State(accepted.ID)
 	if !worker.Active || worker.Completed || worker.Err != nil {
 		t.Fatal("active worker was replaced or prematurely completed", worker)
 	}
@@ -77,7 +77,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 		close(release)
 	})
 	awaitColdWorker(t, service, accepted.ID)
-	worker = service.Workers.Snapshot(accepted.ID)
+	worker = service.Workers.State(accepted.ID)
 	if worker.Active || !worker.Completed || !errors.Is(worker.Err, interrupted) {
 		t.Fatal("worker result was not published atomically", worker)
 	}
@@ -88,7 +88,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	}
 	service.Maintenance.Dispatch(accepted.ID)
 	awaitColdWorker(t, service, accepted.ID)
-	worker = service.Workers.Snapshot(accepted.ID)
+	worker = service.Workers.State(accepted.ID)
 	if worker.Active || !worker.Completed || worker.Err != nil || backend.Count("launch") != 1 {
 		t.Fatal("completed replay retained stale diagnostics or duplicated effects", worker)
 	}

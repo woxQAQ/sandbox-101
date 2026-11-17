@@ -47,7 +47,7 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 			service = resumeColdService(t, service, backend)
 			deleted := awaitColdWorker(t, service, release.ID)
 			if deleted.Status != "succeeded" {
-				reason := service.Workers.Snapshot(release.ID).Err
+				reason := service.Workers.State(release.ID).Err
 				t.Fatal("capture cleanup did not follow VM release", deleted.State, reason)
 			}
 			if len(deleted.Input.Captures) != 1 {

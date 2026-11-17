@@ -74,7 +74,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 			stops, removals := backend.Count("stop"), backend.Count("remove")
 			faults.Set(nil)
 			_, err = admit(true)
-			worker := service.Workers.Snapshot(accepted.ID)
+			worker := service.Workers.State(accepted.ID)
 			if !errors.Is(err, errs.ErrConflict) || worker.Active || worker.Completed || backend.Count("stop") != stops || backend.Count("remove") != removals {
 				t.Fatal("conflicting cleanup request dispatched retained work", worker, err)
 			}
@@ -97,7 +97,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 			}
 			done, err := testfixture.ObserveStep(ctx, service.State.Database(), accepted.ID, key)
 			if err != nil || done.Status != "succeeded" || done.Hash != before.Hash || !bytes.Equal(done.Input, before.Input) || done.Candidate != before.Candidate || done.ExpectedInstance != before.ExpectedInstance {
-				t.Fatal("matching replay did not complete frozen cleanup proof", done, service.Workers.Snapshot(accepted.ID).Err, err)
+				t.Fatal("matching replay did not complete frozen cleanup proof", done, service.Workers.State(accepted.ID).Err, err)
 			}
 			history, err := machine.LoadResourceStep(ctx, service.State.Database(), source.OperationID)
 			if err != nil || !bytes.Equal(testfixture.Encode(history), testfixture.Encode(source)) {

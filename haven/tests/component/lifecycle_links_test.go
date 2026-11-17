@@ -43,7 +43,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitFixtureWorker(t, service, accepted.ID)
-			if worker := service.Workers.Snapshot(accepted.ID); !worker.Completed || worker.Err == nil {
+			if worker := service.Workers.State(accepted.ID); !worker.Completed || worker.Err == nil {
 				t.Fatal("denied dependency completion was accepted", worker)
 			}
 			link, status, err := machine.LoadResourceLink(context.Background(), service.State.Database(), accepted.ID, "capture")

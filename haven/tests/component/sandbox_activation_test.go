@@ -41,7 +41,7 @@ func (fixture sandboxClaims) claim(t *testing.T, key string, env map[string]oper
 		TenantID: "tenant",
 	}, acceptedOperation.ID)
 	if err != nil {
-		reason := service.Workers.Snapshot(acceptedOperation.ID).Err
+		reason := service.Workers.State(acceptedOperation.ID).Err
 		t.Fatal("sandbox claim failed", acceptedOperation, err, reason)
 	}
 	return acceptedOperation

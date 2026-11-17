@@ -82,7 +82,7 @@ func (fixture *nativeImageFixture) ImportOCI(ctx context.Context, options Import
 	}
 	_, err = fixture.service.Operations.WaitManagement(ctx, root, operation.ID)
 	if err != nil {
-		cause := fixture.service.Workers.Snapshot(operation.ID).Err
+		cause := fixture.service.Workers.State(operation.ID).Err
 		if cause != nil {
 			return ImageManifest{}, cause
 		}

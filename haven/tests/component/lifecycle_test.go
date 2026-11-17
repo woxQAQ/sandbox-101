@@ -56,7 +56,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 		SandboxID: claim.Result.SandboxID,
 	})
 	if err != nil {
-		reason := service.Workers.Snapshot(released.ID).Err
+		reason := service.Workers.State(released.ID).Err
 		t.Fatal(released, reason, err)
 	}
 	var slots, storage, vms int
@@ -141,7 +141,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				SandboxID: claim.Result.SandboxID,
 			})
 			if err != nil {
-				reason := service.Workers.Snapshot(released.ID).Err
+				reason := service.Workers.State(released.ID).Err
 				t.Fatal(released, reason, err)
 			}
 			sandbox, err := service.Catalog.Get(ctx, principal, claim.Result.SandboxID)
@@ -199,7 +199,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 				CheckpointID: checkpoint.Result.CheckpointID,
 			})
 			if err != nil {
-				reason := service.Workers.Snapshot(rollback.ID).Err
+				reason := service.Workers.State(rollback.ID).Err
 				t.Fatal(rollback, reason, err)
 			}
 			after, err := service.Catalog.Get(ctx, principal, before.ID)
@@ -258,7 +258,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 			},
 		})
 		if err != nil {
-			reason := service.Workers.Snapshot(fork.ID).Err
+			reason := service.Workers.State(fork.ID).Err
 			t.Fatal(fork, reason, err)
 		}
 		sandbox, err := service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID)
@@ -340,7 +340,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 				}
 				select {
 				case <-ctx.Done():
-					reason := service.Workers.Snapshot(failed.ID).Err
+					reason := service.Workers.State(failed.ID).Err
 					t.Fatal("resume cleanup did not finish", reason)
 				case <-time.After(time.Millisecond):
 				}
@@ -428,7 +428,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 		SandboxID: before.ID,
 	})
 	if err != nil {
-		reason := service.Workers.Snapshot(resumed.ID).Err
+		reason := service.Workers.State(resumed.ID).Err
 		t.Fatal(resumed, reason, err)
 	}
 	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
@@ -470,7 +470,7 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 				TenantID: "tenant",
 			}, acceptedRecord.ID)
 			if err != nil {
-				reason := service.Workers.Snapshot(acceptedRecord.ID).Err
+				reason := service.Workers.State(acceptedRecord.ID).Err
 				t.Fatal("lifecycle failed", action, result, reason, err)
 			}
 			sandbox, err := service.Catalog.Get(ctx, authorization.Principal{

@@ -21,7 +21,7 @@ func awaitCaptureDiscard(t *testing.T, service *application.App, id string) capt
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, seen := worker.Active, worker.Completed
 		step, err := loadCaptureDiscard(context.Background(), service.State.Database(), id)
 		if err != nil {
@@ -117,7 +117,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			}
 			done := awaitCaptureDiscard(t, service, operation.ID)
 			if done.Status != "succeeded" {
-				reason := service.Workers.Snapshot(operation.ID).Err
+				reason := service.Workers.State(operation.ID).Err
 				t.Fatal("capture discard failed", done, reason)
 			}
 			captureDiscardLiability(t, service, failed, 0)
@@ -191,7 +191,7 @@ func TestHavenCaptureDiscardRecovery(t *testing.T) {
 			service = resumeColdService(t, service, backend)
 			step := awaitCaptureDiscard(t, service, operation.ID)
 			if step.Status != "succeeded" {
-				reason := service.Workers.Snapshot(operation.ID).Err
+				reason := service.Workers.State(operation.ID).Err
 				t.Fatal(step, reason)
 			}
 			captureDiscardLiability(t, service, failed, 0)

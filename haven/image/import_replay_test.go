@@ -45,7 +45,7 @@ func TestHavenImageReplayDoesNotRunConflictingRequest(t *testing.T) {
 			if !errors.Is(err, errs.ErrConflict) {
 				t.Fatal("changed request did not conflict", err)
 			}
-			if worker := service.Workers.Snapshot(id); worker.Active || worker.Completed {
+			if worker := service.Workers.State(id); worker.Active || worker.Completed {
 				t.Fatal("conflicting request dispatched retained work", worker)
 			}
 			if _, err = os.Stat(filepath.Join(service.State.Directory(), "imports", id)); !os.IsNotExist(err) {

@@ -58,7 +58,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 				Root:     true,
 				TenantID: "root",
 			}, collector.ID); err != nil {
-				reason := service.Workers.Snapshot(collector.ID).Err
+				reason := service.Workers.State(collector.ID).Err
 				t.Fatal(reason, err)
 			}
 			if _, err = service.Operations.GetOperation(ctx, "tenant", collector.ID); err == nil {
@@ -123,7 +123,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 			} else {
 				deadline := time.Now().Add(10 * time.Second)
 				for {
-					worker := service.Workers.Snapshot(collector.ID)
+					worker := service.Workers.State(collector.ID)
 					active, last := worker.Active, worker.Err
 					if !active && last != nil {
 						break

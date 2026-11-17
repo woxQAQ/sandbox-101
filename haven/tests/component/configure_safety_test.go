@@ -19,7 +19,7 @@ func waitFixtureWorker(t *testing.T, service *application.App, id string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		active := service.Workers.Snapshot(id).Active
+		active := service.Workers.State(id).Active
 		if !active {
 			return
 		}

@@ -48,7 +48,7 @@ func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
 	if err == nil || acceptedRecord.ID == "" || acceptedRecord.Status != "failed" {
 		t.Fatal("host failure was not retained", acceptedRecord, err)
 	}
-	diagnostic := service.Workers.Snapshot(acceptedRecord.ID).Err
+	diagnostic := service.Workers.State(acceptedRecord.ID).Err
 	if !errors.Is(diagnostic, os.ErrNotExist) || !strings.Contains(diagnostic.Error(), privatePath) {
 		t.Fatal("private diagnostic lost its original context", diagnostic)
 	}

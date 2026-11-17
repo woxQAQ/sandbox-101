@@ -53,7 +53,7 @@ func awaitRawCleanup(t *testing.T, service *application.App, id string) captureC
 		if terminal(step.Status) {
 			return step
 		}
-		reason := service.Workers.Snapshot(id).Err
+		reason := service.Workers.State(id).Err
 		if reason != nil {
 			t.Fatal(reason)
 		}
@@ -67,7 +67,7 @@ func awaitRetainedRaw(t *testing.T, service *application.App, id string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, reason, seen := worker.Active, worker.Err, worker.Completed
 		if !active && seen {
 			if reason == nil {

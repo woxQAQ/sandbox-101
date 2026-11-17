@@ -125,7 +125,7 @@ func waitImportInterruption(t *testing.T, service *application.App, id string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		worker := service.Workers.Snapshot(id)
+		worker := service.Workers.State(id)
 		active, last := worker.Active, worker.Err
 		if !active && last != nil {
 			return

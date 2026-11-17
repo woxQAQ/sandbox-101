@@ -53,7 +53,7 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 				}
 				fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
 				if done := awaitSnapshotDelete(t, fixture.service, operation.ID); done.Status != "succeeded" {
-					reason := fixture.service.Workers.Snapshot(operation.ID).Err
+					reason := fixture.service.Workers.State(operation.ID).Err
 					t.Fatal(done.Phase, reason)
 				}
 				snapshotDeleteCost(t, fixture, 0)
@@ -101,7 +101,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			}
 			fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
 			if done := awaitColdWorker(t, fixture.service, release.ID); done.Status != "succeeded" {
-				reason := fixture.service.Workers.Snapshot(release.ID).Err
+				reason := fixture.service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
 			}
 			snapshotDeleteCost(t, fixture, 0)
@@ -302,7 +302,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 	}
 	deletion := admitSnapshotDeleteFixture(t, fixture)
 	if step := awaitSnapshotDelete(t, service, deletion.ID); step.Status != "succeeded" {
-		reason := service.Workers.Snapshot(deletion.ID).Err
+		reason := service.Workers.State(deletion.ID).Err
 		t.Fatal(step.Phase, reason)
 	}
 	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
@@ -328,7 +328,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 		t.Fatal(err)
 	}
 	if step := awaitDiscard(t, service, discard.ID); step.Status != "succeeded" {
-		reason := service.Workers.Snapshot(discard.ID).Err
+		reason := service.Workers.State(discard.ID).Err
 		t.Fatal(step.State, reason)
 	}
 	snapshotDeleteCost(t, fixture, 0)

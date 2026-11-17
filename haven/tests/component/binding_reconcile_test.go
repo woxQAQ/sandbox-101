@@ -116,7 +116,7 @@ func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *tes
 	record, err := service.Operations.Operation(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, claim.ID)
-	if err != nil || record.Status != "succeeded" || service.Workers.Snapshot(claim.ID).Err != nil {
+	if err != nil || record.Status != "succeeded" || service.Workers.State(claim.ID).Err != nil {
 		t.Fatal("binding diagnostic changed an accepted operation", record, err)
 	}
 }

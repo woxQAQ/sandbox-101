@@ -34,7 +34,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 				t.Fatal(err)
 			}
 			step := awaitStop(t, service, accepted.ID)
-			if step.Status != "running" || step.Phase != "stop_intent" || service.Workers.Snapshot(accepted.ID).Err == nil {
+			if step.Status != "running" || step.Phase != "stop_intent" || service.Workers.State(accepted.ID).Err == nil {
 				t.Fatal("failed stop completion lost retryable intent", step)
 			}
 			current, err := machine.LoadOwnership(context.Background(), service.State.Database(), source.Candidate)

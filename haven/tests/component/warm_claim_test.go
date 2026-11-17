@@ -51,7 +51,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				},
 			})
 			if err != nil {
-				reason := service.Workers.Snapshot(claimed.ID).Err
+				reason := service.Workers.State(claimed.ID).Err
 				t.Fatal(claimed, reason, err)
 			}
 			sandbox, err := service.Dataplane.Ready(ctx, principal, claimed.Result.SandboxID)
@@ -77,7 +77,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				SandboxID: sandbox.ID,
 			})
 			if err != nil {
-				reason := service.Workers.Snapshot(released.ID).Err
+				reason := service.Workers.State(released.ID).Err
 				t.Fatal(released, reason, err)
 			}
 			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources").Scan(&slots); err != nil || slots != 0 {
