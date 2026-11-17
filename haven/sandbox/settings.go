@@ -1,9 +1,7 @@
-// Package sandbox owns stable sandbox identity, settings and catalog facts.
 package sandbox
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -27,16 +25,6 @@ type Settings struct {
 	Generation  string                             `json:"generation"`
 	Instance    string                             `json:"instance"`
 	ActiveEpoch string                             `json:"active_epoch,omitempty"`
-}
-
-type CapabilityLookup struct {
-	queries *dbgen.Queries
-}
-
-func NewCapabilityLookup(db store.DBTX) *CapabilityLookup {
-	return &CapabilityLookup{
-		queries: dbgen.New(db),
-	}
 }
 
 func LoadSandbox(ctx context.Context, query store.DBTX, id, tenant string) (ownership.Sandbox, error) {
@@ -73,30 +61,4 @@ func LoadSettings(ctx context.Context, query store.DBTX, id string) (Settings, e
 
 func LifecycleFence(ctx context.Context, query store.DBTX, id string) (string, error) {
 	return dbgen.New(query).GetFence(ctx, id)
-}
-
-// FindCapability includes retired identities only for historical operation
-// authorization. Decoding stops at the matching capability, preserving the
-// original ordered lookup's failure boundary.
-func (r *CapabilityLookup) FindCapability(ctx context.Context, retired bool, matches func(ownership.Sandbox) bool) (ownership.Sandbox, error) {
-	var bodies [][]byte
-	var err error
-	if retired {
-		bodies, err = r.queries.ListAllCapabilities(ctx)
-	} else {
-		bodies, err = r.queries.ListActiveCapabilities(ctx)
-	}
-	if err != nil {
-		return ownership.Sandbox{}, err
-	}
-	for _, body := range bodies {
-		var record ownership.Sandbox
-		if err := json.Unmarshal(body, &record); err != nil {
-			return ownership.Sandbox{}, err
-		}
-		if matches(record) {
-			return record, nil
-		}
-	}
-	return ownership.Sandbox{}, sql.ErrNoRows
 }

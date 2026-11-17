@@ -1,3 +1,4 @@
+// Package sandbox owns stable sandbox identity, settings and catalog facts.
 package sandbox
 
 import (
