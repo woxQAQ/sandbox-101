@@ -94,7 +94,7 @@ func (service *Lifecycle) runPause(step LifecycleStep) error {
 	if step.State.Phase != "captured" {
 		return fmt.Errorf("unsupported pause phase")
 	}
-	service.access.CloseSandboxConnections(step.Input.Sandbox.ID)
+	service.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
 	if err = service.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
 		return err
 	}

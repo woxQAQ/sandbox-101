@@ -269,7 +269,7 @@ func (service *Activations) completeActivation(step ActivationStep) error {
 	if err = service.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.access.DropOperationSecrets(step.OperationID)
+	service.registry.DropOperationSecrets(step.OperationID)
 	if err = service.store.Checkpoint(); err != nil {
 		return err
 	}

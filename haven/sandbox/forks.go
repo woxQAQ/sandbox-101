@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom"
@@ -43,7 +43,7 @@ type ForkDependencies struct {
 	Guards       ForkGuards
 	Gate         execution.AdmissionGate
 	Workers      *execution.Workers
-	Registry     *access.Registry
+	Registry     *ephemeral.Registry
 	History      machine.SnapshotProofs
 	Committer    *operation.Committer
 	Commands     *SandboxCommands
@@ -66,7 +66,7 @@ type Forks struct {
 	gate         execution.AdmissionGate
 	guards       ForkGuards
 	workers      *execution.Workers
-	access       *access.Registry
+	registry     *ephemeral.Registry
 	history      machine.SnapshotProofs
 	catalog      *Catalog
 	commands     *SandboxCommands
@@ -95,7 +95,7 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 		gate:         dependencies.Gate,
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
-		access:       dependencies.Registry,
+		registry:     dependencies.Registry,
 		history:      dependencies.History,
 		catalog:      NewCatalog(state.Database()),
 		commands:     dependencies.Commands,
@@ -393,7 +393,7 @@ func (service *Forks) saveFork(step *ForkStep, state ForkState) error {
 }
 
 func (service *Forks) forkSecrets(group ForkStep) {
-	service.access.CopyOperationSecrets(group.OperationID, group.State.Children...)
+	service.registry.CopyOperationSecrets(group.OperationID, group.State.Children...)
 }
 
 func sameForkTargets(first, second []string) bool {

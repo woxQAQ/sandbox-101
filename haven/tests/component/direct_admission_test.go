@@ -43,7 +43,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err == nil {
 		t.Fatal("data admission accepted missing host policy")
 	}
-	key := "network-revalidate:" + service.Access.Epoch() + ":" + before.ID + ":" + claim.ID
+	key := "network-revalidate:" + service.Ephemeral.Epoch() + ":" + before.ID + ":" + claim.ID
 	var acceptedRecord string
 	if err = service.State.Database().QueryRow("SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id='tenant' AND idem_key=?", key).Scan(&acceptedRecord); err != nil {
 		t.Fatal("network rejection lacks durable revalidation", err)

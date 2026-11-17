@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom"
@@ -43,7 +43,7 @@ type LifecycleDependencies struct {
 	Guards         LifecycleGuards
 	Gate           execution.AdmissionGate
 	Workers        *execution.Workers
-	Registry       *access.Registry
+	Registry       *ephemeral.Registry
 	Proofs         machine.ResourceProofs
 	Committer      *operation.Committer
 	Commands       *SandboxCommands
@@ -69,7 +69,7 @@ type Lifecycle struct {
 	gate           execution.AdmissionGate
 	guards         LifecycleGuards
 	workers        *execution.Workers
-	access         *access.Registry
+	registry       *ephemeral.Registry
 	proofs         machine.ResourceProofs
 	catalog        *Catalog
 	commands       *SandboxCommands
@@ -100,7 +100,7 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 		gate:           dependencies.Gate,
 		guards:         dependencies.Guards,
 		workers:        dependencies.Workers,
-		access:         dependencies.Registry,
+		registry:       dependencies.Registry,
 		proofs:         dependencies.Proofs,
 		catalog:        NewCatalog(state.Database()),
 		commands:       dependencies.Commands,

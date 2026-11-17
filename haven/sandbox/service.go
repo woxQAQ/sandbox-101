@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
@@ -38,7 +38,7 @@ type SandboxDependencies struct {
 	Guards       SandboxGuards
 	Workers      *execution.Workers
 	Closing      interface{ Closing() bool }
-	Registry     *access.Registry
+	Registry     *ephemeral.Registry
 	History      machine.SnapshotProofs
 	Committer    *operation.Committer
 	Commands     *SandboxCommands
@@ -59,7 +59,7 @@ type Sandboxes struct {
 	guards       SandboxGuards
 	workers      *execution.Workers
 	closing      interface{ Closing() bool }
-	access       *access.Registry
+	registry     *ephemeral.Registry
 	history      machine.SnapshotProofs
 	commands     *SandboxCommands
 	availability *execution.Availability
@@ -85,7 +85,7 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies, options 
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
 		closing:      dependencies.Closing,
-		access:       dependencies.Registry,
+		registry:     dependencies.Registry,
 		history:      dependencies.History,
 		commands:     dependencies.Commands,
 		availability: dependencies.Availability,

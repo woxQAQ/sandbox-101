@@ -185,7 +185,7 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 	}
 	parent.Result.SnapshotID = child.Result.SnapshotID
 	if command.Action == "release" {
-		service.access.CloseSandboxConnections(sandboxRecord.ID)
+		service.registry.CloseSandboxConnections(sandboxRecord.ID)
 		if revokeErr := service.activations.RevokeSandbox(sandboxRecord.ID); revokeErr != nil {
 			return parent, revokeErr
 		}
@@ -424,7 +424,7 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	if err = service.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.access.RetireCredentials(step.Input.Sandbox.ID, step.OperationID)
+	service.registry.RetireCredentials(step.Input.Sandbox.ID, step.OperationID)
 	return service.store.Checkpoint()
 }
 
@@ -439,7 +439,7 @@ func (service *Lifecycle) runLifecycle(step LifecycleStep) (runErr error) {
 	}
 	switch step.Input.Command.Action {
 	case "release":
-		service.access.CloseSandboxConnections(step.Input.Sandbox.ID)
+		service.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
 		if err := service.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
 			return err
 		}

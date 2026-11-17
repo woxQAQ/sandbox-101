@@ -8,9 +8,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/operation/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
@@ -71,14 +71,14 @@ type CommandIdentity struct {
 	ctx        context.Context
 	operations *Repository
 	view       *Operations
-	access     *access.Registry
+	registry   *ephemeral.Registry
 	sign       func(...string) string
 }
 
 type CommandIdentityDependencies struct {
 	Operations *Repository
 	View       *Operations
-	Registry   *access.Registry
+	Registry   *ephemeral.Registry
 	Sign       func(...string) string
 }
 
@@ -87,7 +87,7 @@ func NewCommandIdentity(ctx context.Context, dependencies CommandIdentityDepende
 		ctx:        ctx,
 		operations: dependencies.Operations,
 		view:       dependencies.View,
-		access:     dependencies.Registry,
+		registry:   dependencies.Registry,
 		sign:       dependencies.Sign,
 	}
 }
@@ -127,7 +127,7 @@ func (service *CommandIdentity) Existing(ctx context.Context, principal authoriz
 		return accepted, true, err
 	}
 	if !Terminal(accepted.Status) {
-		service.access.SetOperationSecrets(id, credentials.Secrets)
+		service.registry.SetOperationSecrets(id, credentials.Secrets)
 	}
 	return accepted, true, nil
 }

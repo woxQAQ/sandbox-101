@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/gc"
 	"github.com/woxQAQ/haven/guest"
@@ -87,7 +87,7 @@ type App struct {
 	CaptureCleanup *machine.CaptureCleanup
 
 	guards    *execution.Guards
-	Access    *access.Registry
+	Ephemeral *ephemeral.Registry
 	Options   Options
 	State     *store.State
 	ctx       context.Context
@@ -135,7 +135,7 @@ func Open(opts Options) (*App, error) {
 	resourceProofs := machine.NewResourceProofs(snapshotProofs, sandbox.ActivationHistory{})
 	authentication := authorization.NewAuthentication(opts.RootToken, authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign)
 	operations := operation.NewOperations(state.Database(), workers, state.Identity().Identity)
-	registry := access.New()
+	registry := ephemeral.New()
 	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.CommandIdentityDependencies{
 		Operations: operation.New(state.Database()),
 		View:       operations,
@@ -158,7 +158,7 @@ func Open(opts Options) (*App, error) {
 			Checkpoint: state.Checkpoint,
 		}),
 		Admission: admission,
-		Access:    registry,
+		Ephemeral: registry,
 		Options:   opts,
 		State:     state,
 		ctx:       lifetime.Context(),
@@ -273,7 +273,7 @@ func Open(opts Options) (*App, error) {
 	service.Activations = sandbox.NewActivations(state, sandbox.ActivationDependencies{
 		Guards:    guards,
 		Lifetime:  lifetime,
-		Registry:  service.Access,
+		Registry:  service.Ephemeral,
 		Proofs:    resourceProofs,
 		Committer: committer,
 	}, sandbox.ActivationOptions{
@@ -298,7 +298,7 @@ func Open(opts Options) (*App, error) {
 		Lifetime:    lifetime,
 		Gate:        admissionGate,
 		Workers:     workers,
-		Registry:    service.Access,
+		Registry:    service.Ephemeral,
 		Proofs:      resourceProofs,
 		Activations: service.Activations,
 		Policies:    service.DirectPolicies,
@@ -487,7 +487,7 @@ func (service *App) Close(ctx context.Context) error {
 		// Registration and the closing check share this guard. Once admission
 		// closes, the snapshot includes every socket accepted before the barrier.
 		service.mu.Lock()
-		dataConnections := service.Access.AllConnections()
+		dataConnections := service.Ephemeral.AllConnections()
 		service.mu.Unlock()
 		for _, connection := range dataConnections {
 			_ = connection.Close()

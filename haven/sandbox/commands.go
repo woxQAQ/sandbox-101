@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
@@ -18,14 +18,14 @@ import (
 // bound to the original authenticated role while persistence receives redaction.
 type SandboxCommands struct {
 	Identity *operation.CommandIdentity
-	access   *access.Registry
+	registry *ephemeral.Registry
 	maxTTL   time.Duration
 }
 
-func NewSandboxCommands(maxTTL time.Duration, identity *operation.CommandIdentity, registry *access.Registry) *SandboxCommands {
+func NewSandboxCommands(maxTTL time.Duration, identity *operation.CommandIdentity, registry *ephemeral.Registry) *SandboxCommands {
 	return &SandboxCommands{
 		Identity: identity,
-		access:   registry,
+		registry: registry,
 		maxTTL:   maxTTL,
 	}
 }
@@ -82,7 +82,7 @@ func (service *SandboxCommands) CredentialsMissing(id string, settings Settings)
 	if len(settings.Secrets) == 0 {
 		return false
 	}
-	secrets := service.access.SandboxSecrets(id)
+	secrets := service.registry.SandboxSecrets(id)
 	for name, descriptor := range settings.Secrets {
 		secret, ok := secrets[name]
 		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {

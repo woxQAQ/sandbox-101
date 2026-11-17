@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/sandbox"
@@ -98,7 +98,7 @@ func (service *Plane) Ready(ctx context.Context, principal authorization.Princip
 	guard := service.guards.Configuration(id)
 	guard.Lock()
 	defer guard.Unlock()
-	view, settings, err = service.finalAdmission(ctx, principal, access.ConnectionIdentity{
+	view, settings, err = service.finalAdmission(ctx, principal, ephemeral.ConnectionIdentity{
 		SandboxID:  id,
 		Instance:   view.Instance,
 		Generation: settings.Generation,
@@ -112,7 +112,7 @@ func (service *Plane) Ready(ctx context.Context, principal authorization.Princip
 // finalAdmission verifies the original connection identity under the
 // configuration guard. Verification never renews a lease during socket handoff
 // or periodic connection enforcement.
-func (service *Plane) finalAdmission(ctx context.Context, principal authorization.Principal, identity access.ConnectionIdentity) (sandbox.View, sandbox.Settings, error) {
+func (service *Plane) finalAdmission(ctx context.Context, principal authorization.Principal, identity ephemeral.ConnectionIdentity) (sandbox.View, sandbox.Settings, error) {
 	id, instance, generation := identity.SandboxID, identity.Instance, identity.Generation
 	closed := service.lifetime.Closing() || service.store.Reviewed
 	if closed {
@@ -132,7 +132,7 @@ func (service *Plane) finalAdmission(ctx context.Context, principal authorizatio
 	}
 	service.mu.Lock()
 	closing := service.lifetime.Closing() || service.store.Reviewed
-	bound := service.access.Binding(id)
+	bound := service.registry.Binding(id)
 	service.mu.Unlock()
 	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != service.epoch || !time.Now().Before(settings.Deadline) || service.commands.CredentialsMissing(id, settings) {
 		return view, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission changed", errs.ErrConflict)
@@ -200,7 +200,7 @@ func (service *Plane) open(ctx context.Context, principal authorization.Principa
 	if err != nil {
 		return nil, err
 	}
-	identity := access.ConnectionIdentity{
+	identity := ephemeral.ConnectionIdentity{
 		SandboxID:  id,
 		Instance:   view.Instance,
 		Generation: settings.Generation,
@@ -219,7 +219,7 @@ func (service *Plane) open(ctx context.Context, principal authorization.Principa
 		_ = conn.Close()
 		return nil, fmt.Errorf("%w: haven is closing", errs.ErrConflict)
 	}
-	tracked := service.access.Track(conn, identity)
+	tracked := service.registry.Track(conn, identity)
 	service.mu.Unlock()
 	guard.Unlock()
 	go func() {
@@ -246,8 +246,8 @@ func (service *Plane) Attach(ctx context.Context, principal authorization.Princi
 		return nil, err
 	}
 	defer service.lifetime.End()
-	up, ok := upstream.(*access.Connection)
-	if !ok || !up.BelongsTo(service.access) || up.Identity().SandboxID != id {
+	up, ok := upstream.(*ephemeral.Connection)
+	if !ok || !up.BelongsTo(service.registry) || up.Identity().SandboxID != id {
 		return nil, fmt.Errorf("%w: connection belongs to another admission", errs.ErrInvalid)
 	}
 	guard := service.guards.Configuration(id)
@@ -272,7 +272,7 @@ func (service *Plane) Attach(ctx context.Context, principal authorization.Princi
 		_ = conn.Close()
 		return nil, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
-	tracked := service.access.Track(conn, identity)
+	tracked := service.registry.Track(conn, identity)
 	service.mu.Unlock()
 	go func() {
 		defer service.lifetime.End()
@@ -292,7 +292,7 @@ func (service *Plane) Forward(ctx context.Context, principal authorization.Princ
 	return service.open(ctx, principal, id, port)
 }
 
-func (service *Plane) enforceLease(conn *access.Connection, principal authorization.Principal) {
+func (service *Plane) enforceLease(conn *ephemeral.Connection, principal authorization.Principal) {
 	identity := conn.Identity()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

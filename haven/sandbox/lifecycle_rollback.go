@@ -121,11 +121,11 @@ func (service *Lifecycle) AdmitRollback(ctx context.Context, principal authoriza
 	if child.ID == "" {
 		return empty, err
 	}
-	service.access.StageSandboxSecrets(parent.ID, current.ID)
+	service.registry.StageSandboxSecrets(parent.ID, current.ID)
 	if err != nil {
 		return parent, err
 	}
-	service.access.CloseSandboxConnections(current.ID)
+	service.registry.CloseSandboxConnections(current.ID)
 	if err = service.activations.RevokeSandbox(current.ID); err != nil {
 		return parent, err
 	}

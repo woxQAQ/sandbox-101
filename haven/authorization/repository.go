@@ -18,7 +18,7 @@ type Principal struct {
 }
 
 // Visible checks identity scope only. Lease, settings and resource proofs are
-// evaluated by the business use case before granting access.
+// evaluated by the business use case before granting ephemeral.
 func (p Principal) Visible(tenant, sandbox string) bool {
 	return (p.Root || p.TenantID == tenant) && (p.SandboxID == "" || p.SandboxID == sandbox)
 }

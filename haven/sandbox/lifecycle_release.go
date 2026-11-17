@@ -236,7 +236,7 @@ func (service *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lif
 	if err = service.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	service.access.DropSandboxSecrets(current.ID)
+	service.registry.DropSandboxSecrets(current.ID)
 	parent.Status = "succeeded"
 	return parent, service.store.Checkpoint()
 }

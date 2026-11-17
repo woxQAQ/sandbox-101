@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
@@ -36,7 +36,7 @@ type ProvisionDependencies struct {
 	Lifetime    *execution.Lifetime
 	Gate        execution.AdmissionGate
 	Workers     *execution.Workers
-	Registry    *access.Registry
+	Registry    *ephemeral.Registry
 	Proofs      machine.ResourceProofs
 	Activations *Activations
 	Policies    *machine.DirectPolicies
@@ -53,7 +53,7 @@ type VMProvisioning struct {
 	admission   execution.Guard
 	gate        execution.AdmissionGate
 	workers     *execution.Workers
-	access      *access.Registry
+	registry    *ephemeral.Registry
 	policies    *machine.DirectPolicies
 	guards      ProvisionGuards
 	proofs      machine.ResourceProofs
@@ -80,7 +80,7 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 		proofs:      dependencies.Proofs,
 		gate:        dependencies.Gate,
 		workers:     dependencies.Workers,
-		access:      dependencies.Registry,
+		registry:    dependencies.Registry,
 		policies:    dependencies.Policies,
 		backend:     options.Backend,
 		activations: dependencies.Activations,

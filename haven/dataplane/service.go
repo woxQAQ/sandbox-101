@@ -8,7 +8,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/woxQAQ/haven/access"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
@@ -41,7 +41,7 @@ type Options struct {
 type Dependencies struct {
 	Guards      Guards
 	Lifetime    *execution.Lifetime
-	Registry    *access.Registry
+	Registry    *ephemeral.Registry
 	Commands    *sandbox.SandboxCommands
 	Sandboxes   *sandbox.Sandboxes
 	Lifecycle   *sandbox.Lifecycle
@@ -57,7 +57,7 @@ type Plane struct {
 	lifetime    *execution.Lifetime
 	guards      Guards
 	mu          execution.Guard
-	access      *access.Registry
+	registry    *ephemeral.Registry
 	epoch       string
 	sign        func(...string) string
 	catalog     *sandbox.Catalog
@@ -81,7 +81,7 @@ func NewPlane(state *store.State, dependencies Dependencies, options Options) *P
 		lifetime:    dependencies.Lifetime,
 		guards:      dependencies.Guards,
 		mu:          dependencies.Guards.Registration(),
-		access:      dependencies.Registry,
+		registry:    dependencies.Registry,
 		epoch:       options.Epoch,
 		sign:        state.Sign,
 		catalog:     sandbox.NewCatalog(state.Database()),

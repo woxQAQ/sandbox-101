@@ -55,10 +55,10 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 		return accepted, admissionErr
 	}
 	if paused {
-		service.access.SetSandboxSecrets(command.SandboxID, secrets)
+		service.registry.SetSandboxSecrets(command.SandboxID, secrets)
 		return accepted, admissionErr
 	}
-	service.access.CloseSandboxConnections(command.SandboxID)
+	service.registry.CloseSandboxConnections(command.SandboxID)
 	// Durable revocation precedes any external call. Safety teardown has its own
 	// bounded context, independent of the submitting connection's cancellation.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -81,7 +81,7 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 		}
 		return accepted, err
 	}
-	service.access.SetOperationSecrets(accepted.ID, secrets)
+	service.registry.SetOperationSecrets(accepted.ID, secrets)
 	if err = service.fault("configure_admitted"); err != nil {
 		return accepted, err
 	}

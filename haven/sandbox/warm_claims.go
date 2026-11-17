@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/woxQAQ/haven/access"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
@@ -31,7 +31,7 @@ type WarmClaimDependencies struct {
 	Guards       WarmClaimGuards
 	Gate         execution.AdmissionGate
 	Workers      *execution.Workers
-	Registry     *access.Registry
+	Registry     *ephemeral.Registry
 	Proofs       machine.ResourceProofs
 	Committer    *operation.Committer
 	Activations  *Activations
@@ -50,7 +50,7 @@ type WarmClaims struct {
 	gate         execution.AdmissionGate
 	guards       WarmClaimGuards
 	workers      *execution.Workers
-	access       *access.Registry
+	registry     *ephemeral.Registry
 	proofs       machine.ResourceProofs
 	activations  *Activations
 	provisioning *VMProvisioning
@@ -74,7 +74,7 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 		gate:         dependencies.Gate,
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
-		access:       dependencies.Registry,
+		registry:     dependencies.Registry,
 		proofs:       dependencies.Proofs,
 		activations:  dependencies.Activations,
 		provisioning: dependencies.Provisioning,

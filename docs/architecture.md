@@ -40,7 +40,7 @@ image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、cap
 
 旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。门禁按 Go 类型核对 step namespace，并按 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
 
-`store.State` 独占数据库、writer lock、node key 与 HEAD。各能力构造函数通过本能力的 `Dependencies` 明确接收原 guards、Lifetime/Workers、证明与协作端口，运行配置由独立 options 或故障注入参数传入；构造过程只装配这些依赖，不从通用容器查找或回填缺失端口。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`access.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 dataplane.Audits、dataplane.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
+`store.State` 独占数据库、writer lock、node key 与 HEAD。各能力构造函数通过本能力的 `Dependencies` 明确接收原 guards、Lifetime/Workers、证明与协作端口，运行配置由独立 options 或故障注入参数传入；构造过程只装配这些依赖，不从通用容器查找或回填缺失端口。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`ephemeral.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 dataplane.Audits、dataplane.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
 
 架构门禁同时检查实际 Go import graph 和编译源码 AST：禁止 controller 绕过用例或回指 App、业务层手写 SQL、跨领域 dbgen 导入，以及根兼容 facade。仅保留逐函数/逐语句审阅的 SQLite 维护例外。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
 

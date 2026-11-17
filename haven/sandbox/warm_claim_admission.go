@@ -215,7 +215,7 @@ func (service *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) 
 	if err = tx.Commit(); err != nil {
 		return empty, false, err
 	}
-	service.access.SetOperationSecrets(accepted.ID, admission.Secrets)
+	service.registry.SetOperationSecrets(accepted.ID, admission.Secrets)
 	if err = service.store.Checkpoint(); err != nil {
 		return accepted, true, err
 	}

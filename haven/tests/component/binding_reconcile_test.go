@@ -47,7 +47,7 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 			manager.Binds[claim.Result.SandboxID] = nil
 			manager.Mu.Unlock()
 			if tracked {
-				service.Access.SetBinding(claim.Result.SandboxID, "private-residual")
+				service.Ephemeral.SetBinding(claim.Result.SandboxID, "private-residual")
 			}
 			for range 2 {
 				if err = service.Maintenance.Reconcile(); err != nil {
@@ -103,14 +103,14 @@ func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *tes
 	if err := service.Maintenance.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Access.BindingError(claim.Result.SandboxID); !errors.Is(err, failure) {
+	if err := service.Ephemeral.BindingError(claim.Result.SandboxID); !errors.Is(err, failure) {
 		t.Fatal("binding maintenance lost its diagnostic", err)
 	}
 	manager.Before = nil
 	if err := service.Maintenance.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Access.BindingError(claim.Result.SandboxID); !errors.Is(err, failure) {
+	if err := service.Ephemeral.BindingError(claim.Result.SandboxID); !errors.Is(err, failure) {
 		t.Fatal("successful maintenance erased the last failure", err)
 	}
 	record, err := service.Operations.Operation(context.Background(), authorization.Principal{

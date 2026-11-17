@@ -27,7 +27,7 @@ func (service *Lifecycle) AdmitResume(ctx context.Context, principal authorizati
 	if command.Action != "resume" || command.SandboxID == "" || key == "" || len(key) > 256 || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: resume requires tenant authority, sandbox and key", errs.ErrInvalid)
 	}
-	credentials := service.access.SandboxSecrets(command.SandboxID)
+	credentials := service.registry.SandboxSecrets(command.SandboxID)
 	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
@@ -141,7 +141,7 @@ func (service *Lifecycle) AdmitResume(ctx context.Context, principal authorizati
 		return empty, err
 	}
 	parent.Result.VMID = child.Result.VMID
-	service.access.SetOperationSecrets(parent.ID, credentials)
+	service.registry.SetOperationSecrets(parent.ID, credentials)
 	if err != nil {
 		return parent, err
 	}

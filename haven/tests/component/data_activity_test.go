@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
 )
@@ -80,9 +80,9 @@ func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
 	}
 	// Keep both endpoints registered across multiple enforcement intervals.
 	select {
-	case <-upstream.(*access.Connection).Done():
+	case <-upstream.(*ephemeral.Connection).Done():
 		t.Fatal("valid upstream was revoked during lease enforcement")
-	case <-downstream.(*access.Connection).Done():
+	case <-downstream.(*ephemeral.Connection).Done():
 		t.Fatal("valid downstream was revoked during lease enforcement")
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())

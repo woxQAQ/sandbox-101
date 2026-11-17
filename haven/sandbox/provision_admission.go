@@ -167,7 +167,7 @@ func (service *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdm
 		ID:   tenantID,
 	}, key, hash); found || err != nil {
 		if claim != nil && found && err == nil && !operation.Terminal(cached.Status) {
-			service.access.SetOperationSecrets(cached.ID, claim.Secrets)
+			service.registry.SetOperationSecrets(cached.ID, claim.Secrets)
 		}
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			service.dispatch(cached.ID)
@@ -185,7 +185,7 @@ func (service *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdm
 		return empty, err
 	}
 	if claim != nil {
-		service.access.SetOperationSecrets(accepted.ID, claim.Secrets)
+		service.registry.SetOperationSecrets(accepted.ID, claim.Secrets)
 	}
 	if err = service.store.Checkpoint(); err != nil {
 		return accepted, err

@@ -53,7 +53,7 @@ func (service *Plane) ReconcileBindings() error {
 			cancel()
 		}
 		if lookup != nil {
-			service.access.RecordBindingError(id, lookup)
+			service.registry.RecordBindingError(id, lookup)
 		}
 	}
 	return nil

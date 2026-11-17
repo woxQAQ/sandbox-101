@@ -198,7 +198,7 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 			return empty, err
 		}
 	}
-	service.access.SetOperationSecrets(parent.ID, admission.Secrets)
+	service.registry.SetOperationSecrets(parent.ID, admission.Secrets)
 	if err = service.fault("fork_admitted"); err != nil {
 		return parent, err
 	}

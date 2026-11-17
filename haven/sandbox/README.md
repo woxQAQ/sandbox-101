@@ -22,7 +22,7 @@ warm claim 原子选择 ready pool、接管 slot、settings 与 activation；fal
 
 ## 命令、secret 与投递
 
-operation.CommandIdentity 负责原角色 MAC、幂等凭据匹配及 accepted operation 的内存 secret 恢复。SandboxCommands 验证环境、policy、TTL，分离 guest 值、host secret 与描述；只有净化后的命令进入 SQLite。完整 secret 仅留在共享 access.Registry，publication 不保留凭据。
+operation.CommandIdentity 负责原角色 MAC、幂等凭据匹配及 accepted operation 的内存 secret 恢复。SandboxCommands 验证环境、policy、TTL，分离 guest 值、host secret 与描述；只有净化后的命令进入 SQLite。完整 secret 仅留在共享 ephemeral.Registry，publication 不保留凭据。
 
 OperationDelivery 组合通用 operation 结果与 sandbox 授权。DirectBindings 核验业务设置和原 activation，再借 machine 执行物理 policy；回收闭包固定原实例与原 operation。配置失败和持久完成失败继续保留 fence，不能误撤后继实例。
 

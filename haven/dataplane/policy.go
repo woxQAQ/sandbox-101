@@ -50,7 +50,7 @@ func (service *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Sett
 			Value: value,
 		}
 	}
-	credentials := service.access.SandboxSecrets(view.ID)
+	credentials := service.registry.SandboxSecrets(view.ID)
 	for name, descriptor := range settings.Secrets {
 		value, ok := credentials[name]
 		if !ok || value.Value == "" {

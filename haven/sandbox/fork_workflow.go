@@ -398,7 +398,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 	if err = service.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.access.DropOperationSecrets(append([]string{
+	service.registry.DropOperationSecrets(append([]string{
 		step.OperationID,
 	}, step.State.Children...)...)
 	return service.store.Checkpoint()

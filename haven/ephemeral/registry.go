@@ -1,6 +1,8 @@
-// Package access owns process-local credentials, bindings and admitted sockets.
-// It carries no database, workflow runner or reference to the application service.
-package access
+// Package ephemeral owns process-local credentials, bindings and admitted
+// sockets. Nothing here survives a restart: the daemon epoch is regenerated,
+// secrets stay memory-only by design, and tracked connections die with the
+// process. It carries no database, workflow runner or application reference.
+package ephemeral
 
 import (
 	"crypto/rand"

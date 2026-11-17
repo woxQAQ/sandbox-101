@@ -7,7 +7,7 @@ import (
 	"github.com/woxQAQ/haven/loom"
 )
 
-// Activation contains only guest-visible values. Host credentials stay in access.
+// Activation contains only guest-visible values. Host credentials stay in ephemeral.
 type Activation struct {
 	SandboxID     string
 	Hostname      string

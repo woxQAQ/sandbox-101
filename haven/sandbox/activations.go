@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/woxQAQ/haven/access"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -56,7 +56,7 @@ type ActivationOptions struct {
 type ActivationDependencies struct {
 	Guards    ActivationGuards
 	Lifetime  *execution.Lifetime
-	Registry  *access.Registry
+	Registry  *ephemeral.Registry
 	Proofs    machine.ResourceProofs
 	Committer *operation.Committer
 }
@@ -74,7 +74,7 @@ type Activations struct {
 	egress     EgressBindings
 	caPEM      string
 	epoch      string
-	access     *access.Registry
+	registry   *ephemeral.Registry
 	sign       func(...string) string
 	faultPoint func(string) error
 	committer  *operation.Committer
@@ -97,7 +97,7 @@ func NewActivations(state *store.State, dependencies ActivationDependencies, opt
 		egress:     options.Egress,
 		caPEM:      options.CAPEM,
 		epoch:      options.Epoch,
-		access:     dependencies.Registry,
+		registry:   dependencies.Registry,
 		sign:       state.Sign,
 		faultPoint: options.Fault,
 		committer:  dependencies.Committer,
@@ -261,7 +261,7 @@ func (service *Activations) BlockGuarded(step ActivationStep, source machine.Res
 }
 
 func (service *Activations) activationSecrets(step ActivationStep) (map[string]egress.Secret, error) {
-	secrets := service.access.OperationSecrets(step.OperationID)
+	secrets := service.registry.OperationSecrets(step.OperationID)
 	for name, descriptor := range step.Input.Settings.Secrets {
 		secret, ok := secrets[name]
 		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {
@@ -289,9 +289,9 @@ func (service *Activations) bindActivation(step ActivationStep, source machine.R
 		return fmt.Errorf("%w: egress effects required for this network mode", errs.ErrIncompatible)
 	}
 	// Binding fingerprints remain keyed and ephemeral. Secret values stay in the
-	// shared access registry and never enter the unified metadata.
+	// shared ephemeral registry and never enter the unified metadata.
 	fingerprint := service.sign("binding-v1", step.OperationID, guest.Socket(source.Input.Resource))
-	bound := service.access.Binding(step.Input.SandboxID)
+	bound := service.registry.Binding(step.Input.SandboxID)
 	if bound == fingerprint {
 		return nil
 	}
@@ -305,7 +305,7 @@ func (service *Activations) bindActivation(step ActivationStep, source machine.R
 	}, step.Input.Settings.Policy, secrets); err != nil {
 		return err
 	}
-	service.access.Bind(step.Input.SandboxID, fingerprint, secrets)
+	service.registry.Bind(step.Input.SandboxID, fingerprint, secrets)
 	return nil
 }
 
@@ -315,6 +315,6 @@ func (service *Activations) RevokeSandbox(id string) error {
 			return err
 		}
 	}
-	service.access.ForgetBinding(id)
+	service.registry.ForgetBinding(id)
 	return nil
 }

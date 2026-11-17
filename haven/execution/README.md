@@ -49,4 +49,4 @@ sequenceDiagram
 
 具名 API 不重排获取顺序、不自动扩张持有范围，也不将 TryLock 改为排队等待。长 syscall、RPC、hash/copy 继续位于全局 Admission 之外。Capture 返回的释放函数应在原捕获保护范围结束时调用，不能因为工作流分包而提前释放。
 
-Data 与 App.Close 借用同一 `Registration` guard，保留连接登记和关闭快照的原短互斥；mutex 本身由 `Guards` 唯一持有。draining 决策属于 `execution.Availability`，查询和 Drain 使用同一 guard。关闭标记不能单独替代最后一次接纳/登记与连接快照的原子协议。`access.Registry` 生成并持有唯一 daemon epoch，activation 和 data 服务使用同一不可变值。
+Dataplane 与 App.Close 借用同一 `Registration` guard，保留连接登记和关闭快照的原短互斥；mutex 本身由 `Guards` 唯一持有。draining 决策属于 `execution.Availability`，查询和 Drain 使用同一 guard。关闭标记不能单独替代最后一次接纳/登记与连接快照的原子协议。`ephemeral.Registry` 生成并持有唯一 daemon epoch，activation 和 data 服务使用同一不可变值。
