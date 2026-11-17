@@ -3,11 +3,16 @@ package machine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/machine/internal/dbgen"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/store"
 )
 
@@ -116,4 +121,256 @@ func (service *CaptureDiscard) Resume(id string) (bool, error) {
 func ValidateCaptureDiscard(ctx context.Context, database store.DBTX, id string) error {
 	_, err := LoadCaptureDiscard(ctx, database, id)
 	return err
+}
+
+type CaptureDiscardRequest struct {
+	TenantID          string `json:"tenant_id"`
+	Key               string `json:"key"`
+	SandboxID         string `json:"sandbox_id"`
+	FailedOperationID string `json:"failed_operation_id"`
+	ExpectedInstance  string `json:"expected_instance"`
+	StopOperationID   string `json:"stop_operation_id"`
+}
+
+type (
+	CaptureDiscardInput struct {
+		Lifecycle string `json:"lifecycle,omitempty"`
+		Request   CaptureDiscardRequest
+		Source    CaptureStep
+		StopHash  string
+	}
+	CaptureDiscardStep struct {
+		OperationID string
+		Hash        string
+		Status      string
+		Phase       string
+		Input       CaptureDiscardInput
+	}
+)
+
+func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDiscardStep, error) {
+	step := CaptureDiscardStep{
+		OperationID: id,
+	}
+	record, err := dbgen.New(q).GetStep(ctx, dbgen.GetStepParams{
+		OperationID: id,
+		StepKey:     "capture_discard",
+	})
+	if err != nil {
+		record = dbgen.GetStepRow{}
+	}
+	input, body := record.Input, record.Body
+	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
+	step.Hash, step.Status = record.InputHash, record.Status
+	if err != nil {
+		return step, err
+	}
+	if operation.Digest(input) != step.Hash {
+		return step, fmt.Errorf("capture discard input checksum changed")
+	}
+	if err = json.Unmarshal(input, &step.Input); err != nil {
+		return step, err
+	}
+	if err = json.Unmarshal(body, &step.Phase); err != nil {
+		return step, err
+	}
+	if action != "capture_discard" || candidate != step.Input.Source.Input.Snapshot.ID || expected != step.Input.Request.ExpectedInstance {
+		return step, fmt.Errorf("capture discard frozen identity changed")
+	}
+	return step, nil
+}
+
+// captureDiscardAdmissionProof requires the original failed capture to retain
+// custody. The discard operation and its transferred holders do not exist yet.
+func (service *CaptureDiscard) captureDiscardAdmissionProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
+	if _, err := service.verifyCaptureDiscardSource(ctx, tx, step, ""); err != nil {
+		return err
+	}
+	return verifyCaptureDiscardCustody(ctx, tx, step, captureDiscardCustody{
+		Deleting:      0,
+		CleanupStatus: "blocked",
+		Holder: quota.Holder{
+			Kind: "engine_dependency",
+			ID:   step.Input.Source.OperationID + ":capture",
+		},
+	})
+}
+
+// captureDiscardProof requires admitted ownership and the exact transferred
+// cleanup responsibility before effects or completion can proceed.
+func (service *CaptureDiscard) captureDiscardProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
+	record, err := service.verifyCaptureDiscardSource(ctx, tx, step, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if step.Input.Lifecycle != "" {
+		if err = service.ownership.VerifyCaptureDiscardLink(ctx, tx, step); err != nil {
+			return err
+		}
+	}
+	if err = verifyCaptureDiscardCustody(ctx, tx, step, captureDiscardCustody{
+		Deleting:      1,
+		CleanupStatus: "transferred",
+		Holder: quota.Holder{
+			Kind: "cleanup",
+			ID:   step.OperationID + ":capture_discard",
+		},
+	}); err != nil {
+		return err
+	}
+	input, request := step.Input, step.Input.Request
+	snapshot := input.Source.Input.Snapshot
+	resource := input.Source.Input.Source
+	count, err := dbgen.New(tx).MatchingCleanupCount(ctx, dbgen.MatchingCleanupCountParams{
+		ID:           "capture_discard:" + step.OperationID,
+		OperationID:  step.OperationID,
+		ResourceKind: "snapshot",
+		ResourceID:   snapshot.ID,
+		Status:       "pending",
+		Body:         operation.Encode(input),
+	})
+	if err != nil || count != 1 {
+		return fmt.Errorf("capture discard responsibility changed: %v", err)
+	}
+	var parent struct {
+		Action  string
+		Request CaptureDiscardRequest
+	}
+	// Decode the discard result independently; missing fields cannot inherit
+	// identity from the original failed capture result.
+	var result operation.Result
+	projection, err := operation.New(tx).Projection(ctx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if err = json.Unmarshal(projection.Request, &parent); err != nil {
+		return err
+	}
+	if err = json.Unmarshal(projection.Body, &result); err != nil {
+		return err
+	}
+	if operation.Digest(projection.Request) != projection.RequestHash || operation.Terminal(projection.Status) || projection.ScopeKind != "tenant" || projection.ScopeID != request.TenantID || parent.Action != "capture_discard" || parent.Request != request || result.SnapshotID != snapshot.ID || result.VMID != resource.Candidate || result.SandboxID != record.ID {
+		return fmt.Errorf("capture discard parent identity changed")
+	}
+	return nil
+}
+
+// captureDiscardCustody is the exact responsibility expected at one durable
+// boundary. These facts are matched directly against storage, without selecting
+// execution paths or inferring a holder from current catalog state.
+type captureDiscardCustody struct {
+	Deleting      int64
+	CleanupStatus string
+	Holder        quota.Holder
+}
+
+func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep, expected captureDiscardCustody) error {
+	input, request := step.Input, step.Input.Request
+	source := input.Source
+	resource := source.Input.Source
+	snapshot := source.Input.Snapshot
+	publication, err := dbgen.New(tx).GetCapture(ctx, dbgen.GetCaptureParams{
+		ID:         snapshot.ID,
+		SourceVmID: resource.Candidate,
+	})
+	if err != nil {
+		return err
+	}
+	var record SnapshotRecord
+	if err = json.Unmarshal(publication.Body, &record); err != nil {
+		return err
+	}
+	if publication.Published != 0 || publication.Deleting != expected.Deleting || !reflect.DeepEqual(record, snapshot) {
+		return fmt.Errorf("capture discard unpublished catalog changed")
+	}
+	body, err := dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
+		ID:           "capture:" + source.OperationID,
+		OperationID:  source.OperationID,
+		ResourceKind: "snapshot",
+		ResourceID:   snapshot.ID,
+		Status:       expected.CleanupStatus,
+	})
+	if err != nil {
+		return err
+	}
+	if string(body) != string(operation.Encode(source.Input)) {
+		return fmt.Errorf("capture discard original cleanup changed")
+	}
+	shape := resource.Input.Resource.Config.Shape
+	if count, err := quota.New(tx).CountMatchingReservation(ctx, quota.Reservation{
+		Owner: "snapshot:" + snapshot.ID,
+		Bytes: (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20,
+	}); err != nil || count != 1 {
+		return fmt.Errorf("capture discard responsibility changed: %v", err)
+	}
+	responsibilities := quota.New(tx)
+	checks := []struct {
+		count func() (int64, error)
+		want  int64
+	}{
+		{func() (int64, error) {
+			return responsibilities.CountMatchingCost(ctx, quota.Cost{
+				CostIdentity: quota.CostIdentity{
+					TenantID:        request.TenantID,
+					Kind:            "pending_storage",
+					Key:             source.OperationID + ":capture",
+					SourceOperation: source.OperationID,
+				},
+				StorageMiB: shape.DiskMiB + shape.MemoryMiB,
+			})
+		}, 1},
+		{func() (int64, error) {
+			return responsibilities.CountTenantCostHolders(ctx, request.TenantID, "pending_storage", source.OperationID+":capture")
+		}, 1},
+		{func() (int64, error) {
+			return responsibilities.CountCostReference(ctx, quota.CostReference{
+				TenantID:   request.TenantID,
+				Kind:       "pending_storage",
+				Key:        source.OperationID + ":capture",
+				HolderKind: expected.Holder.Kind,
+				HolderID:   expected.Holder.ID,
+			})
+		}, 1},
+		{func() (int64, error) {
+			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+				Kind:       "vm",
+				ID:         resource.Candidate,
+				HolderKind: "capture",
+				HolderID:   source.OperationID,
+			})
+		}, 1},
+		{func() (int64, error) {
+			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+				Kind:       "image",
+				ID:         resource.Input.Resource.Config.Image,
+				HolderKind: "capture",
+				HolderID:   source.OperationID,
+			})
+		}, 1},
+		{func() (int64, error) {
+			return responsibilities.CountResourceHolders(ctx, "snapshot", snapshot.ID)
+		}, 0},
+	}
+	for _, check := range checks {
+		if count, err := check.count(); err != nil || count != check.want {
+			return fmt.Errorf("capture discard responsibility changed: %v", err)
+		}
+	}
+	owners, err := dbgen.New(tx).CountCaptureOwner(ctx, dbgen.CountCaptureOwnerParams{
+		SnapshotID:        snapshot.ID,
+		TenantID:          request.TenantID,
+		SourceOperationID: source.OperationID,
+	})
+	if err != nil || owners != 1 {
+		return fmt.Errorf("capture discard responsibility changed: %v", err)
+	}
+	checkpoints, err := dbgen.New(tx).CountCheckpoint(ctx, snapshot.ID)
+	if err != nil || checkpoints != 0 {
+		return fmt.Errorf("capture discard responsibility changed: %v", err)
+	}
+	leases, err := SnapshotReaders(ctx, tx, snapshot.ID)
+	if err != nil || leases != 0 {
+		return fmt.Errorf("capture discard responsibility changed: %v", err)
+	}
+	return nil
 }

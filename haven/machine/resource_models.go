@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -114,4 +115,53 @@ func SlotDestinationHolder(destination *QuotaDestination) string {
 	default:
 		return ""
 	}
+}
+
+type FreshRequest struct {
+	TenantID   string `json:"tenant_id"`
+	Key        string `json:"key"`
+	TemplateID string `json:"template_id"`
+}
+
+type ReleaseRequest struct {
+	TenantID  string `json:"tenant_id"`
+	Key       string `json:"key"`
+	SandboxID string `json:"sandbox_id"`
+}
+
+type CloneRequest struct {
+	TenantID   string `json:"tenant_id"`
+	Key        string `json:"key"`
+	SnapshotID string `json:"snapshot_id"`
+}
+
+type RestoreRequest struct {
+	TenantID         string `json:"tenant_id"`
+	Key              string `json:"key"`
+	SandboxID        string `json:"sandbox_id"`
+	SnapshotID       string `json:"snapshot_id"`
+	ExpectedInstance string `json:"expected_instance"`
+	StopOperationID  string `json:"stop_operation_id"`
+}
+
+// ResourceAdmission carries one child's frozen identity through the parent
+// transaction. Its fields are required facts, not optional execution modes.
+type ResourceAdmission struct {
+	Child       operation.Record
+	Kind        string
+	Candidate   string
+	RequestHash string
+}
+
+// ResourceParent joins a control workflow to a resource admission transaction.
+// Implementations verify their frozen intent; Loom never receives this port.
+type ResourceParent interface {
+	AdmitResource(context.Context, *sql.Tx, ResourceAdmission) error
+}
+
+func AdmitResourceParent(ctx context.Context, tx *sql.Tx, parent ResourceParent, request ResourceAdmission) error {
+	if parent == nil {
+		return nil
+	}
+	return parent.AdmitResource(ctx, tx, request)
 }
