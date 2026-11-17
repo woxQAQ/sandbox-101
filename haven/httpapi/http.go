@@ -11,18 +11,51 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/data"
 	"github.com/woxQAQ/haven/httpwire"
+	"github.com/woxQAQ/haven/node"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/supply"
 	"github.com/woxQAQ/haven/types"
 )
 
-type Adapter struct {
-	service *haven.Service
+// Services names the business capabilities exposed by the public protocol.
+// Controllers receive no application lifecycle, runtime or database authority.
+type Services struct {
+	Authentication *authorization.Authentication
+	Catalog        *sandbox.Catalog
+	Templates      *supply.TemplateCatalog
+	Operations     *operation.Operations
+	Delivery       *sandbox.OperationDelivery
+	Tenants        *authorization.Tenants
+	Requests       *sandbox.SandboxRequests
+	Data           *data.Data
+	Management     *node.Management
 }
 
-func New(service *haven.Service) http.Handler {
+type Adapter struct {
+	requests       *sandbox.SandboxRequests
+	data           *data.Data
+	authentication *authorization.Authentication
+	catalog        *sandbox.Catalog
+	templates      *supply.TemplateCatalog
+	operations     *operation.Operations
+	delivery       *sandbox.OperationDelivery
+	tenants        *authorization.Tenants
+}
+
+func New(dependencies Services) http.Handler {
 	adapter := &Adapter{
-		service: service,
+		requests:       dependencies.Requests,
+		data:           dependencies.Data,
+		authentication: dependencies.Authentication,
+		catalog:        dependencies.Catalog,
+		templates:      dependencies.Templates,
+		operations:     dependencies.Operations,
+		delivery:       dependencies.Delivery,
+		tenants:        dependencies.Tenants,
 	}
 	router := gin.New()
 	router.RedirectTrailingSlash = false
@@ -70,7 +103,7 @@ func New(service *haven.Service) http.Handler {
 	v1 := router.Group("/v1", adapter.authenticate)
 	v1.POST("/tenants", adapter.putTenant)
 	v1.GET("/status", func(c *gin.Context) {
-		value, err := service.Status(c.Request.Context(), principal(c))
+		value, err := dependencies.Management.Status(c.Request.Context(), principal(c))
 		respond(c.Writer, value, err)
 	})
 	v1.POST("/drain", func(c *gin.Context) {
@@ -81,29 +114,29 @@ func New(service *haven.Service) http.Handler {
 			})
 			return
 		}
-		service.Drain()
+		dependencies.Management.Drain()
 		writeJSON(c.Writer, 200, map[string]bool{
 			"draining": true,
 		})
 	})
 	v1.GET("/sandboxes", func(c *gin.Context) {
-		value, err := service.List(c.Request.Context(), principal(c))
+		value, err := adapter.catalog.List(c.Request.Context(), principal(c))
 		respond(c.Writer, value, err)
 	})
 	v1.GET("/templates", func(c *gin.Context) {
-		value, err := service.Templates(c.Request.Context(), principal(c))
+		value, err := adapter.templates.Templates(c.Request.Context(), principal(c))
 		respond(c.Writer, value, err)
 	})
 	v1.GET("/checkpoints", func(c *gin.Context) {
-		value, err := service.Checkpoints(c.Request.Context(), principal(c))
+		value, err := adapter.catalog.Checkpoints(c.Request.Context(), principal(c))
 		respond(c.Writer, value, err)
 	})
 	v1.GET("/sandboxes/:id", func(c *gin.Context) {
-		value, err := service.Get(c.Request.Context(), principal(c), c.Param("id"))
+		value, err := adapter.catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
 		respond(c.Writer, value, err)
 	})
 	v1.GET("/operations/:id", func(c *gin.Context) {
-		value, err := service.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
+		value, err := adapter.delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
 		respond(c.Writer, operationResponse(value), err)
 	})
 	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) {
@@ -130,8 +163,8 @@ func New(service *haven.Service) http.Handler {
 	return router
 }
 
-func principal(c *gin.Context) haven.Principal {
-	return c.MustGet("principal").(haven.Principal)
+func principal(c *gin.Context) authorization.Principal {
+	return c.MustGet("principal").(authorization.Principal)
 }
 
 func (adapter *Adapter) authenticate(c *gin.Context) {
@@ -145,9 +178,9 @@ func (adapter *Adapter) authenticate(c *gin.Context) {
 		return
 	}
 	token := strings.TrimPrefix(header, "Bearer ")
-	value, err := adapter.service.Authenticate(c.Request.Context(), token)
+	value, err := adapter.authentication.Authenticate(c.Request.Context(), token)
 	if err != nil && c.Request.Method == http.MethodGet && c.FullPath() == "/v1/operations/:id" {
-		value, err = adapter.service.AuthenticateOperation(c.Request.Context(), token)
+		value, err = adapter.authentication.AuthenticateOperation(c.Request.Context(), token)
 	}
 	if err != nil {
 		writeError(c.Writer, err)
@@ -189,12 +222,7 @@ func (adapter *Adapter) putTenant(c *gin.Context) {
 		}
 		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
 	}
-	_, err := adapter.service.PutTenant(c.Request.Context(), owner, haven.Tenant{
-		ID:            value.ID,
-		Token:         value.Token,
-		MaxSandboxes:  value.MaxSandboxes,
-		MaxStorageMiB: value.MaxStorageMiB,
-	})
+	_, err := adapter.tenants.PutTenant(c.Request.Context(), owner, value)
 	if err != nil {
 		writeError(c.Writer, err)
 		return
@@ -210,7 +238,7 @@ func (adapter *Adapter) metrics(c *gin.Context) {
 		})
 		return
 	}
-	sandboxes, err := adapter.service.List(c.Request.Context(), principal(c))
+	sandboxes, err := adapter.catalog.List(c.Request.Context(), principal(c))
 	if err != nil {
 		writeError(c.Writer, err)
 		return
@@ -284,14 +312,14 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 	if actor.Root && action == "fork" {
 		owner := ""
 		if command.CheckpointID != "" {
-			value, err := adapter.service.GetCheckpoint(request.Context(), actor, command.CheckpointID)
+			value, err := adapter.catalog.GetCheckpoint(request.Context(), actor, command.CheckpointID)
 			if err != nil {
 				writeError(c.Writer, err)
 				return
 			}
 			owner = value.TenantID
 		} else {
-			value, err := adapter.service.Get(request.Context(), actor, command.SandboxID)
+			value, err := adapter.catalog.Get(request.Context(), actor, command.SandboxID)
 			if err != nil {
 				writeError(c.Writer, err)
 				return
@@ -311,7 +339,7 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 		writeError(c.Writer, err)
 		return
 	}
-	var intent haven.Command
+	var intent operation.Command
 	if err = json.Unmarshal(payload, &intent); err != nil {
 		writeError(c.Writer, err)
 		return
@@ -319,13 +347,13 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 	if action == "delete_checkpoint" {
 		intent.Action = "checkpoint_delete"
 	}
-	operation, err := adapter.service.Submit(request.Context(), principal(c), request.Header.Get("Idempotency-Key"), intent)
+	operation, err := adapter.requests.Submit(request.Context(), principal(c), request.Header.Get("Idempotency-Key"), intent)
 	if err != nil {
 		writeError(c.Writer, err)
 		return
 	}
 	if strings.Contains(request.Header.Get("Prefer"), "respond-async") {
-		view, err := adapter.service.PublicOperation(request.Context(), principal(c), operation.ID)
+		view, err := adapter.delivery.PublicOperation(request.Context(), principal(c), operation.ID)
 		if err != nil {
 			writeError(c.Writer, err)
 			return
@@ -334,12 +362,12 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 		writeJSON(c.Writer, 202, operationResponse(view))
 		return
 	}
-	operation, err = adapter.service.Wait(request.Context(), principal(c), operation.ID)
+	operation, err = adapter.operations.Wait(request.Context(), principal(c), operation.ID)
 	if err != nil && operation.Status != "failed" {
 		writeError(c.Writer, err)
 		return
 	}
-	view, err := adapter.service.PublicOperation(request.Context(), principal(c), operation.ID)
+	view, err := adapter.delivery.PublicOperation(request.Context(), principal(c), operation.ID)
 	if err != nil {
 		writeError(c.Writer, err)
 		return

@@ -1,0 +1,106 @@
+package supply
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply/internal/dbgen"
+)
+
+// LoadTemplate decodes the frozen catalog value. Publication authorization is
+// checked separately by TemplateCatalog against the original supply workflow.
+func LoadTemplate(ctx context.Context, query store.DBTX, id string) (TemplateRecord, error) {
+	var record TemplateRecord
+	body, err := dbgen.New(query).GetTemplate(ctx, id)
+	if err != nil {
+		return record, err
+	}
+	err = json.Unmarshal(body, &record)
+	return record, err
+}
+
+// CurrentTemplate distinguishes absence from unreadable or corrupted catalog
+// data. It grants no right to replace permanent publication ownership.
+func CurrentTemplate(ctx context.Context, query store.DBTX, id string) (*TemplateRecord, error) {
+	record, err := LoadTemplate(ctx, query, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if record.ID != id {
+		return nil, fmt.Errorf("%w: template catalog identity changed", errs.ErrManualRecovery)
+	}
+	return &record, nil
+}
+
+func RequireTemplateOwner(ctx context.Context, query store.DBTX, id, tenant string) error {
+	count, err := dbgen.New(query).CountOwnedIntent(ctx, dbgen.CountOwnedIntentParams{
+		TemplateID: id,
+		TenantID:   tenant,
+	})
+	if err != nil || count != 1 {
+		return fmt.Errorf("template owner proof missing: %v", err)
+	}
+	return nil
+}
+
+// reservePublication advances the publication pointer without transferring the
+// permanent tenant. The comparison and conditional upsert share the caller's tx.
+func reservePublication(ctx context.Context, query store.DBTX, desired TemplateRecord, previous *TemplateRecord, operationID string) error {
+	current, err := CurrentTemplate(ctx, query, desired.ID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, previous) {
+		return fmt.Errorf("%w: template catalog changed before admission", errs.ErrConflict)
+	}
+	if current != nil && current.TenantID != desired.TenantID {
+		return fmt.Errorf("%w: template owner cannot change", errs.ErrConflict)
+	}
+	queries := dbgen.New(query)
+	owner, err := queries.GetPermanentOwner(ctx, desired.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if owner != "" && owner != desired.TenantID {
+		return fmt.Errorf("%w: template permanent owner cannot change", errs.ErrConflict)
+	}
+	return store.RequireOne(queries.ReservePublication(ctx, dbgen.ReservePublicationParams{
+		TemplateID:  desired.ID,
+		TenantID:    desired.TenantID,
+		OperationID: operationID,
+	}))
+}
+
+func publishTemplate(ctx context.Context, query store.DBTX, desired TemplateRecord, previous *TemplateRecord) error {
+	body, err := json.Marshal(desired)
+	if err != nil {
+		return err
+	}
+	queries := dbgen.New(query)
+	if previous == nil {
+		return store.RequireOne(queries.InsertTemplate(ctx, dbgen.InsertTemplateParams{
+			ID:     desired.ID,
+			Tenant: desired.TenantID,
+			Body:   body,
+		}))
+	}
+	before, err := json.Marshal(previous)
+	if err != nil {
+		return err
+	}
+	return store.RequireOne(queries.ReplaceTemplate(ctx, dbgen.ReplaceTemplateParams{
+		NewBody:      body,
+		ID:           desired.ID,
+		Tenant:       desired.TenantID,
+		PreviousBody: before,
+	}))
+}

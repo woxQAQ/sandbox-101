@@ -97,7 +97,6 @@ systemd-run --user --wait --pipe --collect --service-type=exec --unit="$unit" \
   --property=MemoryMax=8G --property=MemorySwapMax=0 --property=TasksMax=2048 \
   --property=TimeoutStopSec=10s --property=RuntimeMaxSec=1300s \
   --setenv="PATH=$PATH" --setenv="HOME=$HOME" --setenv=GOMAXPROCS=2 \
-  --setenv="SANDBOX_IMAGE_TOOL_ROOTS=${SANDBOX_IMAGE_TOOL_ROOTS:-}" \
   --setenv="SANDBOX_RUNTIME_USER_UNIT=$unit" \
   --setenv="SANDBOX_RUNTIME_ARTIFACTS=$run_dir" \
   --setenv="SANDBOX_RUNTIME_MATERIALS=$materials_dir" \

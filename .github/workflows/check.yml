@@ -16,6 +16,7 @@ jobs:
             sdk/go.sum
             common/go.sum
             protocol/gen/go.sum
+            tools/go.sum
       - uses: extractions/setup-just@v3
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -26,7 +27,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler ripgrep build-essential binutils file
       - run: python3 -I scripts/test_runner_environment.py
       - run: python3 -I scripts/test_native_gate.py
+      - run: just check-sql
+      - run: python3 -I scripts/test_sql_generation.py
       - run: python3 -I scripts/check-architecture.py
+      - run: python3 -I scripts/test_architecture.py
       - run: GOWORK=off go -C haven test -tags=kvm . -run '^TestKVMRootfsOCI$' -count=1
       - run: just test check test-race integration smoke
   native-image:
@@ -69,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y bubblewrap coreutils util-linux build-essential \
+          sudo apt-get install -y coreutils util-linux build-essential \
             autoconf automake libtool pkg-config curl ca-certificates xz-utils \
             jq uuid-dev liblz4-dev liblzma-dev libzstd-dev libdeflate-dev libxxhash-dev zlib1g-dev
           prefix=/usr/local/native-image-tools
@@ -80,7 +84,7 @@ jobs:
             curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$1" -o "$2"
             printf '%s  %s\n' "$3" "$2" | sha256sum --check --strict
           }
-          # Hashes: nixpkgs' pinned erofs source and kernel.org sha256sums.asc.
+          # Hash: nixpkgs' pinned erofs source.
           download https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git/snapshot/erofs-utils-1.9.4.tar.gz \
             erofs.tar.gz 7d135aa2550326a5acf20f53c518aea5a8900015ce50700044e40f818c31dd80
           tar -xf erofs.tar.gz
@@ -90,15 +94,6 @@ jobs:
             ./configure --prefix="$prefix" --enable-multithreading --disable-fuse --without-selinux MAX_BLOCK_SIZE=4096
             make -j2
             make install
-          )
-          download https://www.kernel.org/pub/linux/utils/util-linux/v2.41/util-linux-2.41.3.tar.xz \
-            util-linux.tar.xz 3330d873f0fceb5560b89a7dc14e4f3288bbd880e96903ed9b50ec2b5799e58b
-          tar -xf util-linux.tar.xz
-          (
-            cd util-linux-2.41.3
-            ./configure --disable-all-programs --enable-unshare --disable-nls --without-systemd
-            make -j2 unshare
-            install -m0755 unshare "$prefix/bin/unshare"
           )
           # umoci has a replace directive, so go install module@version cannot
           # build it. Use its checksummed module source and original go.mod.
@@ -111,9 +106,9 @@ jobs:
           )
           # All privileged commands use this closed PATH, not the runner PATH.
           echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v golangci-lint)"):$(dirname "$(command -v go)"):$(dirname "$(command -v just)"):/usr/bin:/bin" >> "$GITHUB_ENV"
-      - name: Verify native namespaces and mapping
+      - name: Verify native tools and ownership
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --preflight
-      - name: Verify missing-bwrap failure
+      - name: Verify missing-mkfs failure
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --negative
       - name: Require actual native coverage
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py

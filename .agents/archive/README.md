@@ -2,7 +2,7 @@
 
 此目录保存已完成工作及其原始设计、复核和验收来源。正文中的 Scope、STOP、分支、机器路径与运行授权均属于当时上下文，不作为当前执行许可。未完成工作只在 [plans](../../plans/README.md) 维护；当前系统契约从 [docs](../../docs/README.md) 阅读。
 
-归档表示计划已有完成/接受记录，不表示本次重新运行了其中的检查，也不证明当前 HEAD 通过旧验收。JSON/脚本证据原样移动，内部 source/path/hash 保留历史含义。
+归档表示计划已有完成/接受记录，不表示本次重新运行了其中的检查，也不证明当前 HEAD 通过旧验收。025、026 按用户指令以实施完成归档，仍为 VALIDATION_BLOCKED；其剩余验收在 [未完成索引](../../plans/README.md#待完成验收) 跟踪。JSON/脚本证据原样移动，内部 source/path/hash 保留历史含义。
 
 ## 完成计划
 
@@ -28,6 +28,8 @@
 | [019](019-tree-pull-identity-investigation.md) | 双 UID 调查、保留 FD 与身份约束；未确认泄露 |
 | [022](022-responsibility-and-api-boundaries.md) | 职责/测试单元/API 重组，见 [结果](022-RESULT.md) |
 | [023](023-structured-error-design.md) | Guest RPC 分类与调用位置；sandboxd 自有错误契约、Engine/Agent 边界翻译及私有/公开诊断，见 [验证证据](evidence/023-structured-errors.md) |
+| [025](025-haven-services-sqlc.md) | 实际业务 services、领域仓库/私有 sqlc、唯一 v9 baseline、App/controller 边界；实施完成，验收缺项保留，见 [证据](evidence/025-services-sqlc.md) |
+| [026](026-direct-image-tools-and-tests.md) | 镜像直接宿主工具调用、component/native 测试分包、内部组装/共享 fixture 与 gate/runner 更新；实施完成，验收缺项保留，见 [证据](evidence/026-direct-image-tools-and-tests.md) |
 
 ## 历史批次与证据
 

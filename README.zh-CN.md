@@ -8,7 +8,7 @@ Haven 在唯一 SQLite store 中负责租户与资源工作流，包括模板、
 
 ## Workspace
 
-根目录仅保留 `go.work`，组件各自拥有 Go module，没有额外的 `internal/` 包层。
+根目录保留 `go.work`，组件各自拥有 Go module。Haven 的 `App` 组装 image、machine、supply、sandbox、data、collection、node 能力；各能力拥有用例与私有 SQL，HTTP/管理 adapter 直接接收所需用例。
 
 | 目录 | 职责 |
 |---|---|
@@ -17,7 +17,7 @@ Haven 在唯一 SQLite store 中负责租户与资源工作流，包括模板、
 | `sdk/` | 业务/管理客户端、guest RPC 与 `cmd/havenctl` |
 | `types/` | 共享 wire 数据，以及经过清理的错误 payload |
 | `common/` | 共享的有界 CLI 文件读写、配置加载与日志初始化 |
-| `tools/` | structfmt 等开发工具 |
+| `tools/` | 固定版本的 structfmt、sqlc 等开发工具 |
 | `protocol/gen/` | 生成的 Go guest 协议绑定 |
 | `operator/` | Kubernetes 集成 |
 
@@ -37,14 +37,16 @@ just smoke
 
 二进制输出为 `bin/{haven,havenctl,loomctl}`。test、vet 与 race 覆盖 Haven、Loom、SDK、types、common、tools 和 protocol 模块；workspace lint 另包含 operator。`just test-race` 保留每包 10 分钟超时。`just integration` 构建真实 Rust Unix fixture，验证 Haven/SQLite、HTTP 与 guest RPC。`just smoke` 在自建私有状态中启动一个真实 daemon，检查两个 CLI、writer 排他、配置、重启、GC 和离线备份。这两个入口均不启动 VM。
 
-普通测试缺少工具或 namespace 时可能跳过 native 项。`just test-native` 强制 EROFS 覆盖，保留 race、count=1、300s 设置，stdout 仅输出 Go test JSON。native gate 还要求 shared/merged 物化与 GC 的实际 pass 事件：
+Haven 的版本化 migration SQL 同时供运行时初始化和 sqlc 使用。修改领域 SQL 后运行 `just generate-sql`、`just check-sql`；生成绑定纳入版本控制，普通构建不需要 sqlc。检查在私有临时目录生成，能识别缺失、修改和多余文件，不改写工作树。版本与事务边界见 [store migrations](haven/store/README.md)。架构门禁同时检查实际 import graph 和 Go AST，拒绝 controller 绕过业务服务、根兼容 facade 与手写业务 SQL；负例验证拒绝能力，SQLite 维护例外在 store 契约中逐项列明。
+
+普通测试缺少工具或 ownership 权限时可能跳过 native 项。`just test-native` 强制 EROFS 覆盖，保留 race、count=1、300s 设置，stdout 仅输出 Go test JSON。native gate 还要求 shared/merged 物化与 GC 的实际 pass 事件：
 
 ```nu
 python3 -I scripts/check-native-gate.py --negative
 python3 -I scripts/check-native-gate.py
 ```
 
-需要版本相同的 mkfs/fsck.erofs >=1.9.4 且 <2、dump.erofs、umoci 0.6.0、bubblewrap、util-linux unshare 与 C 编译器。gate 不安装工具、不自动提权；negative 通过私有 PATH 隐藏 bwrap。日志和原始退出码保存在新建的 `build/native-gate/run.*`。namespace 和 mapping 要求见[镜像验证](docs/image-materialization.md#validation)。
+需要版本相同的 mkfs/fsck.erofs >=1.9.4 且 <2、dump.erofs、umoci 0.6.0 与 C 编译器。镜像工具直接执行；完整 merged/元数据验证需要 effective UID 0 和原生 ownership/xattr 支持。gate 不安装工具、不自动提权；negative 通过私有 PATH 隐藏 mkfs.erofs。日志和原始退出码保存在新建的 `build/native-gate/run.*`。详见[镜像验证](docs/image-materialization.md#validation)。
 
 ## HTTP 与配置
 

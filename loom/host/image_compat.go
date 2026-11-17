@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
 	ocidigest "github.com/opencontainers/go-digest"
@@ -25,7 +24,7 @@ const (
 	// This is self-contained OCI compatibility, not the shared fsmeta layout or
 	// the historical, unversioned merged builder.
 	MergedOCIEROFSLayout = "merged-oci-erofs-v1"
-	mergedOCIProfile     = "umoci-native-merged-v2;unix-paths;raw-unpack;umask=077;uid0-mapped-userns;tmpfs-root;bwrap;caps=chown,dac_override,fowner,fsetid,setfcap;4096;noinline_data;workers=1;uuid=manifest;mkfs-time=0;mtime=preserve;xattrs=native;boot=fsck-openroot"
+	mergedOCIProfile     = "umoci-native-merged-v3;unix-paths;raw-unpack;umask=077;host-tools;private-directory;4096;noinline_data;workers=1;uuid=manifest;mkfs-time=0;mtime=preserve;xattrs=native;boot=fsck-openroot"
 )
 
 func mergedOCIBuilder(tools map[string]string) string {
@@ -33,8 +32,6 @@ func mergedOCIBuilder(tools map[string]string) string {
 	profile.WriteString(mergedOCIProfile)
 	for _, tool := range []string{
 		"umoci",
-		"unshare",
-		"bwrap",
 		"mkfs.erofs",
 		"fsck.erofs",
 	} {
@@ -45,9 +42,11 @@ func mergedOCIBuilder(tools map[string]string) string {
 }
 
 func mergedOCITools(ctx context.Context, tools map[string]string) (map[string]string, error) {
+	if os.Geteuid() != 0 {
+		return nil, errors.New("OCI compatibility materializer requires effective UID 0 to preserve ownership")
+	}
 	for _, tool := range []string{
 		"umoci",
-		"unshare",
 	} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return nil, fmt.Errorf("required OCI compatibility tool missing: %s", tool)
@@ -139,7 +138,7 @@ func (m ImageManifest) validateMergedOCI() error {
 	}
 	if _, err := shaName(
 		m.Builder,
-	); err != nil || m.Builder != mergedOCIBuilder(m.Tools) || !supportedUmoci(m.Tools["umoci"]) || m.Tools["bwrap"] == "" || m.Tools["unshare"] == "" || !supportedEROFSVersion(m.Tools["mkfs.erofs"]) || !supportedEROFSVersion(m.Tools["fsck.erofs"]) ||
+	); err != nil || m.Builder != mergedOCIBuilder(m.Tools) || !supportedUmoci(m.Tools["umoci"]) || !supportedEROFSVersion(m.Tools["mkfs.erofs"]) || !supportedEROFSVersion(m.Tools["fsck.erofs"]) ||
 		erofsVersion.FindString(m.Tools["mkfs.erofs"]) != erofsVersion.FindString(m.Tools["fsck.erofs"]) {
 		return bad()
 	}
@@ -210,7 +209,7 @@ func (m ImageManifest) verifyMergedOCIArtifacts(dir string) error {
 	return nil
 }
 
-func materializeMergedOCI(ctx context.Context, input, out, digest string, expandedLimit int64) error {
+func materializeMergedOCI(ctx context.Context, input, out, digest string) (err error) {
 	// Construct a minimal trusted index. No source index tags, URLs, annotations
 	// or runtime configuration can select a different image for unpacking.
 	if err := writeJSON(filepath.Join(input, "oci-layout"), v1.ImageLayout{
@@ -241,84 +240,32 @@ func materializeMergedOCI(ctx context.Context, input, out, digest string, expand
 	if err = writeJSON(filepath.Join(input, "index.json"), index); err != nil {
 		return err
 	}
-	reads := []imageMount{
-		{input, "/input"},
-	}
-	for _, tool := range []string{
-		"umoci",
-		"mkfs.erofs",
-		"sh",
-	} {
-		binary, x := exec.LookPath(tool)
-		if x != nil {
-			return x
-		}
-		binary, x = filepath.EvalSymlinks(binary)
-		if x != nil {
-			return x
-		}
-		reads = append(reads, imageMount{binary, "/tools/" + tool})
-	}
-	args, err := imageToolSandbox(out, reads, true)
+	stage, err := os.MkdirTemp(out, ".unpack-")
 	if err != nil {
 		return err
 	}
-	args = append(
-		args,
-		"--size",
-		strconv.FormatInt(expandedLimit, 10),
-		"--tmpfs",
-		"/merged",
-		"--",
-		"/tools/sh",
-		"-euc",
-		`umask 077
-/tools/umoci raw unpack --image /input:compat /merged/root
-exec /tools/mkfs.erofs --quiet --workers=1 -b4096 -E noinline_data -T0 --mkfs-time --preserve-mtime -U "$1" /work/root.erofs /merged/root`,
-		"builder",
-		layerUUID(digest),
-	)
-	if err = runMappedImageTool(ctx, args); err != nil {
-		return err
-	}
-	return extractImageBoot(
-		ctx,
-		out,
-		[]imageMount{
-			{filepath.Join(out, "root.erofs"), "/root.erofs"},
-		},
-		nil,
-		"/root.erofs",
-	)
-}
-
-func runMappedImageTool(ctx context.Context, sandboxArgs []string) error {
-	bwrap, err := exec.LookPath("bwrap")
+	defer func() { err = errors.Join(err, os.RemoveAll(stage)) }()
+	root := filepath.Join(stage, "root")
+	umoci, err := exec.LookPath("umoci")
 	if err != nil {
 		return err
 	}
-	bwrap, err = filepath.EvalSymlinks(bwrap)
+	umoci, err = filepath.EvalSymlinks(umoci)
 	if err != nil {
 		return err
 	}
-	args := []string{
-		"--user",
-		"--map-auto",
-		"--map-root-user",
-		"--keep-caps",
+	// Set the child umask without changing the daemon's process-wide umask.
+	if err = runImageTool(ctx, out, "sh", "-euc", `umask 077; exec "$@"`, "image-unpack",
+		umoci, "raw", "unpack", "--image", input+":compat", root); err != nil {
+		return err
 	}
-	if os.Geteuid() == 0 {
-		// A root daemon can identity-map all valid Linux IDs, still inside a new
-		// user namespace and the same readonly bubblewrap filesystem boundary.
-		args = []string{
-			"--user",
-			"--map-users=0:0:4294967295",
-			"--map-groups=0:0:4294967295",
-			"--keep-caps",
-		}
+	if err = runImageTool(ctx, out, "mkfs.erofs", "--quiet", "--workers=1", "-b4096",
+		"-E", "noinline_data", "-T0", "--mkfs-time", "--preserve-mtime", "-U",
+		layerUUID(digest), filepath.Join(out, "root.erofs"), root); err != nil {
+		return err
 	}
-	args = append(args, bwrap)
-	args = append(args, sandboxArgs...)
-	_, err = command(ctx, "unshare", args...)
-	return err
+	if err = os.RemoveAll(stage); err != nil {
+		return err
+	}
+	return extractImageBoot(ctx, out, nil, filepath.Join(out, "root.erofs"))
 }

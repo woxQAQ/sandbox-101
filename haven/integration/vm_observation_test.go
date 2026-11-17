@@ -33,12 +33,15 @@ type vmInventory struct {
 }
 
 type vmObservation struct {
-	ID, Instance                  string
-	PID                           int
-	StartTime                     uint64
-	Verified, AgentReady          bool
-	NetworkEnabled, NetworkActual bool
-	NetworkPolicyInstance         string
+	ID                    string
+	Instance              string
+	PID                   int
+	StartTime             uint64
+	Verified              bool
+	AgentReady            bool
+	NetworkEnabled        bool
+	NetworkActual         bool
+	NetworkPolicyInstance string
 }
 
 func newVMInventory(t *testing.T, state string, backends ...*host.CloudHypervisor) *vmInventory {

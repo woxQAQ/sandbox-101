@@ -13,14 +13,14 @@ import unittest
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-PACKAGE = "github.com/woxQAQ/haven"
+PACKAGE = "github.com/woxQAQ/haven/tests/native"
 TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
     "TestActualMergedOCIHardlinksAndMetadata",
     "TestGCActualLayerCacheAndCompletedImport",
 )
-ROOT_SKIP = "TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner"
+NATIVE_SKIP = "TestHavenActualOCIImportPublishesSingleCatalog"
 
 
 def event(action, test=None, output=None, package=PACKAGE):
@@ -58,13 +58,13 @@ if sys.argv[-2:] == ["rev-parse", "HEAD"]:
 import json, os, sys
 from pathlib import Path
 if Path(sys.argv[0]).name == "just":
-    assert sys.argv[1:] == ["--quiet", "test-native"]
+    assert sys.argv[1:] == ["test-native"]
 else:
     assert sys.argv[1:] == ["-C", "haven", "test", "-json", "-run",
-        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "."]
+        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "./tests/native"]
     assert os.environ["GOWORK"] == "off"
     assert os.environ["SANDBOX_REQUIRE_EROFS_TESTS"] == "1"
-    assert not (Path(os.environ["PATH"]) / "bwrap").exists()
+    assert not (Path(os.environ["PATH"]) / "mkfs.erofs").exists()
 result = json.loads(Path(os.environ["NATIVE_TEST_RESULT"]).read_text())
 sys.stdout.write(result["stdout"])
 sys.stderr.write(result["stderr"])
@@ -109,6 +109,25 @@ sys.exit(result["exit_code"])
         self.assertEqual((log / "test-native.stderr").read_text(), "owned command diagnostic\n")
         self.assertEqual((log / "result.txt").read_text(), "PASS\n")
 
+    def test_real_just_preserves_go_json(self):
+        executable = shutil.which("just")
+        self.assertIsNotNone(executable, "the native gate requires just")
+        tool = self.root / "tools/just"
+        tool.unlink()
+        tool.symlink_to(Path(executable).resolve())
+        shell = json.dumps([sys.executable, "-c"])
+        (self.root / "justfile").write_text(
+            f"set shell := {shell}\n"
+            "test-native:\n"
+            "    @import json, os, sys; from pathlib import Path; "
+            "result = json.loads(Path(os.environ['NATIVE_TEST_RESULT']).read_text()); "
+            "sys.stdout.write(result['stdout']); sys.stderr.write(result['stderr']); "
+            "sys.exit(result['exit_code'])\n"
+        )
+        log = self.run_gate(self.passes)
+        recorded = [json.loads(line) for line in (log / "test-native.stdout").read_text().splitlines()]
+        self.assertEqual(recorded, self.passes)
+
     def test_incomplete_or_invalid_coverage_is_rejected(self):
         cases = {
             "package-only": [event("pass")],
@@ -135,33 +154,26 @@ sys.exit(result["exit_code"])
         self.assertEqual(json.loads((log / "skips.json").read_text())[0]["test"],
                          "TestCaptureOnly")
 
-    def test_root_skip_uses_actual_identity_and_exact_reason(self):
+    def test_native_skips_have_no_identity_exception(self):
         self.tool("id", "print(0)\n")
-        reason = "    image_compat_test.go:885: root can identity-map all owners\n"
-        rows = self.passes + [event("output", ROOT_SKIP, reason), event("skip", ROOT_SKIP)]
-        self.run_gate(rows, expected=0 if os.geteuid() == 0 else 1)
-        for message in (
-            "root can identity-map all owners\n",
-            reason.rstrip() + " extra\n",
-            reason + "    image_compat_test.go:886: unexpected\n",
-            "    image_compat_test.go:885: namespace unavailable\n",
-        ):
-            with self.subTest(message=message):
+        for name in (NATIVE_SKIP, "TestActualMergedOCIInvalidInputsDoNotPublish/invalid_owner"):
+            with self.subTest(name=name):
                 self.run_gate(self.passes + [
-                    event("output", ROOT_SKIP, message), event("skip", ROOT_SKIP),
+                    event("output", name, "    image_compat_test.go:885: missing ownership privileges\n"),
+                    event("skip", name),
                 ], expected=1)
 
     def test_negative_requires_exact_failed_test_and_cleans_path(self):
-        # A real bwrap entry in the fixture must be absent only in the child view.
-        self.tool("bwrap", 'raise RuntimeError("must not run")\n')
-        reason = "    fsmeta_test.go:312: required OCI tool missing: bwrap\n"
+        # The fixture's mkfs entry is absent only in the child view.
+        self.tool("mkfs.erofs", 'raise RuntimeError("must not run")\n')
+        reason = "    fsmeta_test.go:312: required OCI tool missing: mkfs.erofs\n"
         rows = [event("output", TESTS[0], reason), event("fail", TESTS[0]), event("fail")]
         log = self.run_gate(rows, code=1, args=("--negative",))
         self.assertEqual((log / "negative.exit-code").read_text(), "1\n")
-        self.assertTrue((self.root / "tools/bwrap").exists())
+        self.assertTrue((self.root / "tools/mkfs.erofs").exists())
         for name, output in (
             ("compile-error", "compile failed\n"),
-            ("wrong-tool", reason.replace("bwrap", "mkfs.erofs")),
+            ("wrong-tool", reason.replace("mkfs.erofs", "fsck.erofs")),
             ("reason-suffix", reason.rstrip() + " extra\n"),
         ):
             with self.subTest(name=name):

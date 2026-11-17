@@ -40,7 +40,6 @@ class RunnerEntrypoints(unittest.TestCase):
             "PATH": str(self.tools),
             "HOME": str(self.root),
             "RECORD_DIR": str(self.root),
-            "SANDBOX_IMAGE_TOOL_ROOTS": str(self.tools),
         }
         self.env.pop("KVM_ROOTFS_DIR", None)
         self.env.pop("SANDBOX_KVM_ROOTFS", None)
@@ -72,7 +71,7 @@ import json, os, sys
 from pathlib import Path
 keys = ["SANDBOX_KVM_ROOTFS", "SANDBOX_KVM_HYPERVISOR", "SANDBOX_KVM_KERNEL",
         "SANDBOX_KVM_GUEST_DIR", "SANDBOX_KVM_ARTIFACTS",
-        "SANDBOX_IMAGE_TOOL_ROOTS", "SANDBOX_REQUIRE_EROFS_TESTS"]
+        "SANDBOX_REQUIRE_EROFS_TESTS"]
 Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
     "args": sys.argv[1:], "environment": {key: os.environ[key] for key in keys},
 }))
@@ -85,12 +84,11 @@ Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
         record = json.loads((self.root / "go.json").read_text())
         self.assertIn("-tags=kvm", record["args"])
         self.assertEqual(record["args"][:2], ["-C", str(PROJECT / "haven")])
-        self.assertIn(".", record["args"])
+        self.assertIn("./tests/native", record["args"])
         self.assertIn("^TestKVMOCIFileViewAndCOW$", record["args"])
         self.assertEqual(record["environment"]["SANDBOX_KVM_ROOTFS"], str(rootfs))
         self.assertEqual(record["environment"]["SANDBOX_KVM_GUEST_DIR"], str(guest))
         self.assertEqual(record["environment"]["SANDBOX_REQUIRE_EROFS_TESTS"], "1")
-        self.assertEqual(record["environment"]["SANDBOX_IMAGE_TOOL_ROOTS"], str(self.tools))
 
     def test_kvm_rejects_missing_or_host_rootfs_before_launch(self):
         script = str(PROJECT / "scripts/run-kvm.sh")
@@ -124,7 +122,6 @@ Path(os.environ["RECORD_DIR"], "service.json").write_text(json.dumps(sys.argv[1:
             SANDBOX_RUNTIME_IO_MAX="8:0 wbps=1048576",
         )
         args = json.loads((self.root / "service.json").read_text())
-        self.assertIn(f"--setenv=SANDBOX_IMAGE_TOOL_ROOTS={self.tools}", args)
         self.assertIn(f"--setenv=PATH={self.tools.resolve()}", args)
         self.assertIn(f"--setenv=SANDBOX_RUNTIME_MATERIALS={self.materials}", args)
         self.assertIn(f"--setenv=SANDBOX_RUNTIME_OCI_LAYOUT={oci}", args)

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -33,14 +33,14 @@ func PublicError(err error) *types.ApiError {
 		reason error
 		code   string
 	}{
-		{haven.ErrNotFound, types.ErrNotFound},
-		{haven.ErrForbidden, types.ErrForbidden},
-		{haven.ErrConflict, types.ErrConflict},
-		{haven.ErrInvalid, types.ErrInvalid},
-		{haven.ErrExhausted, types.ErrExhausted},
-		{haven.ErrIncompatible, types.ErrIncompatible},
-		{haven.ErrUnknown, types.ErrUnknown},
-		{haven.ErrManualRecovery, types.ErrManualRecovery},
+		{errs.ErrNotFound, types.ErrNotFound},
+		{errs.ErrForbidden, types.ErrForbidden},
+		{errs.ErrConflict, types.ErrConflict},
+		{errs.ErrInvalid, types.ErrInvalid},
+		{errs.ErrExhausted, types.ErrExhausted},
+		{errs.ErrIncompatible, types.ErrIncompatible},
+		{errs.ErrUnknown, types.ErrUnknown},
+		{errs.ErrManualRecovery, types.ErrManualRecovery},
 	} {
 		if errors.Is(err, failure.reason) {
 			return &types.ApiError{
@@ -61,7 +61,7 @@ func PublicError(err error) *types.ApiError {
 			Message: errExtraJSON.Error(),
 		}
 	}
-	if errors.Is(err, haven.ErrInterrupted) {
+	if errors.Is(err, errs.ErrInterrupted) {
 		return &types.ApiError{
 			Code:    types.ErrUnknown,
 			Message: "accepted operation retained for recovery",

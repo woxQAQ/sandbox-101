@@ -19,14 +19,17 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/common/logging"
 	"github.com/woxQAQ/haven/config"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/httpapi"
+	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/localuds"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/management"
+	"github.com/woxQAQ/haven/types"
 )
 
 func main() {
@@ -67,7 +70,7 @@ func run(args []string) (result error) {
 		if cfg.Backup == "" {
 			return fmt.Errorf("--backup destination required")
 		}
-		point, err := haven.BackupState(ctx, cfg.StateDir, cfg.Backup)
+		point, err := application.BackupState(ctx, cfg.StateDir, cfg.Backup)
 		if err != nil {
 			return err
 		}
@@ -76,20 +79,20 @@ func run(args []string) (result error) {
 		if cfg.Backup == "" {
 			return fmt.Errorf("--backup source required")
 		}
-		point, err := haven.RestoreBackup(ctx, cfg.StateDir, cfg.Backup)
+		point, err := application.RestoreBackup(ctx, cfg.StateDir, cfg.Backup)
 		if err != nil {
 			return err
 		}
 		return output(point)
 	case "recover":
-		if err := haven.AcknowledgeRecovery(ctx, cfg.StateDir, cfg.RecoveryNote); err != nil {
+		if err := application.AcknowledgeRecovery(ctx, cfg.StateDir, cfg.RecoveryNote); err != nil {
 			return err
 		}
 		return output(map[string]bool{
 			"reviewed": true,
 		})
 	case "doctor":
-		status, err := haven.InspectState(ctx, cfg.StateDir)
+		status, err := application.InspectState(ctx, cfg.StateDir)
 		if err != nil {
 			return err
 		}
@@ -132,12 +135,12 @@ func run(args []string) (result error) {
 	defer func() {
 		_ = backend.Close()
 	}()
-	service, err := haven.Open(haven.Options{
+	service, err := application.Open(application.Options{
 		Context:      ctx,
 		StateDir:     cfg.StateDir,
 		Initialize:   cfg.Init,
 		Backend:      backend,
-		Guest:        haven.LiveGuest{},
+		Guest:        guest.Client{},
 		RootToken:    token,
 		MaxMemoryMiB: cfg.MaxMemoryMiB,
 		MaxVCPUs:     cfg.MaxVCPUs,
@@ -146,19 +149,19 @@ func run(args []string) (result error) {
 		PausedTTL:    cfg.PausedTTL,
 		MaxWarm:      cfg.MaxWarm,
 		Interval:     cfg.MaintenanceInterval,
-		EgressFactory: func(service *haven.Service) (haven.Egress, string, error) {
+		EgressFactory: func(host application.EgressCallbacks) (application.Egress, string, error) {
 			manager, err := egress.New(egress.Options{
 				PrepareSocket: func(binding egress.Binding, path string, info os.FileInfo) error {
 					prepareCtx, stop := context.WithTimeout(ctx, 3*time.Second)
 					defer stop()
-					return service.PrepareProxySocket(prepareCtx, binding, path, info)
+					return host.PrepareProxySocket(prepareCtx, binding, path, info)
 				},
-				InstallDirect:      service.InstallDirect,
-				RecoverStaleSocket: service.RecoverStaleSocket,
+				InstallDirect:      host.InstallDirect,
+				RecoverStaleSocket: host.RecoverStaleSocket,
 				AuditRecord: func(event egress.AuditEvent) error {
 					auditCtx, stop := context.WithTimeout(ctx, 3*time.Second)
 					defer stop()
-					return service.Audit(auditCtx, event)
+					return host.Audit(auditCtx, event)
 				},
 			})
 			if err != nil {
@@ -178,7 +181,7 @@ func run(args []string) (result error) {
 	return serve(ctx, cfg, service)
 }
 
-func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error {
+func serve(ctx context.Context, cfg config.Daemon, service *application.App) error {
 	local, err := localuds.Open(cfg.Socket)
 	if err != nil {
 		return err
@@ -194,7 +197,16 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 		_ = business.Close()
 	}()
 	httpServer := &http.Server{
-		Handler:           httpapi.New(service),
+		Handler: httpapi.New(httpapi.Services{
+			Authentication: service.Authentication,
+			Catalog:        service.Catalog,
+			Templates:      service.TemplateCatalog,
+			Operations:     service.Operations,
+			Tenants:        service.Tenants,
+			Requests:       service.SandboxRequests,
+			Data:           service.Data,
+			Management:     service.Management, Delivery: service.Delivery,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    32 << 10,
@@ -203,7 +215,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 		},
 	}
 	localServer := &http.Server{
-		Handler:           management.New(service),
+		Handler:           management.New(service.Management),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    32 << 10,
@@ -235,7 +247,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 	case <-ctx.Done():
 	case serveErr = <-done:
 	}
-	service.Drain()
+	service.Availability.Drain()
 	stopWork()
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
@@ -257,7 +269,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *haven.Service) error
 	return errors.Join(serveErr, httpErr, localErr)
 }
 
-func maintain(ctx context.Context, cfg config.Daemon, service *haven.Service) {
+func maintain(ctx context.Context, cfg config.Daemon, service *application.App) {
 	ticker := time.NewTicker(cfg.MaintenanceInterval)
 	defer ticker.Stop()
 	var collect <-chan time.Time
@@ -270,7 +282,7 @@ func maintain(ctx context.Context, cfg config.Daemon, service *haven.Service) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if err := service.Maintain(ctx); err != nil && ctx.Err() == nil {
+		if err := service.Maintenance.Maintain(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("Haven maintenance deferred", "error", err)
 		}
 		select {
@@ -278,10 +290,10 @@ func maintain(ctx context.Context, cfg config.Daemon, service *haven.Service) {
 			return
 		case <-ticker.C:
 		case now := <-collect:
-			_, err := service.CollectGarbage(ctx, haven.Principal{
+			_, err := service.GarbageCollection.CollectGarbage(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "node-admin",
-			}, "gc:"+now.UTC().Format(time.RFC3339Nano), haven.GCOptions{
+			}, "gc:"+now.UTC().Format(time.RFC3339Nano), types.GCOptions{
 				Batch: cfg.GCBatch,
 			})
 			if err != nil && ctx.Err() == nil {

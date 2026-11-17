@@ -15,9 +15,24 @@ writer exclusion, dry-run, restart and unified offline backup. Neither boots a V
 The VM/production runners below use the Haven workspace module and explicit Loom
 packages; historical outcomes do not establish current Haven production acceptance.
 
+`haven/internal/testfixture` supplies private store/runtime materials and must not
+depend on application. `haven/internal/testapp` separately composes full App fixtures;
+production packages may import neither package. Owner external test packages exercise
+single-capability Service/SQLite behavior. `haven/tests/component` retains App,
+cross-capability, restart and shutdown scenarios; `haven/tests/native` owns real image-tool
+cases and the separately tagged KVM suite. Go test entrypoints use `-p=1` across packages,
+retain four lifecycle slots and preserve the ordinary 120s/race 10m/native 300s budgets.
+Moving tests does not establish a performance fix. These are behavior tests rather than
+isolated helper function unit tests.
+
+The native gate captures the Go JSON stream from `just test-native` and requires
+explicit pass events for its native test inventory. It must not use `just --quiet`,
+which suppresses that stream. Missing tools or runner capabilities remain failures;
+the negative gate only proves that a deliberately missing tool is rejected.
+
 ## VM test inputs
 
-`haven/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
+`haven/tests/native/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
 not the privileged launcher or daemon lifecycle. The separate `kernel_isolation`
 tests under `loom/host/` cover real host networking and cgroup enforcement without a VM; production
 checks exercise the launcher and single Haven daemon. These are distinct evidence
@@ -74,11 +89,10 @@ just KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path
 
 ## Host capabilities
 
-Native image tests need the tools and namespaces described in
+Native image tests need the tools and ownership/xattr privileges described in
 [image materialization](../docs/image-materialization.md#validation), plus
-e2fsprogs for KVM tests. Use an administrator-controlled PATH. Alternate tool
-installations declare their readonly dependency roots using
-[`SANDBOX_IMAGE_TOOL_ROOTS`](../docs/image-materialization.md#host-tool-installation).
+e2fsprogs for KVM tests. Use an administrator-controlled PATH; image tools run
+directly from their host installation.
 
 KVM tests need user-authorized `/dev/kvm`, usable namespaces/mappings and storage
 with matching `stat` and `/proc/PID/maps` device identity. Kernel/production tests
@@ -88,8 +102,7 @@ bindfs, subordinate UID/GID mappings, `/dev/fuse`, a user systemd manager
 delegating cpu/memory/io/pids, and the explicit block-device I/O budget described
 in host deployment. Use `just runtime-e2e` with `RUNTIME_OCI_LAYOUT`,
 `RUNTIME_ARTIFACTS_DIR` and `SANDBOX_RUNTIME_IO_MAX` for the full daemon lifecycle.
-The runner resolves PATH before masking `/run`
-and forwards the configured image-tool roots into its transient service.
+The runner resolves and forwards PATH before masking `/run`.
 
 Missing prerequisites fail in required runs. Logs and hashes identify the source
 and inputs used for each result; [historical results](../docs/acceptance.md) do
@@ -118,10 +131,12 @@ and restarts that daemon, and verifies the exact live VMM plus guest state.
 
 These entrypoint tests use a closed PATH without a package manager, synthetic
 ELFs checked by real binutils, and recorded Go/service invocations. They do not
-start systemd services or VMs:
+start systemd services or VMs. Native gate regressions also use the installed
+`just` binary with a private recipe to verify that Go JSON reaches the gate:
 
 ```nu
 python3 -I scripts/test_runner_environment.py
+python3 -I scripts/test_native_gate.py
 ```
 
 The rootfs regression imports and extracts the generated OCI layer through both
@@ -130,6 +145,6 @@ needs native image tools and namespaces/mappings, but no VM:
 
 ```nu
 with-env {GOWORK: "off", SANDBOX_REQUIRE_EROFS_TESTS: "1"} {
-    go -C haven test -tags=kvm . -run '^TestKVMRootfsOCI$' -count=1
+    go -C haven test -tags=kvm ./tests/native -run '^TestKVMRootfsOCI$' -count=1
 }
 ```

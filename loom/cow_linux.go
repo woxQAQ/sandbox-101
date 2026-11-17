@@ -112,7 +112,8 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 // An accepted API request alone cannot establish that CH avoided eager copying.
 func VerifyCOWFileMappings(maps io.Reader, backing *unix.Stat_t, size uint64) error {
 	type extent struct {
-		offset, end uint64
+		offset uint64
+		end    uint64
 	}
 	var extents []extent
 	scanner := bufio.NewScanner(maps)

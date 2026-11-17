@@ -1,0 +1,74 @@
+version: "2"
+sql:
+  - engine: sqlite
+    schema: store/migrations
+    queries: operation/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: operation/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: authorization/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: authorization/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: [sandbox/queries.sql, sandbox/workflows.sql]
+    gen:
+      go:
+        package: dbgen
+        out: sandbox/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: [supply/queries.sql, supply/workflows.sql]
+    gen:
+      go:
+        package: dbgen
+        out: supply/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: quota/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: quota/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: [machine/queries.sql, machine/workflows.sql]
+    gen:
+      go:
+        package: dbgen
+        out: machine/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: image/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: image/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: collection/workflows.sql
+    gen:
+      go:
+        package: dbgen
+        out: collection/internal/dbgen
+        omit_unused_structs: true
+  - engine: sqlite
+    schema: store/migrations
+    queries: store/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: store/internal/dbgen
+        omit_unused_structs: true

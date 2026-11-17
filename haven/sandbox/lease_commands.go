@@ -1,0 +1,197 @@
+package sandbox
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/ownership"
+	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
+	"github.com/woxQAQ/haven/store"
+)
+
+func (service *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+	var empty operation.Record
+	if command.Action != "renew" || command.SandboxID == "" || principal.TenantID == "" || key == "" || len(key) > 256 || (principal.SandboxID != "" && principal.SandboxID != command.SandboxID) {
+		return empty, fmt.Errorf("%w: renew requires scoped sandbox and key", errs.ErrInvalid)
+	}
+	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard.Lock()
+	defer requestGuard.Unlock()
+	mac := service.commands.Identity.CommandMAC(principal, command)
+	if accepted, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+		MAC: mac,
+	}); found || err != nil {
+		return accepted, err
+	}
+	guard := service.guards.Configuration(command.SandboxID)
+	guard.Lock()
+	defer guard.Unlock()
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	if err := service.gate.Check(); err != nil {
+		return empty, err
+	}
+	tx, err := service.store.Database.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	current, err := NewCatalog(tx).OwnedRecord(ctx, principal, command.SandboxID)
+	if err != nil {
+		return empty, err
+	}
+
+	settings, err := LoadSettings(ctx, tx, current.ID)
+	if err != nil {
+		return empty, err
+	}
+	if _, err = LifecycleFence(ctx, tx, current.ID); !errors.Is(err, sql.ErrNoRows) {
+		if err != nil {
+			return empty, err
+		}
+		return empty, fmt.Errorf("%w: renew cannot pass an admitted configuration fence", errs.ErrConflict)
+	}
+	now := time.Now().UTC()
+	next := settings
+	switch current.State {
+	case "running":
+		if settings.Deadline.IsZero() || !now.Before(settings.Deadline) {
+			return empty, fmt.Errorf("%w: sandbox lease expired", errs.ErrConflict)
+		}
+		ttl := command.TTLSeconds
+		if ttl == 0 {
+			ttl = settings.TTLSeconds
+		}
+		if ttl < 1 || ttl > int64(service.opts.MaxTTL.Seconds()) {
+			return empty, fmt.Errorf("%w: renew duration exceeds host bound", errs.ErrInvalid)
+		}
+		next.TTLSeconds = ttl
+		next.Deadline = now.Add(time.Duration(ttl) * time.Second)
+	case "paused":
+		if settings.PausedUntil.IsZero() || !now.Before(settings.PausedUntil) {
+			return empty, fmt.Errorf("%w: paused sandbox lease expired", errs.ErrConflict)
+		}
+		ttl := command.TTLSeconds
+		if ttl == 0 {
+			ttl = int64(service.opts.PausedTTL.Seconds())
+		}
+		if ttl < 1 || ttl > int64(service.opts.PausedTTL.Seconds()) {
+			return empty, fmt.Errorf("%w: paused renew duration exceeds host bound", errs.ErrInvalid)
+		}
+		next.PausedUntil = now.Add(time.Duration(ttl) * time.Second)
+	default:
+		return empty, fmt.Errorf("%w: sandbox state cannot renew", errs.ErrConflict)
+	}
+	accepted := operation.Record{
+		ID:     operation.NewID("op-"),
+		Key:    key,
+		Status: "succeeded",
+		Result: operation.Result{
+			SandboxID: current.ID,
+			VMID:      current.VMID,
+		},
+	}
+	frozen := operation.Encode(struct {
+		Action  string
+		Request operation.Command
+	}{"renew", operation.SanitizedCommand(command)})
+	input := operation.Encode(struct {
+		Sandbox ownership.Sandbox
+		Before  Settings
+		After   Settings
+	}{current, settings, next})
+	operations := operation.New(tx)
+	if err = operations.Insert(ctx, operation.Admission{
+		ID:        accepted.ID,
+		ScopeKind: "tenant",
+		ScopeID:   principal.TenantID,
+		Key:       key,
+		Hash:      operation.Digest(frozen),
+		Request:   frozen,
+		Status:    "succeeded",
+		Body:      operation.Encode(accepted.Result),
+	}); err != nil {
+		return empty, err
+	}
+	if err = operations.InsertCredential(ctx, accepted.ID, mac); err != nil {
+		return empty, err
+	}
+	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+		OperationID:         accepted.ID,
+		StepKey:             "lease",
+		Action:              "renew",
+		InputHash:           operation.Digest(input),
+		Input:               input,
+		CandidateResourceID: current.ID,
+		ExpectedInstance:    current.Instance,
+		Status:              "succeeded",
+		Body:                operation.Encode("complete"),
+	})); err != nil {
+		return empty, err
+	}
+	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
+		SandboxID:    current.ID,
+		PreviousBody: operation.Encode(settings),
+		NextBody:     operation.Encode(next),
+	})); err != nil {
+		return empty, err
+	}
+	if err = service.fault("renew_before_commit"); err != nil {
+		return empty, err
+	}
+	if err = service.committer.Commit(tx); err != nil {
+		return empty, err
+	}
+	return accepted, service.store.Checkpoint()
+}
+
+// Reap submits normal durable workflows with the exact observed lease deadline.
+// Renewal winning the configuration guard invalidates that expiration intent.
+func (service *Lifecycle) Reap(ctx context.Context) error {
+	candidates, err := LeaseCandidates(ctx, service.store.Database)
+	if err != nil {
+		return err
+	}
+	type expiration struct {
+		id       string
+		tenant   string
+		action   string
+		deadline time.Time
+	}
+	var pending []expiration
+	now := time.Now().UTC()
+	for _, candidate := range candidates {
+		deadline := candidate.Settings.Deadline
+		action := "release"
+		if candidate.State == "paused" {
+			deadline = candidate.Settings.PausedUntil
+		} else if candidate.Settings.OnExpire == "pause" {
+			action = "pause"
+		}
+		if !deadline.IsZero() && !now.Before(deadline) {
+			pending = append(pending, expiration{candidate.ID, candidate.TenantID, action, deadline})
+		}
+	}
+	var failures []error
+	for _, item := range pending {
+		_, err := service.AdmitLifecycle(ctx, authorization.Principal{
+			TenantID: item.tenant,
+		}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), operation.Command{
+			Action:        item.action,
+			SandboxID:     item.id,
+			LeaseDeadline: item.deadline,
+		})
+		if err != nil {
+			failures = append(failures, fmt.Errorf("expire %s: %w", item.id, err))
+		}
+	}
+	return errors.Join(failures...)
+}

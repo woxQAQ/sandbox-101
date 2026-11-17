@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/types"
 )
 
-func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal haven.Principal, id string) {
+func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
 		writeJSON(w, 426, &types.ApiError{
 			Code:    types.ErrInvalid,
@@ -39,12 +39,12 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 		})
 		return
 	}
-	if _, err := adapter.service.DataReady(r.Context(), principal, id); err != nil {
+	if _, err := adapter.data.DataReady(r.Context(), principal, id); err != nil {
 		writeError(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	upstream, err := adapter.service.Connect(ctx, principal, id)
+	upstream, err := adapter.data.Connect(ctx, principal, id)
 	cancel()
 	if err != nil {
 		writeError(w, err)
@@ -55,7 +55,7 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := adapter.service.AttachData(r.Context(), principal, id, upstream, func() (net.Conn, error) {
+	downstream, err := adapter.data.AttachData(r.Context(), principal, id, upstream, func() (net.Conn, error) {
 		var err error
 		raw, buffer, err = hijacker.Hijack()
 		return raw, err
@@ -110,13 +110,13 @@ func relayBytes(left, right net.Conn) {
 	<-done
 }
 
-func (adapter *Adapter) createPreview(w http.ResponseWriter, r *http.Request, principal haven.Principal, id string) {
+func (adapter *Adapter) createPreview(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
 	port, _ := strconv.Atoi(r.URL.Query().Get("port"))
 	ttl, _ := strconv.ParseInt(r.URL.Query().Get("ttl_seconds"), 10, 64)
 	if ttl == 0 {
 		ttl = 300
 	}
-	path, err := adapter.service.PreviewURL(r.Context(), principal, id, port, time.Duration(ttl)*time.Second)
+	path, err := adapter.data.PreviewURL(r.Context(), principal, id, port, time.Duration(ttl)*time.Second)
 	respond(w, map[string]string{
 		"url": path,
 	}, err)
@@ -133,19 +133,19 @@ func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	target, err := adapter.service.ResolvePreview(r.Context(), body, signature)
+	target, err := adapter.data.ResolvePreview(r.Context(), body, signature)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if _, err = adapter.service.DataReady(r.Context(), target.Principal, target.SandboxID); err != nil {
+	if _, err = adapter.data.DataReady(r.Context(), target.Principal, target.SandboxID); err != nil {
 		writeError(w, err)
 		return
 	}
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return adapter.service.Forward(ctx, target.Principal, target.SandboxID, target.Port)
+			return adapter.data.Forward(ctx, target.Principal, target.SandboxID, target.Port)
 		},
 	}
 	defer transport.CloseIdleConnections()

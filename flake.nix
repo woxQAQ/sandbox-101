@@ -36,7 +36,6 @@
             e2fsprogs
             umoci
             skopeo
-            bubblewrap
             iproute2
             nftables
             cpio
@@ -51,7 +50,6 @@
         {
           default = pkgs.mkShell {
             packages = tools;
-            SANDBOX_IMAGE_TOOL_ROOTS = "/nix/store";
           };
         }
       );

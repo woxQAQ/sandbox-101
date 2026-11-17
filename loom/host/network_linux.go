@@ -308,7 +308,8 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 			return err
 		}
 		for _, elem := range []struct {
-			set, value string
+			set   string
+			value string
 		}{
 			{"active_ifaces", `"` + host + `"`},
 			{"active_ips", mapped},
@@ -430,7 +431,8 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 		}
 	}
 	for _, elem := range []struct {
-		set, value string
+		set   string
+		value string
 	}{
 		{"active_ifaces", `"` + host + `"`},
 		{"active_ips", mapped},

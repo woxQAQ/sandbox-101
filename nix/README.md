@@ -1,8 +1,8 @@
 # Optional Nix entrypoint
 
 The default development shell supplies the tools listed in the
-[project README](../README.md#build-and-local-verification). Run the same Make
-targets inside or outside the shell; common scripts do not invoke Nix or require
+[project README](../README.md#build-and-local-verification). Run the same just
+recipes inside or outside the shell; common scripts do not invoke Nix or require
 NixOS. There is no separate acceptance shell or automatically prepared VM fixture.
 
 ## Development and static guest
@@ -14,9 +14,8 @@ let guest_package = (nix build .#guest-static --no-link --print-out-paths | str 
 nix develop --command just $"GUEST_ARTIFACT_DIR=($guest_package)/bin" guest
 ```
 
-The default shell supplies the host toolchain and sets
-`SANDBOX_IMAGE_TOOL_ROOTS=/nix/store`, declaring the readonly dependencies of its
-native tools through the same explicit setting available to other installations.
+The default shell supplies the host toolchain through PATH. Image tools run
+directly against private work directories; no readonly tool-root projection is needed.
 `guest-static` cross-builds with `pkgsStatic` and rejects dynamic ELF dependencies.
 It does not replace the host-side Rust tests.
 

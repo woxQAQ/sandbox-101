@@ -98,8 +98,8 @@ func ValidateLayerFor(file, media, diff string, maxBytes, maxFiles int64, merged
 	return validateLayerFor(file, media, diff, maxBytes, maxFiles, merged)
 }
 
-func MaterializeMergedOCI(ctx context.Context, input, output, digest string, limit int64) error {
-	return materializeMergedOCI(ctx, input, output, digest, limit)
+func MaterializeMergedOCI(ctx context.Context, input, output, digest string) error {
+	return materializeMergedOCI(ctx, input, output, digest)
 }
 
 func MaterializeSharedFsmeta(ctx context.Context, state, output string, artifacts []ImageArtifact, builder string) error {
@@ -110,16 +110,8 @@ func MaterializeFsmeta(ctx context.Context, state, output string, artifacts []Im
 	return materializeFsmeta(ctx, state, output, artifacts, digest)
 }
 
-func ImageToolSandbox(work string, reads []ImageMount, mapped bool) ([]string, error) {
-	return imageToolSandbox(work, reads, mapped)
-}
-
-func RunImageTool(ctx context.Context, work string, reads []ImageMount, tool string, args ...string) error {
-	return runImageTool(ctx, work, reads, tool, args...)
-}
-
-func RunMappedImageTool(ctx context.Context, args []string) error {
-	return runMappedImageTool(ctx, args)
+func RunImageTool(ctx context.Context, work, tool string, args ...string) error {
+	return runImageTool(ctx, work, tool, args...)
 }
 
 func VerifyImageDeviceTable(meta string, layers, diffs []string, shared bool) error {

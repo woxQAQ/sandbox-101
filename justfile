@@ -24,14 +24,14 @@ build:
     cargo build --locked --workspace
 
 test:
-    for module in {{modules}}; do GOWORK=off go -C "$module" test ./... -count=1 -timeout=120s; done
+    for module in {{modules}}; do GOWORK=off go -C "$module" test ./... -p=1 -count=1 -timeout=120s; done
     cargo test --locked --workspace --all-targets
 
 test-native:
-    @for module in {{modules}}; do SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C "$module" test -json -race ./... -count=1 -timeout=300s; done
+    @for module in {{modules}}; do SANDBOX_REQUIRE_EROFS_TESTS=1 GOWORK=off go -C "$module" test -json -race ./... -p=1 -count=1 -timeout=300s; done
 
 test-race:
-    for module in {{modules}}; do GOWORK=off go -C "$module" test -race ./... -count=1 -timeout=10m; done
+    for module in {{modules}}; do GOWORK=off go -C "$module" test -race ./... -p=1 -count=1 -timeout=10m; done
 
 check:
     for module in {{modules}}; do GOWORK=off go -C "$module" vet ./...; done
@@ -46,9 +46,15 @@ lint-fix:
     golangci-lint run --fix {{packages}} ./operator/...
 
 fmt:
-    rg --files "$PWD/haven" "$PWD/loom" "$PWD/sdk" "$PWD/types" "$PWD/common" "$PWD/tools" "$PWD/protocol/gen" -g '*.go' -g '!sandbox.pb.go' -0 | xargs -0 go -C tools tool structfmt -w
+    rg --files "$PWD/haven" "$PWD/loom" "$PWD/sdk" "$PWD/types" "$PWD/common" "$PWD/tools" "$PWD/protocol/gen" -g '*.go' -g '!sandbox.pb.go' -g '!**/internal/dbgen/**' -0 | xargs -0 go -C tools tool structfmt -split-fields -w
     golangci-lint fmt {{packages}}
     cargo fmt --all
+
+generate-sql:
+    GOWORK=off go -C tools tool sqlc generate -f '{{root}}/haven/sqlc.yaml'
+
+check-sql:
+    python3 -I scripts/check-sql.py
 
 proto:
     protoc --go_out=protocol/gen --go_opt=paths=source_relative -I protocol protocol/sandbox.proto

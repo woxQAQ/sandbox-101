@@ -17,7 +17,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/operation"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
@@ -139,7 +139,7 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	}, nil); err == nil {
 		t.Fatal("tenant stream exposed host administration")
 	}
-	if _, err = service.Execute(ctx, principal, "release", haven.Command{
+	if _, err = service.SandboxRequests.Execute(ctx, principal, "release", operation.Command{
 		Action:    "release",
 		SandboxID: id,
 	}); err != nil {
@@ -278,7 +278,7 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 	}))
 	defer upstream.Close()
 	port := upstream.Listener.Addr().(*net.TCPAddr).Port
-	capability, err := service.PreviewURL(context.Background(), principal, id, port, time.Minute)
+	capability, err := service.Data.PreviewURL(context.Background(), principal, id, port, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

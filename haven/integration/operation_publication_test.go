@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/guest"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
@@ -26,7 +27,7 @@ type failedPublicationGuest struct {
 	diagnostic error
 }
 
-func (guest *failedPublicationGuest) Activate(ctx context.Context, resource loom.Resource, activation haven.Activation) error {
+func (guest *failedPublicationGuest) Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error {
 	if guest.fail.Load() {
 		return guest.diagnostic
 	}
@@ -40,7 +41,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 		t.Fatal("private fixture unexpectedly exists")
 	}
 	guest := &failedPublicationGuest{
-		diagnostic: fmt.Errorf("%s: %w", haven.ErrExhausted.Error(), missing),
+		diagnostic: fmt.Errorf("%s: %w", errs.ErrExhausted.Error(), missing),
 	}
 	service, scoped, principal, _ := transportFixtureRoot(t, false, guest)
 	guest.fail.Store(true)
@@ -68,7 +69,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	if view.Error == nil || view.Error.Code != types.ErrInternal || view.Error.Message != "internal service error" {
 		t.Fatal("HTTP failure was not formatted at the boundary", view)
 	}
-	internal, err := service.PublicOperation(ctx, principal, accepted.ID)
+	internal, err := service.Delivery.PublicOperation(ctx, principal, accepted.ID)
 	if err != nil || internal.Error != nil || internal.Status != "failed" {
 		t.Fatal("business publication retained an HTTP error", internal, err)
 	}

@@ -15,6 +15,35 @@ flowchart LR
     L --> S[System 协作]
 ```
 
+内部职责按业务能力组织，App 只构造组件并管理最终关闭顺序。业务 HTTP 通过 `httpapi.Services` 接收实际用例，管理 UDS 调用 `node.Management`；controller 不接收 App、数据库或宿主效果。
+
+```mermaid
+flowchart TD
+    App[App 构造与关闭] --> Controllers[HTTP / management adapters]
+    App --> Composition[publication / recovery / maintenance]
+    Controllers --> Capabilities[业务能力入口]
+    Capabilities --> Data[data]
+    Data --> Sandbox[sandbox]
+    Sandbox --> Supply[supply]
+    Sandbox --> Machine[machine]
+    Supply --> Machine
+    Machine --> Image[image]
+    Capabilities --> Collection[collection / node]
+    Composition --> Capabilities
+    Capabilities --> Shared[共享 execution / access]
+    Capabilities --> Store[原 DBTX / 唯一 store.State]
+```
+
+image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。data 保持 live 接纳、连接、lease 与 preview；collection 组合各 owner 的 GC 事实，node 执行管理用例。internal/maintenance 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内冻结全部未发布终态。
+
+私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v9 schema、trigger、冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
+
+旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。门禁按 Go 类型核对 step namespace，并按 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
+
+`store.State` 独占数据库、writer lock、node key 与 HEAD。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`access.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 data.Audits、data.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
+
+架构门禁同时检查实际 Go import graph 和编译源码 AST：禁止 controller 绕过用例或回指 App、业务层手写 SQL、跨领域 dbgen 导入，以及根兼容 facade。仅保留逐函数/逐语句审阅的 SQLite 维护例外。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
+
 业务 API 与客户端契约见 [Sandbox](../sandboxd/README.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [验收记录](acceptance.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
 
 ## 职责与执行边界
@@ -86,4 +115,4 @@ Haven 构造可信根、可达性、回收候选和持久删除责任；Loom 只
 
 离线备份取得同一 writer lock，将 DB/key/HEAD 作为同一点保存。旧 schema、缺证明或恢复回退在 writable startup/effects 前拒绝。review 只授权元数据诊断，不重放 pending、不恢复数据授权、不补 GC witness；整个 DB 和本地历史一起回退超出本地 HEAD 检测范围。
 
-组件 Service/SQLite、真实 Rust transport、native OCI、跨 UID capture、kernel-isolation、KVM 与 production 分别提供证据。host fixture 不证明 guest boot 或 Linux 隔离。当前结果与缺项记录在 [计划 024](../plans/024-haven-loom-single-control-design.md)；历史通过不挪用到新树。
+组件 Service/SQLite、真实 Rust transport、native OCI、跨 UID capture、kernel-isolation、KVM 与 production 分别提供证据。`haven/tests/component` 使用真实 App/SQLite 和显式注入的效果替身；`haven/tests/native` 使用真实镜像工具，KVM 用例仍受独立 build tag 约束。`haven/internal/testfixture` 提供私有 store/runtime 材料且不依赖 application；`internal/testapp` 单独提供完整 App 组装。单能力 Service/SQLite 测试位于 owner 的外部测试包，跨能力/重启/关闭场景留在 component；Go 包使用 `-p=1` 串行调度且生命周期场景仍限四个。生产包不得导入任一 fixture 包；HTTP/管理 controller 也不得反向依赖 `internal/application`。host fixture 不证明 guest boot 或 Linux 隔离。当前镜像/测试调整记录在 [归档计划 026](../.agents/archive/026-direct-image-tools-and-tests.md)，VM 缺项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；历史通过不挪用到新树。

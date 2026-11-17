@@ -69,31 +69,31 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "trailing", []byte(`{} {}`), false, 400)
 	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "unknown-field", []byte(`{"observed_generation":"private"}`), false, 400)
 	payload := controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "http-claim", command, true, 202)
-	var operation types.Operation
-	if err := json.Unmarshal(payload, &operation); err != nil {
+	var acceptedRecord types.Operation
+	if err := json.Unmarshal(payload, &acceptedRecord); err != nil {
 		t.Fatal(err)
 	}
-	if operation.ID == "" || operation.Command.Action != "claim" || operation.CreatedAt.IsZero() {
-		t.Fatal("async response lost the public operation schema", operation)
+	if acceptedRecord.ID == "" || acceptedRecord.Command.Action != "claim" || acceptedRecord.CreatedAt.IsZero() {
+		t.Fatal("async response lost the public operation schema", acceptedRecord)
 	}
 	tenant := sdk.New(endpoint, "transport-token")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for operation.Status != "succeeded" {
+	for acceptedRecord.Status != "succeeded" {
 		select {
 		case <-ctx.Done():
 			t.Fatal("async operation did not complete")
 		default:
 		}
 		var err error
-		operation, err = tenant.Operation(ctx, operation.ID)
+		acceptedRecord, err = tenant.Operation(ctx, acceptedRecord.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if operation.Result.Sandbox == nil || operation.Result.Sandbox.TTLSeconds != 300 || operation.FinishedAt.IsZero() {
-		t.Fatal(operation)
+	if acceptedRecord.Result.Sandbox == nil || acceptedRecord.Result.Sandbox.TTLSeconds != 300 || acceptedRecord.FinishedAt.IsZero() {
+		t.Fatal(acceptedRecord)
 	}
 	replay, err := tenant.Claim(ctx, "http-claim", types.Command{
 		TemplateID: "fixture",
@@ -101,18 +101,18 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 			Mode: "none",
 		},
 	})
-	if err != nil || replay.OperationID != operation.ID {
+	if err != nil || replay.OperationID != acceptedRecord.ID {
 		t.Fatal(replay, err)
 	}
-	expected, _ := json.Marshal(operation.Result)
+	expected, _ := json.Marshal(acceptedRecord.Result)
 	actual, _ := json.Marshal(replay)
 	if !bytes.Equal(expected, actual) {
 		t.Fatal("retry changed the successful public result")
 	}
 	controlHTTP(t, endpoint, "POST", "/v1/claim", "transport-token", "http-claim", []byte(`{"template_id":"fixture","ttl_seconds":301,"policy":{"mode":"none"}}`), false, 409)
-	controlHTTP(t, endpoint, "GET", "/v1/operations/"+operation.ID, operation.Result.Tokens[operation.Result.Sandbox.ID], "", nil, false, 404)
+	controlHTTP(t, endpoint, "GET", "/v1/operations/"+acceptedRecord.ID, acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID], "", nil, false, 404)
 	root := sdk.New(endpoint, "integration-root-token")
-	if value, err := root.Operation(ctx, operation.ID); err != nil || value.ID != operation.ID {
+	if value, err := root.Operation(ctx, acceptedRecord.ID); err != nil || value.ID != acceptedRecord.ID {
 		t.Fatal("administrator cannot read a tenant operation", value, err)
 	}
 	foreign, err := root.PutTenant(ctx, types.Tenant{
@@ -123,10 +123,10 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+operation.Result.Sandbox.ID, foreign.Token, "", nil, false, 404)
+	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+acceptedRecord.Result.Sandbox.ID, foreign.Token, "", nil, false, 404)
 	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/missing", foreign.Token, "", nil, false, 404)
-	scopedClient := sdk.New(endpoint, operation.Result.Tokens[operation.Result.Sandbox.ID])
-	released, err := scopedClient.Change(ctx, operation.Result.Sandbox.ID, "self-release", types.Command{
+	scopedClient := sdk.New(endpoint, acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID])
+	released, err := scopedClient.Change(ctx, acceptedRecord.Result.Sandbox.ID, "self-release", types.Command{
 		Action: "release",
 	})
 	if err != nil || released.Sandbox == nil || released.Sandbox.State != "terminated" || released.Tokens != nil {
@@ -135,5 +135,5 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	if terminal, err := scopedClient.Operation(ctx, released.OperationID); err != nil || terminal.Status != "succeeded" {
 		t.Fatal("retired capability lost its own release result", terminal, err)
 	}
-	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+operation.Result.Sandbox.ID, scopedClient.Token, "", nil, false, 404)
+	controlHTTP(t, endpoint, "GET", "/v1/sandboxes/"+acceptedRecord.Result.Sandbox.ID, scopedClient.Token, "", nil, false, 404)
 }

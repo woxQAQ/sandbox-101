@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require actual native image coverage using a caller-prepared toolchain."""
+"""Require actual native image coverage using a caller-prepared host toolchain."""
 
 import argparse
 import hashlib
@@ -14,42 +14,20 @@ import tempfile
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-NATIVE_PACKAGE = "github.com/woxQAQ/haven"
+NATIVE_PACKAGE = "github.com/woxQAQ/haven/tests/native"
 REQUIRED_TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
     "TestActualMergedOCIHardlinksAndMetadata",
     "TestGCActualLayerCacheAndCompletedImport",
 )
-ROOT_SKIP = "TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner"
 NATIVE_TESTS = re.compile(
-    r"^Test(Actual|GCActual|LayerValidation|LegacyNativeLayered|SharedCached|MergedOCI)"
+    r"^Test(HavenActual|Actual|GCActual|LayerValidation|LegacyNativeLayered|SharedCached|MergedOCI)"
 )
-ROOT_REASON = re.compile(
-    r"[ \t]+image_compat_test\.go:[0-9]+: root can identity-map all owners"
-)
-MISSING_BWRAP = re.compile(
-    r"[ \t]+fsmeta_test\.go:[0-9]+: required OCI tool missing: bwrap\n"
+MISSING_MKFS = re.compile(
+    r"[ \t]+fsmeta_test\.go:[0-9]+: required OCI tool missing: mkfs\.erofs\n"
 )
 REQUIRED_ENV = {"SANDBOX_REQUIRE_EROFS_TESTS": "1", "GOWORK": "off"}
-NAMESPACES = ("user", "mnt", "pid", "net")
-
-# The probe needs only the supplied shell, id and readlink, not another
-# interpreter or image executable inside the readonly namespace.
-IDENTITY_PROBE = r"""
-printf 'uid=%s\neuid=%s\ngid=%s\negid=%s\n' \
-    "$("$1" -ru)" "$("$1" -u)" "$("$1" -rg)" "$("$1" -g)"
-for ns in user mnt pid net; do
-    printf 'ns_%s=%s\n' "$ns" "$("$2" "/proc/self/ns/$ns")"
-done
-for kind in uid gid; do
-    printf '%s_map=' "$kind"
-    while read -r inside outside count; do
-        printf '%s %s %s;' "$inside" "$outside" "$count"
-    done < "/proc/self/${kind}_map"
-    printf '\n'
-done
-"""
 
 
 def require(condition, message):
@@ -63,7 +41,6 @@ def save_json(path, value):
 
 def capture(logs, name, command, env=None):
     result = subprocess.run(command, env=env, capture_output=True, check=False)
-    # Preserve raw output and the original child status before interpretation.
     (logs / f"{name}.stdout").write_bytes(result.stdout)
     (logs / f"{name}.stderr").write_bytes(result.stderr)
     (logs / f"{name}.exit-code").write_text(str(result.returncode) + "\n")
@@ -99,21 +76,12 @@ def check_positive(logs, result, required):
                          and row["Package"] == event["Package"]
                          and row.get("Test") == event.get("Test"))
         skipped.append({
-            "package": event["Package"], "test": event.get("Test", ""),
-            "output": output,
+            "package": event["Package"], "test": event.get("Test", ""), "output": output,
         })
     save_json(logs / "skips.json", skipped)
     for skip in skipped:
-        if not NATIVE_TESTS.match(skip["test"]):
-            continue
-        reasons = [line for line in skip["output"].splitlines()
-                   if not re.match(r"^(=== RUN|[ \t]*--- SKIP)", line)]
-        exception = (
-            os.geteuid() == 0 and skip["package"] == NATIVE_PACKAGE
-            and skip["test"] == ROOT_SKIP and len(reasons) == 1
-            and ROOT_REASON.fullmatch(reasons[0]) is not None
-        )
-        require(exception, f"required native test skipped: {skip['test']}")
+        require(not NATIVE_TESTS.match(skip["test"]),
+                f"required native test skipped: {skip['test']}")
     require(result.returncode == 0, f"test command failed with exit {result.returncode}")
     require(not any(e["Action"] in ("fail", "build-fail") for e in stream),
             "Go JSON contains a failure")
@@ -131,9 +99,7 @@ def executable(name):
 
 def tool_versions(logs):
     versions = {}
-    tools = ("go", "just", "python3", "golangci-lint", "unshare", "id",
-             "readlink", "bwrap", "mkfs.erofs", "fsck.erofs", "dump.erofs", "umoci")
-    for tool in tools:
+    for tool in ("go", "just", "python3", "golangci-lint", "mkfs.erofs", "fsck.erofs", "dump.erofs", "umoci"):
         path = executable(tool)
         result = capture(logs, f"version-{tool}",
                          [path, "version" if tool == "go" else "--version"])
@@ -154,76 +120,17 @@ def tool_versions(logs):
             "umoci must be 0.6.0")
 
 
-def readonly_roots():
-    configured = os.environ.get("SANDBOX_IMAGE_TOOL_ROOTS", "")
-    extra = configured.split(os.pathsep) if configured else []
-    for root in extra:
-        require(os.path.isabs(root) and os.path.normpath(root) == root and root != "/",
-                f"invalid tool root: {root}")
-        require(Path(root).is_dir(), f"missing tool root: {root}")
-        for reserved in ("/proc", "/dev", "/tmp", "/work", "/tools", "/input", "/merged"):
-            require(root != reserved and not root.startswith(reserved + "/")
-                    and not reserved.startswith(root + "/"),
-                    f"tool root overlaps private path: {root}")
-    return [root for root in ("/usr", "/bin", "/lib", "/lib64")
-            if Path(root).exists()] + extra
-
-
-def identity(logs, name, command):
-    result = capture(logs, name, command)
-    require(result.returncode == 0, f"{name} probe failed")
-    fields = {}
-    for line in result.stdout.decode().splitlines():
-        key, value = line.split("=", 1)
-        require(key not in fields, f"duplicate identity field: {key}")
-        fields[key] = value
-    state = {key: int(fields[key]) for key in ("uid", "euid", "gid", "egid")}
-    state["namespaces"] = {ns: fields[f"ns_{ns}"] for ns in NAMESPACES}
-    for namespace, value in state["namespaces"].items():
-        require(re.fullmatch(rf"{namespace}:\[\d+\]", value) is not None,
-                f"invalid namespace identity: {namespace}")
-    for kind in ("uid_map", "gid_map"):
-        state[kind] = [list(map(int, row.split()))
-                       for row in fields[kind].split(";") if row]
-    save_json(logs / f"{name}.json", state)
-    return state
-
-
 def preflight(logs):
     require(os.geteuid() == 0,
-            "native CI preflight requires effective UID 0 on an isolated runner; no automatic sudo")
+            "native CI preflight requires effective UID 0 for native ownership; no automatic sudo")
     tool_versions(logs)
-    shell, user_id, readlink = map(executable, ("sh", "id", "readlink"))
-    probe = [shell, "-ec", IDENTITY_PROBE, "native-gate-probe", user_id, readlink]
-    before = identity(logs, "outer", probe)
-    args = [
-        executable("bwrap"), "--die-with-parent", "--new-session", "--unshare-all",
-        "--uid", "0", "--gid", "0", "--clearenv", "--setenv", "LC_ALL", "C",
-        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--chdir", "/",
-    ]
-    for root in readonly_roots():
-        args.extend(("--ro-bind", root, root))
-    inside = identity(logs, "shared-namespace", args + ["--"] + probe)
-    for key in ("uid", "euid", "gid", "egid"):
-        require(inside[key] == 0, f"shared namespace identity is not root: {key}")
-    for ns in NAMESPACES:
-        require(before["namespaces"][ns] != inside["namespaces"][ns],
-                f"shared namespace unchanged: {ns}")
-    mapped = identity(logs, "merged-mapping", [
-        executable("unshare"), "--user", "--map-users=0:0:4294967295",
-        "--map-groups=0:0:4294967295", "--keep-caps",
-    ] + probe)
-    for key in ("uid", "euid", "gid", "egid"):
-        require(mapped[key] == 0, f"mapped identity is not root: {key}")
-    require(mapped["namespaces"]["user"] != before["namespaces"]["user"],
-            "merged user namespace unchanged")
-    for kind in ("uid_map", "gid_map"):
-        require(mapped[kind] == [[0, 0, 4294967295]],
-                f"merged mapping must cover all valid Linux IDs: {kind}")
+    save_json(logs / "host-identity.json", {
+        "uid": os.getuid(), "euid": os.geteuid(), "gid": os.getgid(), "egid": os.getegid(),
+    })
     test = "TestActualMergedOCIExplicitSelectionAndVerification"
     result = capture(logs, "merged-import", [
         "go", "-C", "haven", "test", "-json", "-run", f"^{test}$",
-        "-count=1", "-timeout=60s", ".",
+        "-count=1", "-timeout=60s", "./tests/native",
     ], env={**os.environ, **REQUIRED_ENV})
     check_positive(logs, result, (test,))
 
@@ -233,31 +140,30 @@ def negative(logs):
     view = logs / "tool-view"
     view.mkdir()
     try:
-        # Only this command receives the projected PATH. Installed tools and
-        # compiler wrappers stay untouched, including alternate dependency roots.
+        # Only this command receives the projected PATH; installed tools remain untouched.
         for directory in os.environ.get("PATH", "").split(os.pathsep):
             if not Path(directory).is_dir():
                 continue
             for entry in Path(directory).iterdir():
                 link = view / entry.name
-                if (entry.name != "bwrap" and entry.is_file()
+                if (entry.name != "mkfs.erofs" and entry.is_file()
                         and os.access(entry, os.X_OK)
                         and not link.is_symlink() and not link.exists()):
                     link.symlink_to(entry.absolute())
-        require(shutil.which("bwrap", path=str(view)) is None,
-                "negative PATH still contains bwrap")
+        require(shutil.which("mkfs.erofs", path=str(view)) is None,
+                "negative PATH still contains mkfs.erofs")
         test = REQUIRED_TESTS[0]
         result = capture(logs, "negative", [
             go, "-C", "haven", "test", "-json", "-run", f"^{test}$",
-            "-count=1", "-timeout=60s", ".",
+            "-count=1", "-timeout=60s", "./tests/native",
         ], env={**os.environ, **REQUIRED_ENV, "PATH": str(view)})
         stream = events(result)
-        require(result.returncode != 0, "missing bwrap unexpectedly succeeded")
+        require(result.returncode != 0, "missing mkfs.erofs unexpectedly succeeded")
         require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "output"
-                    and MISSING_BWRAP.fullmatch(e.get("Output", "")) is not None
+                    and MISSING_MKFS.fullmatch(e.get("Output", "")) is not None
                     for e in stream),
-                "negative command did not report the exact missing-bwrap test diagnostic")
+                "negative command did not report the exact missing-mkfs test diagnostic")
         require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "fail" for e in stream),
                 "negative command did not execute and fail the selected test")
@@ -269,9 +175,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--preflight", action="store_true",
-                       help="prove root namespaces/mapping and run the merged importer")
+                       help="check host tools and ownership privileges, then run the merged importer")
     modes.add_argument("--negative", action="store_true",
-                       help="require the selected test to fail for missing bwrap")
+                       help="require the selected test to fail for missing mkfs.erofs")
     options = parser.parse_args()
     os.chdir(PROJECT)
     for directory in (Path("build"), Path("build/native-gate")):
@@ -286,14 +192,11 @@ def main():
         git = ["git", "-c", f"safe.directory={PROJECT}"]
         for name, args in (("source", ["rev-parse", "HEAD"]),
                            ("changed-paths", ["diff", "--name-only", "HEAD"])):
-            require(capture(logs, name, git + args).returncode == 0,
-                    f"cannot record {name}")
+            require(capture(logs, name, git + args).returncode == 0, f"cannot record {name}")
         save_json(logs / "entrypoints.json", [
             {"file": file, "sha256": hashlib.sha256(Path(file).read_bytes()).hexdigest()}
             for file in ("justfile", "scripts/check-native-gate.py", ".github/workflows/check.yml")
         ])
-        # env -i forwards no HOME or credentials. Go still needs private cache
-        # state, which is never included in the diagnostic artifact.
         if not os.environ.get("HOME"):
             home = logs / "runtime-home"
             home.mkdir(mode=0o700)
@@ -303,7 +206,7 @@ def main():
         elif options.negative:
             negative(logs)
         else:
-            result = capture(logs, "test-native", ["just", "--quiet", "test-native"])
+            result = capture(logs, "test-native", ["just", "test-native"])
             check_positive(logs, result, REQUIRED_TESTS)
         (logs / "result.txt").write_text("PASS\n")
         print("native gate PASS")

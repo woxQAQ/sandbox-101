@@ -181,7 +181,7 @@ func BuildImageImportOutput(ctx context.Context, state, operation string, plan I
 	}
 	var err error
 	if plan.Options.Materialization == host.MergedOCIEROFSLayout {
-		err = host.MaterializeMergedOCI(ctx, filepath.Join(boundary.Path, "input"), output, plan.Options.Digest, plan.Options.MaxBytes+plan.Options.MaxFiles*4096)
+		err = host.MaterializeMergedOCI(ctx, filepath.Join(boundary.Path, "input"), output, plan.Options.Digest)
 	} else {
 		err = host.MaterializeSharedFsmeta(ctx, state, output, artifacts, plan.Builder)
 	}

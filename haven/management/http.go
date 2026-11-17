@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/localuds"
+	"github.com/woxQAQ/haven/node"
 	"github.com/woxQAQ/haven/types"
 )
 
-func New(service *haven.Service) http.Handler {
+func New(service *node.Management) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !localuds.Authorized(r.Context()) {
 			httpwire.Failure(w, types.ApiError{
@@ -20,7 +21,7 @@ func New(service *haven.Service) http.Handler {
 			})
 			return
 		}
-		principal := haven.Principal{
+		principal := authorization.Principal{
 			Root:     true,
 			TenantID: "node-admin",
 		}

@@ -17,7 +17,7 @@ images/<OCI-manifest-hex>/fsmeta.erofs
 images/<OCI-manifest-hex>/image.json
 ```
 
-`Builder` is a sha256 identity over the materializer profile, exact `mkfs.erofs` / `fsck.erofs` version strings and the pinned, patched go-erofs dependency identity. The profile fixes block size, flags, deterministic layer UUIDs, timestamp handling, payload normalization, cached header encoding and namespace semantics. Cache receipts include that profile and builder, `diff_id`, output sha256, validated uncompressed tar byte count and entry count. Changing tools or the profile selects a different cache directory. OCI compressed-layer descriptors remain ordered in `Layers`; `DiffIDs` records the corresponding uncompressed identities.
+`Builder` is a sha256 identity over the materializer profile, exact `mkfs.erofs` / `fsck.erofs` version strings and the pinned, patched go-erofs dependency identity. The profile fixes block size, flags, deterministic layer UUIDs, timestamp handling, payload normalization, cached header encoding and host-tool execution semantics. Cache receipts include that profile and builder, `diff_id`, output sha256, validated uncompressed tar byte count and entry count. Changing tools or the profile selects a different cache directory. OCI compressed-layer descriptors remain ordered in `Layers`; `DiffIDs` records the corresponding uncompressed identities.
 
 Previously published native-rebuild builders have no `Tools["go-erofs"]` entry. Their original profile, cache receipt checks and native UUID/tag/address-map verification remain supported. The new builder cannot reuse a legacy cache under its new key or reinterpret a legacy catalog entry as the new profile. Idempotent import verifies and returns an existing identity instead of rebuilding it with current tools.
 
@@ -29,11 +29,11 @@ A new manifest referencing verified cached `diff_id`s can rebuild fsmeta and boo
 
 ## Shared data pipeline
 
-The layered materializer requires matching erofs-utils versions **>=1.9.4 and <2**, plus bubblewrap with usable user and mount namespaces. The implementation has been exercised with erofs-utils 1.9.4. Loom uses the public Writer API of [go-erofs](../third_party/go-erofs/UPSTREAM.md) for per-image metadata composition.
+The layered materializer requires matching erofs-utils versions **>=1.9.4 and <2**. The implementation has been exercised with erofs-utils 1.9.4. Loom uses the public Writer API of [go-erofs](../third_party/go-erofs/UPSTREAM.md) for per-image metadata composition.
 
 For each missing layer, preflight validates canonical sha256 descriptors, compressed-blob checksum and size, the complete uncompressed tar digest, decompression/entry bounds and supported metadata. Normalization writes a private tar with every regular entry version at an indexed `data/<entry-index>` name. Overwritten versions stay available because another hardlink may still refer to their inode. Original headers and OCI operations are encoded with standard `encoding/gob` as `headers.gob` in the same cache EROFS. Attribute maps are sorted before encoding; arbitrary binary capability/ACL values retain their bytes. The cache hash authenticates this index along with all payloads. Cached index decoding bounds its size using the authenticated receipt, checks entry counts and attribute ordering, revalidates headers and refuses trailing data.
 
-Native conversion of that normalized tar runs inside bubblewrap:
+Native conversion invokes the host executables directly in a private work directory:
 
 ```text
 mkfs.erofs --workers=1 --tar=f -b4096 -E noinline_data \
@@ -50,37 +50,37 @@ The pinned dependency is `v0.3.3-0.20261101155608-4c135619312a`, with a document
 
 The importer strictly validates superblock features, actual layer UUIDs, ordered slot counts and block geometry. This library profile emits explicit chunk device IDs with zero fsmeta UUID/device tags and zero concatenated mapped addresses; the manifest hashes, authenticated receipts and ordered bindings fix device identity. The older native-rebuild profile retains its distinct UUID-tag and concatenated-address checks. Neither profile accepts the other's geometry.
 
-Native fsck reads/extracts the final filesystem through all supplied external devices inside bubblewrap. Confined checks enforce required boot files, systemd and agent materials; kernel/initramfs are copied from that final view. This temporary extraction is not published as the read-only lower. There is no per-image merged regular-data filesystem.
+Native fsck reads/extracts the final filesystem through all supplied external devices into a private directory. Root-confined path checks enforce required boot files, systemd and agent materials; kernel/initramfs are copied from that final view. This temporary extraction is not published as the read-only lower. There is no per-image merged regular-data filesystem.
 
 `-T0` alone defaults to applying that timestamp to every file. `--preserve-mtime` by itself does not undo that policy. `--mkfs-time` is required to preserve input file mtimes while fixing the native build timestamp; the library also receives a fixed build timestamp and explicit inode times.
 
-Native tools run as UID/GID 0 inside an unprivileged user namespace. Shared composition preserves numeric OCI ownership directly, without requiring host subordinate mappings for those IDs. No sudo, host mounts or host device creation are needed for import/extraction tests.
+Shared composition preserves numeric OCI ownership directly in EROFS metadata. Basic layered conversion needs no host chown, mounts or device creation. Full native extraction tests for ownership, ACLs and capabilities require the corresponding host privileges.
 
 ## Host tool installation
 
-Executables are selected through an administrator-controlled PATH. The image sandbox mounts existing system tool roots (`/usr`, `/bin`, `/lib`, `/lib64`) readonly. For tools installed elsewhere, set `SANDBOX_IMAGE_TOOL_ROOTS` to a colon-separated list of absolute, normalized directories containing their runtime dependencies; these are mounted readonly at their original absolute paths. Provide executable search directories through PATH. No package-manager path is assumed.
+Executables are selected through an administrator-controlled PATH and resolved before execution. Each child receives a private work directory, the host-tool PATH and `LC_ALL=C`. Runtime libraries use the normal host installation; there is no tool-root projection or package-manager-specific path setting.
 
-This is trusted process configuration, never image metadata. Expose only tool dependencies, not the host root, credentials or Haven state. Missing or invalid configured roots fail. Roots must not overlap private `/proc`, `/dev`, `/tmp`, `/work`, `/tools`, `/input` or `/merged` paths.
+Tools run with the caller's host authority. Private directories separate import artifacts; they do not sandbox the tool process. Image paths never select executables, and image executables are never invoked. The shared profile `erofs-shared-oci-v2;host-tools` and merged profile `umoci-native-merged-v3` give this execution policy distinct builder/cache identities.
 
 ## Explicit OCI merged compatibility
 
-The compatibility builder requires umoci **0.6.0**, matching erofs-utils **>=1.9.4 and <2**, bubblewrap and util-linux `unshare` with `--map-auto`/`--map-root-user` support. Its builder sha256 includes a distinct profile plus exact version output for umoci, unshare, bubblewrap, mkfs and fsck. That profile fixes native unpacking, mapped UID 0, tmpfs extraction, the permitted namespace capabilities, block size, native xattrs, flags, UUID and timestamp policy. It does not use the layered cache or its receipts.
+The compatibility builder requires umoci **0.6.0**, matching erofs-utils **>=1.9.4 and <2**, and effective UID 0 to preserve native ownership. Its builder sha256 includes a distinct profile plus exact version output for umoci, mkfs and fsck. That profile fixes native unpacking, private-directory extraction, block size, native xattrs, flags, UUID and timestamp policy. It does not use the layered cache or its receipts.
 
 Every layer is staged and checked before unpacking: compressed checksum and descriptor size, full uncompressed `diff_id`, tar/decompression/entry bounds, safe archive and hardlink paths, allowed entry types, whiteout shape, metadata ranges, xattr names and PAX records. Config descriptor size is checked too. Aggregate compressed descriptors are bounded to twice the uncompressed import budget, metadata blobs to 16 MiB each. A trusted minimal OCI index selects only the verified manifest; source indexes, tags, URLs and annotations cannot redirect unpacking.
 
-A new user namespace supplies UID 0 and the caller's configured subordinate UID/GID ranges. `unshare --map-auto --map-root-user --keep-caps` uses the system's normal mapping helpers; configure valid subuid/subgid ranges and working helpers for an unprivileged caller. A root daemon instead identity-maps all valid Linux IDs within a new user namespace. Bubblewrap then isolates mount/PID/IPC/UTS/network/cgroup namespaces and exposes tool roots/input readonly, a private tmpfs merged root, and only the pending output directory writable. Child capabilities are limited to CHOWN, DAC_OVERRIDE, FOWNER, FSETID and SETFCAP in that user namespace; SYS_ADMIN is dropped. Tools never run from image paths and image executables are never invoked.
+The importer creates a private `.unpack-*` directory under its pending output directory. umoci runs with a child-only `umask=077`; mkfs then reads that same native tree. The unpack directory is removed before boot extraction and publication, including cleanup on failure. No namespace, subordinate-ID helper or tmpfs mount is involved.
 
-Within that single mapped namespace, the trusted pipeline is:
+The trusted pipeline uses actual host paths:
 
 ```text
-umoci raw unpack --image /input:compat /merged/root
+umoci raw unpack --image <verified-layout>:compat <private-unpack>/root
 mkfs.erofs --workers=1 -b4096 -E noinline_data -T0 --mkfs-time \
-  --preserve-mtime -U <manifest-derived-UUID> /work/root.erofs /merged/root
+  --preserve-mtime -U <manifest-derived-UUID> <pending>/root.erofs <private-unpack>/root
 ```
 
-`umoci --rootless` is deliberately absent. UID/GID, setuid/setgid/sticky bits, nanosecond mtimes, hardlink identity, xattrs, ACLs and capabilities are represented as native filesystem metadata. Running mkfs in the same user namespace avoids exporting subordinate host ownership or a namespaced capability root ID into the guest image. Unmapped ownership or ACL IDs, unavailable xattr support, insufficient tmpfs capacity and native unpack failures abort import; metadata is never silently replaced by synthetic ownership xattrs. The tmpfs size is bounded by `MaxBytes + MaxFiles*4096`; actual pages consume memory/swap under the caller's host resource limits. The namespace destroys all unpacked files on exit.
+`umoci --rootless` is deliberately absent. UID/GID, setuid/setgid/sticky bits, nanosecond mtimes, hardlink identity, xattrs, ACLs and capabilities are represented as native filesystem metadata. Invalid Linux ownership/ACL IDs, unavailable xattr support, insufficient disk space and native unpack failures abort import; metadata is never silently replaced by synthetic ownership xattrs. Tar byte/entry bounds and Haven reservations remain enforced; extraction consumes the caller's backing filesystem under its host resource limits.
 
-Native fsck checks/extracts the resulting self-contained filesystem in a separate isolated work directory. The shared confined boot contract checks and `os.OpenRoot` copy kernel/initramfs from that final EROFS view. Immutable publication uses the same seal/fsync/rename/catalog ordering as the layered path. The layout has exactly `{kernel,initramfs,root.erofs}` in `Files`, no external `Artifacts`, ordered original `Layers`/`DiffIDs`, and the distinct builder/tools. `Verify` checks this identity, readonly regular nonsymlink artifacts, hashes, platform, EROFS geometry, UUID and absence of external data devices.
+Native fsck checks/extracts the resulting self-contained filesystem in a separate private work directory. The shared confined boot contract checks and `os.OpenRoot` copy kernel/initramfs from that final EROFS view. Immutable publication uses the same seal/fsync/rename/catalog ordering as the layered path. The layout has exactly `{kernel,initramfs,root.erofs}` in `Files`, no external `Artifacts`, ordered original `Layers`/`DiffIDs`, and the distinct builder/tools. `Verify` checks this identity, readonly regular nonsymlink artifacts, hashes, platform, EROFS geometry, UUID and absence of external data devices.
 
 Compatibility handles arbitrary supported root attributes, inherited directories without repeated parent headers, cross-layer regular and symlink hardlinks to existing targets, root/nonroot opaque markers, whiteouts and same-layer replacement in either order, duplicate path replacement and PAX metadata. It retains the 1..16 OCI layer input bound. All source layer blobs are required for a new compatibility publication; only the layered path offers cache-only fsmeta rebuild. No conversion between these immutable layouts occurs.
 
@@ -115,7 +115,7 @@ The shared namespace composer handles:
 - Implicit parents and inherited existing directories. The shared profile deterministically assigns missing parents the owner, permission and timestamp of their nearest existing parent until an explicit directory header replaces those attributes. Existing directory metadata survives layers that add only children. This policy is specific to the shared profile: the explicit umoci builder creates implicit parents under its fixed `umask=077`, which can produce mode 0700.
 - Duplicate path replacement, including directory-to-file and file-to-directory replacement. Explicit directory metadata updates retain existing children. Path traversal through a symlink or other nondirectory is refused; guest symlink targets themselves may be absolute.
 
-Special devices/FIFOs, zstd layers, unknown PAX attributes, unsupported xattr namespaces, negative/out-of-range metadata, Linux symlink modes other than 0777 and more than 16 layer devices remain refused. The explicit umoci builder additionally refuses true forward hardlinks and ownership/ACL IDs unavailable in its configured mappings. These limits are checked explicitly and do not trigger another materialization mode.
+Special devices/FIFOs, zstd layers, unknown PAX attributes, unsupported xattr namespaces, negative/out-of-range metadata, Linux symlink modes other than 0777 and more than 16 layer devices remain refused. The explicit umoci builder additionally refuses true forward hardlinks and metadata that the host cannot represent. These limits are checked explicitly and do not trigger another materialization mode.
 
 The older native-rebuild profile remains frozen for existing catalog verification. Its native tar conversion required explicit parents and backward same-layer regular hardlinks; rebuild synthesized its root and could not express the broader cases above. In erofs-utils 1.9.4, `lib/tar.c` requires a hardlink target already in the current tar tree, while `lib/rebuild.c` walks source root children without importing root inode metadata. The new profile uses public library composition to remove those namespace restrictions while preserving native shared payload storage.
 
@@ -125,10 +125,10 @@ Native source research used the Nix-pinned erofs-utils 1.9.4 archive (sha256 `7d
 
 Tests use the caller's prepared toolchain under the same contract for every
 environment provider. `just test` is the quick entrypoint and may skip native
-tests for missing tools/namespaces/mappings. `just test-native` forces `SANDBOX_REQUIRE_EROFS_TESTS=1` and runs every host workspace module independently
+tests for missing tools or privileges. `just test-native` forces `SANDBOX_REQUIRE_EROFS_TESTS=1` and runs every host workspace module independently
 with `-json -race ./... -count=1 -timeout=300s`;
 missing prerequisites fail, and stdout contains only Go JSON. The required native
-pass events now belong to `github.com/woxQAQ/haven`, where the
+pass events belong to `github.com/woxQAQ/haven/tests/native`, where the
 original image scenarios execute through the real Haven importer.
 
 The gate additionally checks the original command exit code and individual
@@ -136,22 +136,17 @@ pass events for `TestActualLayeredEROFSImportAndExtraction`,
 `TestActualSharedOCIHardlinksAndMetadata`,
 `TestActualMergedOCIHardlinksAndMetadata`, and
 `TestGCActualLayerCacheAndCompletedImport`. A package pass alone is insufficient.
-It rejects non-JSON output and skipped native tests (`TestActual*`,
+It rejects non-JSON output and skipped native tests (`TestHavenActual*`, `TestActual*`,
 `TestGCActual*`, `TestLayerValidation*`, `TestLegacyNativeLayered*`,
-`TestSharedCached*`, `TestMergedOCI*`). The only exception is effective UID 0
-skipping `TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner` with
-the exact source diagnostic `root can identity-map all owners`. Other skips,
+`TestSharedCached*`, `TestMergedOCI*`), with no ownership skip exception. Other skips,
 including package skips for packages without tests and unrelated KVM/capture
 tests, are recorded separately in `skips.json` and do not supply native coverage.
 
 Prepare Go with race/C compiler support, just, git, Python >=3.11, coreutils,
-golangci-lint, bubblewrap, util-linux unshare, matching mkfs/fsck.erofs
-**>=1.9.4 and <2**, dump.erofs and umoci **0.6.0**. Declare alternate readonly
-dependency roots using `SANDBOX_IMAGE_TOOL_ROOTS` as above. Executable realpaths
-and versions are evidence, not a package-manager or installation-prefix
-allowlist. A nonroot caller needs usable namespaces and subordinate UID/GID
-mappings with working helpers for merged imports; root needs a new user
-namespace with full `0:0:4294967295` UID and GID identity maps.
+golangci-lint, matching mkfs/fsck.erofs **>=1.9.4 and <2**, dump.erofs and umoci
+**0.6.0**. Full merged/metadata validation requires effective UID 0 and host
+ownership/xattr support. Executable realpaths and versions are retained as evidence.
+No namespace or subordinate-ID mapping preparation is required.
 
 ```sh
 python3 scripts/check-native-gate.py --negative
@@ -165,8 +160,8 @@ private tmpfs is convenient for large SQLite/resource fixtures, independently of
 the JSON/race/300s gate semantics.
 
 `--negative` retains the normal compiler/base-tool PATH projection except
-for bwrap, then actually runs the single required layered test. Success means
-the child failed and emitted the exact `required OCI tool missing: bwrap`
+for mkfs.erofs, then actually runs the single required layered test. Success means
+the child failed and emitted the exact `required OCI tool missing: mkfs.erofs`
 test diagnostic, not a compiler error or some other missing tool. The view is
 private to that command and removed on normal success or failure.
 
@@ -176,26 +171,21 @@ On a **prepared, disposable root CI runner**, also run:
 python3 scripts/check-native-gate.py --preflight
 ```
 
-Preflight checks versions and actual executable paths, proves bwrap's new
-user/mount/PID/network namespaces and UID/GID 0 with readonly system/dependency
-roots, private proc/dev and temporary tmp. It separately runs pinned unshare
-with `--user --map-users=0:0:4294967295 --map-groups=0:0:4294967295 --keep-caps`,
-checks real/effective identities and both complete maps, then executes
+Preflight checks effective UID, versions and actual executable paths, then runs
 `TestActualMergedOCIExplicitSelectionAndVerification` through the production
-mapped helper. Full shared/merged coverage still comes from the complete gate.
-Preflight never switches identity or relaxes host namespace/AppArmor policy.
+host-tool helper. Full shared/merged coverage still comes from the complete gate.
+Preflight never switches identity or changes host policy.
 
 The GitHub `native-image` job uses Ubuntu 24.04, source-pinned erofs-utils
-1.9.4 and unshare 2.41.3, umoci 0.6.0, golangci-lint 2.14.0,
-and distribution Python/bubblewrap/coreutils. The gate uses only Python's standard
-library and POSIX shell probes; Nushell is neither installed nor invoked.
+1.9.4, umoci 0.6.0, golangci-lint 2.14.0,
+and distribution Python/coreutils. The gate uses only Python's standard
+library; Nushell is neither installed nor invoked.
 Separate preparation steps install tools;
 the official `golangci/golangci-lint-action@v9.3.0` supplies the fixed lint version
 using `install-only`, and the existing `just lint` remains the single lint entrypoint.
 Lint runs without sudo after native validation, so its `go fix` cannot rewrite the
 checkout before the native tests. The native probes/tests receive only
-the controlled PATH and `GOTOOLCHAIN=local` through `sudo env -i` (an alternate
-provider may also forward necessary `SANDBOX_IMAGE_TOOL_ROOTS`). The gate
+the controlled PATH and `GOTOOLCHAIN=local` through `sudo env -i`. The gate
 creates private runtime HOME when none is supplied, rather than forwarding
 runner credentials. Cache keys include workflow/tool-source identity, Go
 module sums and Cargo.lock; restored caches never bypass the gate.
@@ -219,6 +209,6 @@ Actual shared tool tests import gzip/uncompressed OCI fixtures, read the final e
 
 Integrity tests cover cache corruption/missing receipts, cached index bounds/unsafe metadata/trailing records, manifest order/hash/profile checks and unsafe artifact paths. Invalid namespace tests ensure unresolved/cyclic/directory hardlinks and symlink-parent traversal publish no catalog entry. GC tests also exercise actual default imports. Rejection tests document limits; they do not establish support for those inputs.
 
-Additional actual umoci tests exercise its separate merged layout, including root attributes, cross-layer links, capabilities/ACLs, whiteout and duplicate ordering, symlink confinement, boot symlink refusal, digest/descriptor/resource limits, unmapped ownership, immutable manifests and layout conflicts. Its forward-hardlink refusal checks that no catalog entry is published.
+Additional actual umoci tests exercise its separate merged layout, including root attributes, cross-layer links, capabilities/ACLs, whiteout and duplicate ordering, symlink confinement, boot symlink refusal, digest/descriptor/resource limits, invalid ownership, immutable manifests and layout conflicts. Its forward-hardlink refusal checks that no catalog entry is published.
 
 Host extraction tests are complemented by `just KVM_MATERIALS_DIR=... KVM_ROOTFS_DIR=... KVM_ARTIFACTS_DIR=... kvm-e2e`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel, packaged static guest and caller-supplied complete userspace to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The historical shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The recorded complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](acceptance.md) for exact source-bound outcomes and boundaries; those runs do not validate later harness changes.

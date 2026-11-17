@@ -23,7 +23,7 @@ import (
 
 const (
 	sharedEROFSVersion = "github.com/erofs/go-erofs@v0.3.3-0.20261101155608-4c135619312a+sandbox-devtable-v1"
-	sharedLayerProfile = "erofs-shared-oci-v1;unix-paths;payloads=all-regular-entry-versions;headers=gob-sorted-tar.Header;4096;noinline_data;workers=1;uuid=diff_id;mkfs-time=0;mtime=preserve;fsmeta=go-erofs-metadataonly;whiteouts=before-entries;hardlinks=ordered-deferred;parents=inherit;symlinks=nofollow"
+	sharedLayerProfile = "erofs-shared-oci-v2;host-tools;unix-paths;payloads=all-regular-entry-versions;headers=gob-sorted-tar.Header;4096;noinline_data;workers=1;uuid=diff_id;mkfs-time=0;mtime=preserve;fsmeta=go-erofs-metadataonly;whiteouts=before-entries;hardlinks=ordered-deferred;parents=inherit;symlinks=nofollow"
 )
 
 func (m ImageManifest) sharedLayered() bool {
@@ -74,13 +74,13 @@ func buildSharedLayerCache(
 		"--preserve-mtime",
 		"-U",
 		layerUUID(diff),
-		"/work/layer.erofs",
-		"/work/payload.tar",
+		filepath.Join(stage, "layer.erofs"),
+		filepath.Join(stage, "payload.tar"),
 	}
-	if err = runImageTool(ctx, stage, nil, "mkfs.erofs", args...); err != nil {
+	if err = runImageTool(ctx, stage, "mkfs.erofs", args...); err != nil {
 		return cached, err
 	}
-	if err = runImageTool(ctx, stage, nil, "fsck.erofs", "--extract", "/work/layer.erofs"); err != nil {
+	if err = runImageTool(ctx, stage, "fsck.erofs", "--extract", filepath.Join(stage, "layer.erofs")); err != nil {
 		return cached, err
 	}
 	if err = os.Remove(normalized); err != nil {
@@ -211,7 +211,8 @@ func payloadName(i int) string {
 
 type (
 	headerAttribute struct {
-		Name, Value string
+		Name  string
+		Value string
 	}
 	cachedHeader struct {
 		Header tar.Header
@@ -432,9 +433,8 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 		_ = f.Close()
 	}()
 	w := erofs.Create(f, erofs.WithBlockSize(4096), erofs.WithBuildTime(0, 0))
-	var reads []imageMount
 	var layers, diffs, devices []string
-	for i, a := range artifacts {
+	for _, a := range artifacts {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -521,9 +521,7 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 				}
 			}
 		}
-		guest := fmt.Sprintf("/data/%04d.erofs", i)
-		reads = append(reads, imageMount{file, guest})
-		devices = append(devices, "--device="+guest)
+		devices = append(devices, "--device="+file)
 		layers, diffs = append(layers, file), append(diffs, a.DiffID)
 	}
 	// CopyFrom preserves source nlinks; merged directory counts are derived
@@ -555,8 +553,7 @@ func materializeSharedFsmeta(ctx context.Context, state, out string, artifacts [
 	if err = verifyImageDeviceTable(filepath.Join(out, "fsmeta.erofs"), layers, diffs, true); err != nil {
 		return err
 	}
-	reads = append(reads, imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"})
-	return extractImageBoot(ctx, out, reads, devices, "/fsmeta.erofs")
+	return extractImageBoot(ctx, out, devices, filepath.Join(out, "fsmeta.erofs"))
 }
 
 func applySharedWhiteouts(w *erofs.Writer, headers []tar.Header) error {

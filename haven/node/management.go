@@ -1,0 +1,152 @@
+package node
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/collection"
+	"github.com/woxQAQ/haven/execution"
+	image "github.com/woxQAQ/haven/image"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/types"
+)
+
+// NodeMetadata exposes only immutable origin and the current metadata epoch.
+type NodeMetadata interface {
+	Identity() store.Identity
+	Reviewed() bool
+	Epoch(context.Context) (int64, error)
+}
+
+type ManagementDependencies struct {
+	Availability  *execution.Availability
+	Operations    *operation.Operations
+	Images        *image.Images
+	Collection    *collection.GarbageCollection
+	SupplyCleanup *supply.SupplyCleanup
+}
+
+// Management admits host requests through the same durable business workflows.
+type Management struct {
+	metadata      NodeMetadata
+	availability  *execution.Availability
+	operations    *operation.Operations
+	images        *image.Images
+	collection    *collection.GarbageCollection
+	supplyCleanup *supply.SupplyCleanup
+}
+
+func NewManagement(metadata NodeMetadata, dependencies ManagementDependencies) *Management {
+	return &Management{
+		metadata:      metadata,
+		availability:  dependencies.Availability,
+		operations:    dependencies.Operations,
+		images:        dependencies.Images,
+		collection:    dependencies.Collection,
+		supplyCleanup: dependencies.SupplyCleanup,
+	}
+}
+
+// ReadNodeStatus reads metadata under the caller's existing store custody.
+func ReadNodeStatus(ctx context.Context, metadata NodeMetadata) (types.NodeStatus, error) {
+	status := types.NodeStatus{
+		Format:           store.Format,
+		Version:          store.Version,
+		StoreID:          metadata.Identity().Identity,
+		RecoveryReviewed: metadata.Reviewed(),
+	}
+	var err error
+	status.Epoch, err = metadata.Epoch(ctx)
+	return status, err
+}
+
+func (service *Management) Status(ctx context.Context, principal authorization.Principal) (types.NodeStatus, error) {
+	if !principal.Root || principal.SandboxID != "" {
+		return types.NodeStatus{}, errs.ErrForbidden
+	}
+	status, err := ReadNodeStatus(ctx, service.metadata)
+	if err != nil {
+		return status, err
+	}
+	status.Draining = service.availability.IsDraining()
+	return status, nil
+}
+
+// Drain stops new admission under the shared registration guard.
+func (service *Management) Drain() {
+	service.availability.Drain()
+}
+
+func managementOperation(value operation.Record) types.ManagementOperation {
+	return types.ManagementOperation{
+		ID:     value.ID,
+		Key:    value.Key,
+		Status: value.Status,
+		Result: types.ManagementResult(value.Result),
+	}
+}
+
+func (service *Management) ManagementOperation(ctx context.Context, principal authorization.Principal, id string) (types.ManagementOperation, error) {
+	value, err := service.operations.GetManagementOperation(ctx, principal, id)
+	return managementOperation(value), err
+}
+
+func (service *Management) Manage(ctx context.Context, principal authorization.Principal, request types.ManagementRequest) (types.ManagementResponse, error) {
+	var response types.ManagementResponse
+	if !principal.Root || principal.SandboxID != "" {
+		return response, errs.ErrForbidden
+	}
+	var accepted operation.Record
+	var err error
+	switch request.Action {
+	case "import":
+		if request.Import == nil || request.GC != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
+			return response, fmt.Errorf("%w: import requires only import options", errs.ErrInvalid)
+		}
+		accepted, err = service.images.AdmitImport(ctx, principal, request.Key, imageimport.ImageImportOptions(*request.Import))
+	case "gc":
+		if request.GC == nil || request.Import != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
+			return response, fmt.Errorf("%w: gc requires only gc options", errs.ErrInvalid)
+		}
+		report, err := service.collection.CollectGarbage(ctx, principal, request.Key, *request.GC)
+		response.GC = &report
+		return response, err
+	case "supply_cleanup":
+		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
+			return response, fmt.Errorf("%w: supply cleanup requires only original operation id", errs.ErrInvalid)
+		}
+		accepted, err = service.supplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
+			OperationID: request.OperationID,
+		})
+	case "image_cleanup":
+		if request.Import != nil || request.GC != nil {
+			return response, fmt.Errorf("%w: image cleanup accepts only original import or cache identity", errs.ErrInvalid)
+		}
+		accepted, err = service.images.AdmitCleanup(ctx, principal, request.Key, image.ImageCleanupRequest{
+			ImportOperationID: request.OperationID,
+			CacheBuilder:      request.CacheBuilder,
+			CacheDiffID:       request.CacheDiffID,
+		})
+	default:
+		return response, fmt.Errorf("%w: unsupported management action", errs.ErrInvalid)
+	}
+	if accepted.ID != "" {
+		view := managementOperation(accepted)
+		response.Operation = &view
+	}
+	if err != nil {
+		return response, err
+	}
+	accepted, err = service.operations.WaitManagement(ctx, principal, accepted.ID)
+	view := managementOperation(accepted)
+	response.Operation = &view
+	if err != nil && accepted.Status == "failed" {
+		return response, fmt.Errorf("management operation %s failed", accepted.ID)
+	}
+	return response, err
+}

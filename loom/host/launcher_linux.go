@@ -128,8 +128,9 @@ func InternalLaunch(specPath string) error {
 		return unix.Mount("", dst, "", flags, "")
 	}
 	for _, item := range []struct {
-		src, dst string
-		ro       bool
+		src string
+		dst string
+		ro  bool
 	}{
 		{s.Binary, "bin/cloud-hypervisor", true},
 		{filepath.Join(s.Resource.ImageDir, "kernel"), "boot/kernel", true},

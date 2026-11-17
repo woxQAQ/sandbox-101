@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -9,6 +10,82 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestSplitFieldsCommand(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("testdata", "grouped.go.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "grouped.go")
+	if err := os.WriteFile(file, source, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	invoke := func(args ...string) []byte {
+		t.Helper()
+		command := exec.Command("go", append([]string{
+			"run",
+			".",
+		}, args...)...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("formatter: %v: %s", err, output)
+		}
+		return output
+	}
+	formatted := invoke("-split-fields", file)
+	preserved, err := os.ReadFile(file)
+	if err != nil || !bytes.Equal(source, preserved) {
+		t.Fatal("stdout mode changed the input", err)
+	}
+	positions := token.NewFileSet()
+	parsed, err := parser.ParseFile(positions, file, formatted, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		if structure, ok := node.(*ast.StructType); ok {
+			for _, field := range structure.Fields.List {
+				if len(field.Names) > 1 {
+					t.Errorf("grouped field remains at %s", positions.Position(field.Pos()))
+				}
+			}
+		}
+		return true
+	})
+	for _, expected := range []string{
+		"ID        string",
+		"ScopeKind string",
+		"ScopeID   string",
+		"Key       string",
+		"Hash      string",
+		"Status    string",
+		"Request   []byte `json:\"payload\"`",
+		"Body      []byte `json:\"payload\"` // Encoded bytes.",
+		"// Identity belongs to the request.",
+		"/* before comma , */",
+		"/* after comma */",
+		"// Right is documented separately.",
+		"map[string][]byte",
+		"*Embedded",
+		"func grouped(a, b int) (x, y int)",
+	} {
+		if !bytes.Contains(formatted, []byte(expected)) {
+			t.Errorf("missing %q:\n%s", expected, formatted)
+		}
+	}
+	invoke("-split-fields", "-w", file)
+	written, err := os.ReadFile(file)
+	if err != nil || !bytes.Equal(formatted, written) {
+		t.Fatal("stdout and write modes differ", err)
+	}
+	if second := invoke("-split-fields", file); !bytes.Equal(formatted, second) {
+		t.Fatalf("split fields is not idempotent:\n%s", second)
+	}
+	command := exec.Command("go", "test", file)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("formatted declarations do not compile: %v: %s", err, output)
+	}
+}
 
 // Exercise the complete tool on real files, including nested literals, arrays,
 // slices, field declarations, statement blocks and comments. Repeated invocations must be stable.

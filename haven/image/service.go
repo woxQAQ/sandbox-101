@@ -1,0 +1,179 @@
+package image
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/execution"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/types"
+)
+
+// ImageGuards exposes the existing lock domains used by image producers and collectors.
+type ImageGuards interface {
+	Admission() execution.Guard
+	Artifacts() execution.Guard
+	NodeRequest(string, string) execution.Guard
+	ImageImport(string) execution.Guard
+	ImageCleanup(string) execution.Guard
+}
+
+type ImageOptions struct {
+	SafetyBytes int64
+	Fault       func(string) error
+}
+
+// Images coordinates import, immutable publication, cache funding and collection.
+// It borrows the shared store and execution owners; it does not close either.
+type Images struct {
+	database    *store.Database
+	directory   string
+	nodeID      string
+	reviewed    bool
+	safetyBytes int64
+	checkpoint  func() error
+	faultPoint  func(string) error
+	ctx         context.Context
+	guards      ImageGuards
+	admission   execution.Guard
+	gate        execution.AdmissionGate
+	workers     *execution.Workers
+}
+
+func NewImages(state *store.State, guards ImageGuards, gate execution.AdmissionGate, workers *execution.Workers, options ImageOptions) *Images {
+	return &Images{
+		database:    state.Database(),
+		directory:   state.Directory(),
+		nodeID:      state.Identity().Identity,
+		reviewed:    state.Reviewed(),
+		safetyBytes: options.SafetyBytes,
+		checkpoint:  state.Checkpoint,
+		faultPoint:  options.Fault,
+		ctx:         workers.Context(),
+		guards:      guards,
+		admission:   guards.Admission(),
+		gate:        gate,
+		workers:     workers,
+	}
+}
+
+func (service *Images) fault(point string) error {
+	if service.faultPoint != nil {
+		return service.faultPoint(point)
+	}
+	return nil
+}
+
+func (service *Images) dispatch(id string) {
+	if service.reviewed {
+		return
+	}
+	service.workers.Start(id, func() error {
+		handled, err := service.Resume(id)
+		if err != nil {
+			return err
+		}
+		if !handled {
+			return fmt.Errorf("image operation lacks matching immutable step")
+		}
+		return nil
+	})
+}
+
+// Resume selects existing frozen steps, preserving cleanup-before-import order.
+// An absent image step lets the application's dispatcher try its next use case.
+func (service *Images) Resume(id string) (bool, error) {
+	if service.reviewed {
+		return false, fmt.Errorf("%w: reviewed rollback cannot resume image effects", errs.ErrManualRecovery)
+	}
+	cleanup, err := loadImageCleanup(service.ctx, service.database, id)
+	if err == nil {
+		guard := service.guards.ImageCleanup(id)
+		guard.Lock()
+		defer guard.Unlock()
+		cleanup, err = loadImageCleanup(service.ctx, service.database, id)
+		if err != nil {
+			return true, err
+		}
+		if operation.Terminal(cleanup.Status) {
+			return true, nil
+		}
+		service.guards.Artifacts().Lock()
+		defer service.guards.Artifacts().Unlock()
+		return true, service.runImageCleanup(cleanup)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	step, err := loadImageImport(service.ctx, service.database, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	guard := service.guards.ImageImport(id)
+	guard.Lock()
+	defer guard.Unlock()
+	step, err = loadImageImport(service.ctx, service.database, id)
+	if err != nil {
+		return true, err
+	}
+	if operation.Terminal(step.Status) {
+		return true, nil
+	}
+	service.guards.Artifacts().Lock()
+	defer service.guards.Artifacts().Unlock()
+	return true, service.runImageImport(step)
+}
+
+func ValidateImageImport(ctx context.Context, database store.DBTX, id string) error {
+	_, err := loadImageImport(ctx, database, id)
+	return err
+}
+
+func ValidateImageCleanup(ctx context.Context, database store.DBTX, id string) error {
+	_, err := loadImageCleanup(ctx, database, id)
+	return err
+}
+
+// CollectCandidate rechecks the artifact proof frozen by the GC parent before
+// admitting a separately owned collector. Admission repeats current custody checks.
+func (service *Images) CollectCandidate(ctx context.Context, principal authorization.Principal, key string, item types.GCItem) (operation.Record, error) {
+	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
+		return operation.Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+	}
+	request := ImageCleanupRequest{
+		ImportOperationID: item.ID,
+	}
+	switch item.Kind {
+	case "image_cache":
+		record, err := loadImageCache(ctx, service.database, item.CacheBuilder, item.CacheDiffID)
+		if err != nil {
+			return operation.Record{}, err
+		}
+		if operation.Digest(operation.Encode(record)) != item.Proof {
+			return operation.Record{}, fmt.Errorf("%w: GC frozen cache ownership changed", errs.ErrManualRecovery)
+		}
+		request = ImageCleanupRequest{
+			CacheBuilder: item.CacheBuilder,
+			CacheDiffID:  item.CacheDiffID,
+		}
+	case "image_work":
+		source, err := loadImageImport(ctx, service.database, item.ID)
+		if err != nil {
+			return operation.Record{}, err
+		}
+		if source.Hash != item.Proof {
+			return operation.Record{}, fmt.Errorf("%w: GC frozen import ownership changed", errs.ErrManualRecovery)
+		}
+	default:
+		return operation.Record{}, fmt.Errorf("%w: unknown image collection kind", errs.ErrInvalid)
+	}
+	return service.AdmitCleanup(ctx, principal, key, request)
+}

@@ -29,13 +29,17 @@ import (
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 
-	"github.com/woxQAQ/haven"
+	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/httpapi"
+	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/unixsocket"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sdk"
+	"github.com/woxQAQ/haven/types"
 )
 
 // Only host/System/Admin effects are fixtures. Haven owns the actual SQLite
@@ -268,10 +272,10 @@ func (backend *transportRuntime) close() {
 }
 
 type transportGuest struct {
-	haven.LiveGuest
+	guest.Client
 }
 
-func (transportGuest) Activate(context.Context, loom.Resource, haven.Activation) error {
+func (transportGuest) Activate(context.Context, loom.Resource, guest.Activation) error {
 	return nil
 }
 
@@ -379,11 +383,11 @@ func seedFixtureImage(t *testing.T, root string) string {
 	return manifest.Digest
 }
 
-func transportFixture(t *testing.T) (*haven.Service, *sdk.Client, haven.Principal, string) {
+func transportFixture(t *testing.T) (*application.App, *sdk.Client, authorization.Principal, string) {
 	return transportFixtureRoot(t, false, transportGuest{})
 }
 
-func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*haven.Service, *sdk.Client, haven.Principal, string) {
+func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Port) (*application.App, *sdk.Client, authorization.Principal, string) {
 	t.Helper()
 	binary := os.Getenv("SANDBOX_AGENT_FIXTURE")
 	if binary == "" {
@@ -440,7 +444,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 		listeners:    map[string]*net.UnixListener{},
 	}
 	t.Cleanup(backend.close)
-	options := haven.Options{
+	options := application.Options{
 		StateDir:     root,
 		Initialize:   true,
 		Backend:      backend,
@@ -450,7 +454,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 		MaxVCPUs:     64,
 		SafetyBytes:  1,
 	}
-	bootstrap, err := haven.Open(options)
+	bootstrap, err := application.Open(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +463,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 	}
 	image := seedFixtureImage(t, root)
 	options.Initialize = false
-	service, err := haven.Open(options)
+	service, err := application.Open(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,9 +474,9 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err = service.PutTenant(ctx, haven.Principal{
+	_, err = service.Tenants.PutTenant(ctx, authorization.Principal{
 		Root: true,
-	}, haven.Tenant{
+	}, types.Tenant{
 		ID:            "transport",
 		Token:         "transport-token",
 		MaxSandboxes:  10,
@@ -481,12 +485,12 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := haven.Principal{
+	principal := authorization.Principal{
 		TenantID: "transport",
 	}
-	if _, err = service.Execute(ctx, principal, "template", haven.Command{
+	if _, err = service.SandboxRequests.Execute(ctx, principal, "template", operation.Command{
 		Action: "template_put",
-		Template: &haven.Template{
+		Template: &operation.TemplateSpec{
 			ID:    "fixture",
 			Image: image,
 			Shape: loom.Shape{
@@ -498,7 +502,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 	}); err != nil {
 		t.Fatal(err)
 	}
-	operation, err := service.Execute(ctx, principal, "claim", haven.Command{
+	acceptedRecord, err := service.SandboxRequests.Execute(ctx, principal, "claim", operation.Command{
 		Action:     "claim",
 		TemplateID: "fixture",
 		Policy: egress.Policy{
@@ -508,11 +512,20 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest haven.Guest) (*have
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.PublicOperation(ctx, principal, operation.ID)
+	result, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
 	if err != nil || result.Result.Sandbox == nil {
 		t.Fatal(result, err)
 	}
-	server := httptest.NewServer(httpapi.New(service))
+	server := httptest.NewServer(httpapi.New(httpapi.Services{
+		Authentication: service.Authentication,
+		Catalog:        service.Catalog,
+		Templates:      service.TemplateCatalog,
+		Operations:     service.Operations,
+		Tenants:        service.Tenants,
+		Requests:       service.SandboxRequests,
+		Data:           service.Data,
+		Management:     service.Management, Delivery: service.Delivery,
+	}))
 	t.Cleanup(server.Close)
 	return service, sdk.New(server.URL, result.Result.Tokens[result.Result.Sandbox.ID]), principal, result.Result.Sandbox.ID
 }

@@ -8,7 +8,7 @@ Haven owns tenant and resource workflows in one SQLite store: templates, warm po
 
 ## Workspace
 
-The repository root contains `go.work`; each component owns its module. No `internal/` package layer remains.
+The repository root contains `go.work`; each component owns its module. Haven's `App` composes image, machine, supply, sandbox, data, collection and node capabilities. Each capability owns its use cases and private SQL; HTTP and management adapters receive the use cases they need.
 
 | Directory | Responsibility |
 |---|---|
@@ -17,7 +17,7 @@ The repository root contains `go.work`; each component owns its module. No `inte
 | `sdk/` | Business/management clients, guest RPC and `cmd/havenctl` |
 | `types/` | Shared wire data, including sanitized error payloads |
 | `common/` | Shared CLI file I/O, configuration loading and logging initialization |
-| `tools/` | Development tools such as structfmt |
+| `tools/` | Pinned development tools, including structfmt and sqlc |
 | `protocol/gen/` | Generated Go guest-protocol bindings |
 | `operator/` | Kubernetes integration |
 
@@ -37,14 +37,18 @@ just smoke
 
 Binaries go to `bin/{haven,havenctl,loomctl}`. Test, vet and race recipes cover Haven, Loom, SDK, types, common, tools and protocol modules; workspace lint also includes operator. `just test-race` retains the 10-minute per-package timeout. `just integration` builds the actual Rust Unix fixture and tests Haven/SQLite, HTTP and guest RPC. `just smoke` starts one real daemon in private state and checks both CLIs, writer exclusion, configuration, restart, GC and offline backup. Neither boots a VM.
 
-Quick tests may skip native checks when tools or namespaces are unavailable. `just test-native` requires EROFS coverage and emits Go test JSON with the existing race/count=1/300s settings. The native gate additionally requires actual shared/merged materialization and GC pass events:
+Haven's versioned SQL migrations are the shared input for runtime initialization and sqlc. After changing domain SQL, run `just generate-sql` and `just check-sql`; generated bindings are checked in, so ordinary builds do not need sqlc. The check generates in a private temporary directory and detects missing, changed and unexpected files. See [store migrations](haven/store/README.md) for version and transaction boundaries.
+
+The architecture gate checks the compiled import graph and Go AST, including controller dependencies, root facade removal and raw SQL boundaries. Its negative fixtures verify rejection; reviewed SQLite maintenance exceptions are listed in the store contract.
+
+Quick tests may skip native checks when tools or ownership privileges are unavailable. `just test-native` requires EROFS coverage and emits Go test JSON with the existing race/count=1/300s settings. The native gate additionally requires actual shared/merged materialization and GC pass events:
 
 ```nu
 python3 -I scripts/check-native-gate.py --negative
 python3 -I scripts/check-native-gate.py
 ```
 
-Required tools include matching mkfs/fsck.erofs >=1.9.4 and <2, dump.erofs, umoci 0.6.0, bubblewrap, util-linux unshare and a C compiler. The gate never installs tools or elevates privileges. The negative run uses a private PATH without bwrap. Logs and original exit codes go to fresh `build/native-gate/run.*` directories. See [native verification](docs/image-materialization.md#validation) for namespace and mapping requirements.
+Required tools include matching mkfs/fsck.erofs >=1.9.4 and <2, dump.erofs, umoci 0.6.0 and a C compiler. Image tools execute directly; full merged/metadata validation requires effective UID 0 and native ownership/xattr support. The gate never installs tools or elevates privileges. The negative run uses a private PATH without mkfs.erofs. Logs and original exit codes go to fresh `build/native-gate/run.*` directories. See [native verification](docs/image-materialization.md#validation).
 
 ## HTTP and configuration
 

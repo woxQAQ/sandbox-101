@@ -33,7 +33,6 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 		"go-erofs": sharedEROFSVersion,
 	}
 	for _, tool := range []string{
-		"bwrap",
 		"mkfs.erofs",
 		"fsck.erofs",
 	} {
@@ -45,7 +44,7 @@ func imageTools(ctx context.Context) (map[string]string, error) {
 			return nil, err
 		}
 		tools[tool] = strings.TrimSpace(string(v))
-		if tool != "bwrap" && !supportedEROFSVersion(tools[tool]) {
+		if !supportedEROFSVersion(tools[tool]) {
 			return nil, errors.New("layered materializer requires erofs-utils >=1.9.4 and <2")
 		}
 	}
@@ -60,16 +59,9 @@ func supportedLayerMedia(media string) bool {
 		media == "application/vnd.docker.image.rootfs.diff.tar.gzip"
 }
 
-type ImageMount struct {
-	Host, Guest string
-}
-
-type imageMount = ImageMount
-
-// All archive interpretation and filesystem extraction happen in a private
-// mount/user/network namespace. Only system tool roots and explicitly configured
-// runtime dependencies are exposed readonly. Image paths are never host cwd.
-func runImageTool(ctx context.Context, work string, reads []imageMount, tool string, args ...string) error {
+// Tools operate directly on explicit host paths in a private work directory.
+// Executables come from the administrator's PATH, never from image contents.
+func runImageTool(ctx context.Context, work, tool string, args ...string) error {
 	binary, err := exec.LookPath(tool)
 	if err != nil {
 		return err
@@ -78,95 +70,14 @@ func runImageTool(ctx context.Context, work string, reads []imageMount, tool str
 	if err != nil {
 		return err
 	}
-	bargs, err := imageToolSandbox(work, reads, false)
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = work
+	cmd.Env = []string{"PATH=" + hostToolPath(), "LC_ALL=C"}
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w: %.4096s", tool, err, strings.TrimSpace(string(output)))
 	}
-	bargs = append(bargs, "--", binary)
-	bargs = append(bargs, args...)
-	_, err = command(ctx, "bwrap", bargs...)
-	return err
-}
-
-func imageToolSandbox(work string, reads []imageMount, mapped bool) ([]string, error) {
-	bargs := []string{
-		"--die-with-parent",
-		"--new-session",
-	}
-	if mapped {
-		// Keep the enclosing subordinate-ID mapping and its namespace-only
-		// capabilities, so native unpack/chown/xattrs and mkfs see identical IDs.
-		bargs = append(bargs, "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts", "--unshare-cgroup")
-		for _, capability := range []string{
-			"CAP_CHOWN",
-			"CAP_DAC_OVERRIDE",
-			"CAP_FOWNER",
-			"CAP_FSETID",
-			"CAP_SETFCAP",
-		} {
-			bargs = append(bargs, "--cap-add", capability)
-		}
-	} else {
-		bargs = append(bargs, "--unshare-all", "--uid", "0", "--gid", "0")
-	}
-	bargs = append(
-		bargs,
-		"--clearenv",
-		"--setenv",
-		"LC_ALL",
-		"C",
-		"--setenv",
-		"PATH",
-		"/usr/bin:/bin",
-		"--proc",
-		"/proc",
-		"--dev",
-		"/dev",
-		"--tmpfs",
-		"/tmp",
-	)
-	for _, dir := range []string{
-		"/usr",
-		"/bin",
-		"/lib",
-		"/lib64",
-	} {
-		if _, x := os.Stat(dir); x == nil {
-			bargs = append(bargs, "--ro-bind", dir, dir)
-		}
-	}
-	// Alternate toolchains declare their dependency roots, not their package
-	// manager. This is trusted process configuration, never an image input.
-	for _, dir := range filepath.SplitList(os.Getenv("SANDBOX_IMAGE_TOOL_ROOTS")) {
-		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == "/" {
-			return nil, fmt.Errorf("invalid SANDBOX_IMAGE_TOOL_ROOTS directory: %q", dir)
-		}
-		for _, reserved := range []string{
-			"/proc",
-			"/dev",
-			"/tmp",
-			"/work",
-			"/tools",
-			"/input",
-			"/merged",
-		} {
-			if dir == reserved || strings.HasPrefix(dir, reserved+"/") || strings.HasPrefix(reserved, dir+"/") {
-				return nil, fmt.Errorf("tool root %q overlaps sandbox path %q", dir, reserved)
-			}
-		}
-		info, err := os.Stat(dir)
-		if err != nil {
-			return nil, fmt.Errorf("image tool root %q: %w", dir, err)
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("image tool root %q is not a directory", dir)
-		}
-		bargs = append(bargs, "--ro-bind", dir, dir)
-	}
-	for _, mount := range reads {
-		bargs = append(bargs, "--ro-bind", mount.Host, mount.Guest)
-	}
-	return append(bargs, "--bind", work, "/work", "--chdir", "/work"), nil
+	return nil
 }
 
 type layerCache struct {
@@ -277,13 +188,11 @@ func buildLayerCache(
 	if media == v1.MediaTypeImageLayerGzip || media == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
 		args = append(args, "--ungzip")
 	}
-	args = append(args, "/work/layer.erofs", "/input.tar")
-	if err = runImageTool(ctx, stage, []imageMount{
-		{input, "/input.tar"},
-	}, "mkfs.erofs", args...); err != nil {
+	args = append(args, filepath.Join(stage, "layer.erofs"), input)
+	if err = runImageTool(ctx, stage, "mkfs.erofs", args...); err != nil {
 		return cached, err
 	}
-	if err = runImageTool(ctx, stage, nil, "fsck.erofs", "--extract", "/work/layer.erofs"); err != nil {
+	if err = runImageTool(ctx, stage, "fsck.erofs", "--extract", filepath.Join(stage, "layer.erofs")); err != nil {
 		return cached, err
 	}
 	cached.SHA256, err = digestFile(filepath.Join(stage, "layer.erofs"))
@@ -328,32 +237,28 @@ func materializeFsmeta(ctx context.Context, state, out string, artifacts []Image
 		"--preserve-mtime",
 		"-U",
 		layerUUID(manifestDigest),
-		"/work/fsmeta.erofs",
+		filepath.Join(out, "fsmeta.erofs"),
 	}
-	var reads []imageMount
 	var layers, diffs, devices []string
-	for i, a := range artifacts {
+	for _, a := range artifacts {
 		host := filepath.Join(state, a.Path)
-		guest := fmt.Sprintf("/data/%04d.erofs", i)
-		reads = append(reads, imageMount{host, guest})
-		args = append(args, guest)
-		devices = append(devices, "--device="+guest)
+		args = append(args, host)
+		devices = append(devices, "--device="+host)
 		layers = append(layers, host)
 		diffs = append(diffs, a.DiffID)
 	}
-	if err := runImageTool(ctx, out, reads, "mkfs.erofs", args...); err != nil {
+	if err := runImageTool(ctx, out, "mkfs.erofs", args...); err != nil {
 		return err
 	}
 	if err := verifyDeviceTable(filepath.Join(out, "fsmeta.erofs"), layers, diffs); err != nil {
 		return err
 	}
 	// Native fsck reads every merged file through its external block mapping.
-	// Extraction is temporary and isolated; it is not the published lower.
-	reads = append(reads, imageMount{filepath.Join(out, "fsmeta.erofs"), "/fsmeta.erofs"})
-	return extractImageBoot(ctx, out, reads, devices, "/fsmeta.erofs")
+	// Extraction is temporary; it is not the published lower.
+	return extractImageBoot(ctx, out, devices, filepath.Join(out, "fsmeta.erofs"))
 }
 
-func extractImageBoot(ctx context.Context, out string, reads []imageMount, devices []string, image string) error {
+func extractImageBoot(ctx context.Context, out string, devices []string, image string) error {
 	check, err := os.MkdirTemp(filepath.Dir(out), "check-")
 	if err != nil {
 		return err
@@ -363,13 +268,13 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 	}()
 	args := append(
 		[]string{
-			"--extract=/work/tree",
+			"--extract=" + filepath.Join(check, "tree"),
 			"--no-preserve-owner",
 			"--preserve-perms",
 		},
 		devices...)
 	args = append(args, image)
-	if err = runImageTool(ctx, check, reads, "fsck.erofs", args...); err != nil {
+	if err = runImageTool(ctx, check, "fsck.erofs", args...); err != nil {
 		return err
 	}
 	root, err := os.OpenRoot(filepath.Join(check, "tree"))
@@ -392,7 +297,8 @@ func extractImageBoot(ctx context.Context, out string, reads []imageMount, devic
 		}
 	}
 	for _, item := range []struct {
-		src, dst string
+		src string
+		dst string
 	}{
 		{"boot/vmlinux", "kernel"},
 		{"boot/initramfs", "initramfs"},

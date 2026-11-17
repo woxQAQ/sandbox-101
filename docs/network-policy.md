@@ -1,6 +1,6 @@
 # Direct network policy contract
 
-Haven owns desired policy, activation generation and retirement responsibility. Loom performs explicit `Network`, `InstallNetworkPolicy` and `VerifyNetworkPolicy` effects on the frozen `loom.Resource`. Network, start/stop, capture, restore and deletion share the VM lifecycle guard; long host effects run outside global admission/ownership locks. There is no public engine network operation API.
+Haven owns desired policy, activation generation and retirement responsibility. Loom performs explicit `Network`, `InstallNetworkPolicy` and `VerifyNetworkPolicy` effects on the frozen `loom.Resource`. VM lifecycle work retains the shared VM guard. Policy binding and retirement retain their existing configuration serialization; retirement recovery acquires the configuration guard, and binding teardown runs within its caller's lifecycle/configuration boundary. Long host effects run outside global admission/ownership locks. There is no public engine network operation API.
 
 ## Policy and packet limits
 
@@ -19,6 +19,8 @@ Mandatory denial covers unspecified/this-network, RFC1918, CGNAT, loopback, link
 The namespace-local nft `ct count` budget is shared across outbound/reply traffic and all destinations. It counts TCP/UDP/ICMP flows under kernel lifetime rules, not requests, FDs or guest sockets. Completed TCP can leave the count before conntrack expiration; close does not promise an immediate free slot. Both directions enforce the same count after replacement. Host deployment separately provides bandwidth, packet-rate and conntrack allocation quotas; forward filtering does not bound allocations before the hook.
 
 ## Haven activation and exact retirement
+
+`machine.DirectPolicies` owns binding verification, immutable teardown and retirement recovery. `ArmDirectRetirement`, `CompleteDirectReplacement` and `RetireVMPolicy` coordinate responsibility in the caller's original transaction. Machine consumes private network-policy, retirement-step and cleanup queries; sandbox owns activation and business binding. Its stateless ActivationHistory reader supplies frozen activation identity through the caller's DBTX. See the [capability migration evidence](../plans/evidence/027-capability-map.md).
 
 The sequence in `haven/activation.go` is:
 
