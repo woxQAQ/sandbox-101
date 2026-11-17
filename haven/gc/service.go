@@ -79,28 +79,28 @@ func NewCollector(state *store.State, dependencies Dependencies, fault func(stri
 	}
 }
 
-func (service *Collector) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (c *Collector) fault(point string) error {
+	if c.faultPoint != nil {
+		return c.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *Collector) dispatch(id string) {
-	if service.store.Reviewed {
+func (c *Collector) dispatch(id string) {
+	if c.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		_, err := service.Resume(id)
+	c.workers.Start(id, func() error {
+		_, err := c.Resume(id)
 		return err
 	})
 }
 
-func (service *Collector) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (c *Collector) Resume(id string) (bool, error) {
+	if c.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume collection", errs.ErrManualRecovery)
 	}
-	step, err := Load(service.ctx, service.store.Database, id)
+	step, err := Load(c.ctx, c.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -110,12 +110,12 @@ func (service *Collector) Resume(id string) (bool, error) {
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	guard := service.guards.GCOperation(id)
+	guard := c.guards.GCOperation(id)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = Load(service.ctx, service.store.Database, id)
+	step, err = Load(c.ctx, c.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.run(step)
+	return true, c.run(step)
 }

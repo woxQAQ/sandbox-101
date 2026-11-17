@@ -15,12 +15,12 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func (service *Collector) Collect(ctx context.Context, principal authorization.Principal, key string, options types.GCOptions) (types.GCReport, error) {
+func (c *Collector) Collect(ctx context.Context, principal authorization.Principal, key string, options types.GCOptions) (types.GCReport, error) {
 	var empty types.GCReport
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	if service.store.Reviewed {
+	if c.store.Reviewed {
 		return types.GCReport{
 			DryRun:  options.DryRun,
 			Blocked: true,
@@ -41,7 +41,7 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 	if options.Batch < 1 || options.Batch > 1024 || options.Budget <= 0 {
 		return empty, fmt.Errorf("%w: invalid GC batch or budget", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.NodeRequest(service.nodeID, key)
+	requestGuard := c.guards.NodeRequest(c.nodeID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	request := operation.Encode(struct {
@@ -53,22 +53,22 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 		if key == "" || len(key) > 256 {
 			return empty, fmt.Errorf("%w: GC mutation requires key", errs.ErrInvalid)
 		}
-		if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+		if cached, found, err := operation.New(c.store.Database).Cached(ctx, operation.Scope{
 			Kind: "node",
-			ID:   service.nodeID,
+			ID:   c.nodeID,
 		}, key, hash); found || err != nil {
 			if err != nil {
 				return empty, err
 			}
 			if !operation.Terminal(cached.Status) {
-				service.dispatch(cached.ID)
+				c.dispatch(cached.ID)
 			}
-			return service.wait(ctx, principal, cached.ID)
+			return c.wait(ctx, principal, cached.ID)
 		}
 	}
 	budgetCtx, cancel := context.WithTimeout(ctx, options.Budget)
 	defer cancel()
-	if !service.guards.GarbageCollection().TryLock() {
+	if !c.guards.GarbageCollection().TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -79,8 +79,8 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 			},
 		}, nil
 	}
-	defer service.guards.GarbageCollection().Unlock()
-	if !service.guards.Artifacts().TryLock() {
+	defer c.guards.GarbageCollection().Unlock()
+	if !c.guards.Artifacts().TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -91,13 +91,13 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 			},
 		}, nil
 	}
-	report, err := service.inventory(budgetCtx)
-	service.guards.Artifacts().Unlock()
+	report, err := c.inventory(budgetCtx)
+	c.guards.Artifacts().Unlock()
 	report.DryRun = options.DryRun
 	if err != nil {
 		return report, err
 	}
-	raw, deferred, err := service.rawCandidates(budgetCtx)
+	raw, deferred, err := c.rawCandidates(budgetCtx)
 	if err != nil {
 		return report, err
 	}
@@ -124,23 +124,23 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 	}
 	report.OperationID = accepted.ID
 	input := input{
-		StoreID:         service.nodeID,
+		StoreID:         c.nodeID,
 		RequestTenantID: principal.TenantID,
 		Options:         options,
 		Deadline:        deadline,
 		Report:          report,
 	}
 	payload := operation.Encode(input)
-	service.admission.Lock()
-	if err = service.gate.Check(); err == nil {
+	c.admission.Lock()
+	if err = c.gate.Check(); err == nil {
 		var tx *sql.Tx
-		tx, err = service.store.Database.BeginTx(ctx, nil)
+		tx, err = c.store.Database.BeginTx(ctx, nil)
 		if err == nil {
 			operations := operation.New(tx)
 			err = operations.Insert(ctx, operation.Admission{
 				ID:        accepted.ID,
 				ScopeKind: "node",
-				ScopeID:   service.nodeID,
+				ScopeID:   c.nodeID,
 				Key:       key,
 				Hash:      hash,
 				Request:   request,
@@ -163,7 +163,7 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 				}))
 			}
 			if err == nil {
-				err = service.fault("gc_admission_before_commit")
+				err = c.fault("gc_admission_before_commit")
 			}
 			if err == nil {
 				err = tx.Commit()
@@ -172,20 +172,20 @@ func (service *Collector) Collect(ctx context.Context, principal authorization.P
 			}
 		}
 	}
-	service.admission.Unlock()
+	c.admission.Unlock()
 	if err != nil {
 		return report, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = c.store.Checkpoint(); err != nil {
 		return report, err
 	}
-	service.dispatch(accepted.ID)
-	return service.wait(ctx, principal, accepted.ID)
+	c.dispatch(accepted.ID)
+	return c.wait(ctx, principal, accepted.ID)
 }
 
-func (service *Collector) wait(ctx context.Context, principal authorization.Principal, id string) (types.GCReport, error) {
-	_, err := service.operations.WaitManagement(ctx, principal, id)
-	step, lookup := Load(context.Background(), service.store.Database, id)
+func (c *Collector) wait(ctx context.Context, principal authorization.Principal, id string) (types.GCReport, error) {
+	_, err := c.operations.WaitManagement(ctx, principal, id)
+	step, lookup := Load(context.Background(), c.store.Database, id)
 	if lookup != nil {
 		return types.GCReport{}, errors.Join(err, lookup)
 	}

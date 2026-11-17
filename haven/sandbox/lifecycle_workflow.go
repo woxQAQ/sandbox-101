@@ -27,15 +27,15 @@ type LifecycleRequest struct {
 	Command   operation.Command
 }
 
-func (service *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	return service.AdmitForParent(ctx, LifecycleRequest{
+func (l *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+	return l.AdmitForParent(ctx, LifecycleRequest{
 		Principal: principal,
 		Key:       key,
 		Command:   command,
 	}, nil)
 }
 
-func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest, upper machine.ResourceParent) (operation.Record, error) {
+func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest, upper machine.ResourceParent) (operation.Record, error) {
 	principal, key, command := request.Principal, request.Key, request.Command
 	var empty operation.Record
 	if key == "" || len(key) > 256 || command.SandboxID == "" || principal.TenantID == "" || (principal.SandboxID != "" && (principal.SandboxID != command.SandboxID || command.Action != "release")) {
@@ -44,24 +44,24 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 	if command.Action != "release" && command.Action != "checkpoint" && command.Action != "pause" {
 		return empty, fmt.Errorf("%w: unsupported lifecycle action", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
-	mac := service.commands.Identity.CommandMAC(principal, command)
-	if operation, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+	mac := l.commands.Identity.CommandMAC(principal, command)
+	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return operation, err
 	}
-	guard := service.guards.Configuration(command.SandboxID)
+	guard := l.guards.Configuration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 
-	sandboxRecord, err := service.catalog.OwnedRecord(ctx, principal, command.SandboxID)
+	sandboxRecord, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 	if err != nil {
 		return empty, err
 	}
-	settings, err := LoadSettings(ctx, service.store.Database, sandboxRecord.ID)
+	settings, err := LoadSettings(ctx, l.store.Database, sandboxRecord.ID)
 	if err != nil {
 		return empty, err
 	}
@@ -81,7 +81,7 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 	if sandboxRecord.SourceOperation == "" {
 		return empty, fmt.Errorf("%w: fork placement has not committed its allocation", errs.ErrConflict)
 	}
-	source, err := machine.LoadResourceStep(ctx, service.store.Database, sandboxRecord.SourceOperation)
+	source, err := machine.LoadResourceStep(ctx, l.store.Database, sandboxRecord.SourceOperation)
 	if err != nil {
 		return empty, err
 	}
@@ -90,7 +90,7 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 	}
 	var priorFence string
 	if command.Action == "release" {
-		if priorFence, err = LifecycleFence(ctx, service.store.Database, sandboxRecord.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if priorFence, err = LifecycleFence(ctx, l.store.Database, sandboxRecord.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return empty, err
 		}
 	}
@@ -108,7 +108,7 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 		},
 	}
 	if command.Action == "release" && sandboxRecord.State != "paused" && source.Status == "succeeded" {
-		refs, err := machine.FailedCaptureReferences(ctx, service.store.Database, source)
+		refs, err := machine.FailedCaptureReferences(ctx, l.store.Database, source)
 		if err != nil {
 			return empty, err
 		}
@@ -128,10 +128,10 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 		},
 	}
 	if command.Action == "checkpoint" && sandboxRecord.State == "paused" {
-		return service.admitPausedCheckpoint(ctx, parent, input, mac)
+		return l.admitPausedCheckpoint(ctx, parent, input, mac)
 	}
 	admission := &LifecycleAdmission{
-		History: service.proofs.Snapshots(),
+		History: l.proofs.Snapshots(),
 		Upper:   upper,
 		Parent:  parent,
 		Input:   input,
@@ -139,14 +139,14 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 		Role:    "capture",
 	}
 	if command.Action == "release" && sandboxRecord.State == "paused" {
-		return service.admitPausedRelease(ctx, admission)
+		return l.admitPausedRelease(ctx, admission)
 	}
 	var child operation.Record
 	if command.Action == "release" {
 		admission.Role = "release"
 		if len(input.CaptureFailures) > 0 {
 			admission.Role = "stop"
-			stops := service.stops
+			stops := l.stops
 			child, err = stops.AdmitForParent(ctx, machine.StopRequest{
 				TenantID:         sandboxRecord.TenantID,
 				Key:              parent.ID + ":stop",
@@ -154,7 +154,7 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 				ExpectedInstance: source.State.Witness,
 			}, admission)
 		} else if source.Status == "failed" {
-			child, err = service.deletion.AdmitDiscardForParent(ctx, machine.DiscardRequest{
+			child, err = l.deletion.AdmitDiscardForParent(ctx, machine.DiscardRequest{
 				TenantID:          sandboxRecord.TenantID,
 				Key:               parent.ID + ":release",
 				SandboxID:         sandboxRecord.ID,
@@ -162,14 +162,14 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 				ExpectedInstance:  source.Input.Resource.Instance,
 			}, admission)
 		} else {
-			child, err = service.deletion.AdmitReleaseForParent(ctx, machine.ReleaseRequest{
+			child, err = l.deletion.AdmitReleaseForParent(ctx, machine.ReleaseRequest{
 				TenantID:  sandboxRecord.TenantID,
 				Key:       parent.ID + ":release",
 				SandboxID: sandboxRecord.ID,
 			}, admission)
 		}
 	} else {
-		captures := service.captures
+		captures := l.captures
 		child, err = captures.AdmitForParent(ctx, machine.CaptureRequest{
 			TenantID:         sandboxRecord.TenantID,
 			Key:              parent.ID + ":capture",
@@ -185,19 +185,19 @@ func (service *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleR
 	}
 	parent.Result.SnapshotID = child.Result.SnapshotID
 	if command.Action == "release" {
-		service.registry.CloseSandboxConnections(sandboxRecord.ID)
-		if revokeErr := service.activations.RevokeSandbox(sandboxRecord.ID); revokeErr != nil {
+		l.registry.CloseSandboxConnections(sandboxRecord.ID)
+		if revokeErr := l.activations.RevokeSandbox(sandboxRecord.ID); revokeErr != nil {
 			return parent, revokeErr
 		}
 	}
 	if err != nil {
 		return parent, err
 	}
-	service.dispatch(parent.ID)
+	l.dispatch(parent.ID)
 	return parent, nil
 }
 
-func (service *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step LifecycleStep) error {
+func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step LifecycleStep) error {
 	current, err := LoadLifecycle(ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -247,20 +247,20 @@ func (service *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step L
 	return nil
 }
 
-func (service *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.CaptureStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.CaptureStep) error {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
+	if err = l.lifecycleProof(l.ctx, tx, step); err != nil {
 		return err
 	}
-	current, err := machine.LoadCapture(service.ctx, tx, capture.OperationID)
+	current, err := machine.LoadCapture(l.ctx, tx, capture.OperationID)
 	if err != nil {
 		return err
 	}
@@ -279,10 +279,10 @@ func (service *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine
 	operations := operation.New(tx)
 
 	references := quota.New(tx)
-	if err = bindCheckpoint(service.ctx, tx, cp, step.OperationID); err != nil {
+	if err = bindCheckpoint(l.ctx, tx, cp, step.OperationID); err != nil {
 		return err
 	}
-	if err = references.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = references.AddResourceReference(l.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         cp.SnapshotID,
 		HolderKind: "checkpoint_binding",
@@ -290,7 +290,7 @@ func (service *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine
 	}); err != nil {
 		return err
 	}
-	if err = references.AddCostReference(service.ctx, quota.CostReference{
+	if err = references.AddCostReference(l.ctx, quota.CostReference{
 		TenantID:   cp.TenantID,
 		Kind:       "snapshot",
 		Key:        cp.SnapshotID,
@@ -299,13 +299,13 @@ func (service *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteFence(service.ctx, dbgen.DeleteFenceParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteFence(l.ctx, dbgen.DeleteFenceParams{
 		SandboxID:   cp.SandboxID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(service.ctx, dbgen.CompleteLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(l.ctx, dbgen.CompleteLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "lifecycle",
 		InputHash:   step.Hash,
@@ -316,32 +316,32 @@ func (service *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("checkpoint_completion_before_commit"); err != nil {
+	if err = l.fault("checkpoint_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return l.store.Checkpoint()
 }
 
-func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
+	if err = l.lifecycleProof(l.ctx, tx, step); err != nil {
 		return err
 	}
-	link, status, err := machine.LoadResourceLink(service.ctx, tx, step.OperationID, "release")
+	link, status, err := machine.LoadResourceLink(l.ctx, tx, step.OperationID, "release")
 	if err != nil {
 		return err
 	}
@@ -350,7 +350,7 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	}
 	switch link.Kind {
 	case "release":
-		released, err := machine.LoadResourceStep(service.ctx, tx, link.ChildID)
+		released, err := machine.LoadResourceStep(l.ctx, tx, link.ChildID)
 		if err != nil {
 			return err
 		}
@@ -358,7 +358,7 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 			return fmt.Errorf("lifecycle release lacks exact deletion proof")
 		}
 	case "discard":
-		discarded, err := machine.LoadDiscard(service.ctx, tx, link.ChildID)
+		discarded, err := machine.LoadDiscard(l.ctx, tx, link.ChildID)
 		if err != nil {
 			return err
 		}
@@ -368,10 +368,10 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	default:
 		return fmt.Errorf("unsupported release child kind")
 	}
-	if err = service.retireSupersededLifecycle(tx, step); err != nil {
+	if err = l.retireSupersededLifecycle(tx, step); err != nil {
 		return err
 	}
-	tombstone, err := LoadSandbox(service.ctx, tx, step.Input.Sandbox.ID, step.Input.OwnerTenantID)
+	tombstone, err := LoadSandbox(l.ctx, tx, step.Input.Sandbox.ID, step.Input.OwnerTenantID)
 	if err != nil {
 		return err
 	}
@@ -380,7 +380,7 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	}
 	retired := tombstone
 	retired.VMID, retired.Instance, retired.OperationID = "", "", ""
-	if err = store.RequireOne(dbgen.New(tx).RetireTerminatedBody(service.ctx, dbgen.RetireTerminatedBodyParams{
+	if err = store.RequireOne(dbgen.New(tx).RetireTerminatedBody(l.ctx, dbgen.RetireTerminatedBodyParams{
 		ID:           retired.ID,
 		Tenant:       retired.TenantID,
 		PreviousBody: operation.Encode(tombstone),
@@ -394,21 +394,21 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	desired.Instance = ""
 	desired.Deadline = time.Time{}
 	desired.PausedUntil = time.Time{}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(service.ctx, dbgen.ReplaceSettingsParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(l.ctx, dbgen.ReplaceSettingsParams{
 		SandboxID:    step.Input.Sandbox.ID,
 		PreviousBody: operation.Encode(step.Input.Settings),
 		NextBody:     operation.Encode(desired),
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteFence(service.ctx, dbgen.DeleteFenceParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteFence(l.ctx, dbgen.DeleteFenceParams{
 		SandboxID:   step.Input.Sandbox.ID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(service.ctx, dbgen.CompleteLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(l.ctx, dbgen.CompleteLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "lifecycle",
 		InputHash:   step.Hash,
@@ -418,20 +418,20 @@ func (service *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.registry.RetireCredentials(step.Input.Sandbox.ID, step.OperationID)
-	return service.store.Checkpoint()
+	l.registry.RetireCredentials(step.Input.Sandbox.ID, step.OperationID)
+	return l.store.Checkpoint()
 }
 
-func (service *Lifecycle) runLifecycle(step LifecycleStep) (runErr error) {
+func (l *Lifecycle) runLifecycle(step LifecycleStep) (runErr error) {
 	defer func() {
-		if runErr != nil && !errors.Is(runErr, errs.ErrInterrupted) && service.ctx.Err() == nil {
-			runErr = errors.Join(runErr, service.failLifecycle(step))
+		if runErr != nil && !errors.Is(runErr, errs.ErrInterrupted) && l.ctx.Err() == nil {
+			runErr = errors.Join(runErr, l.failLifecycle(step))
 		}
 	}()
 	if operation.Terminal(step.Status) {
@@ -439,35 +439,35 @@ func (service *Lifecycle) runLifecycle(step LifecycleStep) (runErr error) {
 	}
 	switch step.Input.Command.Action {
 	case "release":
-		service.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
-		if err := service.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
+		l.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
+		if err := l.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
 			return err
 		}
 		if len(step.Input.CaptureFailures) > 0 {
-			if err := service.runReleaseCaptures(step); err != nil {
+			if err := l.runReleaseCaptures(step); err != nil {
 				return err
 			}
 		}
-		if _, err := service.runResourceLink(step.OperationID, "release"); err != nil {
+		if _, err := l.runResourceLink(step.OperationID, "release"); err != nil {
 			return err
 		}
-		return service.completeReleaseLifecycle(step)
+		return l.completeReleaseLifecycle(step)
 	case "rollback":
-		return service.runRollback(step)
+		return l.runRollback(step)
 	case "resume":
-		return service.runResume(step)
+		return l.runResume(step)
 	case "pause":
-		return service.runPause(step)
+		return l.runPause(step)
 	case "checkpoint":
-		link, err := service.runResourceLink(step.OperationID, "capture")
+		link, err := l.runResourceLink(step.OperationID, "capture")
 		if err != nil {
 			return err
 		}
-		capture, err := machine.LoadCapture(service.ctx, service.store.Database, link.ChildID)
+		capture, err := machine.LoadCapture(l.ctx, l.store.Database, link.ChildID)
 		if err != nil {
 			return err
 		}
-		return service.completeCheckpoint(step, capture)
+		return l.completeCheckpoint(step, capture)
 	default:
 		return fmt.Errorf("%w: unsupported lifecycle workflow", errs.ErrInvalid)
 	}
@@ -586,17 +586,17 @@ func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation Act
 
 // failLifecycle commits failure only from a durable child terminal result.
 // An effect error with a pending child retains an unresolved accepted intent.
-func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadLifecycle(service.ctx, tx, step.OperationID)
+	current, err := LoadLifecycle(l.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -607,14 +607,14 @@ func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
 		return fmt.Errorf("%w: lifecycle failure input changed", errs.ErrManualRecovery)
 	}
 	operations := operation.New(tx)
-	failed, err := dbgen.New(tx).CountFailedLifecycleChildren(service.ctx, step.OperationID)
+	failed, err := dbgen.New(tx).CountFailedLifecycleChildren(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if failed == 0 {
 		return nil
 	}
-	fence, err := LifecycleFence(service.ctx, tx, step.Input.Sandbox.ID)
+	fence, err := LifecycleFence(l.ctx, tx, step.Input.Sandbox.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	} else if err != nil {
@@ -623,7 +623,7 @@ func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
 	if fence != step.OperationID {
 		return nil
 	}
-	status, body, err := operations.ResultState(service.ctx, step.OperationID)
+	status, body, err := operations.ResultState(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -632,7 +632,7 @@ func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
 	}
 	next := current.State
 	next.Phase = "failed"
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(l.ctx, dbgen.FailLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "lifecycle",
 		InputHash:   step.Hash,
@@ -646,12 +646,12 @@ func (service *Lifecycle) failLifecycle(step LifecycleStep) error {
 			return err
 		}
 		result.Error = "sandbox workflow failed; resource responsibility retained"
-		if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+		if err = operations.FailResult(l.ctx, step.OperationID, operation.Encode(result)); err != nil {
 			return err
 		}
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return l.store.Checkpoint()
 }

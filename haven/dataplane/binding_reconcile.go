@@ -13,24 +13,24 @@ import (
 
 // ReconcileBindings keeps an already published none policy free of residual
 // proxies and rebinds a restart without renewing its saved lease.
-func (service *Plane) ReconcileBindings() error {
-	if service.store.Reviewed {
+func (p *Plane) ReconcileBindings() error {
+	if p.store.Reviewed {
 		return nil
 	}
 
-	subjects, err := sandbox.BoundSubjects(service.ctx, service.store.Database)
+	subjects, err := sandbox.BoundSubjects(p.ctx, p.store.Database)
 	if err != nil {
 		return err
 	}
 	for _, subject := range subjects {
 		id, tenant := subject.ID, subject.TenantID
-		guard := service.guards.Configuration(id)
+		guard := p.guards.Configuration(id)
 		if !guard.TryLock() {
 			continue
 		}
-		settings, lookup := sandbox.LoadSettings(service.ctx, service.store.Database, id)
+		settings, lookup := sandbox.LoadSettings(p.ctx, p.store.Database, id)
 		if lookup == nil {
-			_, fenceErr := sandbox.LifecycleFence(service.ctx, service.store.Database, id)
+			_, fenceErr := sandbox.LifecycleFence(p.ctx, p.store.Database, id)
 			if fenceErr == nil {
 				guard.Unlock()
 				continue
@@ -39,36 +39,36 @@ func (service *Plane) ReconcileBindings() error {
 				lookup = fenceErr
 			}
 		}
-		if lookup == nil && (settings.Policy.Mode == "none" || (len(settings.Secrets) > 0 && settings.ActiveEpoch != service.epoch) || !time.Now().Before(settings.Deadline)) {
-			lookup = service.activations.RevokeSandbox(id)
+		if lookup == nil && (settings.Policy.Mode == "none" || (len(settings.Secrets) > 0 && settings.ActiveEpoch != p.epoch) || !time.Now().Before(settings.Deadline)) {
+			lookup = p.activations.RevokeSandbox(id)
 		}
-		rebind := lookup == nil && settings.ActiveEpoch != service.epoch && len(settings.Secrets) == 0 && time.Now().Before(settings.Deadline) && service.opts.Guest != nil
+		rebind := lookup == nil && settings.ActiveEpoch != p.epoch && len(settings.Secrets) == 0 && time.Now().Before(settings.Deadline) && p.opts.Guest != nil
 		guard.Unlock()
 		if rebind {
-			bindingCtx, cancel := context.WithTimeout(service.ctx, 10*time.Second)
-			_, lookup = service.waitRestartBinding(bindingCtx, sandbox.View{
+			bindingCtx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+			_, lookup = p.waitRestartBinding(bindingCtx, sandbox.View{
 				ID:       id,
 				TenantID: tenant,
 			}, settings)
 			cancel()
 		}
 		if lookup != nil {
-			service.registry.RecordBindingError(id, lookup)
+			p.registry.RecordBindingError(id, lookup)
 		}
 	}
 	return nil
 }
 
-func (service *Plane) waitRestartBinding(ctx context.Context, view sandbox.View, settings sandbox.Settings) (operation.Record, error) {
+func (p *Plane) waitRestartBinding(ctx context.Context, view sandbox.View, settings sandbox.Settings) (operation.Record, error) {
 	env := map[string]operation.EnvVar{}
 	for name, value := range settings.Env {
 		env[name] = operation.EnvVar{
 			Value: value,
 		}
 	}
-	accepted, err := service.sandboxes.AdmitConfigure(ctx, authorization.Principal{
+	accepted, err := p.sandboxes.AdmitConfigure(ctx, authorization.Principal{
 		TenantID: view.TenantID,
-	}, "rebind:"+service.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
+	}, "rebind:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
 		Action:             "configure",
 		SandboxID:          view.ID,
 		ObservedGeneration: settings.Generation,
@@ -78,7 +78,7 @@ func (service *Plane) waitRestartBinding(ctx context.Context, view sandbox.View,
 	if err != nil {
 		return accepted, err
 	}
-	return service.operations.Wait(ctx, authorization.Principal{
+	return p.operations.Wait(ctx, authorization.Principal{
 		TenantID: view.TenantID,
 	}, accepted.ID)
 }

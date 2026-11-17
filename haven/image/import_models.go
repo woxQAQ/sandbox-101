@@ -74,11 +74,11 @@ func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportS
 	return step, nil
 }
 
-func (service *Images) saveImageImport(step *imageImportStep, phase string) error {
+func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 	step.State.Phase = phase
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.database.BeginTx(service.ctx, nil)
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).RecordLiveStepProgress(service.ctx, dbgen.RecordLiveStepProgressParams{
+	if err = store.RequireOne(dbgen.New(tx).RecordLiveStepProgress(i.ctx, dbgen.RecordLiveStepProgressParams{
 		OperationID: step.OperationID,
 		StepKey:     "image_import",
 		InputHash:   step.Hash,
@@ -94,7 +94,7 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 	})); err != nil {
 		return err
 	}
-	if err = operations.Run(service.ctx, step.OperationID); err != nil {
+	if err = operations.Run(i.ctx, step.OperationID); err != nil {
 		return err
 	}
 	catalog := dbgen.New(tx)
@@ -108,7 +108,7 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 			Builder: cache.Cache.Builder,
 			DiffID:  cache.Cache.DiffID,
 		}
-		record, lookup := LoadCacheRecord(service.ctx, tx,
+		record, lookup := LoadCacheRecord(i.ctx, tx,
 
 			key)
 		err = lookup
@@ -116,7 +116,7 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 			if !reflect.DeepEqual(record.Witness, *cache) {
 				return fmt.Errorf("%w: image cache immutable ownership changed", errs.ErrManualRecovery)
 			}
-			owned, err := responsibilities.CountMatchingReservation(service.ctx, quota.Reservation{
+			owned, err := responsibilities.CountMatchingReservation(i.ctx, quota.Reservation{
 				Owner: "cache:" + cache.Cache.Builder + ":" + cache.Cache.DiffID,
 				Bytes: cache.PhysicalBytes,
 			})
@@ -131,16 +131,16 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 				return fmt.Errorf("%w: image cache lacks physical charge", errs.ErrIncompatible)
 			}
 			owner := "cache:" + cache.Cache.Builder + ":" + cache.Cache.DiffID
-			if err = responsibilities.DeductReservationBytes(service.ctx, "import:"+step.OperationID, cache.PhysicalBytes); err != nil {
+			if err = responsibilities.DeductReservationBytes(i.ctx, "import:"+step.OperationID, cache.PhysicalBytes); err != nil {
 				return err
 			}
-			if err = responsibilities.Reserve(service.ctx, quota.Reservation{
+			if err = responsibilities.Reserve(i.ctx, quota.Reservation{
 				Owner: owner,
 				Bytes: cache.PhysicalBytes,
 			}); err != nil {
 				return err
 			}
-			if err = store.RequireOne(catalog.InsertCache(service.ctx, dbgen.InsertCacheParams{
+			if err = store.RequireOne(catalog.InsertCache(i.ctx, dbgen.InsertCacheParams{
 				Builder: key.Builder,
 				DiffID:  key.DiffID,
 				Body: operation.Encode(Cache{
@@ -157,7 +157,7 @@ func (service *Images) saveImageImport(step *imageImportStep, phase string) erro
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.checkpoint()
+	return i.checkpoint()
 }
 
 func importRemainingCharge(ctx context.Context, q store.DBTX, source imageImportStep) (int64, error) {

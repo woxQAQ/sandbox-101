@@ -19,16 +19,16 @@ import (
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
 )
 
-func (service *Supply) runRefill(step SupplyStep) error {
-	linked, err := service.runResourceLink(step.OperationID, "clone")
+func (s *Supply) runRefill(step SupplyStep) error {
+	linked, err := s.runResourceLink(step.OperationID, "clone")
 	if err != nil {
 		return err
 	}
-	source, err := machine.LoadResourceStep(service.ctx, service.store.Database, linked.ChildID)
+	source, err := machine.LoadResourceStep(s.ctx, s.store.Database, linked.ChildID)
 	if err != nil {
 		return err
 	}
-	reservation, status, err := LoadPoolReservation(service.ctx, service.store.Database, step.OperationID)
+	reservation, status, err := LoadPoolReservation(s.ctx, s.store.Database, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -38,35 +38,35 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	}) {
 		return fmt.Errorf("refill source differs from original pool reservation")
 	}
-	lock := service.guards.VM(source.Candidate)
+	lock := s.guards.VM(source.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
-	if err = service.opts.Backend.Network(service.ctx, source.Input.Resource, false); err != nil {
+	if err = s.opts.Backend.Network(s.ctx, source.Input.Resource, false); err != nil {
 		return err
 	}
-	observed, err := service.opts.Backend.Inspect(service.ctx, source.Input.Resource)
+	observed, err := s.opts.Backend.Inspect(s.ctx, source.Input.Resource)
 	if err != nil {
 		return err
 	}
 	if !observed.Alive || !observed.Booted || observed.Network {
 		return fmt.Errorf("%w: warm source readiness/network verification failed", errs.ErrConflict)
 	}
-	if service.opts.Guest == nil {
+	if s.opts.Guest == nil {
 		return fmt.Errorf("%w: guest effects unavailable", errs.ErrInvalid)
 	}
-	if err = service.opts.Guest.Info(service.ctx, source.Input.Resource); err != nil {
+	if err = s.opts.Guest.Info(s.ctx, source.Input.Resource); err != nil {
 		return err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	s.admission.Lock()
+	defer s.admission.Unlock()
+	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSupply(service.ctx, tx, step.OperationID)
+	current, err := LoadSupply(s.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -74,17 +74,17 @@ func (service *Supply) runRefill(step SupplyStep) error {
 		return fmt.Errorf("refill current intent changed")
 	}
 	queries := dbgen.New(tx)
-	original, state, err := LoadPoolReservation(service.ctx, tx, step.OperationID)
+	original, state, err := LoadPoolReservation(s.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if state != "pending" || !reflect.DeepEqual(original, reservation) {
 		return fmt.Errorf("refill pending pool responsibility changed")
 	}
-	if err = service.proofs.VerifyGeneration(service.ctx, tx, source); err != nil {
+	if err = s.proofs.VerifyGeneration(s.ctx, tx, source); err != nil {
 		return err
 	}
-	vm, instance, owner, err := machine.LoadVM(service.ctx, tx, source)
+	vm, instance, owner, err := machine.LoadVM(s.ctx, tx, source)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (service *Supply) runRefill(step SupplyStep) error {
 		return fmt.Errorf("refill candidate ownership changed")
 	}
 	reservation.Instance = source.State.Witness
-	body, err := operation.New(tx).LiveBody(service.ctx, step.OperationID)
+	body, err := operation.New(tx).LiveBody(s.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	previousState, resultBody := operation.Encode(step.State), operation.Encode(result)
 	references := quota.New(tx)
 	operations := operation.New(tx)
-	if err = store.RequireOne(queries.InsertWarm(service.ctx, dbgen.InsertWarmParams{
+	if err = store.RequireOne(queries.InsertWarm(s.ctx, dbgen.InsertWarmParams{
 		VmID:       reservation.VMID,
 		TemplateID: reservation.Template.ID,
 		SnapshotID: reservation.Template.SnapshotID,
@@ -119,7 +119,7 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = references.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = references.AddResourceReference(s.ctx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         reservation.VMID,
 		HolderKind: "warm",
@@ -127,14 +127,14 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(queries.MarkReady(service.ctx, dbgen.MarkReadyParams{
+	if err = store.RequireOne(queries.MarkReady(s.ctx, dbgen.MarkReadyParams{
 		OperationID:  step.OperationID,
 		PreviousBody: previous,
 		NewBody:      next,
 	})); err != nil {
 		return err
 	}
-	if err = references.RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = references.RemoveResourceReference(s.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         reservation.Template.Config.Image,
 		HolderKind: "step",
@@ -142,7 +142,7 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(service.ctx, dbgen.CompleteUnchangedStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(s.ctx, dbgen.CompleteUnchangedStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "supply",
 		InputHash:    step.Hash,
@@ -151,38 +151,38 @@ func (service *Supply) runRefill(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.CompleteResult(service.ctx, step.OperationID, resultBody); err != nil {
+	if err = operations.CompleteResult(s.ctx, step.OperationID, resultBody); err != nil {
 		return err
 	}
-	if _, _, err = VerifyReadyWarm(service.proofs, service.ctx, tx, step.OperationID); err != nil {
+	if _, _, err = VerifyReadyWarm(s.proofs, s.ctx, tx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("warm_publication_before_commit"); err != nil {
+	if err = s.fault("warm_publication_before_commit"); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = s.committer.Commit(tx); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return s.store.Checkpoint()
 }
 
-func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "refill" || command.TemplateID == "" {
 		return empty, fmt.Errorf("%w: refill requires tenant authority, template and key", errs.ErrInvalid)
 	}
-	guard := service.guards.TenantRequest(principal.TenantID, key)
+	guard := s.guards.TenantRequest(principal.TenantID, key)
 	guard.Lock()
 	defer guard.Unlock()
-	mac := service.commands.CommandMAC(principal, command)
-	if accepted, found, err := service.existing(ctx, principal, key, mac); found || err != nil {
+	mac := s.commands.CommandMAC(principal, command)
+	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
 	}
-	draining := service.availability.IsDraining()
+	draining := s.availability.IsDraining()
 	if draining {
 		return empty, fmt.Errorf("%w: node is draining", errs.ErrExhausted)
 	}
-	catalog := NewTemplateCatalog(service.store.Database)
+	catalog := NewTemplateCatalog(s.store.Database)
 	public, err := catalog.GetTemplate(ctx, principal, command.TemplateID)
 	if err != nil {
 		return empty, err
@@ -195,28 +195,28 @@ func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.
 		return empty, fmt.Errorf("%w: refill requires golden template with warm target", errs.ErrInvalid)
 	}
 	now := time.Now().UTC()
-	blocked, err := RefillBackoff(ctx, service.store.Database, selected.ID, now)
+	blocked, err := RefillBackoff(ctx, s.store.Database, selected.ID, now)
 	if err != nil {
 		return empty, err
 	}
 	if blocked {
 		return empty, fmt.Errorf("%w: template refill backoff is active", errs.ErrExhausted)
 	}
-	source, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, selected.TenantID, selected.SnapshotID)
+	source, err := s.proofs.Snapshots().LoadRestoreSource(ctx, s.store.Database, selected.TenantID, selected.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
 	if err = machine.VerifyRestoreSourceFiles(source); err != nil {
 		return empty, err
 	}
-	if err = service.opts.Backend.Check(ctx, selected.Config); err != nil {
+	if err = s.opts.Backend.Check(ctx, selected.Config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, selected.Config.Image)
+	manifest, err := image.LoadManifest(ctx, s.store.Database, selected.Config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(s.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
 	parent := operation.Record{
@@ -252,7 +252,7 @@ func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.
 		Action  string
 		Request machine.CloneRequest
 	}{"clone", request})
-	child, err := service.provisioning.AdmitRaw(ctx, ProvisionRequest{
+	child, err := s.provisioning.AdmitRaw(ctx, ProvisionRequest{
 		TenantID: selected.TenantID,
 		Key:      request.Key,
 		Frozen:   frozen,
@@ -269,7 +269,7 @@ func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.
 	})
 	if child.ID == "" {
 		if errors.Is(err, errs.ErrExhausted) {
-			return service.recordRefillFailure(ctx, parent, input, mac)
+			return s.recordRefillFailure(ctx, parent, input, mac)
 		}
 		return empty, err
 	}
@@ -277,17 +277,17 @@ func (service *Supply) AdmitRefill(ctx context.Context, principal authorization.
 	if err != nil {
 		return parent, err
 	}
-	service.dispatch(parent.ID)
+	s.dispatch(parent.ID)
 	return parent, nil
 }
 
-func (service *Supply) recordRefillFailure(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
+	s.admission.Lock()
+	defer s.admission.Unlock()
+	if err := s.gate.Check(); err != nil {
 		return operation.Record{}, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := s.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return operation.Record{}, err
 	}
@@ -334,10 +334,10 @@ func (service *Supply) recordRefillFailure(ctx context.Context, parent operation
 	})); err != nil {
 		return operation.Record{}, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = s.committer.Commit(tx); err != nil {
 		return operation.Record{}, err
 	}
-	return parent, service.store.Checkpoint()
+	return parent, s.store.Checkpoint()
 }
 
 func RefillBackoff(ctx context.Context, database store.DBTX, template string, now time.Time) (bool, error) {
@@ -376,8 +376,8 @@ func RefillBackoff(ctx context.Context, database store.DBTX, template string, no
 
 // RefillReady considers verified templates and admits only missing warm supply.
 // Full pools and active backoff create no intent; admission rechecks capacity.
-func (service *Supply) RefillReady(ctx context.Context) error {
-	templates, err := NewTemplateCatalog(service.store.Database).Templates(ctx, authorization.Principal{
+func (s *Supply) RefillReady(ctx context.Context) error {
+	templates, err := NewTemplateCatalog(s.store.Database).Templates(ctx, authorization.Principal{
 		Root: true,
 	})
 	if err != nil {
@@ -391,7 +391,7 @@ func (service *Supply) RefillReady(ctx context.Context) error {
 		if candidate.TargetWarm < 1 || candidate.SnapshotID == "" {
 			continue
 		}
-		count, err := dbgen.New(service.store.Database).CountTemplateReservations(ctx, candidate.ID)
+		count, err := dbgen.New(s.store.Database).CountTemplateReservations(ctx, candidate.ID)
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -399,7 +399,7 @@ func (service *Supply) RefillReady(ctx context.Context) error {
 		if count >= int64(candidate.TargetWarm) {
 			continue
 		}
-		blocked, err := RefillBackoff(ctx, service.store.Database, candidate.ID, time.Now().UTC())
+		blocked, err := RefillBackoff(ctx, s.store.Database, candidate.ID, time.Now().UTC())
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -407,7 +407,7 @@ func (service *Supply) RefillReady(ctx context.Context) error {
 		if blocked {
 			continue
 		}
-		_, err = service.AdmitRefill(ctx, authorization.Principal{
+		_, err = s.AdmitRefill(ctx, authorization.Principal{
 			Root:     true,
 			TenantID: candidate.TenantID,
 		}, "refill:"+operation.NewID(""), operation.Command{

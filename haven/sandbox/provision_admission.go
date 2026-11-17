@@ -23,7 +23,7 @@ import (
 
 // AdmitCold freezes a tenant-owned template and all resource identities with its
 // slot, disk budget and source reference. Delivery remains separately fenced.
-func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
+func (p *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
 	var empty operation.Record
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.TemplateID == "" {
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
@@ -33,33 +33,33 @@ func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.Fr
 		Request machine.FreshRequest
 	}{"claim", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			p.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	selected, err := supply.NewTemplateCatalog(service.store.Database).Cold(ctx, request.TenantID, request.TemplateID)
+	selected, err := supply.NewTemplateCatalog(p.store.Database).Cold(ctx, request.TenantID, request.TemplateID)
 	if err != nil {
 		return empty, err
 	}
 	if err = host.CheckConfig(&selected.Config); err != nil {
 		return empty, err
 	}
-	if err = service.backend.Check(ctx, selected.Config); err != nil {
+	if err = p.backend.Check(ctx, selected.Config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, selected.Config.Image)
+	manifest, err := image.LoadManifest(ctx, p.store.Database, selected.Config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(p.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	return service.Admit(ctx, ProvisionAdmission{
+	return p.Admit(ctx, ProvisionAdmission{
 		Request: supply.ProvisionRequest{
 			TenantID: request.TenantID,
 			Key:      request.Key,
@@ -70,7 +70,7 @@ func (service *VMProvisioning) AdmitCold(ctx context.Context, request machine.Fr
 	})
 }
 
-func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
+func (p *VMProvisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
 	var empty operation.Record
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
@@ -80,16 +80,16 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 		Request machine.CloneRequest
 	}{"clone", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			p.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	source, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, request.TenantID, request.SnapshotID)
+	source, err := p.proofs.Snapshots().LoadRestoreSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
 	if err == sql.ErrNoRows {
 		return empty, fmt.Errorf("%w: snapshot not found", errs.ErrNotFound)
 	}
@@ -100,10 +100,10 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 	if err = host.CheckConfig(&config); err != nil {
 		return empty, err
 	}
-	if err = service.backend.Check(ctx, config); err != nil {
+	if err = p.backend.Check(ctx, config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, config.Image)
+	manifest, err := image.LoadManifest(ctx, p.store.Database, config.Image)
 	if err != nil {
 		return empty, err
 	}
@@ -114,10 +114,10 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 	if !reflect.DeepEqual(manifest, frozenImage) {
 		return empty, fmt.Errorf("clone image publication changed")
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(p.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	return service.Admit(ctx, ProvisionAdmission{
+	return p.Admit(ctx, ProvisionAdmission{
 		Request: supply.ProvisionRequest{
 			TenantID: request.TenantID,
 			Key:      request.Key,
@@ -132,21 +132,21 @@ func (service *VMProvisioning) AdmitClone(ctx context.Context, request machine.C
 	})
 }
 
-func (service *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
+func (p *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
 	var empty operation.Record
 	request, claim := admission.Request, admission.Claim
 	tenantID, key := request.TenantID, request.Key
 	hash := operation.Digest(request.Frozen)
-	free, err := loom.FreeBytes(service.store.Directory)
+	free, err := loom.FreeBytes(p.store.Directory)
 	if err != nil {
 		return empty, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err = service.gate.Check(); err != nil {
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	if err = p.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := p.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -167,51 +167,51 @@ func (service *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdm
 		ID:   tenantID,
 	}, key, hash); found || err != nil {
 		if claim != nil && found && err == nil && !operation.Terminal(cached.Status) {
-			service.registry.SetOperationSecrets(cached.ID, claim.Secrets)
+			p.registry.SetOperationSecrets(cached.ID, claim.Secrets)
 		}
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			p.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	accepted, err := service.AdmitIn(ctx, tx, admission, free)
+	accepted, err := p.AdmitIn(ctx, tx, admission, free)
 	if err != nil {
 		return empty, err
 	}
-	if err = service.fault("admission_before_commit"); err != nil {
+	if err = p.fault("admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
 	if claim != nil {
-		service.registry.SetOperationSecrets(accepted.ID, claim.Secrets)
+		p.registry.SetOperationSecrets(accepted.ID, claim.Secrets)
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("admission_committed"); err != nil {
+	if err = p.fault("admission_committed"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	p.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *VMProvisioning) dispatch(id string) {
-	if service.store.Reviewed {
+func (p *VMProvisioning) dispatch(id string) {
+	if p.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	p.workers.Start(id, func() error {
+		if handled, err := p.policies.Resume(p.ctx, id); handled || err != nil {
 			return err
 		}
-		return service.Continue(id)
+		return p.Continue(id)
 	})
 }
 
 // verifyProvisionSources rechecks preflight facts inside the allocation
 // transaction before writing any candidate, ownership or budget records.
-func (service *VMProvisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission) error {
+func (p *VMProvisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission) error {
 	request := admission.Request
 	selected, restore := request.Template, request.Restore
 	if admission.Claim != nil {
@@ -246,7 +246,7 @@ func (service *VMProvisioning) verifyProvisionSources(ctx context.Context, tx *s
 			return fmt.Errorf("%w: template publication changed during preflight", errs.ErrConflict)
 		}
 	} else if restore != nil {
-		current, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, restore.Snapshot.ID)
+		current, err := p.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, restore.Snapshot.ID)
 		if err != nil {
 			return err
 		}
@@ -273,7 +273,7 @@ type provisionBudget struct {
 	RestoreBytes int64
 }
 
-func (service *VMProvisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (provisionBudget, error) {
+func (p *VMProvisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (provisionBudget, error) {
 	var empty provisionBudget
 	request, target := admission.Request, admission.Target
 	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)
@@ -317,7 +317,7 @@ func (service *VMProvisioning) checkProvisionBudget(ctx context.Context, tx *sql
 		budget.VMBytes += shape.MemoryMiB << 20
 		budget.RestoreBytes = (shape.MemoryMiB + shape.DiskMiB + 64) << 20
 	}
-	if reserved.Bytes > free || service.capacity.SafetyBytes > free-reserved.Bytes || budget.VMBytes+budget.RestoreBytes > free-reserved.Bytes-service.capacity.SafetyBytes || reserved.MemoryMiB > service.capacity.MaxMemoryMiB || shape.MemoryMiB+128 > service.capacity.MaxMemoryMiB-reserved.MemoryMiB || reserved.CPUs > int64(service.capacity.MaxVCPUs) || int64(shape.VCPUs) > int64(service.capacity.MaxVCPUs)-reserved.CPUs {
+	if reserved.Bytes > free || p.capacity.SafetyBytes > free-reserved.Bytes || budget.VMBytes+budget.RestoreBytes > free-reserved.Bytes-p.capacity.SafetyBytes || reserved.MemoryMiB > p.capacity.MaxMemoryMiB || shape.MemoryMiB+128 > p.capacity.MaxMemoryMiB-reserved.MemoryMiB || reserved.CPUs > int64(p.capacity.MaxVCPUs) || int64(shape.VCPUs) > int64(p.capacity.MaxVCPUs)-reserved.CPUs {
 		return empty, fmt.Errorf("%w: host reservation exhausted", errs.ErrExhausted)
 	}
 	return budget, nil

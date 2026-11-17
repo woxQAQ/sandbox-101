@@ -14,9 +14,9 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.DeletionIntent, error) {
+func (i *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.DeletionIntent, error) {
 	if step.Input.Cache != nil {
-		intent, err := imageimport.InspectCacheDeletion(service.ctx, service.directory, step.Input.Cache.Witness)
+		intent, err := imageimport.InspectCacheDeletion(i.ctx, i.directory, step.Input.Cache.Witness)
 		return []loom.DeletionIntent{
 			intent,
 		}, err
@@ -33,14 +33,14 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 		if source.State.Proof == nil {
 			return nil, fmt.Errorf("published image cleanup lacks original publication proof")
 		}
-		current, err := LoadManifest(service.ctx, service.database, source.Input.Options.Digest)
+		current, err := LoadManifest(i.ctx, i.database, source.Input.Options.Digest)
 		if err != nil {
 			return nil, err
 		}
 		if !reflect.DeepEqual(current, source.State.Proof.Manifest) {
 			return nil, fmt.Errorf("published image catalog changed")
 		}
-		if err = source.State.Proof.Verify(service.ctx, service.directory, source.Input.Target, *source.State.Boundary); err != nil {
+		if err = source.State.Proof.Verify(i.ctx, i.directory, source.Input.Target, *source.State.Boundary); err != nil {
 			return nil, err
 		}
 	} else {
@@ -53,13 +53,13 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 			return nil, err
 		}
 	}
-	prepared := source.preparedWork(service.directory)
+	prepared := source.preparedWork(i.directory)
 	var work loom.DeletionIntent
 	var err error
 	if published {
-		work, err = prepared.InspectPublishedWorkDeletion(service.ctx)
+		work, err = prepared.InspectPublishedWorkDeletion(i.ctx)
 	} else {
-		work, err = prepared.InspectUnpublishedWorkDeletion(service.ctx)
+		work, err = prepared.InspectUnpublishedWorkDeletion(i.ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 		work,
 	}
 	if !published {
-		count, err := dbgen.New(service.database).CountManifest(context.Background(), source.Input.Options.Digest)
+		count, err := dbgen.New(i.database).CountManifest(context.Background(), source.Input.Options.Digest)
 		if err != nil || count != 0 {
 			return nil, fmt.Errorf("failed import publication ownership changed: %v", err)
 		}
@@ -76,7 +76,7 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 			if source.State.Proof == nil {
 				return nil, fmt.Errorf("failed import final directory lacks original output proof")
 			}
-			intent, err := source.State.Proof.InspectUnpublishedDeletion(service.ctx, service.directory, source.Input.Target, *source.State.Boundary)
+			intent, err := source.State.Proof.InspectUnpublishedDeletion(i.ctx, i.directory, source.Input.Target, *source.State.Boundary)
 			if err != nil {
 				return nil, err
 			}
@@ -88,10 +88,10 @@ func (service *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.Deleti
 	return intents, nil
 }
 
-func (service *Images) saveImageCleanup(step *imageCleanupStep, state imageCleanupState) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.database.BeginTx(service.ctx, nil)
+func (i *Images) saveImageCleanup(step *imageCleanupStep, state imageCleanupState) error {
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func (service *Images) saveImageCleanup(step *imageCleanupStep, state imageClean
 	}()
 	if state.Phase == "prepared" {
 		for _, intent := range state.Intents {
-			if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(service.ctx, dbgen.InsertDeletionReceiptParams{
+			if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(i.ctx, dbgen.InsertDeletionReceiptParams{
 				Path:        intent.Path,
 				OperationID: step.OperationID,
 				StepKey:     "image_cleanup",
@@ -110,7 +110,7 @@ func (service *Images) saveImageCleanup(step *imageCleanupStep, state imageClean
 			}
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(i.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "image_cleanup",
 		InputHash:    step.Hash,
@@ -124,15 +124,15 @@ func (service *Images) saveImageCleanup(step *imageCleanupStep, state imageClean
 	}
 	step.State = state
 	step.Status = "running"
-	return service.checkpoint()
+	return i.checkpoint()
 }
 
-func (service *Images) verifyImageCleanupReceipts(step imageCleanupStep) error {
+func (i *Images) verifyImageCleanupReceipts(step imageCleanupStep) error {
 	if len(step.State.Intents) == 0 {
 		return fmt.Errorf("image cleanup deletion proof missing")
 	}
 	for index, intent := range step.State.Intents {
-		payload, err := dbgen.New(service.database).GetDeletionReceipt(service.ctx, dbgen.GetDeletionReceiptParams{
+		payload, err := dbgen.New(i.database).GetDeletionReceipt(i.ctx, dbgen.GetDeletionReceiptParams{
 			Path:        intent.Path,
 			OperationID: step.OperationID,
 			StepKey:     "image_cleanup",
@@ -164,12 +164,12 @@ func (service *Images) verifyImageCleanupReceipts(step imageCleanupStep) error {
 	return nil
 }
 
-func (service *Images) runImageCleanup(step imageCleanupStep) error {
+func (i *Images) runImageCleanup(step imageCleanupStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
 	if step.State.Phase == "admitted" {
-		intents, err := service.imageCleanupIntents(step)
+		intents, err := i.imageCleanupIntents(step)
 		if err != nil {
 			return err
 		}
@@ -177,14 +177,14 @@ func (service *Images) runImageCleanup(step imageCleanupStep) error {
 			Phase:   "prepared",
 			Intents: intents,
 		}
-		if err = service.saveImageCleanup(&step, state); err != nil {
+		if err = i.saveImageCleanup(&step, state); err != nil {
 			return err
 		}
-		if err = service.fault("image_cleanup_prepared"); err != nil {
+		if err = i.fault("image_cleanup_prepared"); err != nil {
 			return err
 		}
 	}
-	if err := service.verifyImageCleanupReceipts(step); err != nil {
+	if err := i.verifyImageCleanupReceipts(step); err != nil {
 		return err
 	}
 	if step.State.Phase == "prepared" {
@@ -198,23 +198,23 @@ func (service *Images) runImageCleanup(step imageCleanupStep) error {
 			return err
 		}
 		for _, intent := range step.State.Intents {
-			files, err := loom.ResumeDeletion(service.ctx, service.directory, intent)
+			files, err := loom.ResumeDeletion(i.ctx, i.directory, intent)
 			if err != nil {
 				return err
 			}
 			for _, file := range files {
-				if err = loom.RemoveDeletionFile(service.ctx, service.directory, intent, file); err != nil {
+				if err = loom.RemoveDeletionFile(i.ctx, i.directory, intent, file); err != nil {
 					return err
 				}
-				if err = service.fault("image_cleanup_file_removed"); err != nil {
+				if err = i.fault("image_cleanup_file_removed"); err != nil {
 					return err
 				}
 			}
-			if err = loom.RemoveDeletionDirectories(service.ctx, service.directory, intent); err != nil {
+			if err = loom.RemoveDeletionDirectories(i.ctx, i.directory, intent); err != nil {
 				return err
 			}
 		}
-		if err := service.saveImageCleanup(&step, imageCleanupState{
+		if err := i.saveImageCleanup(&step, imageCleanupState{
 			Phase:   "removed",
 			Intents: step.State.Intents,
 		}); err != nil {
@@ -224,15 +224,15 @@ func (service *Images) runImageCleanup(step imageCleanupStep) error {
 	if step.State.Phase != "removed" {
 		return fmt.Errorf("image cleanup phase unsupported")
 	}
-	return service.completeImageCleanup(step)
+	return i.completeImageCleanup(step)
 }
 
-func (service *Images) completeImageCleanup(step imageCleanupStep) error {
-	if err := service.verifyImageCleanupReceipts(step); err != nil {
+func (i *Images) completeImageCleanup(step imageCleanupStep) error {
+	if err := i.verifyImageCleanupReceipts(step); err != nil {
 		return err
 	}
 	for _, intent := range step.State.Intents {
-		remaining, err := loom.ResumeDeletion(service.ctx, service.directory, intent)
+		remaining, err := loom.ResumeDeletion(i.ctx, i.directory, intent)
 		if err != nil || len(remaining) != 0 {
 			return fmt.Errorf("image artifact reclamation incomplete: %v", err)
 		}
@@ -240,16 +240,16 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 			return fmt.Errorf("image artifact directory reclamation unconfirmed")
 		}
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.database.BeginTx(service.ctx, nil)
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := loadImageCleanup(service.ctx, tx, step.OperationID)
+	current, err := loadImageCleanup(i.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -258,28 +258,28 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 	}
 	if step.Input.Cache != nil {
 		cache := step.Input.Cache
-		record, err := loadImageCache(service.ctx, tx, cache.Witness.Cache.Builder, cache.Witness.Cache.DiffID)
+		record, err := loadImageCache(i.ctx, tx, cache.Witness.Cache.Builder, cache.Witness.Cache.DiffID)
 		if err != nil {
 			return err
 		}
 		if !reflect.DeepEqual(record, *cache) {
 			return fmt.Errorf("retired cache ownership changed")
 		}
-		live, err := imageCacheLive(service.ctx, tx, cache.Witness)
+		live, err := imageCacheLive(i.ctx, tx, cache.Witness)
 		if err != nil {
 			return err
 		}
 		if live {
 			return fmt.Errorf("retired cache gained a consumer")
 		}
-		if err = store.RequireOne(dbgen.New(tx).DeleteCache(service.ctx, dbgen.DeleteCacheParams{
+		if err = store.RequireOne(dbgen.New(tx).DeleteCache(i.ctx, dbgen.DeleteCacheParams{
 			Builder: cache.Witness.Cache.Builder,
 			DiffID:  cache.Witness.Cache.DiffID,
 			Body:    operation.Encode(cache),
 		})); err != nil {
 			return err
 		}
-		if err = quota.New(tx).ReleaseMatchingReservation(service.ctx, quota.Reservation{
+		if err = quota.New(tx).ReleaseMatchingReservation(i.ctx, quota.Reservation{
 			Owner: "cache:" + cache.Witness.Cache.Builder + ":" + cache.Witness.Cache.DiffID,
 			Bytes: cache.Witness.PhysicalBytes,
 		}); err != nil {
@@ -287,7 +287,7 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 		}
 	} else {
 		source := step.Input.Source
-		original, err := loadImageImport(service.ctx, tx, source.OperationID)
+		original, err := loadImageImport(i.ctx, tx, source.OperationID)
 		if err != nil {
 			return err
 		}
@@ -295,7 +295,7 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 			return fmt.Errorf("original import terminal changed")
 		}
 		if source.Status == "failed" {
-			remaining, err := importRemainingCharge(service.ctx, tx, *source)
+			remaining, err := importRemainingCharge(i.ctx, tx, *source)
 			if err != nil {
 				return err
 			}
@@ -303,26 +303,26 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 				if layer.Cache == nil {
 					continue
 				}
-				record, err := loadImageCache(service.ctx, tx, layer.Cache.Cache.Builder, layer.Cache.Cache.DiffID)
+				record, err := loadImageCache(i.ctx, tx, layer.Cache.Cache.Builder, layer.Cache.Cache.DiffID)
 				if err != nil || !reflect.DeepEqual(record.Witness, *layer.Cache) {
 					return fmt.Errorf("failed import cache responsibility missing: %v", err)
 				}
 			}
-			if err = store.RequireOne(dbgen.New(tx).DeleteImportIntent(service.ctx, dbgen.DeleteImportIntentParams{
+			if err = store.RequireOne(dbgen.New(tx).DeleteImportIntent(i.ctx, dbgen.DeleteImportIntentParams{
 				Digest:      source.Input.Options.Digest,
 				OperationID: source.OperationID,
 				Body:        operation.Encode(source.Input),
 			})); err != nil {
 				return err
 			}
-			if err = quota.New(tx).ReleaseMatchingReservation(service.ctx, quota.Reservation{
+			if err = quota.New(tx).ReleaseMatchingReservation(i.ctx, quota.Reservation{
 				Owner: "import:" + source.OperationID,
 				Bytes: remaining,
 			}); err != nil {
 				return err
 			}
 		}
-		if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(service.ctx, dbgen.CompletePendingCleanupKindParams{
+		if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(i.ctx, dbgen.CompletePendingCleanupKindParams{
 			ID:           "image_import:" + source.OperationID,
 			OperationID:  source.OperationID,
 			ResourceKind: "image_import",
@@ -331,7 +331,7 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 		}
 	}
 	for _, intent := range step.State.Intents {
-		if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(service.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
+		if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(i.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
 			Path:        intent.Path,
 			OperationID: step.OperationID,
 			StepKey:     "image_cleanup",
@@ -343,7 +343,7 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 	state := step.State
 	state.Phase = "complete"
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupResource(service.ctx, dbgen.CompletePendingCleanupResourceParams{
+	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupResource(i.ctx, dbgen.CompletePendingCleanupResourceParams{
 		ID:           "image_cleanup:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: step.Input.Kind,
@@ -351,7 +351,7 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(service.ctx, dbgen.CompleteUnchangedStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(i.ctx, dbgen.CompleteUnchangedStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "image_cleanup",
 		InputHash:    step.Hash,
@@ -360,14 +360,14 @@ func (service *Images) completeImageCleanup(step imageCleanupStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(i.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("image_cleanup_completion_before_commit"); err != nil {
+	if err = i.fault("image_cleanup_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.checkpoint()
+	return i.checkpoint()
 }

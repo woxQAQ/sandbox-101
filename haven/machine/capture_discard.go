@@ -60,23 +60,23 @@ func NewCaptureDiscard(state *store.State, dependencies CaptureDiscardDependenci
 	}
 }
 
-func (service *CaptureDiscard) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (cd *CaptureDiscard) fault(point string) error {
+	if cd.faultPoint != nil {
+		return cd.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *CaptureDiscard) inspectStoppedGenerations(generations []ResourceStep) error {
-	return InspectStoppedGenerations(service.ctx, service.inspector, generations)
+func (cd *CaptureDiscard) inspectStoppedGenerations(generations []ResourceStep) error {
+	return InspectStoppedGenerations(cd.ctx, cd.inspector, generations)
 }
 
-func (service *CaptureDiscard) dispatch(id string) {
-	if service.store.Reviewed {
+func (cd *CaptureDiscard) dispatch(id string) {
+	if cd.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	cd.workers.Start(id, func() error {
+		handled, err := cd.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -87,8 +87,8 @@ func (service *CaptureDiscard) dispatch(id string) {
 	})
 }
 
-func (service *CaptureDiscard) Resume(id string) (bool, error) {
-	if service.
+func (cd *CaptureDiscard) Resume(id string) (bool, error) {
+	if cd.
 		ownership ==
 		nil {
 		return false,
@@ -98,24 +98,24 @@ func (service *CaptureDiscard) Resume(id string) (bool, error) {
 					ErrManualRecovery)
 	}
 
-	if service.store.Reviewed {
+	if cd.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume capture discard", errs.ErrManualRecovery)
 	}
-	step, err := LoadCaptureDiscard(service.ctx, service.store.Database, id)
+	step, err := LoadCaptureDiscard(cd.ctx, cd.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.VM(step.Input.Source.Input.Source.Candidate)
+	guard := cd.guards.VM(step.Input.Source.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadCaptureDiscard(service.ctx, service.store.Database, id)
+	step, err = LoadCaptureDiscard(cd.ctx, cd.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runCaptureDiscard(step)
+	return true, cd.runCaptureDiscard(step)
 }
 
 func ValidateCaptureDiscard(ctx context.Context, database store.DBTX, id string) error {
@@ -182,8 +182,8 @@ func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDi
 
 // captureDiscardAdmissionProof requires the original failed capture to retain
 // custody. The discard operation and its transferred holders do not exist yet.
-func (service *CaptureDiscard) captureDiscardAdmissionProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
-	if _, err := service.verifyCaptureDiscardSource(ctx, tx, step, ""); err != nil {
+func (cd *CaptureDiscard) captureDiscardAdmissionProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
+	if _, err := cd.verifyCaptureDiscardSource(ctx, tx, step, ""); err != nil {
 		return err
 	}
 	return verifyCaptureDiscardCustody(ctx, tx, step, captureDiscardCustody{
@@ -198,13 +198,13 @@ func (service *CaptureDiscard) captureDiscardAdmissionProof(ctx context.Context,
 
 // captureDiscardProof requires admitted ownership and the exact transferred
 // cleanup responsibility before effects or completion can proceed.
-func (service *CaptureDiscard) captureDiscardProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
-	record, err := service.verifyCaptureDiscardSource(ctx, tx, step, step.OperationID)
+func (cd *CaptureDiscard) captureDiscardProof(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep) error {
+	record, err := cd.verifyCaptureDiscardSource(ctx, tx, step, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if step.Input.Lifecycle != "" {
-		if err = service.ownership.VerifyCaptureDiscardLink(ctx, tx, step); err != nil {
+		if err = cd.ownership.VerifyCaptureDiscardLink(ctx, tx, step); err != nil {
 			return err
 		}
 	}

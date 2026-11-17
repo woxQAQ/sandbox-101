@@ -83,7 +83,7 @@ func imageCleanupFence(ctx context.Context, q store.DBTX, kind, id string) error
 	return nil
 }
 
-func (service *Images) AdmitCleanup(ctx context.Context, principal authorization.Principal, key string, request ImageCleanupRequest) (operation.Record, error) {
+func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Principal, key string, request ImageCleanupRequest) (operation.Record, error) {
 	var empty operation.Record
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
@@ -93,7 +93,7 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 	if key == "" || len(key) > 256 || work == cache || (work && (request.CacheBuilder != "" || request.CacheDiffID != "")) {
 		return empty, fmt.Errorf("%w: image cleanup requires one exact import or cache", errs.ErrInvalid)
 	}
-	guard := service.guards.NodeRequest(service.nodeID, key)
+	guard := i.guards.NodeRequest(i.nodeID, key)
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := operation.Encode(struct {
@@ -101,24 +101,24 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 		Request ImageCleanupRequest
 	}{"image_cleanup", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
 		Kind: "node",
-		ID:   service.nodeID,
+		ID:   i.nodeID,
 	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			i.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	if !service.guards.Artifacts().TryLock() {
+	if !i.guards.Artifacts().TryLock() {
 		return empty, fmt.Errorf("%w: artifact producer or collector active", errs.ErrConflict)
 	}
-	defer service.guards.Artifacts().Unlock()
+	defer i.guards.Artifacts().Unlock()
 	input := imageCleanupInput{
 		RequestTenantID: principal.TenantID,
 	}
 	if request.ImportOperationID != "" {
-		source, err := loadImageImport(ctx, service.database, request.ImportOperationID)
+		source, err := loadImageImport(ctx, i.database, request.ImportOperationID)
 		if err != nil {
 			return empty, err
 		}
@@ -129,7 +129,7 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 		input.ResourceID = source.OperationID
 		input.Source = &source
 	} else {
-		cache, err := loadImageCache(ctx, service.database, request.CacheBuilder, request.CacheDiffID)
+		cache, err := loadImageCache(ctx, i.database, request.CacheBuilder, request.CacheDiffID)
 		if err != nil {
 			return empty, err
 		}
@@ -137,12 +137,12 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 		input.ResourceID = request.CacheBuilder + ":" + request.CacheDiffID
 		input.Cache = &cache
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	if err := i.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.database.BeginTx(ctx, nil)
+	tx, err := i.database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -197,7 +197,7 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
-		ScopeID:   service.nodeID,
+		ScopeID:   i.nodeID,
 		Key:       key,
 		Hash:      hash,
 		Request:   frozen,
@@ -230,15 +230,15 @@ func (service *Images) AdmitCleanup(ctx context.Context, principal authorization
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.fault("image_cleanup_admission_before_commit"); err != nil {
+	if err = i.fault("image_cleanup_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.checkpoint(); err != nil {
+	if err = i.checkpoint(); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	i.dispatch(accepted.ID)
 	return accepted, nil
 }

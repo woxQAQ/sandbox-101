@@ -21,36 +21,36 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if command.Count == 0 {
 		command.Count = 1
 	}
-	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 || service.opts.Guest == nil {
+	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 || f.opts.Guest == nil {
 		return empty, fmt.Errorf("%w: fork requires tenant authority, one source, count 1..32 and key", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := f.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	_, secrets, _, err := SplitEnv(command.Env)
 	if err != nil {
 		return empty, err
 	}
-	mac := service.commands.Identity.CommandMAC(principal, command)
-	if acceptedOperation, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+	mac := f.commands.Identity.CommandMAC(principal, command)
+	if acceptedOperation, found, err := f.existing(ctx, principal, key, &ClaimAdmission{
 		MAC:     mac,
 		Secrets: secrets,
 	}); found || err != nil {
 		if found && err == nil && !operation.Terminal(acceptedOperation.Status) {
-			group, lookup := LoadFork(ctx, service.store.Database, acceptedOperation.ID)
+			group, lookup := LoadFork(ctx, f.store.Database, acceptedOperation.ID)
 			if lookup != nil {
 				return acceptedOperation, lookup
 			}
-			service.forkSecrets(group)
+			f.forkSecrets(group)
 		}
 		return acceptedOperation, err
 	}
-	draining := service.availability.IsDraining()
+	draining := f.availability.IsDraining()
 	if draining {
 		return empty, fmt.Errorf("%w: node is draining", errs.ErrExhausted)
 	}
@@ -58,11 +58,11 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 		RequestTenantID: principal.TenantID,
 	}
 	if command.CheckpointID != "" {
-		checkpoint, err := service.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
+		checkpoint, err := f.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
 		if err != nil {
 			return empty, err
 		}
-		source, err := service.history.LoadRestoreSource(ctx, service.store.Database, checkpoint.TenantID, checkpoint.SnapshotID)
+		source, err := f.history.LoadRestoreSource(ctx, f.store.Database, checkpoint.TenantID, checkpoint.SnapshotID)
 		if err != nil {
 			return empty, err
 		}
@@ -76,18 +76,18 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 		}
 	} else {
 
-		sandbox, err := service.catalog.OwnedRecord(ctx, principal, command.SandboxID)
+		sandbox, err := f.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 		if err != nil {
 			return empty, err
 		}
 		if sandbox.State != "running" && sandbox.State != "paused" {
 			return empty, fmt.Errorf("%w: sandbox is not forkable", errs.ErrConflict)
 		}
-		settings, err := LoadSettings(ctx, service.store.Database, sandbox.ID)
+		settings, err := LoadSettings(ctx, f.store.Database, sandbox.ID)
 		if err != nil {
 			return empty, err
 		}
-		if err = service.catalog.Unfenced(ctx, sandbox.ID); err != nil {
+		if err = f.catalog.Unfenced(ctx, sandbox.ID); err != nil {
 			return empty, err
 		}
 		input.SourceSandbox = &sandbox
@@ -96,7 +96,7 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 			command.Policy = settings.Policy
 		}
 		if sandbox.State == "paused" {
-			source, err := service.history.LoadRestoreSource(ctx, service.store.Database, sandbox.TenantID, sandbox.SnapshotID)
+			source, err := f.history.LoadRestoreSource(ctx, f.store.Database, sandbox.TenantID, sandbox.SnapshotID)
 			if err != nil {
 				return empty, err
 			}
@@ -107,11 +107,11 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 				Config:   source.Snapshot.Manifest.Config,
 			}
 		} else {
-			public, err := service.catalog.Get(ctx, principal, sandbox.ID)
+			public, err := f.catalog.Get(ctx, principal, sandbox.ID)
 			if err != nil {
 				return empty, err
 			}
-			source, err := service.catalog.ResourceForData(ctx, public)
+			source, err := f.catalog.ResourceForData(ctx, public)
 			if err != nil {
 				return empty, err
 			}
@@ -123,7 +123,7 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 			}
 		}
 	}
-	admission, err := service.commands.Prepare(command)
+	admission, err := f.commands.Prepare(command)
 	if err != nil {
 		return empty, err
 	}
@@ -132,14 +132,14 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 			return empty, err
 		}
 	}
-	if err = service.opts.Backend.Check(ctx, input.Template.Config); err != nil {
+	if err = f.opts.Backend.Check(ctx, input.Template.Config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, input.Template.Config.Image)
+	manifest, err := image.LoadManifest(ctx, f.store.Database, input.Template.Config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(f.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
 	parent := operation.Record{
@@ -165,21 +165,21 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 	if input.Snapshot != nil {
 		parent.Result.SnapshotID = input.Snapshot.Snapshot.ID
 	}
-	free, err := loom.FreeBytes(service.store.Directory)
+	free, err := loom.FreeBytes(f.store.Directory)
 	if err != nil {
 		return empty, err
 	}
 	link := &forkAdmission{
-		gate:     service.gate,
-		history:  service.history,
-		capacity: service.opts.Capacity,
+		gate:     f.gate,
+		history:  f.history,
+		capacity: f.opts.Capacity,
 		Parent:   parent,
 		Input:    input,
 		MAC:      mac,
 		Free:     free,
 	}
 	if input.Source != nil {
-		captures := service.captures
+		captures := f.captures
 		child, err := captures.AdmitForParent(ctx, machine.CaptureRequest{
 			TenantID:         input.OwnerTenantID,
 			Key:              parent.ID + ":capture",
@@ -194,25 +194,25 @@ func (service *Forks) AdmitFork(ctx context.Context, principal authorization.Pri
 			return parent, err
 		}
 	} else {
-		if err = service.admitForkSnapshot(ctx, link); err != nil {
+		if err = f.admitForkSnapshot(ctx, link); err != nil {
 			return empty, err
 		}
 	}
-	service.registry.SetOperationSecrets(parent.ID, admission.Secrets)
-	if err = service.fault("fork_admitted"); err != nil {
+	f.registry.SetOperationSecrets(parent.ID, admission.Secrets)
+	if err = f.fault("fork_admitted"); err != nil {
 		return parent, err
 	}
-	service.dispatch(parent.ID)
+	f.dispatch(parent.ID)
 	return parent, nil
 }
 
-func (service *Forks) admitForkSnapshot(ctx context.Context, parent *forkAdmission) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+func (f *Forks) admitForkSnapshot(ctx context.Context, parent *forkAdmission) error {
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	if err := f.gate.Check(); err != nil {
 		return err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := f.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -222,18 +222,18 @@ func (service *Forks) admitForkSnapshot(ctx context.Context, parent *forkAdmissi
 	if err = parent.admitIntent(ctx, tx); err != nil {
 		return err
 	}
-	if err = service.fault("fork_admission_before_commit"); err != nil {
+	if err = f.fault("fork_admission_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return f.store.Checkpoint()
 }
 
-func (parent *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error {
-	input := parent.Input
-	if err := parent.gate.Check(); err != nil {
+func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error {
+	input := admission.Input
+	if err := admission.gate.Check(); err != nil {
 		return err
 	}
 	if input.SourceSandbox != nil {
@@ -262,7 +262,7 @@ func (parent *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error 
 		}
 	}
 	if input.Snapshot != nil {
-		current, err := parent.history.LoadRestoreSource(ctx, tx, input.OwnerTenantID, input.Snapshot.Snapshot.ID)
+		current, err := admission.history.LoadRestoreSource(ctx, tx, input.OwnerTenantID, input.Snapshot.Snapshot.ID)
 		if err != nil {
 			return err
 		}
@@ -284,27 +284,27 @@ func (parent *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error 
 	}
 	operations := operation.New(tx)
 	if err := operations.Insert(ctx, operation.Admission{
-		ID:        parent.Parent.ID,
+		ID:        admission.Parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
-		Key:       parent.Parent.Key,
+		Key:       admission.Parent.Key,
 		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(parent.Parent.Result),
+		Body:      operation.Encode(admission.Parent.Result),
 	}); err != nil {
 		return err
 	}
-	if err := operations.InsertCredential(ctx, parent.Parent.ID, parent.MAC); err != nil {
+	if err := operations.InsertCredential(ctx, admission.Parent.ID, admission.MAC); err != nil {
 		return err
 	}
 	if err := store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         parent.Parent.ID,
+		OperationID:         admission.Parent.ID,
 		StepKey:             "fork_group",
 		Action:              "fork",
 		InputHash:           operation.Digest(payload),
 		Input:               payload,
-		CandidateResourceID: parent.Parent.ID,
+		CandidateResourceID: admission.Parent.ID,
 		ExpectedInstance:    "",
 		Status:              "pending",
 		Body:                operation.Encode(state),
@@ -315,17 +315,17 @@ func (parent *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) error 
 		Kind:       "image",
 		ID:         input.Template.Config.Image,
 		HolderKind: "step",
-		HolderID:   parent.Parent.ID + ":fork_group",
+		HolderID:   admission.Parent.ID + ":fork_group",
 	}); err != nil {
 		return err
 	}
-	if err := parent.reserveTargets(ctx, tx); err != nil {
+	if err := admission.reserveTargets(ctx, tx); err != nil {
 		return err
 	}
 	if input.Snapshot != nil {
 		return machine.PinSnapshotSource(ctx, tx, input.OwnerTenantID, machine.SourceLease{
 			SnapshotID:  input.Snapshot.Snapshot.ID,
-			OperationID: parent.Parent.ID,
+			OperationID: admission.Parent.ID,
 			StepKey:     "fork_group",
 		})
 	}
@@ -350,9 +350,9 @@ func forkFunding(input ForkInput) forkBudget {
 	}
 }
 
-func (parent *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) error {
-	acceptedOperation, input := parent.Parent, parent.Input
-	free, capacity := parent.Free, parent.capacity
+func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) error {
+	acceptedOperation, input := admission.Parent, admission.Input
+	free, capacity := admission.Free, admission.capacity
 	budget := forkFunding(input)
 	tenant, err := authorization.New(tx).Limits(ctx, input.OwnerTenantID)
 	if err != nil {

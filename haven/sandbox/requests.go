@@ -42,37 +42,37 @@ func NewSandboxRequests(dependencies SandboxRequestDependencies) *SandboxRequest
 	}
 }
 
-func (service *SandboxRequests) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (sr *SandboxRequests) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	switch command.Action {
 	case "claim":
-		return service.sandboxes.AdmitClaim(ctx, principal, key, command)
+		return sr.sandboxes.AdmitClaim(ctx, principal, key, command)
 	case "configure":
-		return service.sandboxes.AdmitConfigure(ctx, principal, key, command)
+		return sr.sandboxes.AdmitConfigure(ctx, principal, key, command)
 	case "checkpoint_delete":
-		return service.lifecycle.AdmitCheckpointDelete(ctx, principal, key, command)
+		return sr.lifecycle.AdmitCheckpointDelete(ctx, principal, key, command)
 	case "refill":
-		return service.supply.AdmitRefill(ctx, principal, key, command)
+		return sr.supply.AdmitRefill(ctx, principal, key, command)
 	case "template_put", "template_build":
-		return service.supply.AdmitTemplate(ctx, principal, key, command)
+		return sr.supply.AdmitTemplate(ctx, principal, key, command)
 	case "renew":
-		return service.lifecycle.AdmitRenew(ctx, principal, key, command)
+		return sr.lifecycle.AdmitRenew(ctx, principal, key, command)
 	case "rollback":
-		return service.lifecycle.AdmitRollback(ctx, principal, key, command)
+		return sr.lifecycle.AdmitRollback(ctx, principal, key, command)
 	case "fork":
-		return service.forks.AdmitFork(ctx, principal, key, command)
+		return sr.forks.AdmitFork(ctx, principal, key, command)
 	case "resume":
-		return service.lifecycle.AdmitResume(ctx, principal, key, command)
+		return sr.lifecycle.AdmitResume(ctx, principal, key, command)
 	case "release", "checkpoint", "pause":
-		return service.lifecycle.AdmitLifecycle(ctx, principal, key, command)
+		return sr.lifecycle.AdmitLifecycle(ctx, principal, key, command)
 	default:
 		return operation.Record{}, fmt.Errorf("%w: unsupported sandbox action", errs.ErrInvalid)
 	}
 }
 
-func (service *SandboxRequests) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	accepted, err := service.Submit(ctx, principal, key, command)
+func (sr *SandboxRequests) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+	accepted, err := sr.Submit(ctx, principal, key, command)
 	if err != nil {
 		return accepted, err
 	}
-	return service.operations.Wait(ctx, principal, accepted.ID)
+	return sr.operations.Wait(ctx, principal, accepted.ID)
 }

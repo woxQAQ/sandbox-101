@@ -69,7 +69,7 @@ func LoadSnapshotDelete(ctx context.Context, q store.DBTX, id string) (SnapshotD
 	return step, nil
 }
 
-func (service *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx, step SnapshotDeleteStep, admitting bool) ([]ResourceStep, error) {
+func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx, step SnapshotDeleteStep, admitting bool) ([]ResourceStep, error) {
 	var record SnapshotRecord
 	var checkpoint SnapshotRecord
 	source := step.Input.Source
@@ -82,7 +82,7 @@ func (service *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sq
 	if err != nil {
 		return nil, err
 	}
-	if err = service.proofs.ValidateSnapshotPublication(source, request.TenantID, capture); err != nil {
+	if err = sd.proofs.ValidateSnapshotPublication(source, request.TenantID, capture); err != nil {
 		return nil, err
 	}
 	deleting, holderKind, holderID, cleanupStatus := 1, "cleanup", step.OperationID+":snapshot_delete", "pending"
@@ -130,7 +130,7 @@ func (service *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sq
 	if string(body) != string(operation.Encode(capture.Input)) {
 		return nil, fmt.Errorf("snapshot raw cleanup history changed")
 	}
-	backings, err := service.proofs.Backings(ctx, tx, source)
+	backings, err := sd.proofs.Backings(ctx, tx, source)
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +225,11 @@ func (service *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sq
 			return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 		}
 	}
-	count, err := service.usage.TemplateSnapshotUsers(ctx, tx, snapshot.ID)
+	count, err := sd.usage.TemplateSnapshotUsers(ctx, tx, snapshot.ID)
 	if err != nil || count != 0 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	count, err = service.usage.PoolSnapshotUsers(ctx, tx, snapshot.ID)
+	count, err = sd.usage.PoolSnapshotUsers(ctx, tx, snapshot.ID)
 	if err != nil || count != 0 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
@@ -253,8 +253,8 @@ func snapshotRawPath(source SnapshotSource) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(source.Snapshot.Dir)), "vms", source.Snapshot.SourceVM, "capture", source.CaptureOperation)
 }
 
-func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request SnapshotDeleteRequest) (operation.Record, error) {
-	if service.
+func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request SnapshotDeleteRequest) (operation.Record, error) {
+	if sd.
 		usage ==
 		nil {
 		return operation.Record{}, fmt.
@@ -272,13 +272,13 @@ func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, reques
 		Request SnapshotDeleteRequest
 	}{"snapshot_delete", request})
 	hash := operation.Digest(frozen)
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	sd.admission.Lock()
+	defer sd.admission.Unlock()
+	closing := sd.lifetime.Closing() || sd.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := sd.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -290,11 +290,11 @@ func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, reques
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			sd.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	source, err := service.proofs.SnapshotPublication(ctx, tx, request.TenantID, request.SnapshotID)
+	source, err := sd.proofs.SnapshotPublication(ctx, tx, request.TenantID, request.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -318,7 +318,7 @@ func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, reques
 		Phase:       "admitted",
 		Input:       input,
 	}
-	if _, err = service.snapshotDeleteProof(ctx, tx, step, true); err != nil {
+	if _, err = sd.snapshotDeleteProof(ctx, tx, step, true); err != nil {
 		return empty, err
 	}
 	operations := operation.New(tx)
@@ -380,50 +380,50 @@ func (service *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, reques
 	})); err != nil {
 		return empty, err
 	}
-	if _, err = service.snapshotDeleteProof(ctx, tx, step, false); err != nil {
+	if _, err = sd.snapshotDeleteProof(ctx, tx, step, false); err != nil {
 		return empty, err
 	}
-	if err = service.fault("snapshot_delete_admission_before_commit"); err != nil {
+	if err = sd.fault("snapshot_delete_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sd.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("snapshot_delete_admitted"); err != nil {
+	if err = sd.fault("snapshot_delete_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	sd.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *SnapshotDeletion) checkSnapshotDelete(step SnapshotDeleteStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (sd *SnapshotDeletion) checkSnapshotDelete(step SnapshotDeleteStep) error {
+	sd.admission.Lock()
+	defer sd.admission.Unlock()
+	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSnapshotDelete(service.ctx, tx, step.OperationID)
+	current, err := LoadSnapshotDelete(sd.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, step) {
 		return fmt.Errorf("snapshot delete current intent changed")
 	}
-	_, err = service.snapshotDeleteProof(service.ctx, tx, step, false)
+	_, err = sd.snapshotDeleteProof(sd.ctx, tx, step, false)
 	return err
 }
 
-func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep) (loom.DeletionIntent, error) {
+func (sd *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
 	source := step.Input.Source
-	body, err := dbgen.New(service.store.Database).GetDeletionReceipt(service.ctx, dbgen.GetDeletionReceiptParams{
+	body, err := dbgen.New(sd.store.Database).GetDeletionReceipt(sd.ctx, dbgen.GetDeletionReceiptParams{
 		Path:        source.Snapshot.Dir,
 		OperationID: step.OperationID,
 		StepKey:     "snapshot_delete",
@@ -441,7 +441,7 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 	if !errors.Is(err, sql.ErrNoRows) || step.Phase != "admitted" {
 		return intent, fmt.Errorf("snapshot deletion receipt unavailable: %w", err)
 	}
-	intent, err = loom.InspectSnapshotDeletion(service.ctx, service.store.Directory, loom.SnapshotDeletionTarget{
+	intent, err = loom.InspectSnapshotDeletion(sd.ctx, sd.store.Directory, loom.SnapshotDeletionTarget{
 		ID:          source.Snapshot.ID,
 		Publication: source.Publication,
 		Files:       source.Snapshot.Manifest.Files,
@@ -449,23 +449,23 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 	if err != nil {
 		return intent, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	sd.admission.Lock()
+	defer sd.admission.Unlock()
+	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return intent, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSnapshotDelete(service.ctx, tx, step.OperationID)
+	current, err := LoadSnapshotDelete(sd.ctx, tx, step.OperationID)
 	if err != nil {
 		return intent, err
 	}
 	if !reflect.DeepEqual(current, *step) {
 		return intent, fmt.Errorf("snapshot deletion receipt intent changed")
 	}
-	backings, err := service.snapshotDeleteProof(service.ctx, tx, *step, false)
+	backings, err := sd.snapshotDeleteProof(sd.ctx, tx, *step, false)
 	if err != nil {
 		return intent, err
 	}
@@ -474,7 +474,7 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 			return intent, fmt.Errorf("snapshot retained memory differs from published inode")
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(service.ctx, dbgen.InsertDeletionReceiptParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(sd.ctx, dbgen.InsertDeletionReceiptParams{
 		Path:        intent.Path,
 		OperationID: step.OperationID,
 		StepKey:     "snapshot_delete",
@@ -482,7 +482,7 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 	})); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(service.ctx, dbgen.BeginPendingStepParams{
+	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(sd.ctx, dbgen.BeginPendingStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "snapshot_delete",
 		InputHash:    step.Hash,
@@ -496,52 +496,52 @@ func (service *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep)
 	}
 	step.Phase = "deleting"
 	step.Status = "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sd.store.Checkpoint(); err != nil {
 		return intent, err
 	}
-	return intent, service.fault("snapshot_delete_receipt")
+	return intent, sd.fault("snapshot_delete_receipt")
 }
 
-func (service *SnapshotDeletion) runSnapshotDelete(step SnapshotDeleteStep) error {
+func (sd *SnapshotDeletion) runSnapshotDelete(step SnapshotDeleteStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	if err := service.checkSnapshotDelete(step); err != nil {
+	if err := sd.checkSnapshotDelete(step); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(snapshotRawPath(step.Input.Source)); !os.IsNotExist(err) {
 		return fmt.Errorf("snapshot raw cleanup absence unconfirmed: %v", err)
 	}
-	intent, err := service.snapshotDeleteReceipt(&step)
+	intent, err := sd.snapshotDeleteReceipt(&step)
 	if err != nil {
 		return err
 	}
 	if step.Phase == "deleting" {
-		paths, err := loom.ResumeDeletion(service.ctx, service.store.Directory, intent)
+		paths, err := loom.ResumeDeletion(sd.ctx, sd.store.Directory, intent)
 		if err != nil {
 			return err
 		}
 		if err = loom.CheckLocalReaders(paths); err != nil {
 			return err
 		}
-		if err = service.checkSnapshotDelete(step); err != nil {
+		if err = sd.checkSnapshotDelete(step); err != nil {
 			return err
 		}
 		for _, path := range paths {
-			if err = loom.RemoveDeletionFile(service.ctx, service.store.Directory, intent, path); err != nil {
+			if err = loom.RemoveDeletionFile(sd.ctx, sd.store.Directory, intent, path); err != nil {
 				return err
 			}
-			if err = service.fault("snapshot_delete_unlinked"); err != nil {
+			if err = sd.fault("snapshot_delete_unlinked"); err != nil {
 				return err
 			}
 		}
-		if err = loom.RemoveDeletionDirectories(service.ctx, service.store.Directory, intent); err != nil {
+		if err = loom.RemoveDeletionDirectories(sd.ctx, sd.store.Directory, intent); err != nil {
 			return err
 		}
-		if err = service.fault("snapshot_delete_directory_removed"); err != nil {
+		if err = sd.fault("snapshot_delete_directory_removed"); err != nil {
 			return err
 		}
-		if err = service.markSnapshotRemoved(&step); err != nil {
+		if err = sd.markSnapshotRemoved(&step); err != nil {
 			return err
 		}
 	}
@@ -551,23 +551,23 @@ func (service *SnapshotDeletion) runSnapshotDelete(step SnapshotDeleteStep) erro
 	if _, err = os.Lstat(step.Input.Source.Snapshot.Dir); !os.IsNotExist(err) {
 		return fmt.Errorf("snapshot deletion physical absence unconfirmed: %v", err)
 	}
-	return service.completeSnapshotDelete(step)
+	return sd.completeSnapshotDelete(step)
 }
 
-func (service *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (sd *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) error {
+	sd.admission.Lock()
+	defer sd.admission.Unlock()
+	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.snapshotDeleteProof(service.ctx, tx, *step, false); err != nil {
+	if _, err = sd.snapshotDeleteProof(sd.ctx, tx, *step, false); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceRunningStepBody(service.ctx, dbgen.ReplaceRunningStepBodyParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceRunningStepBody(sd.ctx, dbgen.ReplaceRunningStepBodyParams{
 		OperationID:  step.OperationID,
 		StepKey:      "snapshot_delete",
 		InputHash:    step.Hash,
@@ -580,30 +580,30 @@ func (service *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) e
 		return err
 	}
 	step.Phase = "files_removed"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sd.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("snapshot_delete_files_removed")
+	return sd.fault("snapshot_delete_files_removed")
 }
 
-func (service *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) error {
+	sd.admission.Lock()
+	defer sd.admission.Unlock()
+	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSnapshotDelete(service.ctx, tx, step.OperationID)
+	current, err := LoadSnapshotDelete(sd.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, step) || step.Phase != "files_removed" {
 		return fmt.Errorf("snapshot deletion completion changed")
 	}
-	if _, err = service.snapshotDeleteProof(service.ctx, tx, step, false); err != nil {
+	if _, err = sd.snapshotDeleteProof(sd.ctx, tx, step, false); err != nil {
 		return err
 	}
 	publication := step.Input.Source.Snapshot
@@ -611,14 +611,14 @@ func (service *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep)
 
 	responsibilities := quota.New(tx)
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).DeleteCheckpoint(service.ctx, dbgen.DeleteCheckpointParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteCheckpoint(sd.ctx, dbgen.DeleteCheckpointParams{
 		ID:     publication.ID,
 		Tenant: publication.TenantID,
 		Body:   body,
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.RemoveResourceReference(sd.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         publication.ID,
 		HolderKind: "cleanup",
@@ -626,7 +626,7 @@ func (service *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep)
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveCostReference(service.ctx, quota.CostReference{
+	if err = responsibilities.RemoveCostReference(sd.ctx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "snapshot",
 		Key:        publication.ID,
@@ -635,23 +635,23 @@ func (service *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep)
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.ReleaseReservation(service.ctx, "snapshot:"+publication.ID); err != nil {
+	if err = responsibilities.ReleaseReservation(sd.ctx, "snapshot:"+publication.ID); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshot(service.ctx, dbgen.DeleteSnapshotParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshot(sd.ctx, dbgen.DeleteSnapshotParams{
 		ID:        publication.ID,
 		Published: 1,
 		Body:      body,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).RetainCleanup(service.ctx, dbgen.RetainCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).RetainCleanup(sd.ctx, dbgen.RetainCleanupParams{
 		ID:          "snapshot_delete:" + step.OperationID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(service.ctx, dbgen.CompleteRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(sd.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "snapshot_delete",
 		InputHash:    step.Hash,
@@ -660,20 +660,20 @@ func (service *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep)
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(sd.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = RetireDeletedSnapshot(service.ctx, tx, step.Input.Source, service.proofs); err != nil {
+	if err = RetireDeletedSnapshot(sd.ctx, tx, step.Input.Source, sd.proofs); err != nil {
 		return err
 	}
-	if err = service.fault("snapshot_delete_completion_before_commit"); err != nil {
+	if err = sd.fault("snapshot_delete_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sd.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("snapshot_delete_completed")
+	return sd.fault("snapshot_delete_completed")
 }

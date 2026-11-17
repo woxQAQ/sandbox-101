@@ -27,13 +27,13 @@ func (step imageImportStep) preparedWork(state string) imageimport.ImportWork {
 	}
 }
 
-func (service *Images) runImageImport(step imageImportStep) (returned error) {
+func (i *Images) runImageImport(step imageImportStep) (returned error) {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
 	defer func() {
 		if returned != nil && !errors.Is(returned, errs.ErrInterrupted) && !errors.Is(returned, context.Canceled) {
-			if err := service.failImageImport(step); err != nil {
+			if err := i.failImageImport(step); err != nil {
 				returned = errors.Join(returned, err)
 			}
 		}
@@ -44,31 +44,31 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 	for {
 		switch step.State.Phase {
 		case "admitted":
-			if err := service.saveImageImport(&step, "prepare_intent"); err != nil {
+			if err := i.saveImageImport(&step, "prepare_intent"); err != nil {
 				return err
 			}
-			boundary, err := imageimport.PrepareImageImport(service.directory, step.OperationID)
+			boundary, err := imageimport.PrepareImageImport(i.directory, step.OperationID)
 			if err != nil {
 				return err
 			}
-			if err = service.fault("image_import_prepared_effect"); err != nil {
+			if err = i.fault("image_import_prepared_effect"); err != nil {
 				return err
 			}
 			step.State.Boundary = &boundary
-			if err = service.saveImageImport(&step, "prepared"); err != nil {
+			if err = i.saveImageImport(&step, "prepared"); err != nil {
 				return err
 			}
 		case "prepared":
 			if step.State.Boundary == nil {
 				return fmt.Errorf("image import lacks preparation receipt")
 			}
-			if err := service.saveImageImport(&step, "staging_intent"); err != nil {
+			if err := i.saveImageImport(&step, "staging_intent"); err != nil {
 				return err
 			}
-			if err := step.preparedWork(service.directory).Stage(service.ctx); err != nil {
+			if err := step.preparedWork(i.directory).Stage(i.ctx); err != nil {
 				return err
 			}
-			if err := service.saveImageImport(&step, "staged"); err != nil {
+			if err := i.saveImageImport(&step, "staged"); err != nil {
 				return err
 			}
 		case "staged":
@@ -81,10 +81,10 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 					bytes += proof.Bytes
 					files += proof.Entries
 				}
-				if err := service.saveImageImport(&step, "layer_intent"); err != nil {
+				if err := i.saveImageImport(&step, "layer_intent"); err != nil {
 					return err
 				}
-				proof, err := step.preparedWork(service.directory).MaterializeLayer(service.ctx, len(step.State.Layers), host.LayerLimits{
+				proof, err := step.preparedWork(i.directory).MaterializeLayer(i.ctx, len(step.State.Layers), host.LayerLimits{
 					MaxBytes: step.Input.Options.MaxBytes - bytes,
 					MaxFiles: step.Input.Options.MaxFiles - files,
 				})
@@ -92,49 +92,49 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 					return err
 				}
 				step.State.Layers = append(step.State.Layers, proof)
-				if err = service.saveImageImport(&step, "staged"); err != nil {
+				if err = i.saveImageImport(&step, "staged"); err != nil {
 					return err
 				}
-				if err = service.fault("image_import_layer_saved"); err != nil {
+				if err = i.fault("image_import_layer_saved"); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := service.saveImageImport(&step, "output_intent"); err != nil {
+			if err := i.saveImageImport(&step, "output_intent"); err != nil {
 				return err
 			}
-			proof, err := step.preparedWork(service.directory).BuildOutput(service.ctx, step.State.Layers)
+			proof, err := step.preparedWork(i.directory).BuildOutput(i.ctx, step.State.Layers)
 			if err != nil {
 				return err
 			}
 			step.State.Proof = &proof
-			if err = service.saveImageImport(&step, "materialized"); err != nil {
+			if err = i.saveImageImport(&step, "materialized"); err != nil {
 				return err
 			}
-			if err = service.fault("image_import_materialized"); err != nil {
+			if err = i.fault("image_import_materialized"); err != nil {
 				return err
 			}
 		case "materialized":
 			if step.State.Boundary == nil || step.State.Proof == nil {
 				return fmt.Errorf("image publication lacks output proof")
 			}
-			if err := step.State.Proof.Verify(service.ctx, service.directory, filepath.Join(step.Input.Work, "output"), *step.State.Boundary); err != nil {
+			if err := step.State.Proof.Verify(i.ctx, i.directory, filepath.Join(step.Input.Work, "output"), *step.State.Boundary); err != nil {
 				return err
 			}
-			if err := service.saveImageImport(&step, "publish_intent"); err != nil {
+			if err := i.saveImageImport(&step, "publish_intent"); err != nil {
 				return err
 			}
 		case "publish_intent":
 			if step.State.Boundary == nil || step.State.Proof == nil {
 				return fmt.Errorf("image publication lacks frozen rename proof")
 			}
-			if err := step.State.Proof.Publish(service.ctx, service.directory, step.OperationID, *step.State.Boundary); err != nil {
+			if err := step.State.Proof.Publish(i.ctx, i.directory, step.OperationID, *step.State.Boundary); err != nil {
 				return err
 			}
-			if err := service.fault("image_import_renamed"); err != nil {
+			if err := i.fault("image_import_renamed"); err != nil {
 				return err
 			}
-			return service.completeImageImport(step)
+			return i.completeImageImport(step)
 		case "prepare_intent", "staging_intent", "layer_intent", "output_intent":
 			return fmt.Errorf("%w: interrupted image effect has unknown output; explicit cleanup review required", errs.ErrManualRecovery)
 		default:
@@ -143,17 +143,17 @@ func (service *Images) runImageImport(step imageImportStep) (returned error) {
 	}
 }
 
-func (service *Images) failImageImport(step imageImportStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.database.BeginTx(service.ctx, nil)
+func (i *Images) failImageImport(step imageImportStep) error {
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := loadImageImport(service.ctx, tx, step.OperationID)
+	current, err := loadImageImport(i.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (service *Images) failImageImport(step imageImportStep) error {
 	current.State.Phase = "failed"
 	current.State.Error = "image import failed; node storage responsibility retained"
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(i.ctx, dbgen.FailLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "image_import",
 		InputHash:   step.Hash,
@@ -175,12 +175,12 @@ func (service *Images) failImageImport(step imageImportStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(operation.Result{
+	if err = operations.FailResult(i.ctx, step.OperationID, operation.Encode(operation.Result{
 		Error: current.State.Error,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(i.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "image_import:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "image_import",
@@ -192,10 +192,10 @@ func (service *Images) failImageImport(step imageImportStep) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.checkpoint()
+	return i.checkpoint()
 }
 
-func (service *Images) completeImageImport(step imageImportStep) error {
+func (i *Images) completeImageImport(step imageImportStep) error {
 	if step.State.Boundary == nil || step.State.Proof == nil {
 		return fmt.Errorf("image publication proof missing")
 	}
@@ -204,19 +204,19 @@ func (service *Images) completeImageImport(step imageImportStep) error {
 	if plan == nil || proof.Manifest.Digest != step.Input.Options.Digest || proof.Manifest.Layout != step.Input.Options.Materialization || proof.Manifest.Builder != plan.Builder || !reflect.DeepEqual(proof.Manifest.Tools, plan.Tools) {
 		return fmt.Errorf("image publication differs from frozen plan")
 	}
-	if err := proof.Verify(service.ctx, service.directory, step.Input.Target, *step.State.Boundary); err != nil {
+	if err := proof.Verify(i.ctx, i.directory, step.Input.Target, *step.State.Boundary); err != nil {
 		return err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.database.BeginTx(service.ctx, nil)
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := loadImageImport(service.ctx, tx, step.OperationID)
+	current, err := loadImageImport(i.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -224,30 +224,30 @@ func (service *Images) completeImageImport(step imageImportStep) error {
 		return fmt.Errorf("image publication frozen phase changed")
 	}
 	catalog := dbgen.New(tx)
-	intent, err := catalog.GetImportIntent(service.ctx, step.Input.Options.Digest)
+	intent, err := catalog.GetImportIntent(i.ctx, step.Input.Options.Digest)
 	if err != nil {
 		return err
 	}
 	if intent.OperationID != step.OperationID || intent.Layout != step.Input.Options.Materialization || string(intent.Body) != string(operation.Encode(step.Input)) {
 		return fmt.Errorf("image publication ownership claim changed")
 	}
-	remaining, err := importRemainingCharge(service.ctx, tx, step)
+	remaining, err := importRemainingCharge(i.ctx, tx, step)
 	if err != nil {
 		return err
 	}
 	state := step.State
 	state.Phase = "complete"
-	if err = store.RequireOne(catalog.InsertManifest(service.ctx, dbgen.InsertManifestParams{
+	if err = store.RequireOne(catalog.InsertManifest(i.ctx, dbgen.InsertManifestParams{
 		Digest: proof.Manifest.Digest,
 		Body:   operation.Encode(proof.Manifest),
 	})); err != nil {
 		return err
 	}
-	if err = quota.New(tx).TransferStorageReservation(service.ctx, "import:"+step.OperationID, "image:"+proof.Manifest.Digest, remaining); err != nil {
+	if err = quota.New(tx).TransferStorageReservation(i.ctx, "import:"+step.OperationID, "image:"+proof.Manifest.Digest, remaining); err != nil {
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(i.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "image_import:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "image_import",
@@ -259,7 +259,7 @@ func (service *Images) completeImageImport(step imageImportStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(service.ctx, dbgen.CompleteLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(i.ctx, dbgen.CompleteLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "image_import",
 		InputHash:   step.Hash,
@@ -267,16 +267,16 @@ func (service *Images) completeImageImport(step imageImportStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.CompleteResult(service.ctx, step.OperationID, operation.Encode(operation.Result{
+	if err = operations.CompleteResult(i.ctx, step.OperationID, operation.Encode(operation.Result{
 		ImageDigest: proof.Manifest.Digest,
 	})); err != nil {
 		return err
 	}
-	if err = service.fault("image_import_publication_before_commit"); err != nil {
+	if err = i.fault("image_import_publication_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.checkpoint()
+	return i.checkpoint()
 }

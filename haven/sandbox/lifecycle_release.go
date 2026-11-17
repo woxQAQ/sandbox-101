@@ -53,15 +53,15 @@ func pausedReceipt(ctx context.Context, q store.DBTX, current ownership.Sandbox,
 	return "", fmt.Errorf("%w: paused sandbox lacks original successful VM deletion proof", errs.ErrManualRecovery)
 }
 
-func (service *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.Record, error) {
+func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.Record, error) {
 	parent, input, mac, upper := admission.Parent, admission.Input, admission.MAC, admission.Upper
 	var empty operation.Record
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := l.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -99,7 +99,7 @@ func (service *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lif
 		return empty, err
 	}
 	input.PauseOperation = proof
-	snapshot, err := service.proofs.Snapshots().SnapshotPublication(ctx, tx, input.OwnerTenantID, current.SnapshotID)
+	snapshot, err := l.proofs.Snapshots().SnapshotPublication(ctx, tx, input.OwnerTenantID, current.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -230,25 +230,25 @@ func (service *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lif
 			return empty, err
 		}
 	}
-	if err = service.fault("paused_release_before_commit"); err != nil {
+	if err = l.fault("paused_release_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	service.registry.DropSandboxSecrets(current.ID)
+	l.registry.DropSandboxSecrets(current.ID)
 	parent.Status = "succeeded"
-	return parent, service.store.Checkpoint()
+	return parent, l.store.Checkpoint()
 }
 
-func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) error {
+func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) error {
 	id := step.Input.PriorFence
 	if id == "" {
 		return nil
 	}
-	prior, err := LoadLifecycle(service.ctx, tx, id)
+	prior, err := LoadLifecycle(l.ctx, tx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return service.warmClaims.RetireSupersededIn(tx, step)
+		return l.warmClaims.RetireSupersededIn(tx, step)
 	}
 	if err != nil {
 		return err
@@ -267,11 +267,11 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 	}
 	operations := operation.New(tx)
 	if sleepSnapshot != "" {
-		source, err := service.proofs.Snapshots().SnapshotPublication(service.ctx, tx, step.Input.OwnerTenantID, sleepSnapshot)
+		source, err := l.proofs.Snapshots().SnapshotPublication(l.ctx, tx, step.Input.OwnerTenantID, sleepSnapshot)
 		if err != nil {
 			return err
 		}
-		if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+		if err = quota.New(tx).RemoveResourceReference(l.ctx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         sleepSnapshot,
 			HolderKind: "sleep",
@@ -279,7 +279,7 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 		}); err != nil {
 			return err
 		}
-		if err = quota.New(tx).RemoveCostReference(service.ctx, quota.CostReference{
+		if err = quota.New(tx).RemoveCostReference(l.ctx, quota.CostReference{
 			TenantID:   step.Input.OwnerTenantID,
 			Kind:       "snapshot",
 			Key:        sleepSnapshot,
@@ -288,7 +288,7 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 		}); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+		if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(l.ctx, dbgen.InsertCleanupIntentParams{
 			ID:           "sleep:" + step.OperationID,
 			OperationID:  step.OperationID,
 			ResourceKind: "snapshot",
@@ -299,12 +299,12 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 		}
 	}
 	if prior.Input.Rollback != nil {
-		if err = RetireRollbackLease(service.ctx, tx, prior); err != nil {
+		if err = RetireRollbackLease(l.ctx, tx, prior); err != nil {
 			return err
 		}
 	}
 	if !operation.Terminal(prior.Status) {
-		if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+		if err = store.RequireOne(dbgen.New(tx).FailLiveStep(l.ctx, dbgen.FailLiveStepParams{
 			OperationID: id,
 			StepKey:     "lifecycle",
 			InputHash:   prior.Hash,
@@ -315,7 +315,7 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 			return err
 		}
 	}
-	status, body, err := operations.ResultState(service.ctx, id)
+	status, body, err := operations.ResultState(l.ctx, id)
 	if err != nil {
 		return err
 	}
@@ -325,31 +325,31 @@ func (service *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleSt
 			return err
 		}
 		result.Error = "sandbox operation superseded by release"
-		if err = operations.FailResult(service.ctx, id, operation.Encode(result)); err != nil {
+		if err = operations.FailResult(l.ctx, id, operation.Encode(result)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (service *Lifecycle) runReleaseCaptures(step LifecycleStep) error {
-	stopped, err := service.runResourceLink(step.OperationID, "stop")
+func (l *Lifecycle) runReleaseCaptures(step LifecycleStep) error {
+	stopped, err := l.runResourceLink(step.OperationID, "stop")
 	if err != nil {
 		return err
 	}
 	for _, ref := range step.Input.CaptureFailures {
 		role := "failed-capture:" + ref.OperationID
-		if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
+		if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
 			link := &LifecycleAdmission{
-				History: service.proofs.Snapshots(),
+				History: l.proofs.Snapshots(),
 				Parent: operation.Record{
 					ID: step.OperationID,
 				},
 				Input: step.Input,
 				Role:  role,
 			}
-			discards := service.captureDiscard
-			_, err = discards.AdmitForParent(service.ctx, machine.CaptureDiscardRequest{
+			discards := l.captureDiscard
+			_, err = discards.AdmitForParent(l.ctx, machine.CaptureDiscardRequest{
 				TenantID:          step.Input.OwnerTenantID,
 				Key:               step.OperationID + ":" + role,
 				SandboxID:         step.Input.Sandbox.ID,
@@ -363,20 +363,20 @@ func (service *Lifecycle) runReleaseCaptures(step LifecycleStep) error {
 		} else if lookup != nil {
 			return lookup
 		}
-		if _, err = service.runResourceLink(step.OperationID, role); err != nil {
+		if _, err = l.runResourceLink(step.OperationID, role); err != nil {
 			return err
 		}
 	}
-	if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
+	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
 		link := &LifecycleAdmission{
-			History: service.proofs.Snapshots(),
+			History: l.proofs.Snapshots(),
 			Parent: operation.Record{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
 			Role:  "release",
 		}
-		if _, err = service.deletion.AdmitReleaseForParent(service.ctx, machine.ReleaseRequest{
+		if _, err = l.deletion.AdmitReleaseForParent(l.ctx, machine.ReleaseRequest{
 			TenantID:  step.Input.OwnerTenantID,
 			Key:       step.OperationID + ":release",
 			SandboxID: step.Input.Sandbox.ID,

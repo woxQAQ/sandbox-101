@@ -74,30 +74,30 @@ func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, faul
 	}
 }
 
-func (service *VMDeletion) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (d *VMDeletion) fault(point string) error {
+	if d.faultPoint != nil {
+		return d.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *VMDeletion) validateStep(step ResourceStep) error {
-	return ValidateResourceStep(service.store.Directory, step)
+func (d *VMDeletion) validateStep(step ResourceStep) error {
+	return ValidateResourceStep(d.store.Directory, step)
 }
 
-func (service *VMDeletion) inspectStoppedGenerations(generations []ResourceStep) error {
-	return InspectStoppedGenerations(service.ctx, service.backend, generations)
+func (d *VMDeletion) inspectStoppedGenerations(generations []ResourceStep) error {
+	return InspectStoppedGenerations(d.ctx, d.backend, generations)
 }
 
-func (service *VMDeletion) dispatch(id string) {
-	if service.store.Reviewed {
+func (d *VMDeletion) dispatch(id string) {
+	if d.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.ResumeDiscard(id); handled || err != nil {
+	d.workers.Start(id, func() error {
+		if handled, err := d.ResumeDiscard(id); handled || err != nil {
 			return err
 		}
-		if handled, err := service.ResumeRelease(id); handled || err != nil {
+		if handled, err := d.ResumeRelease(id); handled || err != nil {
 			return err
 		}
 		return fmt.Errorf("VM deletion lacks matching immutable step")
@@ -106,52 +106,52 @@ func (service *VMDeletion) dispatch(id string) {
 
 // ResumeDiscard and ResumeRelease preserve their separate positions in the
 // application's recovery order while sharing the original per-VM lock domain.
-func (service *VMDeletion) ResumeDiscard(id string) (bool, error) {
-	if service.
+func (d *VMDeletion) ResumeDiscard(id string) (bool, error) {
+	if d.
 		ownership ==
-		nil || service.
+		nil || d.
 		handoff ==
-		nil || service.usage == nil {
+		nil || d.usage == nil {
 		return false, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
 
-	if service.store.Reviewed {
+	if d.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume discard", errs.ErrManualRecovery)
 	}
-	step, err := LoadDiscard(service.ctx, service.store.Database, id)
+	step, err := LoadDiscard(d.ctx, d.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.VM(step.Input.Source.Candidate)
+	guard := d.guards.VM(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadDiscard(service.ctx, service.store.Database, id)
+	step, err = LoadDiscard(d.ctx, d.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runDiscard(step)
+	return true, d.runDiscard(step)
 }
 
-func (service *VMDeletion) ResumeRelease(id string) (bool, error) {
-	if service.
+func (d *VMDeletion) ResumeRelease(id string) (bool, error) {
+	if d.
 		ownership ==
-		nil || service.
+		nil || d.
 		handoff ==
-		nil || service.usage == nil {
+		nil || d.usage == nil {
 		return false, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
 
-	if service.store.Reviewed {
+	if d.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume release", errs.ErrManualRecovery)
 	}
-	step, err := LoadResourceStep(service.ctx, service.store.Database, id)
+	step, err := LoadResourceStep(d.ctx, d.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -161,30 +161,30 @@ func (service *VMDeletion) ResumeRelease(id string) (bool, error) {
 	if step.Action != "release" {
 		return false, nil
 	}
-	if err = service.validateStep(step); err != nil {
+	if err = d.validateStep(step); err != nil {
 		return true, err
 	}
-	guard := service.guards.VM(step.Candidate)
+	guard := d.guards.VM(step.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadResourceStep(service.ctx, service.store.Database, id)
+	step, err = LoadResourceStep(d.ctx, d.store.Database, id)
 	if err != nil {
 		return true, err
 	}
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	if err = service.validateStep(step); err != nil {
+	if err = d.validateStep(step); err != nil {
 		return true, err
 	}
-	currentMachine, instance, owner, err := LoadVM(service.ctx, service.store.Database, step)
+	currentMachine, instance, owner, err := LoadVM(d.ctx, d.store.Database, step)
 	if err != nil {
 		return true, err
 	}
 	if owner != step.OperationID || !currentMachine.Deleting || instance != "" && !ExpectedCurrentInstance(step, instance) {
 		return true, fmt.Errorf("resource step lost current VM ownership")
 	}
-	return true, service.runRelease(step)
+	return true, d.runRelease(step)
 }
 
 func GenerationFixedNodes(source ResourceStep) map[string]loom.FileIdentity {

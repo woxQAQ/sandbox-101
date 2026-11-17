@@ -119,83 +119,83 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 	}
 }
 
-func (service *Lifecycle) fault(point string) error {
-	if service.opts.Fault != nil {
-		return service.opts.Fault(point)
+func (l *Lifecycle) fault(point string) error {
+	if l.opts.Fault != nil {
+		return l.opts.Fault(point)
 	}
 	return nil
 }
 
-func (service *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (l *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
+	accepted, found, err := l.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
-		service.dispatch(accepted.ID)
+		l.dispatch(accepted.ID)
 	}
 	return accepted, found, err
 }
 
-func (service *Lifecycle) dispatch(id string) {
-	if service.store.Reviewed {
+func (l *Lifecycle) dispatch(id string) {
+	if l.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	l.workers.Start(id, func() error {
+		if handled, err := l.policies.Resume(l.ctx, id); handled || err != nil {
 			return err
 		}
-		_, err := service.Resume(id)
+		_, err := l.Resume(id)
 		return err
 	})
 }
 
-func (service *Lifecycle) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (l *Lifecycle) Resume(id string) (bool, error) {
+	if l.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume lifecycle", errs.ErrManualRecovery)
 	}
-	step, err := LoadLifecycle(service.ctx, service.store.Database, id)
+	step, err := LoadLifecycle(l.ctx, l.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	lock := service.guards.Sandbox(step.Input.Sandbox.ID)
+	lock := l.guards.Sandbox(step.Input.Sandbox.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	step, err = LoadLifecycle(service.ctx, service.store.Database, id)
+	step, err = LoadLifecycle(l.ctx, l.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runLifecycle(step)
+	return true, l.runLifecycle(step)
 }
 
-func (service *Lifecycle) runResourceLink(parent, role string) (machine.ResourceLink, error) {
-	return service.links.Run(parent, role, service.runResource)
+func (l *Lifecycle) runResourceLink(parent, role string) (machine.ResourceLink, error) {
+	return l.links.Run(parent, role, l.runResource)
 }
 
-func (service *Lifecycle) runResource(link machine.ResourceLink) error {
-	if handled, err := service.policies.Resume(service.ctx, link.ChildID); handled || err != nil {
+func (l *Lifecycle) runResource(link machine.ResourceLink) error {
+	if handled, err := l.policies.Resume(l.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool
 	var err error
 	switch link.Kind {
 	case "cold_start", "clone", "restore":
-		return service.provisioning.Continue(link.ChildID)
+		return l.provisioning.Continue(link.ChildID)
 	case "capture":
-		handled, err = service.captures.Resume(link.ChildID)
+		handled, err = l.captures.Resume(link.ChildID)
 	case "release":
-		handled, err = service.deletion.ResumeRelease(link.ChildID)
+		handled, err = l.deletion.ResumeRelease(link.ChildID)
 	case "discard":
-		handled, err = service.deletion.ResumeDiscard(link.ChildID)
+		handled, err = l.deletion.ResumeDiscard(link.ChildID)
 	case "stop":
-		handled, err = service.stops.Resume(link.ChildID)
+		handled, err = l.stops.Resume(link.ChildID)
 	case "capture_discard":
-		handled, err = service.captureDiscard.Resume(link.ChildID)
+		handled, err = l.captureDiscard.Resume(link.ChildID)
 	case "capture_cleanup":
-		handled, err = service.captureCleanup.Resume(link.ChildID)
+		handled, err = l.captureCleanup.Resume(link.ChildID)
 	default:
 		return fmt.Errorf("unsupported lifecycle resource kind %q", link.Kind)
 	}

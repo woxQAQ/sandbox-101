@@ -18,7 +18,7 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func (service *Collector) inventory(ctx context.Context) (types.GCReport, error) {
+func (c *Collector) inventory(ctx context.Context) (types.GCReport, error) {
 	report := types.GCReport{
 		StartedAt:  time.Now().UTC(),
 		Roots:      []types.GCRoot{},
@@ -26,7 +26,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 		Collected:  []types.GCItem{},
 		Deferred:   []types.GCItem{},
 	}
-	graphDeferred, graphErr := service.graphFence(ctx)
+	graphDeferred, graphErr := c.graphFence(ctx)
 	if graphErr != nil {
 		return report, graphErr
 	}
@@ -43,16 +43,16 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 			known[filepath.Clean(path)] = true
 		}
 	}
-	digests, err := image.PublishedDigests(ctx, service.store.Database)
+	digests, err := image.PublishedDigests(ctx, c.store.Database)
 	if err != nil {
 		return report, err
 	}
 	for _, imageDigest := range digests {
-		manifest, err := image.LoadManifest(ctx, service.store.Database, imageDigest)
+		manifest, err := image.LoadManifest(ctx, c.store.Database, imageDigest)
 		if err != nil {
 			return report, err
 		}
-		directory := filepath.Join(service.store.Directory, "images", imageDigest[7:])
+		directory := filepath.Join(c.store.Directory, "images", imageDigest[7:])
 		if err = image.VerifyFiles(manifest, directory); err != nil {
 			report.Blocked = true
 			report.Deferred = append(report.Deferred, types.GCItem{
@@ -63,14 +63,14 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 		}
 		addRoot("image", imageDigest, directory)
 		for _, artifact := range manifest.Artifacts {
-			path := filepath.Join(service.store.Directory, artifact.Path)
+			path := filepath.Join(c.store.Directory, artifact.Path)
 			addRoot("image_artifact", artifact.SHA256, path)
 			if artifact.Role == "layer" {
 				known[filepath.Dir(path)] = true
 			}
 		}
 	}
-	entries, inventoryErr := machine.VMRoots(ctx, service.store.Database, service.store.Directory)
+	entries, inventoryErr := machine.VMRoots(ctx, c.store.Database, c.store.Directory)
 	for _, item := range entries {
 		if !item.Consistent {
 			report.Blocked = true
@@ -85,7 +85,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 	if inventoryErr != nil {
 		return report, inventoryErr
 	}
-	queries := dbgen.New(service.store.Database)
+	queries := dbgen.New(c.store.Database)
 	controls, err := queries.ListGCStepInputs(ctx)
 	if err != nil {
 		return report, err
@@ -109,11 +109,11 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 	}
 	for _, failure := range failed {
 		id := failure.OperationID
-		original, err := supply.LoadSupply(ctx, service.store.Database, id)
+		original, err := supply.LoadSupply(ctx, c.store.Database, id)
 		if err != nil {
 			return report, err
 		}
-		pending, err := dbgen.New(service.store.Database).CountPendingOwnedCleanup(ctx, dbgen.CountPendingOwnedCleanupParams{
+		pending, err := dbgen.New(c.store.Database).CountPendingOwnedCleanup(ctx, dbgen.CountPendingOwnedCleanupParams{
 			ID:           "supply:" + id,
 			OperationID:  id,
 			ResourceKind: "supply",
@@ -130,19 +130,19 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 			})
 		}
 	}
-	warmCandidates, err := supply.ObsoleteWarmCandidates(ctx, service.store.Database)
+	warmCandidates, err := supply.ObsoleteWarmCandidates(ctx, c.store.Database)
 	report.Candidates = append(report.Candidates, warmCandidates...)
 	if err != nil {
 		return report, err
 	}
-	publications, inventoryErr := machine.SnapshotRoots(ctx, service.store.Database)
+	publications, inventoryErr := machine.SnapshotRoots(ctx, c.store.Database)
 	for _, item := range publications {
 		record := item.Record
 		addRoot("snapshot", item.ID, record.Dir)
 		if !item.Published || item.Deleting {
 			continue
 		}
-		candidate, deferReason, err := service.snapshotCandidate(ctx, record)
+		candidate, deferReason, err := c.snapshotCandidate(ctx, record)
 		if err != nil {
 			return report, err
 		}
@@ -164,7 +164,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 	if inventoryErr != nil {
 		return report, inventoryErr
 	}
-	imageRoots, imageCandidates, imageDeferred, imageBlocked, err := service.images.Inventory(ctx)
+	imageRoots, imageCandidates, imageDeferred, imageBlocked, err := c.images.Inventory(ctx)
 	if err != nil {
 		return report, err
 	}
@@ -174,7 +174,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 	report.Candidates = append(report.Candidates, imageCandidates...)
 	for _, candidate := range imageCandidates {
 		if candidate.Kind == "image_cache" {
-			known[filepath.Join(service.store.Directory, filepath.Dir(host.LayerRelativePath(candidate.CacheBuilder, candidate.CacheDiffID)))] = true
+			known[filepath.Join(c.store.Directory, filepath.Dir(host.LayerRelativePath(candidate.CacheBuilder, candidate.CacheDiffID)))] = true
 		}
 	}
 	report.Deferred = append(report.Deferred, imageDeferred...)
@@ -186,7 +186,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 		"imports",
 		"layer-cache",
 	} {
-		directory := filepath.Join(service.store.Directory, base)
+		directory := filepath.Join(c.store.Directory, base)
 		entries, err := os.ReadDir(directory)
 		if os.IsNotExist(err) {
 			continue
@@ -235,7 +235,7 @@ func (service *Collector) inventory(ctx context.Context) (types.GCReport, error)
 			})
 		}
 	}
-	if _, err = os.Lstat(filepath.Join(service.store.Directory, "RECOVERY_REVIEWED.json")); err == nil {
+	if _, err = os.Lstat(filepath.Join(c.store.Directory, "RECOVERY_REVIEWED.json")); err == nil {
 		report.Blocked = true
 		report.Deferred = append(report.Deferred, types.GCItem{
 			Kind:   "recovery",

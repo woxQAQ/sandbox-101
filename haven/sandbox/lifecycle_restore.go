@@ -18,11 +18,11 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *VMProvisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.Record, error) {
-	return service.AdmitRestoreWithParent(ctx, request, nil)
+func (p *VMProvisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.Record, error) {
+	return p.AdmitRestoreWithParent(ctx, request, nil)
 }
 
-func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.Record, error) {
+func (p *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.Record, error) {
 	link, _ := parent.(*LifecycleAdmission)
 	var empty operation.Record
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
@@ -33,40 +33,40 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 		Request machine.RestoreRequest
 	}{"restore", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			p.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	source, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, request.TenantID, request.SnapshotID)
+	source, err := p.proofs.Snapshots().LoadRestoreSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
-	if err = service.backend.Check(ctx, source.Snapshot.Manifest.Config); err != nil {
+	if err = p.backend.Check(ctx, source.Snapshot.Manifest.Config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, source.Snapshot.Manifest.Config.Image)
+	manifest, err := image.LoadManifest(ctx, p.store.Database, source.Snapshot.Manifest.Config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(p.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	free, err := loom.FreeBytes(service.store.Directory)
+	free, err := loom.FreeBytes(p.store.Directory)
 	if err != nil {
 		return empty, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	closing := p.lifetime.Closing() || p.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := p.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -78,7 +78,7 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			p.dispatch(cached.ID)
 		}
 		return cached, err
 	}
@@ -92,7 +92,7 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	if link != nil && (link.Input.Rollback == nil || !reflect.DeepEqual(source, link.Input.Rollback.Source)) {
 		return empty, fmt.Errorf("%w: rollback frozen restore source changed", errs.ErrConflict)
 	}
-	currentSnapshot, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, request.SnapshotID)
+	currentSnapshot, err := p.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, request.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -113,10 +113,10 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	if err != nil {
 		return empty, err
 	}
-	if err = service.proofs.VerifyGeneration(ctx, tx, prior); err != nil {
+	if err = p.proofs.VerifyGeneration(ctx, tx, prior); err != nil {
 		return empty, err
 	}
-	if _, err = service.proofs.GenerationHistory(ctx, tx, prior); err != nil {
+	if _, err = p.proofs.GenerationHistory(ctx, tx, prior); err != nil {
 		return empty, err
 	}
 	stopped, err := machine.LoadStop(ctx, tx, request.StopOperationID)
@@ -174,7 +174,7 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 		return empty, err
 	}
 	reserve := (shape.MemoryMiB + shape.DiskMiB + 64) << 20
-	if held > free || service.capacity.SafetyBytes > free-held || reserve > free-held-service.capacity.SafetyBytes {
+	if held > free || p.capacity.SafetyBytes > free-held || reserve > free-held-p.capacity.SafetyBytes {
 		return empty, fmt.Errorf("restore host peak reservation exhausted")
 	}
 	accepted := operation.Record{
@@ -323,18 +323,18 @@ func (service *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, reque
 	}); err != nil {
 		return empty, err
 	}
-	if err = service.fault("restore_admission_before_commit"); err != nil {
+	if err = p.fault("restore_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("restore_admitted"); err != nil {
+	if err = p.fault("restore_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	p.dispatch(accepted.ID)
 	return accepted, nil
 }

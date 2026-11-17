@@ -32,16 +32,16 @@ func NewAudits(state *store.State, admission execution.Guard, lifetime *executio
 	}
 }
 
-func (service *Audits) Audit(ctx context.Context, event any) error {
-	if service.reviewed || !service.lifetime.Begin() {
+func (a *Audits) Audit(ctx context.Context, event any) error {
+	if a.reviewed || !a.lifetime.Begin() {
 		return fmt.Errorf("%w: sandbox data admission is closed", errs.ErrConflict)
 	}
-	defer service.lifetime.End()
-	service.admission.Lock()
-	defer service.admission.Unlock()
+	defer a.lifetime.End()
+	a.admission.Lock()
+	defer a.admission.Unlock()
 	body := operation.Encode(struct {
 		Time  time.Time `json:"time"`
 		Event any       `json:"event"`
 	}{time.Now().UTC(), event})
-	return service.journal.AppendAudit(ctx, body)
+	return a.journal.AppendAudit(ctx, body)
 }

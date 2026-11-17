@@ -114,30 +114,30 @@ func CheckpointInventory(ctx context.Context, query store.DBTX) ([]Checkpoint, e
 	return out, nil
 }
 
-func (service *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "checkpoint_delete" || command.CheckpointID == "" {
 		return empty, fmt.Errorf("%w: checkpoint deletion requires tenant authority, checkpoint and key", errs.ErrInvalid)
 	}
-	guard := service.guards.TenantRequest(principal.TenantID, key)
+	guard := l.guards.TenantRequest(principal.TenantID, key)
 	guard.Lock()
 	defer guard.Unlock()
-	mac := service.commands.Identity.CommandMAC(principal, command)
-	if cached, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+	mac := l.commands.Identity.CommandMAC(principal, command)
+	if cached, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return cached, err
 	}
-	checkpoint, err := service.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
+	checkpoint, err := l.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
 	if err != nil {
 		return empty, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err = service.gate.Check(); err != nil {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	if err = l.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := l.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -151,7 +151,7 @@ func (service *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal a
 	if !reflect.DeepEqual(current, checkpoint) {
 		return empty, fmt.Errorf("%w: checkpoint binding changed", errs.ErrConflict)
 	}
-	publication, err := service.proofs.Snapshots().SnapshotPublication(ctx, tx, checkpoint.TenantID, checkpoint.SnapshotID)
+	publication, err := l.proofs.Snapshots().SnapshotPublication(ctx, tx, checkpoint.TenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -232,25 +232,25 @@ func (service *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal a
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.fault("checkpoint_delete_before_commit"); err != nil {
+	if err = l.fault("checkpoint_delete_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	return record, service.store.Checkpoint()
+	return record, l.store.Checkpoint()
 }
 
 // A paused checkpoint adds a binding to the proven sleep publication. It does
 // not launch, capture or renew the source and cannot infer a missing pause receipt.
-func (service *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
+func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
 	var empty operation.Record
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := l.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -286,7 +286,7 @@ func (service *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent oper
 		return empty, err
 	}
 	input.PauseOperation = proof
-	snapshot, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, current.SnapshotID)
+	snapshot, err := l.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, current.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -359,11 +359,11 @@ func (service *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent oper
 	}); err != nil {
 		return empty, err
 	}
-	if err = service.fault("paused_checkpoint_before_commit"); err != nil {
+	if err = l.fault("paused_checkpoint_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	return parent, service.store.Checkpoint()
+	return parent, l.store.Checkpoint()
 }

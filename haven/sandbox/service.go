@@ -99,55 +99,55 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies, options 
 	}
 }
 
-func (service *Sandboxes) fault(point string) error {
-	if service.opts.Fault != nil {
-		return service.opts.Fault(point)
+func (sb *Sandboxes) fault(point string) error {
+	if sb.opts.Fault != nil {
+		return sb.opts.Fault(point)
 	}
 	return nil
 }
 
-func (service *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (sb *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
+	accepted, found, err := sb.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
-		service.dispatch(accepted.ID)
+		sb.dispatch(accepted.ID)
 	}
 	return accepted, found, err
 }
 
-func (service *Sandboxes) dispatch(id string) {
-	if service.store.Reviewed {
+func (sb *Sandboxes) dispatch(id string) {
+	if sb.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	sb.workers.Start(id, func() error {
+		if handled, err := sb.policies.Resume(sb.ctx, id); handled || err != nil {
 			return err
 		}
-		if handled, err := service.warmClaims.Resume(id); handled || err != nil {
+		if handled, err := sb.warmClaims.Resume(id); handled || err != nil {
 			return err
 		}
-		activation, err := LoadActivation(service.ctx, service.store.Database, id)
+		activation, err := LoadActivation(sb.ctx, sb.store.Database, id)
 		if err == nil && activation.Input.ResourceOperation != id {
-			source, lookup := machine.LoadResourceStep(service.ctx, service.store.Database, activation.Input.ResourceOperation)
+			source, lookup := machine.LoadResourceStep(sb.ctx, sb.store.Database, activation.Input.ResourceOperation)
 			if lookup != nil {
 				return lookup
 			}
-			guard := service.guards.VM(source.Candidate)
+			guard := sb.guards.VM(source.Candidate)
 			guard.Lock()
 			defer guard.Unlock()
-			return service.activations.Continue(id)
+			return sb.activations.Continue(id)
 		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		return service.provisioning.Continue(id)
+		return sb.provisioning.Continue(id)
 	})
 }
 
-func (service *Sandboxes) checkConfigurationOpen() error {
-	if service.closing.Closing() || service.store.Reviewed {
+func (sb *Sandboxes) checkConfigurationOpen() error {
+	if sb.closing.Closing() || sb.store.Reviewed {
 		return fmt.Errorf("haven is closing")
 	}
 	return nil

@@ -53,28 +53,28 @@ func NewProvisioning(state *store.State, dependencies ProvisioningDependencies, 
 	}
 }
 
-func (service *Provisioning) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (p *Provisioning) fault(point string) error {
+	if p.faultPoint != nil {
+		return p.faultPoint(point)
 	}
 	return nil
 }
 
 // AdvanceLocked requires the original VM guard to remain held through the
 // subsequent activation. It neither obtains nor releases that guard.
-func (service *Provisioning) AdvanceLocked(step ResourceStep) error {
-	if service.
+func (p *Provisioning) AdvanceLocked(step ResourceStep) error {
+	if p.
 		ownership ==
-		nil || service.handoff == nil {
+		nil || p.handoff == nil {
 		return fmt.Errorf("%w: required Provisioning capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
 
-	if err := ValidateResourceStep(service.store.Directory, step); err != nil {
+	if err := ValidateResourceStep(p.store.Directory, step); err != nil {
 		return err
 	}
-	currentMachine, instance, owner, err := LoadVM(service.ctx, service.store.Database, step)
+	currentMachine, instance, owner, err := LoadVM(p.ctx, p.store.Database, step)
 	if err != nil {
 		return err
 	}
@@ -83,9 +83,9 @@ func (service *Provisioning) AdvanceLocked(step ResourceStep) error {
 	}
 	switch step.Action {
 	case "clone", "restore":
-		return service.runClone(step)
+		return p.runClone(step)
 	case "cold_start":
-		return service.runCold(step)
+		return p.runCold(step)
 	default:
 		return fmt.Errorf("unsupported resource action")
 	}

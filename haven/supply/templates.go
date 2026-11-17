@@ -37,8 +37,8 @@ func NewTemplateCatalog(database store.DBTX) *TemplateCatalog {
 	}
 }
 
-func (s *TemplateCatalog) Cold(ctx context.Context, tenant, id string) (TemplateRecord, error) {
-	record, err := s.Owned(ctx, tenant, id)
+func (tc *TemplateCatalog) Cold(ctx context.Context, tenant, id string) (TemplateRecord, error) {
+	record, err := tc.Owned(ctx, tenant, id)
 	if err != nil {
 		return record, err
 	}
@@ -48,9 +48,9 @@ func (s *TemplateCatalog) Cold(ctx context.Context, tenant, id string) (Template
 	return record, nil
 }
 
-func (s *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (TemplateRecord, error) {
+func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (TemplateRecord, error) {
 	var record TemplateRecord
-	body, err := s.queries.GetOwnedTemplate(ctx, dbgen.GetOwnedTemplateParams{
+	body, err := tc.queries.GetOwnedTemplate(ctx, dbgen.GetOwnedTemplateParams{
 		ID:     id,
 		Tenant: tenant,
 	})
@@ -63,14 +63,14 @@ func (s *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templat
 	if err = json.Unmarshal(body, &record); err != nil {
 		return record, err
 	}
-	owner, err := s.queries.GetPublisher(ctx, id)
+	owner, err := tc.queries.GetPublisher(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, fmt.Errorf("%w: template permanent ownership proof is missing", errs.ErrManualRecovery)
 	}
 	if err != nil {
 		return record, err
 	}
-	proof, err := LoadSupply(ctx, s.database, owner.OperationID)
+	proof, err := LoadSupply(ctx, tc.database, owner.OperationID)
 	if err != nil {
 		return record, fmt.Errorf("%w: template immutable publication step is missing", errs.ErrManualRecovery)
 	}
@@ -89,18 +89,18 @@ func (s *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templat
 	return record, nil
 }
 
-func (s *TemplateCatalog) GetTemplate(ctx context.Context, principal authorization.Principal, id string) (operation.TemplateSpec, error) {
+func (tc *TemplateCatalog) GetTemplate(ctx context.Context, principal authorization.Principal, id string) (operation.TemplateSpec, error) {
 	if principal.SandboxID != "" {
 		return operation.TemplateSpec{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	record, err := LoadTemplate(ctx, s.database, id)
+	record, err := LoadTemplate(ctx, tc.database, id)
 	if err != nil {
 		return operation.TemplateSpec{}, err
 	}
 	if !principal.Root && principal.TenantID != record.TenantID {
 		return operation.TemplateSpec{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	verified, err := s.Owned(ctx, record.TenantID, id)
+	verified, err := tc.Owned(ctx, record.TenantID, id)
 	if err != nil {
 		return operation.TemplateSpec{}, err
 	}
@@ -116,11 +116,11 @@ func (s *TemplateCatalog) GetTemplate(ctx context.Context, principal authorizati
 	}, nil
 }
 
-func (s *TemplateCatalog) Templates(ctx context.Context, principal authorization.Principal) ([]types.Template, error) {
+func (tc *TemplateCatalog) Templates(ctx context.Context, principal authorization.Principal) ([]types.Template, error) {
 	if principal.SandboxID != "" {
 		return nil, fmt.Errorf("%w: tenant access required", errs.ErrConflict)
 	}
-	ids, err := s.queries.ListTemplateIDs(ctx)
+	ids, err := tc.queries.ListTemplateIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (s *TemplateCatalog) Templates(ctx context.Context, principal authorization
 		if !principal.Root && item.Tenant != principal.TenantID {
 			continue
 		}
-		record, err := s.Owned(ctx, item.Tenant, item.ID)
+		record, err := tc.Owned(ctx, item.Tenant, item.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -138,20 +138,20 @@ func (s *TemplateCatalog) Templates(ctx context.Context, principal authorization
 	return out, nil
 }
 
-func (service *Supply) AdmitTemplate(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Template == nil || (command.Action != "template_put" && command.Action != "template_build") {
 		return empty, fmt.Errorf("%w: template requires tenant authority, specification and key", errs.ErrInvalid)
 	}
-	guard := service.guards.TenantRequest(principal.TenantID, key)
+	guard := s.guards.TenantRequest(principal.TenantID, key)
 	guard.Lock()
 	defer guard.Unlock()
-	mac := service.commands.CommandMAC(principal, command)
-	if accepted, found, err := service.existing(ctx, principal, key, mac); found || err != nil {
+	mac := s.commands.CommandMAC(principal, command)
+	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
 	}
 	spec := *command.Template
-	if spec.ID == "" || len(spec.ID) > 128 || spec.TargetWarm < 0 || spec.TargetWarm > service.opts.MaxWarm {
+	if spec.ID == "" || len(spec.ID) > 128 || spec.TargetWarm < 0 || spec.TargetWarm > s.opts.MaxWarm {
 		return empty, fmt.Errorf("%w: template owner, identity or warm target invalid", errs.ErrInvalid)
 	}
 	if principal.Root {
@@ -164,7 +164,7 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 		}
 		spec.TenantID = principal.TenantID
 	}
-	if command.Action == "template_build" && (service.opts.Guest == nil || spec.SnapshotID != "") {
+	if command.Action == "template_build" && (s.opts.Guest == nil || spec.SnapshotID != "") {
 		return empty, fmt.Errorf("%w: template build requires guest effects and a fresh snapshot", errs.ErrInvalid)
 	}
 	if command.Action == "template_put" && spec.SnapshotID == "" && spec.TargetWarm != 0 {
@@ -177,19 +177,19 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 	if err := host.CheckConfig(&config); err != nil {
 		return empty, err
 	}
-	if err := service.opts.Backend.Check(ctx, config); err != nil {
+	if err := s.opts.Backend.Check(ctx, config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, config.Image)
+	manifest, err := image.LoadManifest(ctx, s.store.Database, config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(s.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
 	var source *machine.SnapshotSource
 	if spec.SnapshotID != "" {
-		captured, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, spec.TenantID, spec.SnapshotID)
+		captured, err := s.proofs.Snapshots().LoadRestoreSource(ctx, s.store.Database, spec.TenantID, spec.SnapshotID)
 		if err != nil {
 			return empty, err
 		}
@@ -202,7 +202,7 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 		config = captured.Snapshot.Manifest.Config
 		source = &captured
 	}
-	previous, err := CurrentTemplate(ctx, service.store.Database, spec.ID)
+	previous, err := CurrentTemplate(ctx, s.store.Database, spec.ID)
 	if err != nil {
 		return empty, err
 	}
@@ -239,7 +239,7 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 		Source:          source,
 	}
 	if command.Action == "template_put" {
-		return service.admitTemplatePut(ctx, parent, input, mac)
+		return s.admitTemplatePut(ctx, parent, input, mac)
 	}
 	input.Template.State = "building"
 	input.SandboxID = operation.NewID("sandbox_")
@@ -259,7 +259,7 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 		Action  string
 		Request machine.FreshRequest
 	}{"claim", request})
-	child, err := service.provisioning.AdmitRaw(ctx, ProvisionRequest{
+	child, err := s.provisioning.AdmitRaw(ctx, ProvisionRequest{
 		TenantID: spec.TenantID,
 		Key:      request.Key,
 		Frozen:   frozen,
@@ -280,17 +280,17 @@ func (service *Supply) AdmitTemplate(ctx context.Context, principal authorizatio
 	if err != nil {
 		return parent, err
 	}
-	service.dispatch(parent.ID)
+	s.dispatch(parent.ID)
 	return parent, nil
 }
 
-func (service *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
+	s.admission.Lock()
+	defer s.admission.Unlock()
+	if err := s.gate.Check(); err != nil {
 		return operation.Record{}, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := s.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return operation.Record{}, err
 	}
@@ -344,7 +344,7 @@ func (service *Supply) admitTemplatePut(ctx context.Context, parent operation.Re
 	if err = input.Template.reservePublication(ctx, tx, input.Previous, parent.ID); err != nil {
 		return operation.Record{}, err
 	}
-	if err = service.publishTemplate(ctx, tx, SupplyStep{
+	if err = s.publishTemplate(ctx, tx, SupplyStep{
 		OperationID: parent.ID,
 		Hash:        operation.Digest(payload),
 		Status:      "pending",
@@ -355,18 +355,18 @@ func (service *Supply) admitTemplatePut(ctx context.Context, parent operation.Re
 	}, input.Template.SnapshotID); err != nil {
 		return operation.Record{}, err
 	}
-	if err = service.fault("template_publication_before_commit"); err != nil {
+	if err = s.fault("template_publication_before_commit"); err != nil {
 		return operation.Record{}, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = s.committer.Commit(tx); err != nil {
 		return operation.Record{}, err
 	}
 	parent.Status = "succeeded"
 	parent.Result.SnapshotID = input.Template.SnapshotID
-	return parent, service.store.Checkpoint()
+	return parent, s.store.Checkpoint()
 }
 
-func (service *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplyStep, snapshot string) error {
+func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplyStep, snapshot string) error {
 	current, err := LoadSupply(ctx, tx, step.OperationID)
 	if err != nil {
 		return err
@@ -396,7 +396,7 @@ func (service *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step Sup
 	desired.State = "ready"
 	desired.SnapshotID = snapshot
 	if snapshot != "" {
-		source, err := service.proofs.Snapshots().SnapshotPublication(ctx, tx, desired.TenantID, snapshot)
+		source, err := s.proofs.Snapshots().SnapshotPublication(ctx, tx, desired.TenantID, snapshot)
 		if err != nil {
 			return err
 		}

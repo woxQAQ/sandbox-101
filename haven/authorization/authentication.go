@@ -35,27 +35,27 @@ func NewAuthentication(rootToken string, tenants *Repository, sandboxes Capabili
 	}
 }
 
-func (s *Authentication) Authenticate(ctx context.Context, token string) (Principal, error) {
-	return s.authenticate(ctx, token, false)
+func (a *Authentication) Authenticate(ctx context.Context, token string) (Principal, error) {
+	return a.authenticate(ctx, token, false)
 }
 
 // AuthenticateOperation permits retired capabilities only for history lookup;
 // the operation use case must additionally enforce the original operation scope.
-func (s *Authentication) AuthenticateOperation(ctx context.Context, token string) (Principal, error) {
-	return s.authenticate(ctx, token, true)
+func (a *Authentication) AuthenticateOperation(ctx context.Context, token string) (Principal, error) {
+	return a.authenticate(ctx, token, true)
 }
 
-func (s *Authentication) authenticate(ctx context.Context, token string, retired bool) (Principal, error) {
+func (a *Authentication) authenticate(ctx context.Context, token string, retired bool) (Principal, error) {
 	if token == "" {
 		return Principal{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	if s.rootToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.rootToken)) == 1 {
+	if a.rootToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(a.rootToken)) == 1 {
 		return Principal{
 			TenantID: "root",
 			Root:     true,
 		}, nil
 	}
-	tenant, err := s.tenants.TenantForToken(ctx, token)
+	tenant, err := a.tenants.TenantForToken(ctx, token)
 	if err == nil {
 		return Principal{
 			TenantID: tenant,
@@ -64,8 +64,8 @@ func (s *Authentication) authenticate(ctx context.Context, token string, retired
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, err
 	}
-	candidate, err := s.sandboxes.FindCapability(ctx, retired, func(candidate ownership.Sandbox) bool {
-		return subtle.ConstantTimeCompare([]byte(token), []byte(s.SandboxToken(candidate.TenantID, candidate.ID))) == 1
+	candidate, err := a.sandboxes.FindCapability(ctx, retired, func(candidate ownership.Sandbox) bool {
+		return subtle.ConstantTimeCompare([]byte(token), []byte(a.SandboxToken(candidate.TenantID, candidate.ID))) == 1
 	})
 	if err == nil {
 		return Principal{
@@ -79,6 +79,6 @@ func (s *Authentication) authenticate(ctx context.Context, token string, retired
 	return Principal{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 }
 
-func (s *Authentication) SandboxToken(tenant, id string) string {
-	return s.sign("sandbox-token-v1", tenant, id)
+func (a *Authentication) SandboxToken(tenant, id string) string {
+	return a.sign("sandbox-token-v1", tenant, id)
 }

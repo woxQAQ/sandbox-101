@@ -91,41 +91,41 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 	}
 }
 
-func (service *VMProvisioning) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (p *VMProvisioning) fault(point string) error {
+	if p.faultPoint != nil {
+		return p.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *VMProvisioning) Continue(id string) error {
-	if service.store.Reviewed {
+func (p *VMProvisioning) Continue(id string) error {
+	if p.store.Reviewed {
 		return fmt.Errorf("%w: reviewed rollback cannot provision VM", errs.ErrManualRecovery)
 	}
-	step, err := machine.LoadResourceStep(service.ctx, service.store.Database, id)
+	step, err := machine.LoadResourceStep(p.ctx, p.store.Database, id)
 	if err != nil {
 		return err
 	}
-	if err = machine.ValidateResourceStep(service.store.Directory, step); err != nil {
+	if err = machine.ValidateResourceStep(p.store.Directory, step); err != nil {
 		return err
 	}
-	lock := service.guards.VM(step.Candidate)
+	lock := p.guards.VM(step.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
-	step, err = machine.LoadResourceStep(service.ctx, service.store.Database, id)
+	step, err = machine.LoadResourceStep(p.ctx, p.store.Database, id)
 	if err != nil {
 		return err
 	}
 	if operation.Terminal(step.Status) {
 		if step.Status == "succeeded" {
-			return service.activations.Continue(id)
+			return p.activations.Continue(id)
 		}
 		return nil
 	}
-	if err = service.physical.AdvanceLocked(step); err != nil {
+	if err = p.physical.AdvanceLocked(step); err != nil {
 		return err
 	}
-	return service.activations.Continue(id)
+	return p.activations.Continue(id)
 }
 
 // ClaimAdmission carries the sanitized command/settings and ephemeral host
@@ -187,13 +187,13 @@ type ProvisionTargetValidator interface {
 	ValidateProvisionTarget(context.Context, *sql.Tx, ProvisionSlotClaim) (*machine.QuotaDestination, error)
 }
 
-func (parent *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, _ *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+func (admission *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, _ *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
 	record, source, holder := claim.Sandbox, claim.Source, claim.Holder
-	if parent == nil || parent.Input.Command.Action != "resume" || record.State != "paused" || record.VMID != "" || record.Instance != "" || record.SnapshotID != source.Snapshot.ID || holder != "sleep:"+record.ID {
+	if admission == nil || admission.Input.Command.Action != "resume" || record.State != "paused" || record.VMID != "" || record.Instance != "" || record.SnapshotID != source.Snapshot.ID || holder != "sleep:"+record.ID {
 		return nil, fmt.Errorf("%w: resume target differs from frozen sleep responsibility", errs.ErrConflict)
 	}
 	return &machine.QuotaDestination{
-		OperationID: parent.Parent.ID,
+		OperationID: admission.Parent.ID,
 		Kind:        "sleep",
 		ID:          record.ID,
 		SnapshotID:  record.SnapshotID,
@@ -202,8 +202,8 @@ func (parent *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, _ *
 
 // AdmitRaw exposes only the undelivered build/refill subset of resource admission.
 // It shares the original transaction, gate, workers and continuous VM guard.
-func (service *VMProvisioning) AdmitRaw(ctx context.Context, request supply.ProvisionRequest, target supply.RawTarget) (operation.Record, error) {
-	return service.Admit(ctx, ProvisionAdmission{
+func (p *VMProvisioning) AdmitRaw(ctx context.Context, request supply.ProvisionRequest, target supply.RawTarget) (operation.Record, error) {
+	return p.Admit(ctx, ProvisionAdmission{
 		Request: request,
 		Target: &ProvisionTarget{
 			NewSandboxID: target.NewSandboxID,

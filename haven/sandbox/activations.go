@@ -104,16 +104,16 @@ func NewActivations(state *store.State, dependencies ActivationDependencies, opt
 	}
 }
 
-func (service *Activations) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (a *Activations) fault(point string) error {
+	if a.faultPoint != nil {
+		return a.faultPoint(point)
 	}
 	return nil
 }
 
 // AdmitIn joins the initial activation and configuration fence to the caller's
 // resource transaction. Secret registration and dispatch follow its commit.
-func (service *Activations) AdmitIn(tx *sql.Tx, record operation.Record, resource machine.ResourceInput, claim ClaimAdmission) error {
+func (a *Activations) AdmitIn(tx *sql.Tx, record operation.Record, resource machine.ResourceInput, claim ClaimAdmission) error {
 	claim.Settings.Generation = record.ID
 	input := ActivationInput{
 		RequestTenantID:   resource.TenantID,
@@ -127,23 +127,23 @@ func (service *Activations) AdmitIn(tx *sql.Tx, record operation.Record, resourc
 	}
 	payload := operation.Encode(input)
 	if claim.MAC != "" {
-		if err := operation.New(tx).InsertCredential(service.ctx, record.ID, claim.MAC); err != nil {
+		if err := operation.New(tx).InsertCredential(a.ctx, record.ID, claim.MAC); err != nil {
 			return err
 		}
 	}
-	if err := store.RequireOne(dbgen.New(tx).InsertSandboxSettings(service.ctx, dbgen.InsertSandboxSettingsParams{
+	if err := store.RequireOne(dbgen.New(tx).InsertSandboxSettings(a.ctx, dbgen.InsertSandboxSettingsParams{
 		SandboxID: resource.SandboxID,
 		Body:      operation.Encode(claim.Settings),
 	})); err != nil {
 		return err
 	}
-	if err := store.RequireOne(dbgen.New(tx).InsertConfigurationFence(service.ctx, dbgen.InsertConfigurationFenceParams{
+	if err := store.RequireOne(dbgen.New(tx).InsertConfigurationFence(a.ctx, dbgen.InsertConfigurationFenceParams{
 		SandboxID:   resource.SandboxID,
 		OperationID: record.ID,
 	})); err != nil {
 		return err
 	}
-	return store.RequireOne(dbgen.New(tx).InsertStep(service.ctx, dbgen.InsertStepParams{
+	return store.RequireOne(dbgen.New(tx).InsertStep(a.ctx, dbgen.InsertStepParams{
 		OperationID:         record.ID,
 		StepKey:             "activation",
 		Action:              "activate",
@@ -158,17 +158,17 @@ func (service *Activations) AdmitIn(tx *sql.Tx, record operation.Record, resourc
 
 // Resume selects standalone activation while resource-owned activation remains
 // with its resource runner. The original source determines the shared VM guard.
-func (service *Activations) Resume(operationID string) (bool, error) {
-	activation, err := LoadActivation(service.ctx, service.store.Database, operationID)
+func (a *Activations) Resume(operationID string) (bool, error) {
+	activation, err := LoadActivation(a.ctx, a.store.Database, operationID)
 	if err == nil && activation.Input.ResourceOperation != operationID {
-		source, lookup := machine.LoadResourceStep(service.ctx, service.store.Database, activation.Input.ResourceOperation)
+		source, lookup := machine.LoadResourceStep(a.ctx, a.store.Database, activation.Input.ResourceOperation)
 		if lookup != nil {
 			return false, lookup
 		}
-		guard := service.guards.VM(source.Candidate)
+		guard := a.guards.VM(source.Candidate)
 		guard.Lock()
 		defer guard.Unlock()
-		return true, service.Continue(operationID)
+		return true, a.Continue(operationID)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
@@ -178,31 +178,31 @@ func (service *Activations) Resume(operationID string) (bool, error) {
 
 // blockActivation retains the configuration fence and all resource charges. A
 // superseded worker records only its own failure and cannot revoke a successor.
-func (service *Activations) blockActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := service.guards.Configuration(step.Input.SandboxID)
+func (a *Activations) blockActivation(step ActivationStep, source machine.ResourceStep) error {
+	guard := a.guards.Configuration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	return service.BlockGuarded(step, source)
+	return a.BlockGuarded(step, source)
 }
 
 // BlockGuarded borrows the configuration guard already held by the caller.
-func (service *Activations) BlockGuarded(step ActivationStep, source machine.ResourceStep) error {
+func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceStep) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if current, err := LoadActivation(ctx, service.store.Database, step.OperationID); err != nil {
+	if current, err := LoadActivation(ctx, a.store.Database, step.OperationID); err != nil {
 		return err
 	} else if current.Key != step.Key || current.Hash != step.Hash || operation.Terminal(current.Status) {
 		return nil
 	}
 	var cleanupErr error
-	fence, queryErr := LifecycleFence(ctx, service.store.Database, step.Input.SandboxID)
+	fence, queryErr := LifecycleFence(ctx, a.store.Database, step.Input.SandboxID)
 	if queryErr == nil && fence == step.OperationID {
-		cleanupErr = service.backend.Network(ctx, source.Input.Resource, false)
-		cleanupErr = errors.Join(cleanupErr, service.RevokeSandbox(step.Input.SandboxID))
+		cleanupErr = a.backend.Network(ctx, source.Input.Resource, false)
+		cleanupErr = errors.Join(cleanupErr, a.RevokeSandbox(step.Input.SandboxID))
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}
@@ -254,14 +254,14 @@ func (service *Activations) BlockGuarded(step ActivationStep, source machine.Res
 			}
 		}
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = a.committer.Commit(tx); err != nil {
 		return errors.Join(cleanupErr, err)
 	}
-	return errors.Join(cleanupErr, service.store.Checkpoint())
+	return errors.Join(cleanupErr, a.store.Checkpoint())
 }
 
-func (service *Activations) activationSecrets(step ActivationStep) (map[string]egress.Secret, error) {
-	secrets := service.registry.OperationSecrets(step.OperationID)
+func (a *Activations) activationSecrets(step ActivationStep) (map[string]egress.Secret, error) {
+	secrets := a.registry.OperationSecrets(step.OperationID)
 	for name, descriptor := range step.Input.Settings.Secrets {
 		secret, ok := secrets[name]
 		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {
@@ -271,50 +271,50 @@ func (service *Activations) activationSecrets(step ActivationStep) (map[string]e
 	return secrets, nil
 }
 
-func (service *Activations) bindActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := service.guards.Configuration(step.Input.SandboxID)
+func (a *Activations) bindActivation(step ActivationStep, source machine.ResourceStep) error {
+	guard := a.guards.Configuration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	if _, err := service.checkActivation(step); err != nil {
+	if _, err := a.checkActivation(step); err != nil {
 		return err
 	}
-	secrets, err := service.activationSecrets(step)
+	secrets, err := a.activationSecrets(step)
 	if err != nil {
 		return err
 	}
 	if step.Input.Settings.Policy.Mode == "none" {
-		return service.RevokeSandbox(step.Input.SandboxID)
+		return a.RevokeSandbox(step.Input.SandboxID)
 	}
-	if service.egress == nil {
+	if a.egress == nil {
 		return fmt.Errorf("%w: egress effects required for this network mode", errs.ErrIncompatible)
 	}
 	// Binding fingerprints remain keyed and ephemeral. Secret values stay in the
 	// shared ephemeral registry and never enter the unified metadata.
-	fingerprint := service.sign("binding-v1", step.OperationID, guest.Socket(source.Input.Resource))
-	bound := service.registry.Binding(step.Input.SandboxID)
+	fingerprint := a.sign("binding-v1", step.OperationID, guest.Socket(source.Input.Resource))
+	bound := a.registry.Binding(step.Input.SandboxID)
 	if bound == fingerprint {
 		return nil
 	}
-	if err = service.RevokeSandbox(step.Input.SandboxID); err != nil {
+	if err = a.RevokeSandbox(step.Input.SandboxID); err != nil {
 		return err
 	}
-	if err = service.egress.Bind(service.ctx, egress.BindingTarget{
+	if err = a.egress.Bind(a.ctx, egress.BindingTarget{
 		SandboxID: step.Input.SandboxID,
 		TenantID:  step.Input.TenantID,
 		VSockPath: guest.Socket(source.Input.Resource),
 	}, step.Input.Settings.Policy, secrets); err != nil {
 		return err
 	}
-	service.registry.Bind(step.Input.SandboxID, fingerprint, secrets)
+	a.registry.Bind(step.Input.SandboxID, fingerprint, secrets)
 	return nil
 }
 
-func (service *Activations) RevokeSandbox(id string) error {
-	if service.egress != nil {
-		if err := service.egress.Revoke(id); err != nil {
+func (a *Activations) RevokeSandbox(id string) error {
+	if a.egress != nil {
+		if err := a.egress.Revoke(id); err != nil {
 			return err
 		}
 	}
-	service.registry.ForgetBinding(id)
+	a.registry.ForgetBinding(id)
 	return nil
 }

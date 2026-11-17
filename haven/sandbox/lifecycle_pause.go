@@ -14,20 +14,20 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.CaptureStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (l *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.CaptureStep) error {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.lifecycleProof(service.ctx, tx, *step); err != nil {
+	if err = l.lifecycleProof(l.ctx, tx, *step); err != nil {
 		return err
 	}
-	current, err := machine.LoadCapture(service.ctx, tx, capture.OperationID)
+	current, err := machine.LoadCapture(l.ctx, tx, capture.OperationID)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (service *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine
 		SnapshotID: snapshot.ID,
 	}
 	responsibilities := quota.New(tx)
-	if err = responsibilities.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.AddResourceReference(l.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         snapshot.ID,
 		HolderKind: "sleep",
@@ -48,7 +48,7 @@ func (service *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCostReference(service.ctx, quota.CostReference{
+	if err = responsibilities.AddCostReference(l.ctx, quota.CostReference{
 		TenantID:   step.Input.OwnerTenantID,
 		Kind:       "snapshot",
 		Key:        snapshot.ID,
@@ -57,7 +57,7 @@ func (service *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(l.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "lifecycle",
 		InputHash:    step.Hash,
@@ -71,43 +71,43 @@ func (service *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine
 	}
 	step.State = next
 	step.Status = "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = l.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("pause_captured")
+	return l.fault("pause_captured")
 }
 
-func (service *Lifecycle) runPause(step LifecycleStep) error {
-	link, err := service.runResourceLink(step.OperationID, "capture")
+func (l *Lifecycle) runPause(step LifecycleStep) error {
+	link, err := l.runResourceLink(step.OperationID, "capture")
 	if err != nil {
 		return err
 	}
-	capture, err := machine.LoadCapture(service.ctx, service.store.Database, link.ChildID)
+	capture, err := machine.LoadCapture(l.ctx, l.store.Database, link.ChildID)
 	if err != nil {
 		return err
 	}
 	if step.State.Phase == "admitted" {
-		if err = service.markPauseCaptured(&step, capture); err != nil {
+		if err = l.markPauseCaptured(&step, capture); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase != "captured" {
 		return fmt.Errorf("unsupported pause phase")
 	}
-	service.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
-	if err = service.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
+	l.registry.CloseSandboxConnections(step.Input.Sandbox.ID)
+	if err = l.activations.RevokeSandbox(step.Input.Sandbox.ID); err != nil {
 		return err
 	}
-	if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, "release"); lookup == sql.ErrNoRows {
+	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "release"); lookup == sql.ErrNoRows {
 		admission := &LifecycleAdmission{
-			History: service.proofs.Snapshots(),
+			History: l.proofs.Snapshots(),
 			Parent: operation.Record{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
 			Role:  "release",
 		}
-		if _, err = service.deletion.AdmitReleaseForParent(service.ctx, machine.ReleaseRequest{
+		if _, err = l.deletion.AdmitReleaseForParent(l.ctx, machine.ReleaseRequest{
 			TenantID:  step.Input.OwnerTenantID,
 			Key:       step.OperationID + ":release",
 			SandboxID: step.Input.Sandbox.ID,
@@ -117,33 +117,33 @@ func (service *Lifecycle) runPause(step LifecycleStep) error {
 	} else if lookup != nil {
 		return lookup
 	}
-	if _, err = service.runResourceLink(step.OperationID, "release"); err != nil {
+	if _, err = l.runResourceLink(step.OperationID, "release"); err != nil {
 		return err
 	}
-	return service.completePause(step)
+	return l.completePause(step)
 }
 
-func (service *Lifecycle) completePause(step LifecycleStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (l *Lifecycle) completePause(step LifecycleStep) error {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.lifecycleProof(service.ctx, tx, step); err != nil {
+	if err = l.lifecycleProof(l.ctx, tx, step); err != nil {
 		return err
 	}
-	link, status, err := machine.LoadResourceLink(service.ctx, tx, step.OperationID, "release")
+	link, status, err := machine.LoadResourceLink(l.ctx, tx, step.OperationID, "release")
 	if err != nil {
 		return err
 	}
 	if status != "succeeded" {
 		return errs.ErrInterrupted
 	}
-	released, err := machine.LoadResourceStep(service.ctx, tx, link.ChildID)
+	released, err := machine.LoadResourceStep(l.ctx, tx, link.ChildID)
 	if err != nil {
 		return err
 	}
@@ -151,14 +151,14 @@ func (service *Lifecycle) completePause(step LifecycleStep) error {
 		return fmt.Errorf("pause source deletion proof missing")
 	}
 
-	sandbox, err := LoadSandbox(service.ctx, tx, step.Input.Sandbox.ID, step.Input.OwnerTenantID)
+	sandbox, err := LoadSandbox(l.ctx, tx, step.Input.Sandbox.ID, step.Input.OwnerTenantID)
 	if err != nil {
 		return err
 	}
 	if sandbox.State != "terminated" || sandbox.OperationID != released.OperationID || sandbox.Instance != step.Input.Sandbox.Instance || sandbox.SourceOperation != step.Input.Source.OperationID {
 		return fmt.Errorf("pause current source ownership changed")
 	}
-	instances, err := machine.CurrentVMCount(service.ctx, tx, sandbox.VMID)
+	instances, err := machine.CurrentVMCount(l.ctx, tx, sandbox.VMID)
 	if err != nil || instances != 0 {
 		return fmt.Errorf("pause source resource still present: %v", err)
 	}
@@ -173,10 +173,10 @@ func (service *Lifecycle) completePause(step LifecycleStep) error {
 	settings.Instance = ""
 	settings.ActiveEpoch = ""
 	settings.Deadline = time.Time{}
-	settings.PausedUntil = time.Now().UTC().Add(service.opts.PausedTTL)
+	settings.PausedUntil = time.Now().UTC().Add(l.opts.PausedTTL)
 	next := step.State
 	next.Phase = "complete"
-	if err = store.RequireOne(dbgen.New(tx).RestorePausedSandbox(service.ctx, dbgen.RestorePausedSandboxParams{
+	if err = store.RequireOne(dbgen.New(tx).RestorePausedSandbox(l.ctx, dbgen.RestorePausedSandboxParams{
 		ID:           sandbox.ID,
 		Tenant:       sandbox.TenantID,
 		PreviousBody: operation.Encode(oldSandbox),
@@ -184,21 +184,21 @@ func (service *Lifecycle) completePause(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(service.ctx, dbgen.ReplaceSettingsParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(l.ctx, dbgen.ReplaceSettingsParams{
 		SandboxID:    sandbox.ID,
 		PreviousBody: operation.Encode(step.Input.Settings),
 		NextBody:     operation.Encode(settings),
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteFence(service.ctx, dbgen.DeleteFenceParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteFence(l.ctx, dbgen.DeleteFenceParams{
 		SandboxID:   sandbox.ID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(service.ctx, dbgen.CompleteRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(l.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "lifecycle",
 		InputHash:    step.Hash,
@@ -207,14 +207,14 @@ func (service *Lifecycle) completePause(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("pause_completion_before_commit"); err != nil {
+	if err = l.fault("pause_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return l.store.Checkpoint()
 }

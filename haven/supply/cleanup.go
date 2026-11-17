@@ -79,42 +79,42 @@ func NewSupplyCleanup(state *store.State, dependencies SupplyCleanupDependencies
 	}
 }
 
-func (service *SupplyCleanup) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (sc *SupplyCleanup) fault(point string) error {
+	if sc.faultPoint != nil {
+		return sc.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *SupplyCleanup) dispatch(id string) {
-	if service.store.Reviewed {
+func (sc *SupplyCleanup) dispatch(id string) {
+	if sc.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		_, err := service.Resume(id)
+	sc.workers.Start(id, func() error {
+		_, err := sc.Resume(id)
 		return err
 	})
 }
 
-func (service *SupplyCleanup) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (sc *SupplyCleanup) Resume(id string) (bool, error) {
+	if sc.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume supply cleanup", errs.ErrManualRecovery)
 	}
-	step, err := LoadSupplyCleanup(service.ctx, service.store.Database, id)
+	step, err := LoadSupplyCleanup(sc.ctx, sc.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.SupplyCleanup(step.Input.Source.Candidate)
+	guard := sc.guards.SupplyCleanup(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadSupplyCleanup(service.ctx, service.store.Database, id)
+	step, err = LoadSupplyCleanup(sc.ctx, sc.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runSupplyCleanup(step)
+	return true, sc.runSupplyCleanup(step)
 }
 
 type SupplyCleanupAdmission struct {
@@ -122,34 +122,34 @@ type SupplyCleanupAdmission struct {
 	Role   string
 }
 
-func (parent *SupplyCleanupAdmission) SupplyCleanupOperation() (string, bool) {
-	if parent == nil {
+func (admission *SupplyCleanupAdmission) SupplyCleanupOperation() (string, bool) {
+	if admission == nil {
 		return "", false
 	}
-	return parent.Parent.OperationID, true
+	return admission.Parent.OperationID, true
 }
 
-func (parent *SupplyCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
-	current, err := LoadSupplyCleanup(ctx, tx, parent.Parent.OperationID)
+func (admission *SupplyCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	current, err := LoadSupplyCleanup(ctx, tx, admission.Parent.OperationID)
 	if err != nil {
 		return err
 	}
-	if operation.Terminal(current.Status) || current.Hash != parent.Parent.Hash || !reflect.DeepEqual(current.Input, parent.Parent.Input) {
+	if operation.Terminal(current.Status) || current.Hash != admission.Parent.Hash || !reflect.DeepEqual(current.Input, admission.Parent.Input) {
 		return fmt.Errorf("%w: supply cleanup admission changed", errs.ErrConflict)
 	}
 	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
 		OperationID:      current.OperationID,
-		Role:             parent.Role,
+		Role:             admission.Role,
 		ExpectedInstance: current.Input.Source.Input.Resource.Instance,
 	}, request)
 }
 
-func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal authorization.Principal, key string, request SupplyCleanupRequest) (operation.Record, error) {
+func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal authorization.Principal, key string, request SupplyCleanupRequest) (operation.Record, error) {
 	var empty operation.Record
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || !loom.ValidResourceID(request.OperationID, "op-") {
 		return empty, fmt.Errorf("%w: supply cleanup requires management authority, original operation and key", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.NodeRequest(service.nodeID, key)
+	requestGuard := sc.guards.NodeRequest(sc.nodeID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	frozen := operation.Encode(struct {
@@ -157,30 +157,30 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 		Request SupplyCleanupRequest
 	}{"supply_cleanup", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(sc.store.Database).Cached(ctx, operation.Scope{
 		Kind: "node",
-		ID:   service.nodeID,
+		ID:   sc.nodeID,
 	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			sc.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	original, err := LoadSupply(ctx, service.store.Database, request.OperationID)
+	original, err := LoadSupply(ctx, sc.store.Database, request.OperationID)
 	if err != nil {
 		return empty, err
 	}
-	guard := service.guards.TemplateWork(original.Input.Template.ID)
+	guard := sc.guards.TemplateWork(original.Input.Template.ID)
 	if !guard.TryLock() {
 		return empty, fmt.Errorf("%w: supply workflow is active", errs.ErrConflict)
 	}
 	defer guard.Unlock()
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err = service.gate.Check(); err != nil {
+	sc.admission.Lock()
+	defer sc.admission.Unlock()
+	if err = sc.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := sc.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -215,11 +215,11 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 	if source.Input.SandboxID != original.Input.SandboxID || source.Input.TenantID != original.Input.Template.TenantID {
 		return empty, fmt.Errorf("%w: supply source ownership changed", errs.ErrManualRecovery)
 	}
-	record, err := service.ownership.ReadSandbox(ctx, tx, source.Input.SandboxID, source.Input.TenantID)
+	record, err := sc.ownership.ReadSandbox(ctx, tx, source.Input.SandboxID, source.Input.TenantID)
 	if err != nil {
 		return empty, err
 	}
-	settings, err := service.ownership.SettingsCount(ctx, tx, record.ID)
+	settings, err := sc.ownership.SettingsCount(ctx, tx, record.ID)
 	if err != nil {
 		return empty, err
 	}
@@ -275,7 +275,7 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 			return empty, fmt.Errorf("%w: supply pool responsibility was selected or changed", errs.ErrConflict)
 		}
 		if status == "ready" {
-			if _, _, err = VerifyReadyWarm(service.proofs, ctx, tx, original.OperationID); err != nil {
+			if _, _, err = VerifyReadyWarm(sc.proofs, ctx, tx, original.OperationID); err != nil {
 				return empty, err
 			}
 			if err = store.RequireOne(dbgen.New(tx).RemoveWarm(ctx, dbgen.RemoveWarmParams{
@@ -316,7 +316,7 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
-		ScopeID:   service.nodeID,
+		ScopeID:   sc.nodeID,
 		Key:       key,
 		Hash:      hash,
 		Request:   frozen,
@@ -355,54 +355,54 @@ func (service *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal 
 	}); err != nil {
 		return empty, err
 	}
-	if err = service.fault("supply_cleanup_admission_before_commit"); err != nil {
+	if err = sc.fault("supply_cleanup_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sc.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("supply_cleanup_admitted"); err != nil {
+	if err = sc.fault("supply_cleanup_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	sc.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *SupplyCleanup) completeResourceLink(parent, role string, link machine.ResourceLink) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (sc *SupplyCleanup) completeResourceLink(parent, role string, link machine.ResourceLink) error {
+	sc.admission.Lock()
+	defer sc.admission.Unlock()
+	tx, err := sc.store.Database.BeginTx(sc.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	changed, err := link.Complete(service.ctx, tx, parent, role)
+	changed, err := link.Complete(sc.ctx, tx, parent, role)
 	if err != nil || !changed {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return sc.store.Checkpoint()
 }
 
-func (service *SupplyCleanup) resumeChild(link machine.ResourceLink) error {
+func (sc *SupplyCleanup) resumeChild(link machine.ResourceLink) error {
 	var handled bool
 	var err error
 	switch link.Kind {
 	case "stop":
-		handled, err = service.stops.Resume(link.ChildID)
+		handled, err = sc.stops.Resume(link.ChildID)
 	case "capture_discard":
-		handled, err = service.captures.Resume(link.ChildID)
+		handled, err = sc.captures.Resume(link.ChildID)
 	case "release":
-		handled, err = service.deletion.ResumeRelease(link.ChildID)
+		handled, err = sc.deletion.ResumeRelease(link.ChildID)
 	case "discard":
-		handled, err = service.deletion.ResumeDiscard(link.ChildID)
+		handled, err = sc.deletion.ResumeDiscard(link.ChildID)
 	default:
 		return fmt.Errorf("supply cleanup child kind unsupported")
 	}
@@ -415,8 +415,8 @@ func (service *SupplyCleanup) resumeChild(link machine.ResourceLink) error {
 	return nil
 }
 
-func (service *SupplyCleanup) runResourceLink(parent, role string) (machine.ResourceLink, error) {
-	link, status, err := machine.LoadResourceLink(service.ctx, service.store.Database, parent, role)
+func (sc *SupplyCleanup) runResourceLink(parent, role string) (machine.ResourceLink, error) {
+	link, status, err := machine.LoadResourceLink(sc.ctx, sc.store.Database, parent, role)
 	if err != nil {
 		return link, err
 	}
@@ -426,14 +426,14 @@ func (service *SupplyCleanup) runResourceLink(parent, role string) (machine.Reso
 	if status == "succeeded" {
 		return link, nil
 	}
-	runErr := service.resumeChild(link)
+	runErr := sc.resumeChild(link)
 	if errors.Is(runErr, errs.ErrInterrupted) {
 		return link, runErr
 	}
-	if err = service.completeResourceLink(parent, role, link); err != nil {
+	if err = sc.completeResourceLink(parent, role, link); err != nil {
 		return link, errors.Join(err, runErr)
 	}
-	_, status, err = machine.LoadResourceLink(service.ctx, service.store.Database, parent, role)
+	_, status, err = machine.LoadResourceLink(sc.ctx, sc.store.Database, parent, role)
 	if err != nil {
 		return link, err
 	}
@@ -450,19 +450,19 @@ type CleanupOwnershipReader interface {
 	SettingsCount(context.Context, store.DBTX, string) (int64, error)
 }
 
-func (service *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
+func (sc *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
 	if step.Input.Retired == nil {
 		source := step.Input.Source
 		if len(step.Input.CaptureFailures) > 0 {
-			if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, "stop"); errors.Is(lookup, sql.ErrNoRows) {
+			if _, _, lookup := machine.LoadResourceLink(sc.ctx, sc.store.Database, step.OperationID, "stop"); errors.Is(lookup, sql.ErrNoRows) {
 				parent := &SupplyCleanupAdmission{
 					Parent: step,
 					Role:   "stop",
 				}
-				if _, err := service.stops.AdmitForParent(service.ctx, machine.StopRequest{
+				if _, err := sc.stops.AdmitForParent(sc.ctx, machine.StopRequest{
 					TenantID:         source.Input.TenantID,
 					Key:              step.OperationID + ":stop",
 					SandboxID:        source.Input.SandboxID,
@@ -473,18 +473,18 @@ func (service *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 			} else if lookup != nil {
 				return lookup
 			}
-			stopped, err := service.runResourceLink(step.OperationID, "stop")
+			stopped, err := sc.runResourceLink(step.OperationID, "stop")
 			if err != nil {
 				return err
 			}
 			for _, reference := range step.Input.CaptureFailures {
 				role := "capture:" + reference.OperationID
-				if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
+				if _, _, lookup := machine.LoadResourceLink(sc.ctx, sc.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
 					parent := &SupplyCleanupAdmission{
 						Parent: step,
 						Role:   role,
 					}
-					if _, err = service.captures.AdmitForParent(service.ctx, machine.CaptureDiscardRequest{
+					if _, err = sc.captures.AdmitForParent(sc.ctx, machine.CaptureDiscardRequest{
 						TenantID:          source.Input.TenantID,
 						Key:               step.OperationID + ":" + role,
 						SandboxID:         source.Input.SandboxID,
@@ -497,18 +497,18 @@ func (service *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 				} else if lookup != nil {
 					return lookup
 				}
-				if _, err = service.runResourceLink(step.OperationID, role); err != nil {
+				if _, err = sc.runResourceLink(step.OperationID, role); err != nil {
 					return err
 				}
 			}
 		}
-		if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, "resource"); errors.Is(lookup, sql.ErrNoRows) {
+		if _, _, lookup := machine.LoadResourceLink(sc.ctx, sc.store.Database, step.OperationID, "resource"); errors.Is(lookup, sql.ErrNoRows) {
 			parent := &SupplyCleanupAdmission{
 				Parent: step,
 				Role:   "resource",
 			}
 			if source.Status == "failed" {
-				if _, err := service.deletion.AdmitDiscardForParent(service.ctx, machine.DiscardRequest{
+				if _, err := sc.deletion.AdmitDiscardForParent(sc.ctx, machine.DiscardRequest{
 					TenantID:          source.Input.TenantID,
 					Key:               step.OperationID + ":resource",
 					SandboxID:         source.Input.SandboxID,
@@ -518,7 +518,7 @@ func (service *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 					return err
 				}
 			} else {
-				if _, err := service.deletion.AdmitReleaseForParent(service.ctx, machine.ReleaseRequest{
+				if _, err := sc.deletion.AdmitReleaseForParent(sc.ctx, machine.ReleaseRequest{
 					TenantID:  source.Input.TenantID,
 					Key:       step.OperationID + ":resource",
 					SandboxID: source.Input.SandboxID,
@@ -529,31 +529,31 @@ func (service *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 		} else if lookup != nil {
 			return lookup
 		}
-		if _, err := service.runResourceLink(step.OperationID, "resource"); err != nil {
+		if _, err := sc.runResourceLink(step.OperationID, "resource"); err != nil {
 			return err
 		}
 	}
-	return service.completeSupplyCleanup(step)
+	return sc.completeSupplyCleanup(step)
 }
 
-func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
+	sc.admission.Lock()
+	defer sc.admission.Unlock()
+	tx, err := sc.store.Database.BeginTx(sc.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSupplyCleanup(service.ctx, tx, step.OperationID)
+	current, err := LoadSupplyCleanup(sc.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, step) {
 		return fmt.Errorf("supply cleanup current intent changed")
 	}
-	original, err := LoadSupply(service.ctx, tx, step.Input.Original.OperationID)
+	original, err := LoadSupply(sc.ctx, tx, step.Input.Original.OperationID)
 	if err != nil {
 		return err
 	}
@@ -562,7 +562,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 	}
 	source := step.Input.Source
 	if step.Input.Retired != nil {
-		retired, err := machine.LoadResourceStep(service.ctx, tx, step.Input.Retired.OperationID)
+		retired, err := machine.LoadResourceStep(sc.ctx, tx, step.Input.Retired.OperationID)
 		if err != nil {
 			return err
 		}
@@ -570,7 +570,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 			return fmt.Errorf("supply cleanup original retirement proof changed")
 		}
 	} else {
-		link, status, err := machine.LoadResourceLink(service.ctx, tx, step.OperationID, "resource")
+		link, status, err := machine.LoadResourceLink(sc.ctx, tx, step.OperationID, "resource")
 		if err != nil {
 			return err
 		}
@@ -579,7 +579,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 		}
 		switch link.Kind {
 		case "release":
-			retired, err := machine.LoadResourceStep(service.ctx, tx, link.ChildID)
+			retired, err := machine.LoadResourceStep(sc.ctx, tx, link.ChildID)
 			if err != nil {
 				return err
 			}
@@ -587,7 +587,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 				return fmt.Errorf("supply cleanup release receipt changed")
 			}
 		case "discard":
-			retired, err := machine.LoadDiscard(service.ctx, tx, link.ChildID)
+			retired, err := machine.LoadDiscard(sc.ctx, tx, link.ChildID)
 			if err != nil {
 				return err
 			}
@@ -598,19 +598,19 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 			return fmt.Errorf("supply cleanup resource link kind unsupported")
 		}
 	}
-	count, err := machine.CurrentVMCount(service.ctx, tx, source.Candidate)
+	count, err := machine.CurrentVMCount(sc.ctx, tx, source.Candidate)
 	if err != nil || count != 0 {
 		return fmt.Errorf("supply cleanup VM responsibility remains: %v", err)
 	}
 	if step.Input.Pool != nil {
-		reservation, status, err := LoadPoolReservation(service.ctx, tx, original.OperationID)
+		reservation, status, err := LoadPoolReservation(sc.ctx, tx, original.OperationID)
 		if err != nil {
 			return err
 		}
 		if status != "cleanup" || !reflect.DeepEqual(reservation, *step.Input.Pool) {
 			return fmt.Errorf("supply cleanup pool slot changed")
 		}
-		if err = store.RequireOne(dbgen.New(tx).DeleteReservation(service.ctx, dbgen.DeleteReservationParams{
+		if err = store.RequireOne(dbgen.New(tx).DeleteReservation(sc.ctx, dbgen.DeleteReservationParams{
 			OperationID: original.OperationID,
 			Status:      "cleanup",
 			Body:        operation.Encode(reservation),
@@ -619,7 +619,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 		}
 	}
 	if original.Status == "failed" {
-		if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+		if err = quota.New(tx).RemoveResourceReference(sc.ctx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         source.Input.Resource.Config.Image,
 			HolderKind: "step",
@@ -627,7 +627,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 		}); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(service.ctx, dbgen.CompletePendingCleanupKindParams{
+		if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(sc.ctx, dbgen.CompletePendingCleanupKindParams{
 			ID:           "supply:" + original.OperationID,
 			OperationID:  original.OperationID,
 			ResourceKind: "supply",
@@ -635,7 +635,7 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = quota.New(tx).RemoveResourceReference(sc.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "step",
@@ -644,14 +644,14 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(service.ctx, dbgen.CompletePendingCleanupKindParams{
+	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanupKind(sc.ctx, dbgen.CompletePendingCleanupKindParams{
 		ID:           "supply_cleanup:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "supply_cleanup",
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(service.ctx, dbgen.CompleteUnchangedStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(sc.ctx, dbgen.CompleteUnchangedStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "supply_cleanup",
 		InputHash:    step.Hash,
@@ -660,14 +660,14 @@ func (service *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) erro
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(sc.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("supply_cleanup_completion_before_commit"); err != nil {
+	if err = sc.fault("supply_cleanup_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return sc.store.Checkpoint()
 }

@@ -19,8 +19,8 @@ import (
 
 // AdmitCaptureDiscard keeps the source VM and its disk. The caller explicitly
 // supplies a completed stop operation; cleanup never infers that writers exited.
-func (service *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request CaptureDiscardRequest) (operation.Record, error) {
-	if service.
+func (cd *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request CaptureDiscardRequest) (operation.Record, error) {
+	if cd.
 		ownership ==
 		nil {
 		return operation.Record{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
@@ -28,11 +28,11 @@ func (service *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request 
 			errs.ErrManualRecovery)
 	}
 
-	return service.AdmitForParent(ctx, request, nil)
+	return cd.AdmitForParent(ctx, request, nil)
 }
 
-func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDiscardRequest, parent ResourceParent) (operation.Record, error) {
-	if service.
+func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDiscardRequest, parent ResourceParent) (operation.Record, error) {
+	if cd.
 		ownership ==
 		nil {
 		return operation.Record{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
@@ -49,13 +49,13 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 		Request CaptureDiscardRequest
 	}{"capture_discard", request})
 	hash := operation.Digest(frozen)
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	cd.admission.Lock()
+	defer cd.admission.Unlock()
+	closing := cd.lifetime.Closing() || cd.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := cd.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -67,7 +67,7 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			cd.dispatch(cached.ID)
 		}
 		return cached, err
 	}
@@ -116,7 +116,7 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 		Phase:       "admitted",
 		Status:      "pending",
 	}
-	if err = service.captureDiscardAdmissionProof(ctx, tx, step); err != nil {
+	if err = cd.captureDiscardAdmissionProof(ctx, tx, step); err != nil {
 		return empty, err
 	}
 	operations := operation.New(tx)
@@ -182,29 +182,29 @@ func (service *CaptureDiscard) AdmitForParent(ctx context.Context, request Captu
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.captureDiscardProof(ctx, tx, step); err != nil {
+	if err = cd.captureDiscardProof(ctx, tx, step); err != nil {
 		return empty, err
 	}
-	if err = service.fault("capture_discard_admission_before_commit"); err != nil {
+	if err = cd.fault("capture_discard_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = cd.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("capture_discard_admitted"); err != nil {
+	if err = cd.fault("capture_discard_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	cd.dispatch(accepted.ID)
 	return accepted, nil
 }
 
 // verifyCaptureDiscardSource verifies the immutable failure and stopped source
 // against the owner expected at this transaction boundary. Custody transfer and
 // the admitted child operation are checked by their separate stage entrypoints.
-func (service *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep, expectedOwner string) (ownership.Sandbox, error) {
+func (cd *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, tx *sql.Tx, step CaptureDiscardStep, expectedOwner string) (ownership.Sandbox, error) {
 	var empty ownership.Sandbox
 	input, request := step.Input, step.Input.Request
 	source := input.Source
@@ -216,10 +216,10 @@ func (service *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, t
 	if !reflect.DeepEqual(historical, source) || source.OperationID != request.FailedOperationID || source.Status != "failed" || source.State.ResumeRequired || source.State.Error == "" || source.Input.Request.TenantID != request.TenantID || source.Input.Request.SandboxID != request.SandboxID || source.Input.Request.ExpectedInstance != request.ExpectedInstance || resource.State.Witness != request.ExpectedInstance {
 		return empty, fmt.Errorf("capture discard requires immutable resumed failure")
 	}
-	if err = service.proofs.VerifyGeneration(ctx, tx, resource); err != nil {
+	if err = cd.proofs.VerifyGeneration(ctx, tx, resource); err != nil {
 		return empty, err
 	}
-	generations, err := service.proofs.GenerationHistory(ctx, tx, resource)
+	generations, err := cd.proofs.GenerationHistory(ctx, tx, resource)
 	if err != nil {
 		return empty, err
 	}
@@ -233,13 +233,13 @@ func (service *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, t
 	if stopped.Hash != input.StopHash || stopped.Status != "succeeded" || stopped.Phase != "complete" || stopped.Input.SourceOperation != resource.OperationID || stopped.Input.SourceHash != resource.Hash || stopped.Input.Request.TenantID != request.TenantID || stopped.Input.Request.SandboxID != request.SandboxID || stopped.Input.Request.ExpectedInstance != request.ExpectedInstance {
 		return empty, fmt.Errorf("capture discard stop proof changed")
 	}
-	sandboxRecord, err := service.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
+	sandboxRecord, err := cd.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
 	allowedState := sandboxRecord.State == "provisioning"
 	if input.Lifecycle != "" {
-		allowedState, err = service.ownership.VerifyCaptureDiscardParent(ctx, tx, step, sandboxRecord)
+		allowedState, err = cd.ownership.VerifyCaptureDiscardParent(ctx, tx, step, sandboxRecord)
 		if err != nil {
 			return empty, err
 		}
@@ -277,7 +277,7 @@ func (service *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, t
 		return empty, fmt.Errorf("capture discard original terminal result changed")
 	}
 	snapshot := source.Input.Snapshot
-	if snapshot.OperationID != source.OperationID || snapshot.TenantID != request.TenantID || snapshot.SourceVM != resource.Candidate || snapshot.SourceInstance != request.ExpectedInstance || snapshot.Manifest != nil || snapshot.Dir != filepath.Join(service.store.Directory, "snapshots", snapshot.ID) {
+	if snapshot.OperationID != source.OperationID || snapshot.TenantID != request.TenantID || snapshot.SourceVM != resource.Candidate || snapshot.SourceInstance != request.ExpectedInstance || snapshot.Manifest != nil || snapshot.Dir != filepath.Join(cd.store.Directory, "snapshots", snapshot.ID) {
 		return empty, fmt.Errorf("capture discard destination changed")
 	}
 	return sandboxRecord, nil

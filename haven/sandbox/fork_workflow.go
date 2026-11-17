@@ -21,55 +21,55 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (service *Forks) runForkGroup(step ForkStep) error {
+func (f *Forks) runForkGroup(step ForkStep) error {
 	for {
 		switch step.State.Phase {
 		case "admitted":
-			link, err := service.runResourceLink(step.OperationID, "capture")
+			link, err := f.runResourceLink(step.OperationID, "capture")
 			if err != nil {
-				if errors.Is(err, errs.ErrInterrupted) || service.ctx.Err() != nil {
+				if errors.Is(err, errs.ErrInterrupted) || f.ctx.Err() != nil {
 					return err
 				}
-				child, lookup := service.operations.GetOperation(service.ctx, step.Input.OwnerTenantID, link.ChildID)
+				child, lookup := f.operations.GetOperation(f.ctx, step.Input.OwnerTenantID, link.ChildID)
 				if lookup != nil || !operation.Terminal(child.Status) {
 					return err
 				}
-				if err = service.compensateFork(&step, "fork source capture failed"); err != nil {
+				if err = f.compensateFork(&step, "fork source capture failed"); err != nil {
 					return err
 				}
 				continue
 			}
-			if err = service.captureForkSource(&step, link); err != nil {
+			if err = f.captureForkSource(&step, link); err != nil {
 				return err
 			}
 		case "captured":
-			if err := service.allocateFork(&step); err != nil {
-				if errors.Is(err, errs.ErrInterrupted) || service.ctx.Err() != nil {
+			if err := f.allocateFork(&step); err != nil {
+				if errors.Is(err, errs.ErrInterrupted) || f.ctx.Err() != nil {
 					return err
 				}
-				if err = service.compensateFork(&step, "fork batch allocation could not be admitted"); err != nil {
+				if err = f.compensateFork(&step, "fork batch allocation could not be admitted"); err != nil {
 					return err
 				}
 			}
 		case "allocated":
-			service.forkSecrets(step)
+			f.forkSecrets(step)
 			for _, id := range step.State.Children {
-				service.dispatchBranch(id)
+				f.dispatchBranch(id)
 			}
 			failed := false
 			for index, id := range step.State.Children {
-				child, err := service.operations.WaitAccepted(service.ctx, step.Input.OwnerTenantID, id)
+				child, err := f.operations.WaitAccepted(f.ctx, step.Input.OwnerTenantID, id)
 				if err != nil && !operation.Terminal(child.Status) {
 					return err
 				}
-				link, _, err := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, fmt.Sprintf("branch:%d", index))
+				link, _, err := machine.LoadResourceLink(f.ctx, f.store.Database, step.OperationID, fmt.Sprintf("branch:%d", index))
 				if err != nil {
 					return err
 				}
 				if link.ChildID != id {
 					return fmt.Errorf("%w: fork branch dependency changed", errs.ErrManualRecovery)
 				}
-				if err = service.links.Complete(step.OperationID, fmt.Sprintf("branch:%d", index), link); err != nil {
+				if err = f.links.Complete(step.OperationID, fmt.Sprintf("branch:%d", index), link); err != nil {
 					return err
 				}
 				if child.Status != "succeeded" {
@@ -77,19 +77,19 @@ func (service *Forks) runForkGroup(step ForkStep) error {
 				}
 			}
 			if failed {
-				if err := service.compensateFork(&step, "fork branch activation failed"); err != nil {
+				if err := f.compensateFork(&step, "fork branch activation failed"); err != nil {
 					return err
 				}
 				continue
 			}
-			return service.completeFork(step)
+			return f.completeFork(step)
 		case "compensating":
 			if len(step.State.Children) > 0 {
-				if err := service.retireForkBranches(step); err != nil {
+				if err := f.retireForkBranches(step); err != nil {
 					return err
 				}
 			}
-			return service.completeFork(step)
+			return f.completeFork(step)
 		case "complete", "failed":
 			return nil
 		default:
@@ -98,38 +98,38 @@ func (service *Forks) runForkGroup(step ForkStep) error {
 	}
 }
 
-func (service *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) error {
-	capture, err := machine.LoadCapture(service.ctx, service.store.Database, link.ChildID)
+func (f *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) error {
+	capture, err := machine.LoadCapture(f.ctx, f.store.Database, link.ChildID)
 	if err != nil {
 		return err
 	}
 	if capture.Status != "succeeded" || capture.State.Phase != "complete" || step.Input.Source == nil || !reflect.DeepEqual(capture.Input.Source, *step.Input.Source) {
 		return fmt.Errorf("%w: fork capture lacks its original completed source", errs.ErrManualRecovery)
 	}
-	source, err := service.history.LoadRestoreSource(service.ctx, service.store.Database, step.Input.OwnerTenantID, capture.Input.Snapshot.ID)
+	source, err := f.history.LoadRestoreSource(f.ctx, f.store.Database, step.Input.OwnerTenantID, capture.Input.Snapshot.ID)
 	if err != nil {
 		return err
 	}
 	if err = machine.VerifyRestoreSourceFiles(source); err != nil {
 		return err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadFork(service.ctx, tx, step.OperationID)
+	current, err := LoadFork(f.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.State, step.State) {
 		return fmt.Errorf("%w: fork capture handoff changed", errs.ErrConflict)
 	}
-	if err = machine.PinSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
+	if err = machine.PinSnapshotSource(f.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
 		SnapshotID:  source.Snapshot.ID,
 		OperationID: step.OperationID,
 		StepKey:     "fork_group",
@@ -139,7 +139,7 @@ func (service *Forks) captureForkSource(step *ForkStep, link machine.ResourceLin
 	state := step.State
 	state.Phase = "captured"
 	state.Snapshot = &source
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "fork_group",
 		InputHash:    step.Hash,
@@ -148,17 +148,17 @@ func (service *Forks) captureForkSource(step *ForkStep, link machine.ResourceLin
 	})); err != nil {
 		return err
 	}
-	if err = service.fault("fork_capture_before_commit"); err != nil {
+	if err = f.fault("fork_capture_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
 	step.State = state
-	return service.store.Checkpoint()
+	return f.store.Checkpoint()
 }
 
-func (service *Forks) allocateFork(step *ForkStep) error {
+func (f *Forks) allocateFork(step *ForkStep) error {
 	if step.State.Snapshot == nil {
 		return fmt.Errorf("%w: fork allocation lacks frozen source", errs.ErrManualRecovery)
 	}
@@ -166,37 +166,37 @@ func (service *Forks) allocateFork(step *ForkStep) error {
 	if err := machine.VerifyRestoreSourceFiles(source); err != nil {
 		return err
 	}
-	manifest, err := image.LoadManifest(service.ctx, service.store.Database, step.Input.Template.Config.Image)
+	manifest, err := image.LoadManifest(f.ctx, f.store.Database, step.Input.Template.Config.Image)
 	if err != nil {
 		return err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(f.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return err
 	}
-	free, err := loom.FreeBytes(service.store.Directory)
+	free, err := loom.FreeBytes(f.store.Directory)
 	if err != nil {
 		return err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err = service.gate.Check(); err != nil {
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	if err = f.gate.Check(); err != nil {
 		return err
 	}
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadFork(service.ctx, tx, step.OperationID)
+	current, err := LoadFork(f.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.State, step.State) || current.State.Phase != "captured" {
 		return fmt.Errorf("%w: fork allocation intent changed", errs.ErrConflict)
 	}
-	if err = consumeForkForecast(service.ctx, tx, *step); err != nil {
+	if err = consumeForkForecast(f.ctx, tx, *step); err != nil {
 		return err
 	}
 	var children []string
@@ -222,7 +222,7 @@ func (service *Forks) allocateFork(step *ForkStep) error {
 			Command:  step.Input.Command,
 			Settings: step.Input.Settings,
 		}
-		child, err := service.provisioning.AdmitIn(service.ctx, tx, ProvisionAdmission{
+		child, err := f.provisioning.AdmitIn(f.ctx, tx, ProvisionAdmission{
 			Request: supply.ProvisionRequest{
 				TenantID: request.TenantID,
 				Key:      request.Key,
@@ -247,7 +247,7 @@ func (service *Forks) allocateFork(step *ForkStep) error {
 	state := step.State
 	state.Phase = "allocated"
 	state.Children = children
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "fork_group",
 		InputHash:    step.Hash,
@@ -256,40 +256,40 @@ func (service *Forks) allocateFork(step *ForkStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = service.fault("fork_allocation_before_commit"); err != nil {
+	if err = f.fault("fork_allocation_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
 	step.State = state
-	service.forkSecrets(*step)
-	if err = service.store.Checkpoint(); err != nil {
+	f.forkSecrets(*step)
+	if err = f.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("fork_allocated")
+	return f.fault("fork_allocated")
 }
 
-func (service *Forks) compensateFork(step *ForkStep, message string) error {
+func (f *Forks) compensateFork(step *ForkStep, message string) error {
 	state := step.State
 	state.Phase = "compensating"
 	if state.Error == "" {
 		state.Error = message
 	}
-	return service.saveFork(step, state)
+	return f.saveFork(step, state)
 }
 
-func (service *Forks) completeFork(step ForkStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (f *Forks) completeFork(step ForkStep) error {
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadFork(service.ctx, tx, step.OperationID)
+	current, err := LoadFork(f.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -301,14 +301,14 @@ func (service *Forks) completeFork(step ForkStep) error {
 		return fmt.Errorf("%w: fork cannot complete this phase", errs.ErrConflict)
 	}
 	if failed && len(step.State.Children) == 0 {
-		if err = retireUnallocatedFork(service.ctx, tx, step); err != nil {
+		if err = retireUnallocatedFork(f.ctx, tx, step); err != nil {
 			return err
 		}
 	}
 	for index, target := range step.Input.Targets {
 		if failed {
 			if len(step.State.Children) > 0 {
-				link, status, err := machine.LoadResourceLink(service.ctx, tx, step.OperationID, fmt.Sprintf("retire:%d", index))
+				link, status, err := machine.LoadResourceLink(f.ctx, tx, step.OperationID, fmt.Sprintf("retire:%d", index))
 				if err != nil {
 					return err
 				}
@@ -319,12 +319,12 @@ func (service *Forks) completeFork(step ForkStep) error {
 					if err = (forkCleanupAdmission{
 						Group: step,
 						Index: index,
-					}).retireDiscard(service.ctx, tx, link); err != nil {
+					}).retireDiscard(f.ctx, tx, link); err != nil {
 						return err
 					}
 				}
 			}
-			sandbox, err := LoadSandbox(service.ctx, tx, target.ID, target.TenantID)
+			sandbox, err := LoadSandbox(f.ctx, tx, target.ID, target.TenantID)
 			if err != nil {
 				return err
 			}
@@ -332,11 +332,11 @@ func (service *Forks) completeFork(step ForkStep) error {
 				return fmt.Errorf("%w: fork compensation lacks verified retirement", errs.ErrManualRecovery)
 			}
 		} else {
-			child, err := operation.New(tx).Get(service.ctx, "tenant", step.Input.OwnerTenantID, step.State.Children[index])
+			child, err := operation.New(tx).Get(f.ctx, "tenant", step.Input.OwnerTenantID, step.State.Children[index])
 			if err != nil {
 				return err
 			}
-			view, err := operation.LoadPublication(service.ctx, tx, child.ID)
+			view, err := operation.LoadPublication(f.ctx, tx, child.ID)
 			if err != nil {
 				return err
 			}
@@ -346,7 +346,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 		}
 	}
 	if step.State.Snapshot != nil {
-		if err = machine.ReleaseSnapshotSource(service.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
+		if err = machine.ReleaseSnapshotSource(f.ctx, tx, step.Input.OwnerTenantID, machine.SourceLease{
 			SnapshotID:  step.State.Snapshot.Snapshot.ID,
 			OperationID: step.OperationID,
 			StepKey:     "fork_group",
@@ -354,7 +354,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = quota.New(tx).RemoveResourceReference(f.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         step.Input.Template.Config.Image,
 		HolderKind: "step",
@@ -362,7 +362,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 	}); err != nil {
 		return err
 	}
-	accepted, err := operation.New(tx).Get(service.ctx, "tenant", step.Input.RequestTenantID, step.OperationID)
+	accepted, err := operation.New(tx).Get(f.ctx, "tenant", step.Input.RequestTenantID, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -380,7 +380,7 @@ func (service *Forks) completeFork(step ForkStep) error {
 		state.Phase = "failed"
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).FinishLiveStep(service.ctx, dbgen.FinishLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FinishLiveStep(f.ctx, dbgen.FinishLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "fork_group",
 		InputHash:   step.Hash,
@@ -389,19 +389,19 @@ func (service *Forks) completeFork(step ForkStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Finish(service.ctx, step.OperationID, status, operation.Encode(result)); err != nil {
+	if err = operations.Finish(f.ctx, step.OperationID, status, operation.Encode(result)); err != nil {
 		return err
 	}
-	if err = service.fault("fork_completion_before_commit"); err != nil {
+	if err = f.fault("fork_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = f.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.registry.DropOperationSecrets(append([]string{
+	f.registry.DropOperationSecrets(append([]string{
 		step.OperationID,
 	}, step.State.Children...)...)
-	return service.store.Checkpoint()
+	return f.store.Checkpoint()
 }
 
 type forkCleanupAdmission struct {
@@ -409,16 +409,16 @@ type forkCleanupAdmission struct {
 	Index int
 }
 
-func (parent *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+func (admission *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
 	child, kind := request.Child, request.Kind
-	group, err := LoadFork(ctx, tx, parent.Group.OperationID)
+	group, err := LoadFork(ctx, tx, admission.Group.OperationID)
 	if err != nil {
 		return err
 	}
-	if group.Hash != parent.Group.Hash || group.State.Phase != "compensating" || operation.Terminal(group.Status) || parent.Index < 0 || parent.Index >= len(group.Input.Targets) || child.Result.SandboxID != group.Input.Targets[parent.Index].ID || (kind != "lifecycle" && kind != "discard") {
+	if group.Hash != admission.Group.Hash || group.State.Phase != "compensating" || operation.Terminal(group.Status) || admission.Index < 0 || admission.Index >= len(group.Input.Targets) || child.Result.SandboxID != group.Input.Targets[admission.Index].ID || (kind != "lifecycle" && kind != "discard") {
 		return fmt.Errorf("%w: fork cleanup no longer owns its target", errs.ErrConflict)
 	}
-	target := group.Input.Targets[parent.Index]
+	target := group.Input.Targets[admission.Index]
 	current, err := LoadSandbox(ctx, tx, target.ID, target.TenantID)
 	if err != nil {
 		return err
@@ -428,15 +428,15 @@ func (parent *forkCleanupAdmission) AdmitResource(ctx context.Context, tx *sql.T
 	}
 	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
 		OperationID: group.OperationID,
-		Role:        fmt.Sprintf("retire:%d", parent.Index),
+		Role:        fmt.Sprintf("retire:%d", admission.Index),
 	}, request)
 }
 
-func (service *Forks) retireForkBranches(step ForkStep) error {
+func (f *Forks) retireForkBranches(step ForkStep) error {
 	for index, target := range step.Input.Targets {
 		role := fmt.Sprintf("retire:%d", index)
-		if _, _, err := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, role); errors.Is(err, sql.ErrNoRows) {
-			source, err := machine.LoadResourceStep(service.ctx, service.store.Database, step.State.Children[index])
+		if _, _, err := machine.LoadResourceLink(f.ctx, f.store.Database, step.OperationID, role); errors.Is(err, sql.ErrNoRows) {
+			source, err := machine.LoadResourceStep(f.ctx, f.store.Database, step.State.Children[index])
 			if err != nil {
 				return err
 			}
@@ -445,7 +445,7 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 				Index: index,
 			}
 			if source.Status == "failed" {
-				_, err = service.deletion.AdmitDiscardForParent(service.ctx, machine.DiscardRequest{
+				_, err = f.deletion.AdmitDiscardForParent(f.ctx, machine.DiscardRequest{
 					TenantID:          target.TenantID,
 					Key:               step.OperationID + ":discard:" + target.ID,
 					SandboxID:         target.ID,
@@ -453,7 +453,7 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 					ExpectedInstance:  source.Input.Resource.Instance,
 				}, parent)
 			} else {
-				_, err = service.lifecycle.AdmitForParent(service.ctx, LifecycleRequest{
+				_, err = f.lifecycle.AdmitForParent(f.ctx, LifecycleRequest{
 					Principal: authorization.Principal{
 						Root:     true,
 						TenantID: target.TenantID,
@@ -471,7 +471,7 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 		} else if err != nil {
 			return err
 		}
-		if _, err := service.runResourceLink(step.OperationID, role); err != nil {
+		if _, err := f.runResourceLink(step.OperationID, role); err != nil {
 			return err
 		}
 	}
@@ -481,8 +481,8 @@ func (service *Forks) retireForkBranches(step ForkStep) error {
 // Failed births have no successful generation to release. Their exact discard
 // receipt, current tombstone and original settings jointly authorize retiring the
 // business fence; a missing VM by itself grants no handoff authority.
-func (parent forkCleanupAdmission) retireDiscard(ctx context.Context, tx *sql.Tx, link machine.ResourceLink) error {
-	step, index := parent.Group, parent.Index
+func (admission forkCleanupAdmission) retireDiscard(ctx context.Context, tx *sql.Tx, link machine.ResourceLink) error {
+	step, index := admission.Group, admission.Index
 	discard, err := machine.LoadDiscard(ctx, tx, link.ChildID)
 	if err != nil {
 		return err

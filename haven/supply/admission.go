@@ -24,11 +24,11 @@ type SupplyAdmission struct {
 	Role   string
 }
 
-func (parent *SupplyAdmission) ProvisioningTemplate() (TemplateRecord, bool) {
-	if parent == nil || parent.Input.Command.Action != "template_build" {
+func (admission *SupplyAdmission) ProvisioningTemplate() (TemplateRecord, bool) {
+	if admission == nil || admission.Input.Command.Action != "template_build" {
 		return TemplateRecord{}, false
 	}
-	return parent.Input.Template, true
+	return admission.Input.Template, true
 }
 
 func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {

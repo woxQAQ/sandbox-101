@@ -22,31 +22,31 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Captures) checkCapture(step CaptureStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (c *Captures) checkCapture(step CaptureStep) error {
+	c.admission.Lock()
+	defer c.admission.Unlock()
+	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	_, err = service.captureProof(service.ctx, tx, step)
+	_, err = c.captureProof(c.ctx, tx, step)
 	return err
 }
 
-func (service *Captures) saveCapture(ctx context.Context, step *CaptureStep, next CaptureState) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+func (c *Captures) saveCapture(ctx context.Context, step *CaptureStep, next CaptureState) error {
+	c.admission.Lock()
+	defer c.admission.Unlock()
+	tx, err := c.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.captureProof(ctx, tx, *step); err != nil {
+	if _, err = c.captureProof(ctx, tx, *step); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(ctx, dbgen.AdvanceLiveStepParams{
@@ -62,35 +62,35 @@ func (service *Captures) saveCapture(ctx context.Context, step *CaptureStep, nex
 		return err
 	}
 	step.State, step.Status = next, "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = c.store.Checkpoint(); err != nil {
 		return err
 	}
-	if ctx == service.ctx {
-		return service.fault(next.Phase)
+	if ctx == c.ctx {
+		return c.fault(next.Phase)
 	}
 	return nil
 }
 
 // resumeCapture uses a separate bounded safety context. Cancellation of ordinary
 // work cannot discard the durable obligation to resume a possibly paused source.
-func (service *Captures) resumeCapture(step *CaptureStep) error {
+func (c *Captures) resumeCapture(step *CaptureStep) error {
 	if !step.State.ResumeRequired {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	service.admission.Lock()
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	c.admission.Lock()
+	tx, err := c.store.Database.BeginTx(ctx, nil)
 	if err == nil {
-		_, err = service.captureProof(ctx, tx, *step)
+		_, err = c.captureProof(ctx, tx, *step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	service.admission.Unlock()
+	c.admission.Unlock()
 	if err != nil {
 		return err
 	}
 	r := step.Input.Source.Input.Resource
-	observation, err := service.backend.Inspect(ctx, r)
+	observation, err := c.backend.Inspect(ctx, r)
 	if err != nil {
 		return err
 	}
@@ -98,10 +98,10 @@ func (service *Captures) resumeCapture(step *CaptureStep) error {
 		return fmt.Errorf("capture source exit requires explicit recovery")
 	}
 	if observation.Paused {
-		if err = service.backend.Resume(ctx, r); err != nil {
+		if err = c.backend.Resume(ctx, r); err != nil {
 			return err
 		}
-		observation, err = service.backend.Inspect(ctx, r)
+		observation, err = c.backend.Inspect(ctx, r)
 		if err != nil {
 			return err
 		}
@@ -112,38 +112,38 @@ func (service *Captures) resumeCapture(step *CaptureStep) error {
 	next := step.State
 	next.ResumeRequired = false
 	next.Phase = "source_resumed"
-	if err = service.saveCapture(ctx, step, next); err != nil {
+	if err = c.saveCapture(ctx, step, next); err != nil {
 		return err
 	}
-	if service.ctx.Err() == nil {
-		return service.fault("source_resumed")
+	if c.ctx.Err() == nil {
+		return c.fault("source_resumed")
 	}
-	return service.ctx.Err()
+	return c.ctx.Err()
 }
 
-func (service *Captures) failCapture(step *CaptureStep, cause error) error {
-	if err := service.resumeCapture(step); err != nil {
+func (c *Captures) failCapture(step *CaptureStep, cause error) error {
+	if err := c.resumeCapture(step); err != nil {
 		return errors.Join(cause, err)
 	}
-	if service.ctx.Err() != nil {
-		return service.ctx.Err()
+	if c.ctx.Err() != nil {
+		return c.ctx.Err()
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	c.admission.Lock()
+	defer c.admission.Unlock()
+	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.captureProof(service.ctx, tx, *step); err != nil {
+	if _, err = c.captureProof(c.ctx, tx, *step); err != nil {
 		return err
 	}
 	next := step.State
 	next.Error = "capture could not establish durable publication"
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).InsertBlockedCleanup(service.ctx, dbgen.InsertBlockedCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertBlockedCleanup(c.ctx, dbgen.InsertBlockedCleanupParams{
 		ID:           "capture:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "snapshot",
@@ -152,7 +152,7 @@ func (service *Captures) failCapture(step *CaptureStep, cause error) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailUnchangedLiveStep(service.ctx, dbgen.FailUnchangedLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FailUnchangedLiveStep(c.ctx, dbgen.FailUnchangedLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "capture",
 		InputHash:    step.Hash,
@@ -167,10 +167,10 @@ func (service *Captures) failCapture(step *CaptureStep, cause error) error {
 		SnapshotID: step.Input.Snapshot.ID,
 		Error:      next.Error,
 	}
-	if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+	if err = operations.FailResult(c.ctx, step.OperationID, operation.Encode(result)); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(service.ctx, dbgen.ReleaseOwnershipParams{
+	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(c.ctx, dbgen.ReleaseOwnershipParams{
 		ID:              step.Input.Source.Candidate,
 		CurrentInstance: step.Input.Request.ExpectedInstance,
 		OperationID: sql.NullString{
@@ -183,22 +183,22 @@ func (service *Captures) failCapture(step *CaptureStep, cause error) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return errors.Join(cause, service.store.Checkpoint())
+	return errors.Join(cause, c.store.Checkpoint())
 }
 
-func (service *Captures) runCapture(step CaptureStep) (runErr error) {
+func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 	defer func() {
 		if runErr != nil && !errors.Is(runErr, errs.ErrInterrupted) && step.State.ResumeRequired {
-			runErr = errors.Join(runErr, service.resumeCapture(&step))
+			runErr = errors.Join(runErr, c.resumeCapture(&step))
 		}
 	}()
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	if err := service.checkCapture(step); err != nil {
+	if err := c.checkCapture(step); err != nil {
 		return err
 	}
-	if step.Input.Backend != service.backend.Compatibility() || step.Input.Architecture != runtime.GOARCH || step.Input.CPU != host.CPUIdentity() {
+	if step.Input.Backend != c.backend.Compatibility() || step.Input.Architecture != runtime.GOARCH || step.Input.CPU != host.CPUIdentity() {
 		return fmt.Errorf("capture host compatibility changed")
 	}
 	r := step.Input.Source.Input.Resource
@@ -213,16 +213,16 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 	capturedThisAttempt := !step.State.Captured
 	if !step.State.Captured {
 		if step.State.ResumeRequired || (step.State.Phase != "admitted" && step.State.Phase != "capture_prepared") {
-			return service.failCapture(&step, fmt.Errorf("capture interrupted before independent completion"))
+			return c.failCapture(&step, fmt.Errorf("capture interrupted before independent completion"))
 		}
-		observation, err := service.backend.Inspect(service.ctx, r)
+		observation, err := c.backend.Inspect(c.ctx, r)
 		if err != nil {
 			return err
 		}
 		if !observation.Alive || observation.Paused {
-			return service.failCapture(&step, fmt.Errorf("capture requires unpaused source"))
+			return c.failCapture(&step, fmt.Errorf("capture requires unpaused source"))
 		}
-		releaseCapture, err := service.guards.Capture(service.ctx)
+		releaseCapture, err := c.guards.Capture(c.ctx)
 		if err != nil {
 			return err
 		}
@@ -232,7 +232,7 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 			if err != nil {
 				return err
 			}
-			if backend, ok := service.backend.(interface {
+			if backend, ok := c.backend.(interface {
 				PrepareCaptureWriter(loom.Resource, string) error
 			}); ok {
 				if err = backend.PrepareCaptureWriter(r, filepath.Join(boundary.Path, "ch")); err != nil {
@@ -242,66 +242,66 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 			next := step.State
 			next.Boundary = boundary
 			next.Phase = "capture_prepared"
-			if err = service.saveCapture(service.ctx, &step, next); err != nil {
+			if err = c.saveCapture(c.ctx, &step, next); err != nil {
 				return err
 			}
 		}
 		next := step.State
 		next.ResumeRequired = true
 		next.Phase = "pause_intent"
-		if err := service.saveCapture(service.ctx, &step, next); err != nil {
+		if err := c.saveCapture(c.ctx, &step, next); err != nil {
 			return err
 		}
-		if err := service.backend.Pause(service.ctx, r); err != nil {
-			return service.failCapture(&step, err)
+		if err := c.backend.Pause(c.ctx, r); err != nil {
+			return c.failCapture(&step, err)
 		}
 		next = step.State
 		next.Phase = "paused"
-		if err := service.saveCapture(service.ctx, &step, next); err != nil {
+		if err := c.saveCapture(c.ctx, &step, next); err != nil {
 			return err
 		}
 		boundary := step.State.Boundary
 		if boundary == nil {
-			return service.failCapture(&step, fmt.Errorf("capture directory proof missing"))
+			return c.failCapture(&step, fmt.Errorf("capture directory proof missing"))
 		}
 		parent, err := boundary.Open()
 		if err != nil {
-			return service.failCapture(&step, err)
+			return c.failCapture(&step, err)
 		}
 		_ = parent.Close()
-		if err = service.backend.Capture(service.ctx, r, filepath.Join(boundary.Path, "ch")); err != nil {
-			return service.failCapture(&step, err)
+		if err = c.backend.Capture(c.ctx, r, filepath.Join(boundary.Path, "ch")); err != nil {
+			return c.failCapture(&step, err)
 		}
 		if err = loom.CopyFile(r.Disk, filepath.Join(boundary.Path, "publication", "disk.raw"), 0o600); err != nil {
-			return service.failCapture(&step, err)
+			return c.failCapture(&step, err)
 		}
 		next = step.State
 		next.Captured = true
 		next.Phase = "captured"
-		if err = service.saveCapture(service.ctx, &step, next); err != nil {
+		if err = c.saveCapture(c.ctx, &step, next); err != nil {
 			return err
 		}
 	}
-	if err := service.resumeCapture(&step); err != nil {
+	if err := c.resumeCapture(&step); err != nil {
 		return err
 	}
 	if !capturedThisAttempt && (!step.State.Materialized || len(step.State.Files) != 4) {
-		return service.failCapture(&step, fmt.Errorf("capture lacks pre-crash durable bytes proof"))
+		return c.failCapture(&step, fmt.Errorf("capture lacks pre-crash durable bytes proof"))
 	}
 	boundary := step.State.Boundary
 	if boundary == nil || boundary.Path != filepath.Join(r.Dir, "capture", step.OperationID) {
-		return service.failCapture(&step, fmt.Errorf("capture boundary missing"))
+		return c.failCapture(&step, fmt.Errorf("capture boundary missing"))
 	}
 	parent, err := boundary.Open()
 	if err != nil {
-		return service.failCapture(&step, err)
+		return c.failCapture(&step, err)
 	}
 	_ = parent.Close()
 	stage := filepath.Join(boundary.Path, "publication")
 	final := step.Input.Snapshot.Dir
 	if info, err := os.Lstat(final); err == nil {
 		if !step.State.ArtifactsSynced || loom.IdentityOf(info) != boundary.Publication {
-			return service.failCapture(&step, fmt.Errorf("unproved final snapshot directory"))
+			return c.failCapture(&step, fmt.Errorf("unproved final snapshot directory"))
 		}
 		stage = final
 	} else if !os.IsNotExist(err) {
@@ -309,27 +309,27 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 	}
 	info, err := os.Lstat(stage)
 	if err != nil {
-		return service.failCapture(&step, err)
+		return c.failCapture(&step, err)
 	}
 	if loom.IdentityOf(info) != boundary.Publication {
-		return service.failCapture(&step, fmt.Errorf("publication inode changed"))
+		return c.failCapture(&step, fmt.Errorf("publication inode changed"))
 	}
 	if !step.State.Materialized {
 		if err = loom.MaterializeCapture(boundary, r.Config.Shape.MemoryMiB); err != nil {
-			return service.failCapture(&step, err)
+			return c.failCapture(&step, err)
 		}
 		next := step.State
 		next.Phase = "capture_copied"
-		if err = service.saveCapture(service.ctx, &step, next); err != nil {
+		if err = c.saveCapture(c.ctx, &step, next); err != nil {
 			return err
 		}
 	}
 	files, err := loom.HashTree(stage)
 	if err != nil {
-		return service.failCapture(&step, err)
+		return c.failCapture(&step, err)
 	}
 	if len(files) != 4 {
-		return service.failCapture(&step, fmt.Errorf("capture artifact set incomplete"))
+		return c.failCapture(&step, fmt.Errorf("capture artifact set incomplete"))
 	}
 	for _, name := range []string{
 		"ch/config.json",
@@ -338,12 +338,12 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 		"disk.raw",
 	} {
 		if files[name] == "" {
-			return service.failCapture(&step, fmt.Errorf("missing capture artifact"))
+			return c.failCapture(&step, fmt.Errorf("missing capture artifact"))
 		}
 	}
 	if step.State.Materialized {
 		if !reflect.DeepEqual(files, step.State.Files) {
-			return service.failCapture(&step, fmt.Errorf("durable capture checksum mismatch"))
+			return c.failCapture(&step, fmt.Errorf("durable capture checksum mismatch"))
 		}
 	} else {
 		if err = loom.SyncTree(stage); err != nil {
@@ -353,7 +353,7 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 		next.Materialized = true
 		next.Files = files
 		next.Phase = "capture_materialized"
-		if err = service.saveCapture(service.ctx, &step, next); err != nil {
+		if err = c.saveCapture(c.ctx, &step, next); err != nil {
 			return err
 		}
 	}
@@ -380,11 +380,11 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 	next := step.State
 	next.ArtifactsSynced = true
 	next.Phase = "artifacts_synced"
-	if err = service.saveCapture(service.ctx, &step, next); err != nil {
+	if err = c.saveCapture(c.ctx, &step, next); err != nil {
 		return err
 	}
 	if stage != final {
-		root, err := loom.OpenCaptureDir(service.store.Directory)
+		root, err := loom.OpenCaptureDir(c.store.Directory)
 		if err != nil {
 			return err
 		}
@@ -408,23 +408,23 @@ func (service *Captures) runCapture(step CaptureStep) (runErr error) {
 	}
 	next = step.State
 	next.Phase = "publish_intent"
-	if err = service.saveCapture(service.ctx, &step, next); err != nil {
+	if err = c.saveCapture(c.ctx, &step, next); err != nil {
 		return err
 	}
-	return service.completeCapture(step, manifest)
+	return c.completeCapture(step, manifest)
 }
 
-func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
+	c.admission.Lock()
+	defer c.admission.Unlock()
+	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadCapture(service.ctx, tx, step.OperationID)
+	current, err := LoadCapture(c.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -434,7 +434,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.Input, step.Input) || !reflect.DeepEqual(current.State, step.State) || current.State.Phase != "publish_intent" || current.State.ResumeRequired || !current.State.Captured || !current.State.Materialized || !current.State.ArtifactsSynced || len(current.State.Files) != 4 || !reflect.DeepEqual(manifest.Files, current.State.Files) {
 		return fmt.Errorf("snapshot completion lacks frozen durable proof")
 	}
-	if _, err = service.captureProof(service.ctx, tx, current); err != nil {
+	if _, err = c.captureProof(c.ctx, tx, current); err != nil {
 		return err
 	}
 	publication := step.Input.Snapshot
@@ -447,7 +447,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 
 	responsibilities := quota.New(tx)
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).PublishSnapshot(service.ctx, dbgen.PublishSnapshotParams{
+	if err = store.RequireOne(dbgen.New(tx).PublishSnapshot(c.ctx, dbgen.PublishSnapshotParams{
 		ID:           publication.ID,
 		SourceVm:     publication.SourceVM,
 		PreviousBody: previousBody,
@@ -455,14 +455,14 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertCheckpoint(service.ctx, dbgen.InsertCheckpointParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertCheckpoint(c.ctx, dbgen.InsertCheckpointParams{
 		ID:     publication.ID,
 		Tenant: publication.TenantID,
 		Body:   body,
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCost(service.ctx, quota.Cost{
+	if err = responsibilities.AddCost(c.ctx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        publication.TenantID,
 			Kind:            "snapshot",
@@ -473,7 +473,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCostReference(service.ctx, quota.CostReference{
+	if err = responsibilities.AddCostReference(c.ctx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "snapshot",
 		Key:        publication.ID,
@@ -482,7 +482,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveCostReference(service.ctx, quota.CostReference{
+	if err = responsibilities.RemoveCostReference(c.ctx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "pending_storage",
 		Key:        step.OperationID + ":capture",
@@ -491,7 +491,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RetireCost(service.ctx, quota.CostIdentity{
+	if err = responsibilities.RetireCost(c.ctx, quota.CostIdentity{
 		TenantID:        publication.TenantID,
 		Kind:            "pending_storage",
 		Key:             step.OperationID + ":capture",
@@ -499,7 +499,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.AddResourceReference(c.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         publication.ID,
 		HolderKind: "checkpoint",
@@ -507,7 +507,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.AddResourceReference(c.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         manifest.Config.Image,
 		HolderKind: "snapshot",
@@ -516,7 +516,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 		return err
 	}
 	// Raw VMM output and its capture boundary retain their own cleanup obligation.
-	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(c.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "capture:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "capture",
@@ -525,7 +525,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(service.ctx, dbgen.ReleaseOwnershipParams{
+	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(c.ctx, dbgen.ReleaseOwnershipParams{
 		ID:              publication.SourceVM,
 		CurrentInstance: publication.SourceInstance,
 		OperationID: sql.NullString{
@@ -535,7 +535,7 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(service.ctx, dbgen.CompleteRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(c.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "capture",
 		InputHash:    step.Hash,
@@ -544,19 +544,19 @@ func (service *Captures) completeCapture(step CaptureStep, manifest Manifest) er
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(c.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("capture_completion_before_commit"); err != nil {
+	if err = c.fault("capture_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = c.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("capture_completed")
+	return c.fault("capture_completed")
 }
 
 func FailedCaptureReferences(ctx context.Context, database store.DBTX, source ResourceStep) ([]ownership.GenerationRef, error) {

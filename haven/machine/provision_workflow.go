@@ -17,14 +17,14 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Provisioning) runCold(step ResourceStep) error {
-	service.admission.Lock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (p *Provisioning) runCold(step ResourceStep) error {
+	p.admission.Lock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err == nil {
-		_, _, _, err = service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, step)
+		_, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	service.admission.Unlock()
+	p.admission.Unlock()
 	if err != nil {
 		return err
 	}
@@ -33,44 +33,44 @@ func (service *Provisioning) runCold(step ResourceStep) error {
 		return err
 	}
 	if step.State.Phase == "admitted" {
-		if err := service.markPhase(&step, "prepare_intent"); err != nil {
+		if err := p.markPhase(&step, "prepare_intent"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "prepare_intent" {
-		before, err := service.backend.Inspect(service.ctx, r)
+		before, err := p.backend.Inspect(p.ctx, r)
 		if err != nil {
 			return err
 		}
 		if before.Alive {
 			return fmt.Errorf("live candidate lacks a durable launch intent")
 		}
-		if err := service.backend.Prepare(service.ctx, r); err != nil {
-			return service.failStep(step, err)
+		if err := p.backend.Prepare(p.ctx, r); err != nil {
+			return p.failStep(step, err)
 		}
-		if err := service.fault("effect_prepared"); err != nil {
+		if err := p.fault("effect_prepared"); err != nil {
 			return err
 		}
-		if err := service.markPhase(&step, "prepared"); err != nil {
+		if err := p.markPhase(&step, "prepared"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "prepared" {
-		before, err := service.backend.Inspect(service.ctx, r)
+		before, err := p.backend.Inspect(p.ctx, r)
 		if err != nil {
 			return err
 		}
 		if before.Alive {
 			return fmt.Errorf("live candidate lacks a durable launch intent")
 		}
-		if err := service.markPhase(&step, "launch_intent"); err != nil {
+		if err := p.markPhase(&step, "launch_intent"); err != nil {
 			return err
 		}
 	}
-	return service.startCandidate(step, false)
+	return p.startCandidate(step, false)
 }
 
-func (service *Provisioning) startCandidate(step ResourceStep, restore bool) error {
+func (p *Provisioning) startCandidate(step ResourceStep, restore bool) error {
 	r := step.Input.Resource
 	if step.State.Phase != "launch_intent" && step.State.Phase != "launched" && step.State.Phase != "booted" && step.State.Phase != "agent_ready" {
 		return fmt.Errorf("unknown cold resource phase")
@@ -81,71 +81,71 @@ func (service *Provisioning) startCandidate(step ResourceStep, restore bool) err
 	if err := loom.VerifyWritableDisk(r, *step.State.DiskIdentity); err != nil {
 		return err
 	}
-	observation, err := service.backend.Inspect(service.ctx, r)
+	observation, err := p.backend.Inspect(p.ctx, r)
 	if err != nil {
 		return err
 	}
 	if observation.Network {
-		if err = service.backend.Network(service.ctx, r, false); err != nil {
+		if err = p.backend.Network(p.ctx, r, false); err != nil {
 			return err
 		}
 	}
 	if !observation.Alive {
 		if step.State.Phase != "launch_intent" {
-			return service.failStep(step, fmt.Errorf("%w: previous candidate exited; refusing another launch", errs.ErrUnknown))
+			return p.failStep(step, fmt.Errorf("%w: previous candidate exited; refusing another launch", errs.ErrUnknown))
 		}
-		if err = service.backend.Network(service.ctx, r, false); err != nil {
-			return service.failStep(step, err)
+		if err = p.backend.Network(p.ctx, r, false); err != nil {
+			return p.failStep(step, err)
 		}
-		if err = service.backend.Launch(service.ctx, r, restore); err != nil {
-			return service.failStep(step, err)
+		if err = p.backend.Launch(p.ctx, r, restore); err != nil {
+			return p.failStep(step, err)
 		}
-		if err = service.fault("effect_launched"); err != nil {
+		if err = p.fault("effect_launched"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "launch_intent" {
-		if err = service.markPhase(&step, "launched"); err != nil {
+		if err = p.markPhase(&step, "launched"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "launched" {
-		if err = service.backend.Boot(service.ctx, r, restore); err != nil {
-			return service.failStep(step, err)
+		if err = p.backend.Boot(p.ctx, r, restore); err != nil {
+			return p.failStep(step, err)
 		}
-		if err = service.markPhase(&step, "booted"); err != nil {
+		if err = p.markPhase(&step, "booted"); err != nil {
 			return err
 		}
 	}
-	if err = service.backend.Agent(service.ctx, r, restore); err != nil {
-		networkErr := service.backend.Network(service.ctx, r, false)
-		stopErr := service.backend.Stop(service.ctx, r)
-		return service.failStep(step, errors.Join(err, networkErr, stopErr))
+	if err = p.backend.Agent(p.ctx, r, restore); err != nil {
+		networkErr := p.backend.Network(p.ctx, r, false)
+		stopErr := p.backend.Stop(p.ctx, r)
+		return p.failStep(step, errors.Join(err, networkErr, stopErr))
 	}
 	if step.State.Phase != "agent_ready" {
-		if err = service.markPhase(&step, "agent_ready"); err != nil {
+		if err = p.markPhase(&step, "agent_ready"); err != nil {
 			return err
 		}
 	}
-	observation, err = service.backend.Inspect(service.ctx, r)
+	observation, err = p.backend.Inspect(p.ctx, r)
 	if err != nil {
 		return err
 	}
 	if !observation.Alive || !observation.Booted || !observation.Configured || observation.Paused || observation.Network || observation.PID <= 0 || observation.StartTime == 0 {
-		return service.failStep(step, fmt.Errorf("%w: candidate is not verified System ready with network off", errs.ErrUnknown))
+		return p.failStep(step, fmt.Errorf("%w: candidate is not verified System ready with network off", errs.ErrUnknown))
 	}
 	if restore {
 		if step.Input.Restore == nil || !step.State.BackingReady {
 			return fmt.Errorf("restore start lacks backing handoff")
 		}
 		if err := loom.VerifyRestoreMaterials(step.State.Materials, r, step.Input.Restore.Snapshot.Manifest.Files, false); err != nil {
-			return service.failStep(step, err)
+			return p.failStep(step, err)
 		}
 	}
 	if err = loom.VerifyWritableDisk(r, *step.State.DiskIdentity); err != nil {
 		return err
 	}
-	return service.completeCold(step, observation)
+	return p.completeCold(step, observation)
 }
 
 // ProvisionIntent fixes the generation candidate and predecessor before any
@@ -176,7 +176,7 @@ func AdmitProvisionIntent(ctx context.Context, tx *sql.Tx, intent ProvisionInten
 	}))
 }
 
-func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
+func (p *Provisioning) markPhase(step *ResourceStep, phase string) error {
 	next := step.State
 	next.Phase = phase
 	if step.Action == "cold_start" && phase == "prepared" {
@@ -186,19 +186,19 @@ func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		}
 		next.DiskIdentity = &identity
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, _, _, err = service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, *step); err != nil {
+	if _, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(p.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -212,7 +212,7 @@ func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		if phase == "launch_intent" {
 			instance = step.Input.Resource.Instance
 		}
-		if err = store.RequireOne(dbgen.New(tx).RecordCreatedInstance(service.ctx, dbgen.RecordCreatedInstanceParams{
+		if err = store.RequireOne(dbgen.New(tx).RecordCreatedInstance(p.ctx, dbgen.RecordCreatedInstanceParams{
 			ID:              step.Candidate,
 			CurrentInstance: instance,
 			OperationID: sql.NullString{
@@ -232,7 +232,7 @@ func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
 			Resource:     step.Input.Resource,
 			DiskIdentity: next.DiskIdentity,
 		}
-		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(service.ctx, dbgen.ReplaceVersionBodyParams{
+		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
 			ID:           step.OperationID,
 			VmID:         step.Candidate,
 			OperationID:  step.OperationID,
@@ -246,29 +246,29 @@ func (service *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		return err
 	}
 	step.State, step.Status = next, "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("step_" + phase)
+	return p.fault("step_" + phase)
 }
 
 // Runtime failures fix the original public failure but retain the candidate,
 // quota, reservation and dependency. SQL/inspection failures never call this
 // path: they leave the original unfinished step available for inspection/replay.
-func (service *Provisioning) failStep(step ResourceStep, cause error) error {
-	if service.ctx.Err() != nil {
-		return service.ctx.Err()
+func (p *Provisioning) failStep(step ResourceStep, cause error) error {
+	if p.ctx.Err() != nil {
+		return p.ctx.Err()
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadResourceStep(service.ctx, tx, step.OperationID)
+	current, err := LoadResourceStep(p.ctx, tx, step.OperationID)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
@@ -283,10 +283,10 @@ func (service *Provisioning) failStep(step ResourceStep, cause error) error {
 		next.RestoreBlocked = true
 	}
 	next.Error = "resource effect failed; responsibility retained for inspection"
-	if err = service.handoff.BlockActivation(service.ctx, tx, step.OperationID); err != nil {
+	if err = p.handoff.BlockActivation(p.ctx, tx, step.OperationID); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(p.ctx, dbgen.FailLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
 		InputHash:   step.Hash,
@@ -295,7 +295,7 @@ func (service *Provisioning) failStep(step ResourceStep, cause error) error {
 		return errors.Join(cause, err)
 	}
 	var result operation.Result
-	status, body, err := operation.New(tx).ResultState(service.ctx, step.OperationID)
+	status, body, err := operation.New(tx).ResultState(p.ctx, step.OperationID)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
@@ -304,11 +304,11 @@ func (service *Provisioning) failStep(step ResourceStep, cause error) error {
 	}
 	if !operation.Terminal(status) {
 		result.Error = next.Error
-		if err = operation.New(tx).FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+		if err = operation.New(tx).FailResult(p.ctx, step.OperationID, operation.Encode(result)); err != nil {
 			return errors.Join(cause, err)
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertBlockedCleanup(service.ctx, dbgen.InsertBlockedCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertBlockedCleanup(p.ctx, dbgen.InsertBlockedCleanupParams{
 		ID:           "blocked:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "vm",
@@ -317,23 +317,23 @@ func (service *Provisioning) failStep(step ResourceStep, cause error) error {
 	})); err != nil {
 		return errors.Join(cause, err)
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = p.committer.Commit(tx); err != nil {
 		return errors.Join(cause, err)
 	}
-	return errors.Join(cause, service.store.Checkpoint())
+	return errors.Join(cause, p.store.Checkpoint())
 }
 
-func (service *Provisioning) completeCold(step ResourceStep, observation loom.Observation) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observation) error {
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadResourceStep(service.ctx, tx, step.OperationID)
+	current, err := LoadResourceStep(p.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -343,13 +343,13 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.Input, step.Input) || !reflect.DeepEqual(current.State, step.State) || current.State.Phase != "agent_ready" || current.State.DiskIdentity == nil || current.State.Witness != "" {
 		return fmt.Errorf("cold completion lacks its original ready candidate")
 	}
-	currentMachine, record, result, err := service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, current)
+	currentMachine, record, result, err := p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, current)
 	if err != nil {
 		return err
 	}
 	currentMachine.Verified, currentMachine.AgentReady, currentMachine.Observation = true, true, &observation
 	r := currentMachine.Resource
-	if err = store.RequireOne(dbgen.New(tx).CompleteStart(service.ctx, dbgen.CompleteStartParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteStart(p.ctx, dbgen.CompleteStartParams{
 		ID:              r.VMID,
 		CurrentInstance: r.Instance,
 		OperationID: sql.NullString{
@@ -360,7 +360,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceInstanceBody(service.ctx, dbgen.ReplaceInstanceBodyParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceInstanceBody(p.ctx, dbgen.ReplaceInstanceBodyParams{
 		ID:          r.Instance,
 		VmID:        r.VMID,
 		OperationID: step.OperationID,
@@ -368,10 +368,10 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	})); err != nil {
 		return err
 	}
-	if err = service.handoff.PublishInstance(service.ctx, tx, record, r.Instance); err != nil {
+	if err = p.handoff.PublishInstance(p.ctx, tx, record, r.Instance); err != nil {
 		return err
 	}
-	if err = quota.New(tx).AddCost(service.ctx, quota.Cost{
+	if err = quota.New(tx).AddCost(p.ctx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        record.TenantID,
 			Kind:            "vm_disk",
@@ -382,7 +382,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).AddCostReference(service.ctx, quota.CostReference{
+	if err = quota.New(tx).AddCostReference(p.ctx, quota.CostReference{
 		TenantID:   record.TenantID,
 		Kind:       "vm_disk",
 		Key:        current.Input.DiskKey,
@@ -391,7 +391,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RemoveCostReference(service.ctx, quota.CostReference{
+	if err = quota.New(tx).RemoveCostReference(p.ctx, quota.CostReference{
 		TenantID:   record.TenantID,
 		Kind:       "pending_storage",
 		Key:        step.OperationID + ":resource",
@@ -400,7 +400,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RetireCostAtKey(service.ctx, record.TenantID, "pending_storage", step.OperationID+":resource"); err != nil {
+	if err = quota.New(tx).RetireCostAtKey(p.ctx, record.TenantID, "pending_storage", step.OperationID+":resource"); err != nil {
 		return err
 	}
 	for _, reference := range []struct {
@@ -413,7 +413,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 		{"image", r.Config.Image, "vm", r.VMID},
 	} {
 		if current.Action != "restore" || reference.kind != "image" {
-			if err = quota.New(tx).AddResourceReference(service.ctx, quota.ResourceReference{
+			if err = quota.New(tx).AddResourceReference(p.ctx, quota.ResourceReference{
 				Kind:       reference.kind,
 				ID:         reference.id,
 				HolderKind: reference.holderKind,
@@ -422,7 +422,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 				return err
 			}
 		}
-		if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+		if err = quota.New(tx).RemoveResourceReference(p.ctx, quota.ResourceReference{
 			Kind:       reference.kind,
 			ID:         reference.id,
 			HolderKind: "step",
@@ -433,7 +433,7 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 	}
 	next := current.State
 	next.Phase, next.Witness, next.Observation = "complete", r.Instance, &observation
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(service.ctx, dbgen.CompleteRunningStepByInputParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(p.ctx, dbgen.CompleteRunningStepByInputParams{
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
 		InputHash:   step.Hash,
@@ -442,17 +442,17 @@ func (service *Provisioning) completeCold(step ResourceStep, observation loom.Ob
 		return err
 	}
 	result.ResourceReady = true
-	if err = operation.New(tx).RunResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+	if err = operation.New(tx).RunResult(p.ctx, step.OperationID, operation.Encode(result)); err != nil {
 		return err
 	}
-	if err = service.fault("completion_before_commit"); err != nil {
+	if err = p.fault("completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("step_completed")
+	return p.fault("step_completed")
 }

@@ -482,26 +482,26 @@ func Open(opts Options) (*App, error) {
 	return service, nil
 }
 
-func (service *App) Close(ctx context.Context) error {
-	return service.Lifetime.Close(ctx, func() {
+func (a *App) Close(ctx context.Context) error {
+	return a.Lifetime.Close(ctx, func() {
 		// Registration and the closing check share this guard. Once admission
 		// closes, the snapshot includes every socket accepted before the barrier.
-		service.mu.Lock()
-		dataConnections := service.Ephemeral.AllConnections()
-		service.mu.Unlock()
+		a.mu.Lock()
+		dataConnections := a.Ephemeral.AllConnections()
+		a.mu.Unlock()
 		for _, connection := range dataConnections {
 			_ = connection.Close()
 		}
 	}, func() error {
 		var err error
-		if service.Options.Egress != nil {
-			err = service.Options.Egress.Close()
+		if a.Options.Egress != nil {
+			err = a.Options.Egress.Close()
 		}
-		service.Admission.Lock()
-		defer service.Admission.Unlock()
-		if closer, ok := service.Options.Backend.(interface{ Close() error }); ok {
+		a.Admission.Lock()
+		defer a.Admission.Unlock()
+		if closer, ok := a.Options.Backend.(interface{ Close() error }); ok {
 			err = errors.Join(err, closer.Close())
 		}
-		return errors.Join(err, service.State.Close())
+		return errors.Join(err, a.State.Close())
 	})
 }

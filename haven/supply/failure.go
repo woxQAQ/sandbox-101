@@ -10,17 +10,17 @@ import (
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
 )
 
-func (service *Supply) failSupply(step SupplyStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (s *Supply) failSupply(step SupplyStep) error {
+	s.admission.Lock()
+	defer s.admission.Unlock()
+	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadSupply(service.ctx, tx, step.OperationID)
+	current, err := LoadSupply(s.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -31,14 +31,14 @@ func (service *Supply) failSupply(step SupplyStep) error {
 		return fmt.Errorf("supply failure input changed")
 	}
 	operations := operation.New(tx)
-	pending, err := dbgen.New(tx).CountLiveResourceLinks(service.ctx, step.OperationID)
+	pending, err := dbgen.New(tx).CountLiveResourceLinks(s.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if pending != 0 {
 		return nil
 	}
-	body, err := operations.LiveBody(service.ctx, step.OperationID)
+	body, err := operations.LiveBody(s.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func (service *Supply) failSupply(step SupplyStep) error {
 	next.Phase = "failed"
 	next.Error = result.Error
 	next.FinishedAt = time.Now().UTC()
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(service.ctx, dbgen.FailLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(s.ctx, dbgen.FailLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "supply",
 		InputHash:   step.Hash,
@@ -59,10 +59,10 @@ func (service *Supply) failSupply(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.FailResult(service.ctx, step.OperationID, operation.Encode(result)); err != nil {
+	if err = operations.FailResult(s.ctx, step.OperationID, operation.Encode(result)); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(service.ctx, dbgen.InsertCleanupIntentParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(s.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "supply:" + step.OperationID,
 		OperationID:  step.OperationID,
 		ResourceKind: "supply",
@@ -72,12 +72,12 @@ func (service *Supply) failSupply(step SupplyStep) error {
 		return err
 	}
 	if step.Input.Command.Action == "refill" {
-		if err = store.RequireOne(dbgen.New(tx).MarkPendingCleanup(service.ctx, step.OperationID)); err != nil {
+		if err = store.RequireOne(dbgen.New(tx).MarkPendingCleanup(s.ctx, step.OperationID)); err != nil {
 			return err
 		}
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = s.committer.Commit(tx); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return s.store.Checkpoint()
 }

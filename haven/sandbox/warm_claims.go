@@ -86,60 +86,60 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 	}
 }
 
-func (service *WarmClaims) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (wc *WarmClaims) fault(point string) error {
+	if wc.faultPoint != nil {
+		return wc.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *WarmClaims) dispatch(id string) {
-	if service.store.Reviewed {
+func (wc *WarmClaims) dispatch(id string) {
+	if wc.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	wc.workers.Start(id, func() error {
+		if handled, err := wc.policies.Resume(wc.ctx, id); handled || err != nil {
 			return err
 		}
-		_, err := service.Resume(id)
+		_, err := wc.Resume(id)
 		return err
 	})
 }
 
-func (service *WarmClaims) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (wc *WarmClaims) Resume(id string) (bool, error) {
+	if wc.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume warm claim", errs.ErrManualRecovery)
 	}
-	step, err := LoadWarmClaim(service.ctx, service.store.Database, id)
+	step, err := LoadWarmClaim(wc.ctx, wc.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	lock := service.guards.Sandbox(step.Input.Pool.SandboxID)
+	lock := wc.guards.Sandbox(step.Input.Pool.SandboxID)
 	lock.Lock()
 	defer lock.Unlock()
-	step, err = LoadWarmClaim(service.ctx, service.store.Database, id)
+	step, err = LoadWarmClaim(wc.ctx, wc.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runWarmClaim(step)
+	return true, wc.runWarmClaim(step)
 }
 
-func (service *WarmClaims) runResourceLink(parent, role string) (machine.ResourceLink, error) {
-	return service.links.Run(parent, role, service.runResource)
+func (wc *WarmClaims) runResourceLink(parent, role string) (machine.ResourceLink, error) {
+	return wc.links.Run(parent, role, wc.runResource)
 }
 
-func (service *WarmClaims) runResource(link machine.ResourceLink) error {
-	if handled, err := service.policies.Resume(service.ctx, link.ChildID); handled || err != nil {
+func (wc *WarmClaims) runResource(link machine.ResourceLink) error {
+	if handled, err := wc.policies.Resume(wc.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	switch link.Kind {
 	case "clone":
-		return service.provisioning.Continue(link.ChildID)
+		return wc.provisioning.Continue(link.ChildID)
 	case "release":
-		handled, err := service.deletion.ResumeRelease(link.ChildID)
+		handled, err := wc.deletion.ResumeRelease(link.ChildID)
 		if !handled && err == nil {
 			return fmt.Errorf("warm release step missing")
 		}
@@ -246,16 +246,16 @@ func CurrentSlotBudget(ctx context.Context, query store.DBTX, record ownership.S
 	}, nil
 }
 
-func (parent *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, slot ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+func (admission *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, slot ProvisionSlotClaim) (*machine.QuotaDestination, error) {
 	record, source, holder := slot.Sandbox, slot.Source, slot.Holder
-	claim, err := LoadWarmClaim(ctx, tx, parent.ParentID)
+	claim, err := LoadWarmClaim(ctx, tx, admission.ParentID)
 	if err != nil {
 		return nil, err
 	}
-	if claim.State.Phase != "warm_retired" || operation.Terminal(claim.Status) || record.State != "terminated" || holder != "claim:"+parent.ParentID || record.ID != claim.Input.Pool.SandboxID || source.Snapshot.ID != claim.Input.Restore.Snapshot.ID {
+	if claim.State.Phase != "warm_retired" || operation.Terminal(claim.Status) || record.State != "terminated" || holder != "claim:"+admission.ParentID || record.ID != claim.Input.Pool.SandboxID || source.Snapshot.ID != claim.Input.Restore.Snapshot.ID {
 		return nil, fmt.Errorf("%w: fallback target differs from retired warm responsibility", errs.ErrConflict)
 	}
-	released, status, err := machine.LoadResourceLink(ctx, tx, parent.ParentID, "warm_release")
+	released, status, err := machine.LoadResourceLink(ctx, tx, admission.ParentID, "warm_release")
 	if err != nil {
 		return nil, err
 	}
@@ -266,19 +266,19 @@ func (parent *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, t
 	if err != nil {
 		return nil, err
 	}
-	if receipt.Status != "succeeded" || receipt.State.Phase != "complete" || receipt.Input.SourceOperation != claim.Input.Source.OperationID || receipt.Input.SlotDestination == nil || receipt.Input.SlotDestination.Kind != "claim" || receipt.Input.SlotDestination.OperationID != parent.ParentID {
+	if receipt.Status != "succeeded" || receipt.State.Phase != "complete" || receipt.Input.SourceOperation != claim.Input.Source.OperationID || receipt.Input.SlotDestination == nil || receipt.Input.SlotDestination.Kind != "claim" || receipt.Input.SlotDestination.OperationID != admission.ParentID {
 		return nil, fmt.Errorf("%w: fallback original warm retirement proof changed", errs.ErrManualRecovery)
 	}
 	return nil, nil
 }
 
-func (parent *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+func (admission *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
 	kind, candidate := request.Kind, request.Candidate
-	step, err := LoadWarmClaim(ctx, tx, parent.ParentID)
+	step, err := LoadWarmClaim(ctx, tx, admission.ParentID)
 	if err != nil {
 		return err
 	}
-	if operation.Terminal(step.Status) || !reflect.DeepEqual(step.Input, parent.Input) {
+	if operation.Terminal(step.Status) || !reflect.DeepEqual(step.Input, admission.Input) {
 		return fmt.Errorf("%w: warm claim no longer owns resource admission", errs.ErrConflict)
 	}
 	fence, err := LifecycleFence(ctx, tx, step.Input.Pool.SandboxID)
@@ -288,9 +288,9 @@ func (parent *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 	if fence != step.OperationID {
 		return fmt.Errorf("%w: warm claim was superseded", errs.ErrConflict)
 	}
-	switch parent.Role {
+	switch admission.Role {
 	case "warm_release":
-		activation, err := LoadActivation(ctx, tx, parent.ParentID)
+		activation, err := LoadActivation(ctx, tx, admission.ParentID)
 		if err != nil {
 			return err
 		}
@@ -305,8 +305,8 @@ func (parent *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 		return fmt.Errorf("%w: unsupported warm claim resource role", errs.ErrInvalid)
 	}
 	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
-		OperationID:      parent.ParentID,
-		Role:             parent.Role,
+		OperationID:      admission.ParentID,
+		Role:             admission.Role,
 		ExpectedInstance: step.Input.Pool.Instance,
 	}, request)
 }

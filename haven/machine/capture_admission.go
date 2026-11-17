@@ -20,16 +20,16 @@ import (
 
 // AdmitCapture fixes the source instance, destination, authorization and peak
 // responsibility before any pause. Sandbox checkpoint/pause publication is separate.
-func (service *Captures) AdmitCapture(ctx context.Context, request CaptureRequest) (operation.Record, error) {
-	if service.ownership == nil {
+func (c *Captures) AdmitCapture(ctx context.Context, request CaptureRequest) (operation.Record, error) {
+	if c.ownership == nil {
 		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
-	return service.AdmitForParent(ctx, request, nil)
+	return c.AdmitForParent(ctx, request, nil)
 }
 
-func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, parent ResourceParent) (operation.Record, error) {
-	if service.ownership == nil {
+func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, parent ResourceParent) (operation.Record, error) {
+	if c.ownership == nil {
 		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
@@ -42,27 +42,27 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		Request CaptureRequest
 	}{"snapshot", request})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(c.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			c.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	free, err := loom.FreeBytes(service.store.Directory)
+	free, err := loom.FreeBytes(c.store.Directory)
 	if err != nil {
 		return empty, err
 	}
-	compatibility, cpu := service.backend.Compatibility(), host.CPUIdentity()
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	compatibility, cpu := c.backend.Compatibility(), host.CPUIdentity()
+	c.admission.Lock()
+	defer c.admission.Unlock()
+	closing := c.lifetime.Closing() || c.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := c.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -74,11 +74,11 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			c.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	sandbox, err := service.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
+	sandbox, err := c.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
 	if err == sql.ErrNoRows {
 		return empty, fmt.Errorf("%w: sandbox not found", errs.ErrNotFound)
 	}
@@ -95,7 +95,7 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 	if err != nil {
 		return empty, err
 	}
-	if err = service.validateStep(source); err != nil {
+	if err = c.validateStep(source); err != nil {
 		return empty, err
 	}
 	if (source.Action != "cold_start" && source.Action != "clone") || source.Status != "succeeded" || source.State.Witness != request.ExpectedInstance || source.State.Observation == nil || source.State.DiskIdentity == nil || source.Input.TenantID != request.TenantID || source.Input.SandboxID != sandbox.ID || source.Candidate != sandbox.VMID {
@@ -127,7 +127,7 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		return empty, err
 	}
 	reserve := (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20
-	if held > free || service.safetyBytes > free-held || reserve > free-held-service.safetyBytes {
+	if held > free || c.safetyBytes > free-held || reserve > free-held-c.safetyBytes {
 		return empty, fmt.Errorf("%w: capture host peak reservation exhausted", errs.ErrExhausted)
 	}
 	accepted := operation.Record{
@@ -146,7 +146,7 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 		OperationID:    accepted.ID,
 		SourceVM:       sandbox.VMID,
 		SourceInstance: request.ExpectedInstance,
-		Dir:            filepath.Join(service.store.Directory, "snapshots", accepted.Result.SnapshotID),
+		Dir:            filepath.Join(c.store.Directory, "snapshots", accepted.Result.SnapshotID),
 	}
 	input := CaptureInput{
 		Request:      request,
@@ -253,21 +253,21 @@ func (service *Captures) AdmitForParent(ctx context.Context, request CaptureRequ
 	if err != nil {
 		return empty, err
 	}
-	if _, err = service.captureProof(ctx, tx, admitted); err != nil {
+	if _, err = c.captureProof(ctx, tx, admitted); err != nil {
 		return empty, err
 	}
-	if err = service.fault("capture_admission_before_commit"); err != nil {
+	if err = c.fault("capture_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = c.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("capture_admitted"); err != nil {
+	if err = c.fault("capture_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	c.dispatch(accepted.ID)
 	return accepted, nil
 }

@@ -78,25 +78,25 @@ func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (Dis
 
 // AdmitDiscard is an explicit sandbox-scoped cleanup of one fixed failed intent.
 // It never upgrades that failure to a successful generation or invents a witness.
-func (service *VMDeletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.Record, error) {
-	if service.
+func (d *VMDeletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.Record, error) {
+	if d.
 		ownership ==
-		nil || service.
+		nil || d.
 		handoff ==
-		nil || service.usage == nil {
+		nil || d.usage == nil {
 		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
 
-	return service.AdmitDiscardForParent(ctx, request, nil)
+	return d.AdmitDiscardForParent(ctx, request, nil)
 }
 
-func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.Record, error) {
-	if service.
+func (d *VMDeletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.Record, error) {
+	if d.
 		ownership ==
-		nil || service.
+		nil || d.
 		handoff ==
-		nil || service.usage == nil {
+		nil || d.usage == nil {
 		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
@@ -110,13 +110,13 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 		Request DiscardRequest
 	}{"discard", request})
 	hash := operation.Digest(frozen)
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	closing := d.lifetime.Closing() || d.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := d.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -129,11 +129,11 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			d.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	record, err := service.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
+	record, err := d.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, fmt.Errorf("%w: sandbox not found", errs.ErrNotFound)
 	}
@@ -165,10 +165,10 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 		Source:          source,
 		CurrentInstance: current,
 	}
-	if _, err = service.discardSource(ctx, tx, input); err != nil {
+	if _, err = d.discardSource(ctx, tx, input); err != nil {
 		return empty, err
 	}
-	if _, err = service.proofs.GenerationHistory(ctx, tx, source); err != nil {
+	if _, err = d.proofs.GenerationHistory(ctx, tx, source); err != nil {
 		return empty, err
 	}
 	accepted := operation.Record{
@@ -249,7 +249,7 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
+	if err = d.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
 		Sandbox:     record,
 		OperationID: accepted.ID,
 		TenantID:    request.TenantID,
@@ -310,29 +310,29 @@ func (service *VMDeletion) AdmitDiscardForParent(ctx context.Context, request Di
 	if err != nil {
 		return empty, err
 	}
-	if _, err = service.discardProof(ctx, tx, step); err != nil {
+	if _, err = d.discardProof(ctx, tx, step); err != nil {
 		return empty, fmt.Errorf("discard handoff: %w", err)
 	}
-	if err = service.fault("discard_admission_before_commit"); err != nil {
+	if err = d.fault("discard_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = d.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("discard_admitted"); err != nil {
+	if err = d.fault("discard_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	d.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input discardInput) (VMRecord, error) {
+func (d *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input discardInput) (VMRecord, error) {
 	var currentMachine VMRecord
 	source, request := input.Source, input.Request
-	if err := service.validateStep(source); err != nil {
+	if err := d.validateStep(source); err != nil {
 		return currentMachine, err
 	}
 	if (source.Action != "cold_start" && source.Action != "clone" && source.Action != "restore") || source.Status != "failed" || source.State.Witness != "" || (source.Input.Restore != nil && !source.State.RestoreBlocked) || source.OperationID != request.FailedOperationID || source.Input.SandboxID != request.SandboxID || source.Input.TenantID != request.TenantID || source.Input.Resource.Instance != request.ExpectedInstance || (input.CurrentInstance != "" && !ExpectedCurrentInstance(source, input.CurrentInstance)) {
@@ -346,7 +346,7 @@ func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input 
 		return currentMachine, fmt.Errorf("discard failed history changed")
 	}
 	if source.Input.FailureSlotDestination != nil {
-		parent, err := service.ownership.ResumeDestination(service.ctx, tx, source.Input.FailureSlotDestination)
+		parent, err := d.ownership.ResumeDestination(d.ctx, tx, source.Input.FailureSlotDestination)
 		if err != nil {
 			return currentMachine, err
 		}
@@ -440,15 +440,15 @@ func (service *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input 
 		return currentMachine, fmt.Errorf("discard version differs from failed intent")
 	}
 	if source.Input.Restore != nil {
-		if err = service.proofs.Snapshots().RestoreRelations(ctx, tx, source); err != nil {
+		if err = d.proofs.Snapshots().RestoreRelations(ctx, tx, source); err != nil {
 			return currentMachine, err
 		}
 	}
 	return currentMachine, nil
 }
 
-func (service *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardStep) (VMRecord, error) {
-	currentMachine, err := service.discardSource(ctx, tx, step.Input)
+func (d *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardStep) (VMRecord, error) {
+	currentMachine, err := d.discardSource(ctx, tx, step.Input)
 	if err != nil {
 		return currentMachine, err
 	}
@@ -463,7 +463,7 @@ func (service *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step Di
 	if !current.Owned || current.Instance != input.CurrentInstance || current.Owner != step.OperationID || !currentMachine.Deleting || !reflect.DeepEqual(currentMachine.Resource, source.Input.Resource) || currentMachine.AgentReady || currentMachine.Verified && current.State != "stopped" {
 		return currentMachine, fmt.Errorf("discard lost current VM ownership")
 	}
-	record, err := service.ownership.ReadSandbox(ctx, tx, input.Request.SandboxID, input.Request.TenantID)
+	record, err := d.ownership.ReadSandbox(ctx, tx, input.Request.SandboxID, input.Request.TenantID)
 	if err != nil {
 		return currentMachine, err
 	}
@@ -516,7 +516,7 @@ func (service *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step Di
 	}
 	shape := source.Input.Resource.Config.Shape
 	vmBytes := source.Input.RuntimeBytes
-	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
+	generations, err := d.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
 		Kind: "cleanup",
 		ID:   step.OperationID + ":discard",
 	})
@@ -624,7 +624,7 @@ func (service *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step Di
 			return currentMachine, fmt.Errorf("discard responsibility proof incomplete: %v", err)
 		}
 	}
-	warm, err := service.usage.VMUsers(ctx, tx, source.Candidate)
+	warm, err := d.usage.VMUsers(ctx, tx, source.Candidate)
 	if err != nil || warm != 0 {
 		return currentMachine, fmt.Errorf("discard responsibility proof incomplete: %v", err)
 	}

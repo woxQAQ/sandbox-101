@@ -41,19 +41,19 @@ func NewTenants(repository *Repository, dependencies TenantDependencies) *Tenant
 	}
 }
 
-func (s *Tenants) PutTenant(ctx context.Context, principal Principal, tenant types.Tenant) (types.Tenant, error) {
+func (t *Tenants) PutTenant(ctx context.Context, principal Principal, tenant types.Tenant) (types.Tenant, error) {
 	if !principal.Root || tenant.ID == "" || tenant.Token == "" || tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 {
 		return types.Tenant{}, fmt.Errorf("%w: tenant administration requires root, token and finite budgets", errs.ErrInvalid)
 	}
-	s.admission.Lock()
-	defer s.admission.Unlock()
-	if s.reviewed {
+	t.admission.Lock()
+	defer t.admission.Unlock()
+	if t.reviewed {
 		return types.Tenant{}, fmt.Errorf("%w: reviewed metadata rollback does not authorize new effects", errs.ErrManualRecovery)
 	}
-	if s.lifetime.Closing() {
+	if t.lifetime.Closing() {
 		return types.Tenant{}, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
-	if err := s.repository.PutTenant(ctx, tenant.ID, tenant.Token, Limits{
+	if err := t.repository.PutTenant(ctx, tenant.ID, tenant.Token, Limits{
 		MaxSandboxes:  tenant.MaxSandboxes,
 		MaxStorageMiB: tenant.MaxStorageMiB,
 	}); err != nil {
@@ -62,5 +62,5 @@ func (s *Tenants) PutTenant(ctx context.Context, principal Principal, tenant typ
 	tenant.Token = ""
 	// An error here follows a committed write. It is never an instruction to
 	// retry a transaction or restore the previous credential in memory.
-	return tenant, s.checkpoint()
+	return tenant, t.checkpoint()
 }

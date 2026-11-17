@@ -57,19 +57,19 @@ func NewSnapshotDeletion(state *store.State, dependencies SnapshotDeletionDepend
 	}
 }
 
-func (service *SnapshotDeletion) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (sd *SnapshotDeletion) fault(point string) error {
+	if sd.faultPoint != nil {
+		return sd.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *SnapshotDeletion) dispatch(id string) {
-	if service.store.Reviewed {
+func (sd *SnapshotDeletion) dispatch(id string) {
+	if sd.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	sd.workers.Start(id, func() error {
+		handled, err := sd.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -80,8 +80,8 @@ func (service *SnapshotDeletion) dispatch(id string) {
 	})
 }
 
-func (service *SnapshotDeletion) Resume(id string) (bool, error) {
-	if service.
+func (sd *SnapshotDeletion) Resume(id string) (bool, error) {
+	if sd.
 		usage == nil {
 		return false,
 			fmt.
@@ -90,24 +90,24 @@ func (service *SnapshotDeletion) Resume(id string) (bool, error) {
 				)
 	}
 
-	if service.store.Reviewed {
+	if sd.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume snapshot deletion", errs.ErrManualRecovery)
 	}
-	step, err := LoadSnapshotDelete(service.ctx, service.store.Database, id)
+	step, err := LoadSnapshotDelete(sd.ctx, sd.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.Snapshot(step.Input.Request.SnapshotID)
+	guard := sd.guards.Snapshot(step.Input.Request.SnapshotID)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadSnapshotDelete(service.ctx, service.store.Database, id)
+	step, err = LoadSnapshotDelete(sd.ctx, sd.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runSnapshotDelete(step)
+	return true, sd.runSnapshotDelete(step)
 }
 
 func ValidateSnapshotDelete(ctx context.Context, database store.DBTX, id string) error {

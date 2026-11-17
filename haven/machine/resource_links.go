@@ -141,28 +141,28 @@ func NewResourceLinks(state *store.State, admission execution.Guard, ctx context
 	}
 }
 
-func (service *ResourceLinks) Complete(parent, role string, link ResourceLink) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (rl *ResourceLinks) Complete(parent, role string, link ResourceLink) error {
+	rl.admission.Lock()
+	defer rl.admission.Unlock()
+	tx, err := rl.store.Database.BeginTx(rl.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	changed, err := link.Complete(service.ctx, tx, parent, role)
+	changed, err := link.Complete(rl.ctx, tx, parent, role)
 	if err != nil || !changed {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return rl.store.Checkpoint()
 }
 
-func (service *ResourceLinks) Run(parent, role string, run func(ResourceLink) error) (ResourceLink, error) {
-	link, status, err := LoadResourceLink(service.ctx, service.store.Database, parent, role)
+func (rl *ResourceLinks) Run(parent, role string, run func(ResourceLink) error) (ResourceLink, error) {
+	link, status, err := LoadResourceLink(rl.ctx, rl.store.Database, parent, role)
 	if err != nil {
 		return link, err
 	}
@@ -176,10 +176,10 @@ func (service *ResourceLinks) Run(parent, role string, run func(ResourceLink) er
 	if errors.Is(runErr, errs.ErrInterrupted) {
 		return link, runErr
 	}
-	if err = service.Complete(parent, role, link); err != nil {
+	if err = rl.Complete(parent, role, link); err != nil {
 		return link, errors.Join(err, runErr)
 	}
-	_, status, err = LoadResourceLink(service.ctx, service.store.Database, parent, role)
+	_, status, err = LoadResourceLink(rl.ctx, rl.store.Database, parent, role)
 	if err != nil {
 		return link, err
 	}

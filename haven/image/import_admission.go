@@ -19,7 +19,7 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Images) AdmitImport(ctx context.Context, principal authorization.Principal, key string, options imageimport.ImageImportOptions) (operation.Record, error) {
+func (i *Images) AdmitImport(ctx context.Context, principal authorization.Principal, key string, options imageimport.ImageImportOptions) (operation.Record, error) {
 	var empty operation.Record
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
@@ -27,14 +27,14 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 	if key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: image import requires bounded key", errs.ErrInvalid)
 	}
-	if service.reviewed {
+	if i.reviewed {
 		return empty, fmt.Errorf("%w: reviewed rollback cannot admit image effects", errs.ErrManualRecovery)
 	}
 	options, err := imageimport.NormalizeImageImportOptions(options)
 	if err != nil {
 		return empty, err
 	}
-	guard := service.guards.NodeRequest(service.nodeID, key)
+	guard := i.guards.NodeRequest(i.nodeID, key)
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := operation.Encode(struct {
@@ -42,26 +42,26 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 		Options imageimport.ImageImportOptions
 	}{"image_import", options})
 	hash := operation.Digest(frozen)
-	if cached, found, err := operation.New(service.database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
 		Kind: "node",
-		ID:   service.nodeID,
+		ID:   i.nodeID,
 	}, key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			i.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	service.guards.Artifacts().Lock()
-	defer service.guards.Artifacts().Unlock()
+	i.guards.Artifacts().Lock()
+	defer i.guards.Artifacts().Unlock()
 	if err = ctx.Err(); err != nil {
 		return empty, err
 	}
 	input := imageImportInput{
 		RequestTenantID: principal.TenantID,
 		Options:         options,
-		Target:          filepath.Join(service.directory, "images", options.Digest[7:]),
+		Target:          filepath.Join(i.directory, "images", options.Digest[7:]),
 	}
-	existing, err := LoadManifest(ctx, service.database, options.Digest)
+	existing, err := LoadManifest(ctx, i.database, options.Digest)
 	if err == nil {
 		if existing.Layout != options.Materialization {
 			return empty, fmt.Errorf("%w: published digest already uses another materialization", errs.ErrConflict)
@@ -76,19 +76,19 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 		if _, err = os.Lstat(input.Target); !os.IsNotExist(err) {
 			return empty, fmt.Errorf("%w: image destination lacks catalog publication proof", errs.ErrManualRecovery)
 		}
-		plan, err := imageimport.ReadImageImportPlan(ctx, service.directory, options)
+		plan, err := imageimport.ReadImageImportPlan(ctx, i.directory, options)
 		if err != nil {
 			return empty, err
 		}
 		input.Plan = &plan
 		input.Reservation = options.MaxBytes*4 + options.MaxFiles*8192 + 32<<20
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err = service.gate.Check(); err != nil {
+	i.admission.Lock()
+	defer i.admission.Unlock()
+	if err = i.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.database.BeginTx(ctx, nil)
+	tx, err := i.database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -100,7 +100,7 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 		Key:    key,
 		Status: "pending",
 	}
-	input.Work = filepath.Join(service.directory, "imports", accepted.ID)
+	input.Work = filepath.Join(i.directory, "imports", accepted.ID)
 	state := imageImportState{
 		Phase: "admitted",
 	}
@@ -131,11 +131,11 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 		if err != nil {
 			return empty, err
 		}
-		available, err := loom.FreeBytes(service.directory)
+		available, err := loom.FreeBytes(i.directory)
 		if err != nil {
 			return empty, err
 		}
-		if reserved > available || service.safetyBytes > available-reserved || input.Reservation > available-reserved-service.safetyBytes {
+		if reserved > available || i.safetyBytes > available-reserved || input.Reservation > available-reserved-i.safetyBytes {
 			return empty, fmt.Errorf("%w: insufficient image import free space", errs.ErrExhausted)
 		}
 	}
@@ -144,7 +144,7 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
-		ScopeID:   service.nodeID,
+		ScopeID:   i.nodeID,
 		Key:       key,
 		Hash:      hash,
 		Request:   frozen,
@@ -189,17 +189,17 @@ func (service *Images) AdmitImport(ctx context.Context, principal authorization.
 			return empty, err
 		}
 	}
-	if err = service.fault("image_import_admission_before_commit"); err != nil {
+	if err = i.fault("image_import_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.checkpoint(); err != nil {
+	if err = i.checkpoint(); err != nil {
 		return accepted, err
 	}
 	if !operation.Terminal(accepted.Status) {
-		service.dispatch(accepted.ID)
+		i.dispatch(accepted.ID)
 	}
 	return accepted, nil
 }

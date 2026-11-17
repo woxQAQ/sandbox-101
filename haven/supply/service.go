@@ -113,71 +113,71 @@ func NewSupply(state *store.State, dependencies SupplyDependencies, options Supp
 	}
 }
 
-func (service *Supply) fault(point string) error {
-	if service.opts.Fault != nil {
-		return service.opts.Fault(point)
+func (s *Supply) fault(point string) error {
+	if s.opts.Fault != nil {
+		return s.opts.Fault(point)
 	}
 	return nil
 }
 
-func (service *Supply) existing(ctx context.Context, principal authorization.Principal, key, mac string) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Existing(ctx, principal, key, operation.CommandCredentials{
+func (s *Supply) existing(ctx context.Context, principal authorization.Principal, key, mac string) (operation.Record, bool, error) {
+	accepted, found, err := s.commands.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
-		service.dispatch(accepted.ID)
+		s.dispatch(accepted.ID)
 	}
 	return accepted, found, err
 }
 
-func (service *Supply) dispatch(id string) {
-	if service.store.Reviewed {
+func (s *Supply) dispatch(id string) {
+	if s.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		_, err := service.Resume(id)
+	s.workers.Start(id, func() error {
+		_, err := s.Resume(id)
 		return err
 	})
 }
 
-func (service *Supply) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (s *Supply) Resume(id string) (bool, error) {
+	if s.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume supply", errs.ErrManualRecovery)
 	}
-	step, err := LoadSupply(service.ctx, service.store.Database, id)
+	step, err := LoadSupply(s.ctx, s.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	lock := service.guards.TemplateWork(step.Input.Template.ID)
+	lock := s.guards.TemplateWork(step.Input.Template.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	step, err = LoadSupply(service.ctx, service.store.Database, id)
+	step, err = LoadSupply(s.ctx, s.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runSupply(step)
+	return true, s.runSupply(step)
 }
 
-func (service *Supply) runResourceLink(parent, role string) (machine.ResourceLink, error) {
-	return service.links.Run(parent, role, service.runResource)
+func (s *Supply) runResourceLink(parent, role string) (machine.ResourceLink, error) {
+	return s.links.Run(parent, role, s.runResource)
 }
 
-func (service *Supply) runResource(link machine.ResourceLink) error {
-	if handled, err := service.policies.Resume(service.ctx, link.ChildID); handled || err != nil {
+func (s *Supply) runResource(link machine.ResourceLink) error {
+	if handled, err := s.policies.Resume(s.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool
 	var err error
 	switch link.Kind {
 	case "cold_start", "clone", "restore":
-		return service.provisioning.Continue(link.ChildID)
+		return s.provisioning.Continue(link.ChildID)
 	case "capture":
-		handled, err = service.captures.Resume(link.ChildID)
+		handled, err = s.captures.Resume(link.ChildID)
 	case "release":
-		handled, err = service.deletion.ResumeRelease(link.ChildID)
+		handled, err = s.deletion.ResumeRelease(link.ChildID)
 	default:
 		return fmt.Errorf("unsupported supply resource kind %q", link.Kind)
 	}

@@ -28,16 +28,16 @@ type WarmClaimRequest struct {
 
 // Admit borrows the caller's tenant request guard and selects a ready warm
 // allocation atomically. A false found result permits the original cold path.
-func (service *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.Record, bool, error) {
+func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.Record, bool, error) {
 	principal, key, admission := request.Principal, request.Key, request.Admission
 	selectedTemplate, restore := request.Template, request.Restore
 	var empty operation.Record
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	wc.admission.Lock()
+	defer wc.admission.Unlock()
+	if err := wc.gate.Check(); err != nil {
 		return empty, false, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := wc.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, false, err
 	}
@@ -51,14 +51,14 @@ func (service *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) 
 	if !reflect.DeepEqual(current, selectedTemplate) {
 		return empty, false, fmt.Errorf("%w: warm claim template version changed", errs.ErrConflict)
 	}
-	if err = supply.ValidateWarmCatalog(service.proofs, ctx, tx, selectedTemplate); err != nil {
+	if err = supply.ValidateWarmCatalog(wc.proofs, ctx, tx, selectedTemplate); err != nil {
 		return empty, false, err
 	}
-	poolID, selected, source, found, err := supply.ReadyWarm(service.proofs, ctx, tx, selectedTemplate)
+	poolID, selected, source, found, err := supply.ReadyWarm(wc.proofs, ctx, tx, selectedTemplate)
 	if !found || err != nil {
 		return empty, false, err
 	}
-	currentRestore, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, selectedTemplate.TenantID, selectedTemplate.SnapshotID)
+	currentRestore, err := wc.proofs.Snapshots().LoadRestoreSource(ctx, tx, selectedTemplate.TenantID, selectedTemplate.SnapshotID)
 	if err != nil {
 		return empty, false, err
 	}
@@ -209,19 +209,19 @@ func (service *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) 
 	}); err != nil {
 		return empty, false, err
 	}
-	if err = service.fault("warm_claim_admission_before_commit"); err != nil {
+	if err = wc.fault("warm_claim_admission_before_commit"); err != nil {
 		return empty, false, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, false, err
 	}
-	service.registry.SetOperationSecrets(accepted.ID, admission.Secrets)
-	if err = service.store.Checkpoint(); err != nil {
+	wc.registry.SetOperationSecrets(accepted.ID, admission.Secrets)
+	if err = wc.store.Checkpoint(); err != nil {
 		return accepted, true, err
 	}
-	if err = service.fault("warm_claim_admitted"); err != nil {
+	if err = wc.fault("warm_claim_admitted"); err != nil {
 		return accepted, true, err
 	}
-	service.dispatch(accepted.ID)
+	wc.dispatch(accepted.ID)
 	return accepted, true, nil
 }

@@ -10,15 +10,15 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func (service *Collector) rawCandidates(ctx context.Context) ([]types.GCItem, []types.GCItem, error) {
-	queries := dbgen.New(service.store.Database)
+func (c *Collector) rawCandidates(ctx context.Context) ([]types.GCItem, []types.GCItem, error) {
+	queries := dbgen.New(c.store.Database)
 	ids, err := queries.ListPendingCleanupOperations(ctx, "capture")
 	if err != nil {
 		return nil, nil, err
 	}
 	var candidates, deferred []types.GCItem
 	for _, id := range ids {
-		capture, err := machine.LoadCapture(ctx, service.store.Database, id)
+		capture, err := machine.LoadCapture(ctx, c.store.Database, id)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -26,7 +26,7 @@ func (service *Collector) rawCandidates(ctx context.Context) ([]types.GCItem, []
 			continue
 		}
 		source := capture.Input.Source
-		current, err := machine.LoadOwnership(ctx, service.store.Database, source.Candidate)
+		current, err := machine.LoadOwnership(ctx, c.store.Database, source.Candidate)
 		if errors.Is(err, sql.ErrNoRows) {
 			deferred = append(deferred, types.GCItem{
 				Kind:   "raw_capture",
@@ -55,7 +55,7 @@ func (service *Collector) rawCandidates(ctx context.Context) ([]types.GCItem, []
 		}
 		selected := ""
 		for _, stop := range stops {
-			proof, err := machine.LoadStop(ctx, service.store.Database, stop)
+			proof, err := machine.LoadStop(ctx, c.store.Database, stop)
 			if err != nil {
 				return nil, nil, err
 			}

@@ -18,48 +18,48 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *VMDeletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, error) {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (d *VMDeletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, error) {
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.releaseProof(tx, step); err != nil {
+	if _, err = d.releaseProof(tx, step); err != nil {
 		return nil, err
 	}
-	source, err := LoadResourceStep(service.ctx, tx, step.Input.SourceOperation)
+	source, err := LoadResourceStep(d.ctx, tx, step.Input.SourceOperation)
 	if err != nil {
 		return nil, err
 	}
-	return service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+	return d.proofs.CleanupGenerations(d.ctx, tx, source, quota.Holder{
 		Kind: "cleanup",
 		ID:   step.OperationID + ":resource",
 	})
 }
 
-func (service *VMDeletion) runRelease(step ResourceStep) error {
-	generations, err := service.releaseGenerationSet(step)
+func (d *VMDeletion) runRelease(step ResourceStep) error {
+	generations, err := d.releaseGenerationSet(step)
 	if err != nil {
 		return err
 	}
 	r := step.Input.Resource
 	if step.State.Phase == "admitted" {
-		if err := service.markRelease(&step, "stop_intent"); err != nil {
+		if err := d.markRelease(&step, "stop_intent"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "stop_intent" {
 		for _, generation := range slices.Backward(generations) {
-			if err := service.backend.Stop(service.ctx, generation.Input.Resource); err != nil {
+			if err := d.backend.Stop(d.ctx, generation.Input.Resource); err != nil {
 				return err
 			}
 		}
 		for _, generation := range generations {
-			observation, err := service.backend.Inspect(service.ctx, generation.Input.Resource)
+			observation, err := d.backend.Inspect(d.ctx, generation.Input.Resource)
 			if err != nil {
 				return err
 			}
@@ -68,58 +68,58 @@ func (service *VMDeletion) runRelease(step ResourceStep) error {
 			}
 		}
 		for _, generation := range generations {
-			if err := service.backend.Network(service.ctx, generation.Input.Resource, false); err != nil {
+			if err := d.backend.Network(d.ctx, generation.Input.Resource, false); err != nil {
 				return err
 			}
 		}
-		observation, err := service.backend.Inspect(service.ctx, r)
+		observation, err := d.backend.Inspect(d.ctx, r)
 		if err != nil {
 			return err
 		}
 		if observation.Alive || observation.Network {
 			return fmt.Errorf("%w: release exit or network shutdown unconfirmed", errs.ErrUnknown)
 		}
-		if err = service.fault("effect_stopped"); err != nil {
+		if err = d.fault("effect_stopped"); err != nil {
 			return err
 		}
-		if err = service.markRelease(&step, "stopped"); err != nil {
+		if err = d.markRelease(&step, "stopped"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "stopped" {
-		if err := service.markRelease(&step, "remove_intent"); err != nil {
+		if err := d.markRelease(&step, "remove_intent"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "remove_intent" {
 		for _, generation := range generations {
-			if err := service.backend.Remove(service.ctx, generation.Input.Resource); err != nil {
+			if err := d.backend.Remove(d.ctx, generation.Input.Resource); err != nil {
 				return err
 			}
 		}
-		if err := service.fault("effect_removed"); err != nil {
+		if err := d.fault("effect_removed"); err != nil {
 			return err
 		}
-		observation, err := service.backend.Inspect(service.ctx, r)
+		observation, err := d.backend.Inspect(d.ctx, r)
 		if err != nil {
 			return err
 		}
 		if observation.Alive || observation.Network {
 			return fmt.Errorf("%w: backend removal remains unconfirmed", errs.ErrUnknown)
 		}
-		if err = service.markRelease(&step, "removed"); err != nil {
+		if err = d.markRelease(&step, "removed"); err != nil {
 			return err
 		}
 	}
 	if step.State.Phase == "removed" {
-		if err = service.inspectStoppedGenerations(generations); err != nil {
+		if err = d.inspectStoppedGenerations(generations); err != nil {
 			return err
 		}
-		intent, err := service.deletionIntent(step)
+		intent, err := d.deletionIntent(step)
 		if err != nil {
 			return err
 		}
-		paths, err := loom.ResumeDeletion(service.ctx, service.store.Directory, intent)
+		paths, err := loom.ResumeDeletion(d.ctx, d.store.Directory, intent)
 		if err != nil {
 			return err
 		}
@@ -127,20 +127,20 @@ func (service *VMDeletion) runRelease(step ResourceStep) error {
 			return err
 		}
 		for _, path := range paths {
-			if err = loom.RemoveDeletionFile(service.ctx, service.store.Directory, intent, path); err != nil {
+			if err = loom.RemoveDeletionFile(d.ctx, d.store.Directory, intent, path); err != nil {
 				return err
 			}
-			if err = service.fault("release_unlinked"); err != nil {
+			if err = d.fault("release_unlinked"); err != nil {
 				return err
 			}
 		}
-		if err = loom.RemoveDeletionDirectories(service.ctx, service.store.Directory, intent); err != nil {
+		if err = loom.RemoveDeletionDirectories(d.ctx, d.store.Directory, intent); err != nil {
 			return err
 		}
-		if err = service.fault("effect_files_removed"); err != nil {
+		if err = d.fault("effect_files_removed"); err != nil {
 			return err
 		}
-		if err = service.markRelease(&step, "files_removed"); err != nil {
+		if err = d.markRelease(&step, "files_removed"); err != nil {
 			return err
 		}
 	}
@@ -150,22 +150,22 @@ func (service *VMDeletion) runRelease(step ResourceStep) error {
 	if _, err := os.Lstat(r.Dir); !os.IsNotExist(err) {
 		return fmt.Errorf("release files are not proven absent: %v", err)
 	}
-	observation, err := service.backend.Inspect(service.ctx, r)
+	observation, err := d.backend.Inspect(d.ctx, r)
 	if err != nil {
 		return err
 	}
 	if observation.Alive || observation.Network {
 		return fmt.Errorf("%w: release effect no longer matches absence proof", errs.ErrUnknown)
 	}
-	if err = service.inspectStoppedGenerations(generations); err != nil {
+	if err = d.inspectStoppedGenerations(generations); err != nil {
 		return err
 	}
-	return service.completeRelease(step)
+	return d.completeRelease(step)
 }
 
-func (service *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error) {
+func (d *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
-	body, err := dbgen.New(service.store.Database).GetDeletionReceipt(service.ctx, dbgen.GetDeletionReceiptParams{
+	body, err := dbgen.New(d.store.Database).GetDeletionReceipt(d.ctx, dbgen.GetDeletionReceiptParams{
 		Path:        step.Input.Resource.Dir,
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
@@ -206,7 +206,7 @@ func (service *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionInten
 				}
 			}
 		}
-		generations, err := service.releaseGenerationSet(step)
+		generations, err := d.releaseGenerationSet(step)
 		if err != nil {
 			return intent, err
 		}
@@ -221,27 +221,27 @@ func (service *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionInten
 	if step.Input.DiskIdentity == nil {
 		return intent, fmt.Errorf("release lacks frozen disk identity")
 	}
-	generations, err := service.releaseGenerationSet(step)
+	generations, err := d.releaseGenerationSet(step)
 	if err != nil {
 		return intent, err
 	}
-	intent, _, err = loom.InspectVMSetDeletion(service.ctx, service.store.Directory, GenerationDeletionMembers(generations), CaptureBoundaries(step))
+	intent, _, err = loom.InspectVMSetDeletion(d.ctx, d.store.Directory, GenerationDeletionMembers(generations), CaptureBoundaries(step))
 	if err != nil {
 		return intent, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return intent, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.releaseProof(tx, step); err != nil {
+	if _, err = d.releaseProof(tx, step); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(service.ctx, dbgen.InsertDeletionReceiptParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(d.ctx, dbgen.InsertDeletionReceiptParams{
 		Path:        intent.Path,
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
@@ -252,23 +252,23 @@ func (service *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionInten
 	if err = tx.Commit(); err != nil {
 		return intent, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = d.store.Checkpoint(); err != nil {
 		return intent, err
 	}
-	return intent, service.fault("deletion_intent")
+	return intent, d.fault("deletion_intent")
 }
 
-func (service *VMDeletion) completeRelease(step ResourceStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (d *VMDeletion) completeRelease(step ResourceStep) error {
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadResourceStep(service.ctx, tx, step.OperationID)
+	current, err := LoadResourceStep(d.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -278,15 +278,15 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	if current.Hash != step.Hash || !reflect.DeepEqual(current.State, step.State) || current.State.Phase != "files_removed" {
 		return fmt.Errorf("release completion intent changed")
 	}
-	if _, err = service.releaseProof(tx, step); err != nil {
+	if _, err = d.releaseProof(tx, step); err != nil {
 		return err
 	}
 	input := step.Input
-	source, err := LoadResourceStep(service.ctx, tx, input.SourceOperation)
+	source, err := LoadResourceStep(d.ctx, tx, input.SourceOperation)
 	if err != nil {
 		return err
 	}
-	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+	generations, err := d.proofs.CleanupGenerations(d.ctx, tx, source, quota.Holder{
 		Kind: "cleanup",
 		ID:   step.OperationID + ":resource",
 	})
@@ -309,7 +309,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 			storage int64
 		}{input.SlotBudget.Kind, input.SandboxID, input.SlotOperation, input.SlotBudget.Units, 0})
 	} else {
-		if err = quota.New(tx).TransferCostReference(service.ctx, quota.CostReference{
+		if err = quota.New(tx).TransferCostReference(d.ctx, quota.CostReference{
 			TenantID:   input.TenantID,
 			Kind:       "sandbox_slot",
 			Key:        input.SandboxID,
@@ -329,7 +329,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 		}{"vm_disk", generation.Input.DiskKey, generation.OperationID, 0, generation.Input.Resource.Config.Shape.DiskMiB})
 	}
 	for _, charge := range quotas {
-		if err = quota.New(tx).RemoveCostReference(service.ctx, quota.CostReference{
+		if err = quota.New(tx).RemoveCostReference(d.ctx, quota.CostReference{
 			TenantID:   input.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -338,7 +338,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 		}); err != nil {
 			return err
 		}
-		if err = quota.New(tx).RetireMatchingCost(service.ctx, quota.Cost{
+		if err = quota.New(tx).RetireMatchingCost(d.ctx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        input.TenantID,
 				Kind:            charge.kind,
@@ -351,7 +351,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         step.Candidate,
 		HolderKind: "cleanup",
@@ -359,7 +359,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         input.Resource.Config.Image,
 		HolderKind: "vm",
@@ -368,7 +368,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 		return err
 	}
 	for _, capture := range step.Input.Captures {
-		if err = quota.New(tx).RemoveResourceReference(service.ctx, quota.ResourceReference{
+		if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         capture.Input.Source.Input.Resource.Config.Image,
 			HolderKind: "capture",
@@ -376,25 +376,25 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 		}); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).CompleteTransferredCleanup(service.ctx, dbgen.CompleteTransferredCleanupParams{
+		if err = store.RequireOne(dbgen.New(tx).CompleteTransferredCleanup(d.ctx, dbgen.CompleteTransferredCleanupParams{
 			ID:          "capture:" + capture.OperationID,
 			OperationID: capture.OperationID,
 		})); err != nil {
 			return err
 		}
 	}
-	if err = service.proofs.RetireVMPolicy(service.ctx, tx, generations, step.OperationID); err != nil {
+	if err = d.proofs.RetireVMPolicy(d.ctx, tx, generations, step.OperationID); err != nil {
 		return err
 	}
 	for _, generation := range generations {
-		if err = RetireGeneration(service.ctx, tx, generation, service.proofs.Snapshots()); err != nil {
+		if err = RetireGeneration(d.ctx, tx, generation, d.proofs.Snapshots()); err != nil {
 			return err
 		}
 	}
-	if err = quota.New(tx).ReleaseReservation(service.ctx, "vm:"+step.Candidate); err != nil {
+	if err = quota.New(tx).ReleaseReservation(d.ctx, "vm:"+step.Candidate); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteStopped(service.ctx, dbgen.DeleteStoppedParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteStopped(d.ctx, dbgen.DeleteStoppedParams{
 		ID:              step.Candidate,
 		CurrentInstance: step.ExpectedInstance,
 		OperationID: sql.NullString{
@@ -404,14 +404,14 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).RetireDeletionReceipt(service.ctx, dbgen.RetireDeletionReceiptParams{
+	if err = store.RequireOne(dbgen.New(tx).RetireDeletionReceipt(d.ctx, dbgen.RetireDeletionReceiptParams{
 		Path:        input.Resource.Dir,
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanup(service.ctx, dbgen.CompletePendingCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanup(d.ctx, dbgen.CompletePendingCleanupParams{
 		ID:          "cleanup:" + step.OperationID,
 		OperationID: step.OperationID,
 	})); err != nil {
@@ -419,7 +419,7 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	}
 	next := step.State
 	next.Phase = "complete"
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(service.ctx, dbgen.CompleteRunningStepByInputParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(d.ctx, dbgen.CompleteRunningStepByInputParams{
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
 		InputHash:   step.Hash,
@@ -427,40 +427,40 @@ func (service *VMDeletion) completeRelease(step ResourceStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operation.New(tx).Complete(service.ctx, step.OperationID); err != nil {
+	if err = operation.New(tx).Complete(d.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.handoff.CompleteRelease(service.ctx, tx, step); err != nil {
+	if err = d.handoff.CompleteRelease(d.ctx, tx, step); err != nil {
 		return err
 	}
-	if err = service.fault("release_completion_before_commit"); err != nil {
+	if err = d.fault("release_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = d.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("release_completed")
+	return d.fault("release_completed")
 }
 
-func (service *VMDeletion) markRelease(step *ResourceStep, phase string) error {
+func (d *VMDeletion) markRelease(step *ResourceStep, phase string) error {
 	next := step.State
 	next.Phase = phase
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, err = service.releaseProof(tx, *step); err != nil {
+	if _, err = d.releaseProof(tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(d.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -470,12 +470,12 @@ func (service *VMDeletion) markRelease(step *ResourceStep, phase string) error {
 		return err
 	}
 	if phase == "stopped" {
-		currentMachine, _, _, err := LoadVM(service.ctx, tx, *step)
+		currentMachine, _, _, err := LoadVM(d.ctx, tx, *step)
 		if err != nil {
 			return err
 		}
 		currentMachine.AgentReady, currentMachine.Verified, currentMachine.Observation = false, true, nil
-		if err = store.RequireOne(dbgen.New(tx).RecordStopped(service.ctx, dbgen.RecordStoppedParams{
+		if err = store.RequireOne(dbgen.New(tx).RecordStopped(d.ctx, dbgen.RecordStoppedParams{
 			ID:              step.Candidate,
 			CurrentInstance: step.ExpectedInstance,
 			OperationID: sql.NullString{
@@ -491,8 +491,8 @@ func (service *VMDeletion) markRelease(step *ResourceStep, phase string) error {
 		return err
 	}
 	step.State, step.Status = next, "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = d.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("step_" + phase)
+	return d.fault("step_" + phase)
 }

@@ -36,9 +36,9 @@ type PreviewRequest struct {
 	TTL       time.Duration
 }
 
-func (service *Plane) PreviewURL(ctx context.Context, principal authorization.Principal, request PreviewRequest) (string, error) {
+func (p *Plane) PreviewURL(ctx context.Context, principal authorization.Principal, request PreviewRequest) (string, error) {
 	id, port, ttl := request.SandboxID, request.Port, request.TTL
-	sandbox, err := service.catalog.Get(ctx, principal, id)
+	sandbox, err := p.catalog.Get(ctx, principal, id)
 	if err != nil {
 		return "", err
 	}
@@ -63,12 +63,12 @@ func (service *Plane) PreviewURL(ctx context.Context, principal authorization.Pr
 		Expires: expires.Unix(),
 	}
 	body := base64.RawURLEncoding.EncodeToString(operation.Encode(value))
-	return "/preview/" + body + "." + service.sign("preview-v1", body) + "/", nil
+	return "/preview/" + body + "." + p.sign("preview-v1", body) + "/", nil
 }
 
-func (service *Plane) ResolvePreview(ctx context.Context, body, signature string) (PreviewTarget, error) {
+func (p *Plane) ResolvePreview(ctx context.Context, body, signature string) (PreviewTarget, error) {
 	denied := fmt.Errorf("%w: not found", errs.ErrNotFound)
-	if !hmac.Equal([]byte(signature), []byte(service.sign("preview-v1", body))) {
+	if !hmac.Equal([]byte(signature), []byte(p.sign("preview-v1", body))) {
 		return PreviewTarget{}, denied
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(body)
@@ -80,7 +80,7 @@ func (service *Plane) ResolvePreview(ctx context.Context, body, signature string
 		TenantID:  value.Tenant,
 		SandboxID: value.Sandbox,
 	}
-	sandbox, err := service.catalog.Get(ctx, principal, value.Sandbox)
+	sandbox, err := p.catalog.Get(ctx, principal, value.Sandbox)
 	if err != nil || sandbox.Epoch != value.Epoch || sandbox.State == "terminated" || value.Expires > sandbox.Deadline.Unix() {
 		return PreviewTarget{}, denied
 	}

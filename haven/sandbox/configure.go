@@ -24,7 +24,7 @@ type configurationRequest struct {
 	MAC     string
 }
 
-func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if principal.TenantID == "" || principal.SandboxID != "" || command.Action != "configure" || command.SandboxID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: configure requires tenant authority, sandbox and key", errs.ErrInvalid)
@@ -33,21 +33,21 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 	if err != nil {
 		return empty, err
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := sb.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
-	mac := service.commands.Identity.CommandMAC(principal, command)
+	mac := sb.commands.Identity.CommandMAC(principal, command)
 	retry := &ClaimAdmission{
 		MAC:     mac,
 		Secrets: secrets,
 	}
-	if accepted, found, err := service.existing(ctx, principal, key, retry); found || err != nil {
+	if accepted, found, err := sb.existing(ctx, principal, key, retry); found || err != nil {
 		return accepted, err
 	}
-	guard := service.guards.Configuration(command.SandboxID)
+	guard := sb.guards.Configuration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	accepted, resource, paused, admissionErr := service.admitConfiguration(ctx, principal, key, configurationRequest{
+	accepted, resource, paused, admissionErr := sb.admitConfiguration(ctx, principal, key, configurationRequest{
 		Command: command,
 		MAC:     mac,
 	})
@@ -55,50 +55,50 @@ func (service *Sandboxes) AdmitConfigure(ctx context.Context, principal authoriz
 		return accepted, admissionErr
 	}
 	if paused {
-		service.registry.SetSandboxSecrets(command.SandboxID, secrets)
+		sb.registry.SetSandboxSecrets(command.SandboxID, secrets)
 		return accepted, admissionErr
 	}
-	service.registry.CloseSandboxConnections(command.SandboxID)
+	sb.registry.CloseSandboxConnections(command.SandboxID)
 	// Durable revocation precedes any external call. Safety teardown has its own
 	// bounded context, independent of the submitting connection's cancellation.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err = errors.Join(admissionErr, service.opts.Backend.Network(cleanupCtx, resource, false), service.activations.RevokeSandbox(command.SandboxID))
+	err = errors.Join(admissionErr, sb.opts.Backend.Network(cleanupCtx, resource, false), sb.activations.RevokeSandbox(command.SandboxID))
 	if err != nil {
-		step, lookup := LoadActivation(cleanupCtx, service.store.Database, accepted.ID)
+		step, lookup := LoadActivation(cleanupCtx, sb.store.Database, accepted.ID)
 		if lookup == nil {
-			source, sourceErr := machine.LoadResourceStep(cleanupCtx, service.store.Database, step.Input.ResourceOperation)
+			source, sourceErr := machine.LoadResourceStep(cleanupCtx, sb.store.Database, step.Input.ResourceOperation)
 			if sourceErr == nil && source.Hash == step.Input.ResourceHash {
-				err = errors.Join(err, service.activations.BlockGuarded(step, source))
+				err = errors.Join(err, sb.activations.BlockGuarded(step, source))
 			} else {
 				err = errors.Join(err, sourceErr)
 			}
 		} else {
 			err = errors.Join(err, lookup)
 		}
-		if current, lookup := service.operations.GetOperation(cleanupCtx, principal.TenantID, accepted.ID); lookup == nil {
+		if current, lookup := sb.operations.GetOperation(cleanupCtx, principal.TenantID, accepted.ID); lookup == nil {
 			accepted = current
 		}
 		return accepted, err
 	}
-	service.registry.SetOperationSecrets(accepted.ID, secrets)
-	if err = service.fault("configure_admitted"); err != nil {
+	sb.registry.SetOperationSecrets(accepted.ID, secrets)
+	if err = sb.fault("configure_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	sb.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, request configurationRequest) (operation.Record, loom.Resource, bool, error) {
+func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, request configurationRequest) (operation.Record, loom.Resource, bool, error) {
 	command, mac := request.Command, request.MAC
 	var empty operation.Record
 	var noResource loom.Resource
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.checkConfigurationOpen(); err != nil {
+	sb.admission.Lock()
+	defer sb.admission.Unlock()
+	if err := sb.checkConfigurationOpen(); err != nil {
 		return empty, noResource, false, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := sb.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, noResource, false, err
 	}
@@ -137,7 +137,7 @@ func (service *Sandboxes) admitConfiguration(ctx context.Context, principal auth
 	desired.TTLSeconds = old.TTLSeconds
 	desired.OnExpire = old.OnExpire
 	desired.AutoRenew = old.AutoRenew
-	settings, err := service.commands.Prepare(desired)
+	settings, err := sb.commands.Prepare(desired)
 	if err != nil {
 		return empty, noResource, false, err
 	}
@@ -149,7 +149,7 @@ func (service *Sandboxes) admitConfiguration(ctx context.Context, principal auth
 	}
 	resource := source.Input.Resource
 	if current.State != "paused" {
-		if service.opts.Guest == nil {
+		if sb.opts.Guest == nil {
 			return empty, noResource, false, fmt.Errorf("%w: guest activation effects unavailable", errs.ErrIncompatible)
 		}
 		if source.Input.TenantID != current.TenantID || source.Input.SandboxID != current.ID || source.Status != "succeeded" || source.State.Witness != current.Instance || source.Candidate != current.VMID {
@@ -268,13 +268,13 @@ func (service *Sandboxes) admitConfiguration(ctx context.Context, principal auth
 			return empty, noResource, false, err
 		}
 	}
-	if err = service.fault("configure_admission_before_commit"); err != nil {
+	if err = sb.fault("configure_admission_before_commit"); err != nil {
 		return empty, noResource, false, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = sb.committer.Commit(tx); err != nil {
 		return empty, noResource, false, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = sb.store.Checkpoint(); err != nil {
 		return accepted, resource, paused, err
 	}
 	return accepted, resource, paused, nil
@@ -282,37 +282,37 @@ func (service *Sandboxes) admitConfiguration(ctx context.Context, principal auth
 
 // saveConfigurationIntent separates accepted revocation from publication of new
 // settings, so a rejected settings write leaves the durable fence and old policy.
-func (service *Activations) saveConfigurationIntent(step *ActivationStep) error {
-	guard := service.guards.Configuration(step.Input.SandboxID)
+func (a *Activations) saveConfigurationIntent(step *ActivationStep) error {
+	guard := a.guards.Configuration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadActivation(service.ctx, tx, step.OperationID)
+	current, err := LoadActivation(a.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, *step) || step.Phase != "admitted" || step.Input.PreviousSettings == nil {
 		return fmt.Errorf("configuration accepted revocation intent changed")
 	}
-	if _, _, err = VerifyActivation(service.proofs, service.ctx, tx, *step); err != nil {
+	if _, _, err = VerifyActivation(a.proofs, a.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(service.ctx, dbgen.ReplaceSettingsParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(a.ctx, dbgen.ReplaceSettingsParams{
 		SandboxID:    step.Input.SandboxID,
 		PreviousBody: operation.Encode(step.Input.PreviousSettings),
 		NextBody:     operation.Encode(step.Input.Settings),
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(service.ctx, dbgen.BeginPendingStepParams{
+	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(a.ctx, dbgen.BeginPendingStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -321,7 +321,7 @@ func (service *Activations) saveConfigurationIntent(step *ActivationStep) error 
 	})); err != nil {
 		return err
 	}
-	if err = service.fault("configure_settings_before_commit"); err != nil {
+	if err = a.fault("configure_settings_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -329,5 +329,5 @@ func (service *Activations) saveConfigurationIntent(step *ActivationStep) error 
 	}
 	step.Phase = "configuration_saved"
 	step.Status = "running"
-	return service.store.Checkpoint()
+	return a.store.Checkpoint()
 }

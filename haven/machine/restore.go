@@ -17,17 +17,17 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Provisioning) runClone(step ResourceStep) error {
+func (p *Provisioning) runClone(step ResourceStep) error {
 	if step.Input.Restore == nil || step.State.RestoreBlocked {
 		return fmt.Errorf("%w: restore source missing or candidate blocked", errs.ErrManualRecovery)
 	}
-	service.admission.Lock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	p.admission.Lock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err == nil {
-		_, _, _, err = service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, step)
+		_, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	service.admission.Unlock()
+	p.admission.Unlock()
 	if err != nil {
 		return err
 	}
@@ -37,29 +37,29 @@ func (service *Provisioning) runClone(step ResourceStep) error {
 		return err
 	}
 	if !step.State.BackingReady {
-		observation, err := service.backend.Inspect(service.ctx, r)
+		observation, err := p.backend.Inspect(p.ctx, r)
 		if err != nil {
 			return err
 		}
 		if observation.Alive {
-			return service.failStep(step, fmt.Errorf("%w: unproved restore candidate already in use", errs.ErrManualRecovery))
+			return p.failStep(step, fmt.Errorf("%w: unproved restore candidate already in use", errs.ErrManualRecovery))
 		}
 		if step.State.Materials != nil && !step.State.Materials.Complete {
-			return service.failStep(step, fmt.Errorf("%w: restore interrupted before material completion; original candidate retained", errs.ErrIncompatible))
+			return p.failStep(step, fmt.Errorf("%w: restore interrupted before material completion; original candidate retained", errs.ErrIncompatible))
 		}
 		if err = VerifyRestoreSourceFiles(*source); err != nil {
-			return service.failStep(step, err)
+			return p.failStep(step, err)
 		}
 		if step.State.Materials == nil {
 			if step.State.Phase == "admitted" {
 				next := step.State
 				next.Phase = "restore_prepare_intent"
-				if err = service.saveRestore(&step, next); err != nil {
+				if err = p.saveRestore(&step, next); err != nil {
 					return err
 				}
 			}
 			if step.State.Phase != "restore_prepare_intent" {
-				return service.failStep(step, fmt.Errorf("unproved restore phase changed"))
+				return p.failStep(step, fmt.Errorf("unproved restore phase changed"))
 			}
 			request := loom.RestorePreparation{
 				Resource:    r,
@@ -74,7 +74,7 @@ func (service *Provisioning) runClone(step ResourceStep) error {
 				boundary, err = loom.PrepareRestore(request)
 			}
 			if err != nil {
-				return service.failStep(step, err)
+				return p.failStep(step, err)
 			}
 			defer func() {
 				_ = boundary.Close()
@@ -82,37 +82,37 @@ func (service *Provisioning) runClone(step ResourceStep) error {
 			next := step.State
 			next.Materials = CopyRestoreMaterials(boundary.Materials)
 			next.Phase = "restore_candidate_prepared"
-			if err = service.saveRestore(&step, next); err != nil {
+			if err = p.saveRestore(&step, next); err != nil {
 				return err
 			}
 			for _, name := range loom.RestoreFileNames() {
 				if err = boundary.CopyFile(name); err != nil {
-					return service.failStep(step, err)
+					return p.failStep(step, err)
 				}
 				if name == "memory-ranges" {
 					continue
 				}
 				next = step.State
 				next.Phase = "restore_candidate_copied"
-				if err = service.saveRestore(&step, next); err != nil {
+				if err = p.saveRestore(&step, next); err != nil {
 					return err
 				}
 				if err = boundary.PublishFile(name); err != nil {
-					return service.failStep(step, err)
+					return p.failStep(step, err)
 				}
 				next = step.State
 				next.Phase = "restore_candidate_renamed"
-				if err = service.saveRestore(&step, next); err != nil {
+				if err = p.saveRestore(&step, next); err != nil {
 					return err
 				}
 			}
 			if err = boundary.SyncMaterials(); err != nil {
-				return service.failStep(step, err)
+				return p.failStep(step, err)
 			}
 			next = step.State
 			next.Materials = CopyRestoreMaterials(boundary.Materials)
 			next.Phase = "restore_candidate_synced"
-			if err = service.saveRestore(&step, next); err != nil {
+			if err = p.saveRestore(&step, next); err != nil {
 				return err
 			}
 			next = step.State
@@ -121,43 +121,43 @@ func (service *Provisioning) runClone(step ResourceStep) error {
 			identity := next.Materials.Files["disk.raw"].Identity
 			next.DiskIdentity = &identity
 			next.Phase = "restore_materials_complete"
-			if err = service.saveRestore(&step, next); err != nil {
+			if err = p.saveRestore(&step, next); err != nil {
 				return err
 			}
 		}
 		if err = loom.VerifyRestoreMaterials(step.State.Materials, r, source.Snapshot.Manifest.Files, true); err != nil {
-			return service.failStep(step, err)
+			return p.failStep(step, err)
 		}
-		if err = service.backend.Prepare(service.ctx, r); err != nil {
-			return service.failStep(step, err)
+		if err = p.backend.Prepare(p.ctx, r); err != nil {
+			return p.failStep(step, err)
 		}
 		if err = loom.VerifyRestoreMaterials(step.State.Materials, r, source.Snapshot.Manifest.Files, true); err != nil {
-			return service.failStep(step, err)
+			return p.failStep(step, err)
 		}
-		if err = service.transferRestore(&step); err != nil {
+		if err = p.transferRestore(&step); err != nil {
 			return err
 		}
 	}
-	observation, err := service.backend.Inspect(service.ctx, r)
+	observation, err := p.backend.Inspect(p.ctx, r)
 	if err != nil {
 		return err
 	}
 	if observation.Alive && step.State.Phase == "restore_resources_ready" {
-		return service.failStep(step, fmt.Errorf("%w: live restore candidate lacks durable launch intent", errs.ErrManualRecovery))
+		return p.failStep(step, fmt.Errorf("%w: live restore candidate lacks durable launch intent", errs.ErrManualRecovery))
 	}
 	checkDisk := !observation.Alive && (step.State.Phase == "restore_resources_ready" || step.State.Phase == "launch_intent")
 	if err = loom.VerifyRestoreMaterials(step.State.Materials, r, source.Snapshot.Manifest.Files, checkDisk); err != nil {
-		return service.failStep(step, err)
+		return p.failStep(step, err)
 	}
 	if err = loom.ValidateCOWTopology(r.RestoreDir, uint64(r.Config.Shape.MemoryMiB)<<20); err != nil {
-		return service.failStep(step, err)
+		return p.failStep(step, err)
 	}
 	if step.State.Phase == "restore_resources_ready" {
-		if err = service.markPhase(&step, "launch_intent"); err != nil {
+		if err = p.markPhase(&step, "launch_intent"); err != nil {
 			return err
 		}
 	}
-	return service.startCandidate(step, true)
+	return p.startCandidate(step, true)
 }
 
 func VerifyRestoreSourceFiles(source SnapshotSource) error {
@@ -320,20 +320,20 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 	return nil
 }
 
-func (service *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (p *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error {
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, _, _, err = service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, *step); err != nil {
+	if _, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(p.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -350,7 +350,7 @@ func (service *Provisioning) saveRestore(step *ResourceStep, next ResourceState)
 			Resource:     step.Input.Resource,
 			DiskIdentity: next.DiskIdentity,
 		}
-		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(service.ctx, dbgen.ReplaceVersionBodyParams{
+		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
 			ID:           step.OperationID,
 			VmID:         step.Candidate,
 			OperationID:  step.OperationID,
@@ -364,23 +364,23 @@ func (service *Provisioning) saveRestore(step *ResourceStep, next ResourceState)
 		return err
 	}
 	step.State, step.Status = next, "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault(next.Phase)
+	return p.fault(next.Phase)
 }
 
-func (service *Provisioning) transferRestore(step *ResourceStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (p *Provisioning) transferRestore(step *ResourceStep) error {
+	p.admission.Lock()
+	defer p.admission.Unlock()
+	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, _, _, err = service.ownership.VerifyProvisionIntent(service.proofs, service.ctx, tx, *step); err != nil {
+	if _, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, *step); err != nil {
 		return err
 	}
 	if step.State.Materials == nil || !step.State.Materials.Complete || step.State.DiskIdentity == nil || step.State.BackingReady {
@@ -392,14 +392,14 @@ func (service *Provisioning) transferRestore(step *ResourceStep) error {
 	next.Phase = "restore_resources_ready"
 
 	responsibilities := quota.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).InsertBacking(service.ctx, dbgen.InsertBackingParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertBacking(p.ctx, dbgen.InsertBackingParams{
 		Path:   filepath.Join(step.Input.Resource.RestoreDir, "memory-ranges"),
 		VmID:   step.Candidate,
 		Digest: source.Manifest.Files["ch/memory-ranges"],
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.AddResourceReference(p.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         source.ID,
 		HolderKind: "backing",
@@ -407,7 +407,7 @@ func (service *Provisioning) transferRestore(step *ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.RemoveResourceReference(p.ctx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         source.ID,
 		HolderKind: "step",
@@ -415,7 +415,7 @@ func (service *Provisioning) transferRestore(step *ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.TransferCostReference(service.ctx, quota.CostReference{
+	if err = responsibilities.TransferCostReference(p.ctx, quota.CostReference{
 		TenantID:   step.Input.TenantID,
 		Kind:       "snapshot",
 		Key:        source.ID,
@@ -424,14 +424,14 @@ func (service *Provisioning) transferRestore(step *ResourceStep) error {
 	}, "active_use", "backing:"+step.Input.BackingHolder); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteSourceLease(service.ctx, dbgen.DeleteSourceLeaseParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteSourceLease(p.ctx, dbgen.DeleteSourceLeaseParams{
 		SnapshotID:  source.ID,
 		OperationID: step.OperationID,
 		StepKey:     step.Key,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceRunningStep(service.ctx, dbgen.AdvanceRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceRunningStep(p.ctx, dbgen.AdvanceRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -440,15 +440,15 @@ func (service *Provisioning) transferRestore(step *ResourceStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = service.fault("restore_transfer_before_commit"); err != nil {
+	if err = p.fault("restore_transfer_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
 	step.State = next
-	if err = service.store.Checkpoint(); err != nil {
+	if err = p.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault(next.Phase)
+	return p.fault(next.Phase)
 }

@@ -117,24 +117,24 @@ func imageWorkCleanupEligible(source imageImportStep) error {
 	return nil
 }
 
-func (service *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.GCItem, []types.GCItem, bool, error) {
+func (i *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.GCItem, []types.GCItem, bool, error) {
 	var roots []types.GCRoot
 	var candidates, deferred []types.GCItem
 	blocked := false
 
-	ids, err := dbgen.New(service.database).ListStepAdmissions(ctx, "image_import")
+	ids, err := dbgen.New(i.database).ListStepAdmissions(ctx, "image_import")
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
 	for _, id := range ids {
-		source, err := loadImageImport(ctx, service.database, id)
+		source, err := loadImageImport(ctx, i.database, id)
 		if err != nil {
 			return nil, nil, nil, false, err
 		}
 		if source.Input.Existing != nil {
 			continue
 		}
-		pending, err := dbgen.New(service.database).CountPendingCleanupID(ctx, dbgen.CountPendingCleanupIDParams{
+		pending, err := dbgen.New(i.database).CountPendingCleanupID(ctx, dbgen.CountPendingCleanupIDParams{
 			ID:           "image_import:" + id,
 			ResourceKind: "image_import",
 		})
@@ -164,16 +164,16 @@ func (service *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.G
 			}
 		}
 	}
-	keys, err := dbgen.New(service.database).ListCacheKeys(ctx)
+	keys, err := dbgen.New(i.database).ListCacheKeys(ctx)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
 	for _, key := range keys {
-		record, err := loadImageCache(ctx, service.database, key.Builder, key.DiffID)
+		record, err := loadImageCache(ctx, i.database, key.Builder, key.DiffID)
 		if err != nil {
 			return nil, nil, nil, false, err
 		}
-		if err = imageimport.VerifyCacheWitness(ctx, service.directory, record.Witness); err != nil {
+		if err = imageimport.VerifyCacheWitness(ctx, i.directory, record.Witness); err != nil {
 			blocked = true
 			deferred = append(deferred, types.GCItem{
 				Kind:   "image_cache",
@@ -182,7 +182,7 @@ func (service *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.G
 			})
 			continue
 		}
-		held, err := quota.New(service.database).CountMatchingReservation(ctx, quota.Reservation{
+		held, err := quota.New(i.database).CountMatchingReservation(ctx, quota.Reservation{
 			Owner: "cache:" + key.Builder + ":" + key.DiffID,
 			Bytes: record.Witness.PhysicalBytes,
 		})
@@ -198,7 +198,7 @@ func (service *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.G
 			})
 			continue
 		}
-		live, err := imageCacheLive(ctx, service.database, record.Witness)
+		live, err := imageCacheLive(ctx, i.database, record.Witness)
 		if err != nil {
 			return nil, nil, nil, false, err
 		}

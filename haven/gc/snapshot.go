@@ -15,8 +15,8 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (service *Collector) internalSnapshot(ctx context.Context, source machine.SnapshotSource) (bool, bool, error) {
-	entries, err := dbgen.New(service.store.Database).ListCaptureLinks(ctx, source.CaptureOperation)
+func (c *Collector) internalSnapshot(ctx context.Context, source machine.SnapshotSource) (bool, bool, error) {
+	entries, err := dbgen.New(c.store.Database).ListCaptureLinks(ctx, source.CaptureOperation)
 	if err != nil {
 		return false, false, err
 	}
@@ -37,7 +37,7 @@ func (service *Collector) internalSnapshot(ctx context.Context, source machine.S
 	if link.Kind != "capture" || link.Candidate != source.Snapshot.ID {
 		return false, false, fmt.Errorf("snapshot control link identity changed")
 	}
-	if lifecycle, err := sandbox.LoadLifecycle(ctx, service.store.Database, entry.OperationID); err == nil {
+	if lifecycle, err := sandbox.LoadLifecycle(ctx, c.store.Database, entry.OperationID); err == nil {
 		if lifecycle.Input.OwnerTenantID != source.Snapshot.TenantID || (lifecycle.Input.Command.Action != "pause" && lifecycle.Input.Command.Action != "checkpoint") {
 			return false, false, fmt.Errorf("snapshot lifecycle publication scope changed")
 		}
@@ -45,7 +45,7 @@ func (service *Collector) internalSnapshot(ctx context.Context, source machine.S
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return false, false, err
 	}
-	supply, err := supply.LoadSupply(ctx, service.store.Database, entry.OperationID)
+	supply, err := supply.LoadSupply(ctx, c.store.Database, entry.OperationID)
 	if err != nil {
 		return false, false, err
 	}
@@ -55,12 +55,12 @@ func (service *Collector) internalSnapshot(ctx context.Context, source machine.S
 	return true, operation.Terminal(supply.Status) && entry.Status == "succeeded", nil
 }
 
-func (service *Collector) snapshotCandidate(ctx context.Context, record machine.SnapshotRecord) (bool, string, error) {
-	source, err := service.proofs.SnapshotPublication(ctx, service.store.Database, record.TenantID, record.ID)
+func (c *Collector) snapshotCandidate(ctx context.Context, record machine.SnapshotRecord) (bool, string, error) {
+	source, err := c.proofs.SnapshotPublication(ctx, c.store.Database, record.TenantID, record.ID)
 	if err != nil {
 		return false, "", err
 	}
-	internal, complete, err := service.internalSnapshot(ctx, source)
+	internal, complete, err := c.internalSnapshot(ctx, source)
 	if err != nil {
 		return false, "", err
 	}
@@ -70,21 +70,21 @@ func (service *Collector) snapshotCandidate(ctx context.Context, record machine.
 	if !complete {
 		return false, "owning control workflow remains unresolved", nil
 	}
-	readers, err := machine.SnapshotReaders(ctx, service.store.Database, record.ID)
+	readers, err := machine.SnapshotReaders(ctx, c.store.Database, record.ID)
 	if err != nil {
 		return false, "", err
 	}
 	if readers != 0 {
 		return false, "source lease retained", nil
 	}
-	readers, err = quota.New(service.store.Database).ActiveSnapshotReferences(ctx, record.ID)
+	readers, err = quota.New(c.store.Database).ActiveSnapshotReferences(ctx, record.ID)
 	if err != nil {
 		return false, "", err
 	}
 	if readers != 0 {
 		return false, "active or unresolved snapshot use retained", nil
 	}
-	raw, err := dbgen.New(service.store.Database).GetCleanupKindStatus(ctx, dbgen.GetCleanupKindStatusParams{
+	raw, err := dbgen.New(c.store.Database).GetCleanupKindStatus(ctx, dbgen.GetCleanupKindStatusParams{
 		ID:           "capture:" + source.CaptureOperation,
 		OperationID:  source.CaptureOperation,
 		ResourceKind: "capture",

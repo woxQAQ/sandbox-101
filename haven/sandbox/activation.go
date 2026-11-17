@@ -75,41 +75,41 @@ func LoadActivation(ctx context.Context, query store.DBTX, id string) (Activatio
 	return step, nil
 }
 
-func (service *Activations) checkActivation(step ActivationStep) (machine.ResourceStep, error) {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (a *Activations) checkActivation(step ActivationStep) (machine.ResourceStep, error) {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return machine.ResourceStep{}, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadActivation(service.ctx, tx, step.OperationID)
+	current, err := LoadActivation(a.ctx, tx, step.OperationID)
 	if err != nil {
 		return machine.ResourceStep{}, err
 	}
 	if !reflect.DeepEqual(current, step) {
 		return machine.ResourceStep{}, fmt.Errorf("activation current intent changed")
 	}
-	source, _, err := VerifyActivation(service.proofs, service.ctx, tx, step)
+	source, _, err := VerifyActivation(a.proofs, a.ctx, tx, step)
 	return source, err
 }
 
-func (service *Activations) markActivation(step *ActivationStep, phase string) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (a *Activations) markActivation(step *ActivationStep, phase string) error {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, _, err = VerifyActivation(service.proofs, service.ctx, tx, *step); err != nil {
+	if _, _, err = VerifyActivation(a.proofs, a.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(a.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -123,30 +123,30 @@ func (service *Activations) markActivation(step *ActivationStep, phase string) e
 	}
 	step.Phase = phase
 	step.Status = "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = a.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("activation_" + phase)
+	return a.fault("activation_" + phase)
 }
 
-func (service *Activations) commitActivationPolicy(step ActivationStep, source machine.ResourceStep, policy *loom.NetworkPolicy) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (a *Activations) commitActivationPolicy(step ActivationStep, source machine.ResourceStep, policy *loom.NetworkPolicy) error {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if _, _, err = VerifyActivation(service.proofs, service.ctx, tx, step); err != nil {
+	if _, _, err = VerifyActivation(a.proofs, a.ctx, tx, step); err != nil {
 		return err
 	}
-	policyRecord, lookup := machine.LoadPolicyWitness(service.ctx, tx, source.Candidate)
+	policyRecord, lookup := machine.LoadPolicyWitness(a.ctx, tx, source.Candidate)
 	previous, instance, priorPolicy := policyRecord.OperationID, policyRecord.Instance, policyRecord.Body
 	if lookup == nil && previous != step.OperationID {
 		if instance != source.State.Witness && string(priorPolicy) != "null" {
-			old, err := machine.LoadDirectRetirement(service.ctx, tx, previous)
+			old, err := machine.LoadDirectRetirement(a.ctx, tx, previous)
 			if err != nil {
 				return err
 			}
@@ -161,7 +161,7 @@ func (service *Activations) commitActivationPolicy(step ActivationStep, source m
 				return fmt.Errorf("network policy replacement lacks original stopped generation")
 			}
 		}
-		if err = machine.CompleteDirectReplacement(service.ctx, tx, machine.DirectPolicyReplacement{
+		if err = machine.CompleteDirectReplacement(a.ctx, tx, machine.DirectPolicyReplacement{
 			PriorOperationID: previous,
 			OperationID:      step.OperationID,
 			VMID:             source.Candidate,
@@ -173,7 +173,7 @@ func (service *Activations) commitActivationPolicy(step ActivationStep, source m
 		return lookup
 	}
 	activation := step.ResourceProof()
-	if err = machine.ArmDirectRetirement(service.ctx, tx, step.OperationID, machine.DirectRetirementInput{
+	if err = machine.ArmDirectRetirement(a.ctx, tx, step.OperationID, machine.DirectRetirementInput{
 		Source:         source,
 		ActivationHash: activation.Hash,
 		ActivationKey:  activation.Key,
@@ -181,7 +181,7 @@ func (service *Activations) commitActivationPolicy(step ActivationStep, source m
 	}); err != nil {
 		return err
 	}
-	if err = machine.RecordPolicyWitness(service.ctx, tx, machine.NetworkPolicyRecord{
+	if err = machine.RecordPolicyWitness(a.ctx, tx, machine.NetworkPolicyRecord{
 		VMID:        source.Candidate,
 		Instance:    source.State.Witness,
 		OperationID: step.OperationID,
@@ -192,66 +192,66 @@ func (service *Activations) commitActivationPolicy(step ActivationStep, source m
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return a.store.Checkpoint()
 }
 
-func (service *Activations) completeActivation(step ActivationStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (a *Activations) completeActivation(step ActivationStep) error {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadActivation(service.ctx, tx, step.OperationID)
+	current, err := LoadActivation(a.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, step) || step.Phase != "network_on" {
 		return fmt.Errorf("sandbox completion lacks original activation proof")
 	}
-	source, record, err := VerifyActivation(service.proofs, service.ctx, tx, step)
+	source, record, err := VerifyActivation(a.proofs, a.ctx, tx, step)
 	if err != nil {
 		return err
 	}
 	settings := step.Input.Settings
 	settings.Instance = source.State.Witness
-	settings.ActiveEpoch = service.epoch
+	settings.ActiveEpoch = a.epoch
 	if settings.Deadline.IsZero() {
 		settings.Deadline = time.Now().UTC().Add(time.Duration(settings.TTLSeconds) * time.Second)
 	}
 	record.State = "running"
 	record.LastError = ""
 	record.OperationID = ""
-	if err = CompleteWarmClaim(service.ctx, tx, step); err != nil {
+	if err = CompleteWarmClaim(a.ctx, tx, step); err != nil {
 		return err
 	}
-	if err = CompleteLifecycleActivation(service.ctx, tx, step); err != nil {
+	if err = CompleteLifecycleActivation(a.ctx, tx, step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).PublishRunningSandbox(service.ctx, dbgen.PublishRunningSandboxParams{
+	if err = store.RequireOne(dbgen.New(tx).PublishRunningSandbox(a.ctx, dbgen.PublishRunningSandboxParams{
 		Body:   operation.Encode(record),
 		ID:     record.ID,
 		Tenant: record.TenantID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(service.ctx, dbgen.ReplaceSettingsParams{
+	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(a.ctx, dbgen.ReplaceSettingsParams{
 		SandboxID:    record.ID,
 		PreviousBody: operation.Encode(step.Input.Settings),
 		NextBody:     operation.Encode(settings),
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteFence(service.ctx, dbgen.DeleteFenceParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteFence(a.ctx, dbgen.DeleteFenceParams{
 		SandboxID:   record.ID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(service.ctx, dbgen.CompleteRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(a.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      step.Key,
 		InputHash:    step.Hash,
@@ -260,20 +260,20 @@ func (service *Activations) completeActivation(step ActivationStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operation.New(tx).Complete(service.ctx, step.OperationID); err != nil {
+	if err = operation.New(tx).Complete(a.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("activation_completion_before_commit"); err != nil {
+	if err = a.fault("activation_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = a.committer.Commit(tx); err != nil {
 		return err
 	}
-	service.registry.DropOperationSecrets(step.OperationID)
-	if err = service.store.Checkpoint(); err != nil {
+	a.registry.DropOperationSecrets(step.OperationID)
+	if err = a.store.Checkpoint(); err != nil {
 		return err
 	}
-	return service.fault("activation_completed")
+	return a.fault("activation_completed")
 }
 
 // Activation verifies historical resource custody and the current configuration

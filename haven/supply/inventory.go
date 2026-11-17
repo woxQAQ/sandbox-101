@@ -99,28 +99,28 @@ func RequireTemplateOwner(ctx context.Context, query store.DBTX, id, tenant stri
 
 // reservePublication advances the publication pointer without transferring the
 // permanent tenant. The comparison and conditional upsert share the caller's tx.
-func (desired TemplateRecord) reservePublication(ctx context.Context, query store.DBTX, previous *TemplateRecord, operationID string) error {
-	current, err := CurrentTemplate(ctx, query, desired.ID)
+func (record TemplateRecord) reservePublication(ctx context.Context, query store.DBTX, previous *TemplateRecord, operationID string) error {
+	current, err := CurrentTemplate(ctx, query, record.ID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, previous) {
 		return fmt.Errorf("%w: template catalog changed before admission", errs.ErrConflict)
 	}
-	if current != nil && current.TenantID != desired.TenantID {
+	if current != nil && current.TenantID != record.TenantID {
 		return fmt.Errorf("%w: template owner cannot change", errs.ErrConflict)
 	}
 	queries := dbgen.New(query)
-	owner, err := queries.GetPermanentOwner(ctx, desired.ID)
+	owner, err := queries.GetPermanentOwner(ctx, record.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if owner != "" && owner != desired.TenantID {
+	if owner != "" && owner != record.TenantID {
 		return fmt.Errorf("%w: template permanent owner cannot change", errs.ErrConflict)
 	}
 	return store.RequireOne(queries.ReservePublication(ctx, dbgen.ReservePublicationParams{
-		TemplateID:  desired.ID,
-		TenantID:    desired.TenantID,
+		TemplateID:  record.ID,
+		TenantID:    record.TenantID,
 		OperationID: operationID,
 	}))
 }

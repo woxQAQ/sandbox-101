@@ -66,19 +66,19 @@ func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func
 	}
 }
 
-func (service *VMStops) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (s *VMStops) fault(point string) error {
+	if s.faultPoint != nil {
+		return s.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *VMStops) dispatch(id string) {
-	if service.store.Reviewed {
+func (s *VMStops) dispatch(id string) {
+	if s.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	s.workers.Start(id, func() error {
+		handled, err := s.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -89,8 +89,8 @@ func (service *VMStops) dispatch(id string) {
 	})
 }
 
-func (service *VMStops) Resume(id string) (bool, error) {
-	if service.
+func (s *VMStops) Resume(id string) (bool, error) {
+	if s.
 		ownership ==
 		nil {
 		return false,
@@ -100,28 +100,28 @@ func (service *VMStops) Resume(id string) (bool, error) {
 			)
 	}
 
-	if service.store.Reviewed {
+	if s.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume stop", errs.ErrManualRecovery)
 	}
-	step, err := LoadStop(service.ctx, service.store.Database, id)
+	step, err := LoadStop(s.ctx, s.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	source, err := LoadResourceStep(service.ctx, service.store.Database, step.Input.SourceOperation)
+	source, err := LoadResourceStep(s.ctx, s.store.Database, step.Input.SourceOperation)
 	if err != nil {
 		return true, err
 	}
-	guard := service.guards.VM(source.Candidate)
+	guard := s.guards.VM(source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadStop(service.ctx, service.store.Database, id)
+	step, err = LoadStop(s.ctx, s.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runStop(step)
+	return true, s.runStop(step)
 }
 
 type StopRequest struct {

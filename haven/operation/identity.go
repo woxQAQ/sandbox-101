@@ -92,14 +92,14 @@ func NewCommandIdentity(ctx context.Context, dependencies CommandIdentityDepende
 	}
 }
 
-func (service *CommandIdentity) CommandMAC(principal authorization.Principal, command Command) string {
+func (ci *CommandIdentity) CommandMAC(principal authorization.Principal, command Command) string {
 	role := "tenant"
 	if principal.Root {
 		role = "root"
 	} else if principal.SandboxID != "" {
 		role = "sandbox"
 	}
-	return role + ":" + service.sign("sandbox-command-v1", string(Encode(principal)), string(Encode(command)))
+	return role + ":" + ci.sign("sandbox-command-v1", string(Encode(principal)), string(Encode(command)))
 }
 
 // CommandCredentials binds the stored credential MAC to the ephemeral secrets
@@ -111,29 +111,29 @@ type CommandCredentials struct {
 
 // Existing preserves scoped publication and original credential matching before
 // restoring the accepted request's in-memory secrets.
-func (service *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (Record, bool, error) {
-	id, err := service.operations.RequestID(ctx, principal.TenantID, key)
+func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (Record, bool, error) {
+	id, err := ci.operations.RequestID(ctx, principal.TenantID, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, nil
 	}
 	if err != nil {
 		return Record{}, false, err
 	}
-	accepted, err := service.view.Operation(ctx, principal, id)
+	accepted, err := ci.view.Operation(ctx, principal, id)
 	if err != nil {
 		return accepted, true, err
 	}
-	if err = service.MatchCredentials(id, credentials.MAC); err != nil {
+	if err = ci.MatchCredentials(id, credentials.MAC); err != nil {
 		return accepted, true, err
 	}
 	if !Terminal(accepted.Status) {
-		service.registry.SetOperationSecrets(id, credentials.Secrets)
+		ci.registry.SetOperationSecrets(id, credentials.Secrets)
 	}
 	return accepted, true, nil
 }
 
-func (service *CommandIdentity) MatchCredentials(operationID, mac string) error {
-	expected, err := service.operations.CredentialMAC(service.ctx, operationID)
+func (ci *CommandIdentity) MatchCredentials(operationID, mac string) error {
+	expected, err := ci.operations.CredentialMAC(ci.ctx, operationID)
 	if err != nil {
 		return err
 	}

@@ -14,47 +14,47 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (service *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
-	if service.opts.Guest == nil || principal.TenantID == "" || principal.SandboxID != "" || command.Action != "claim" || command.TemplateID == "" || key == "" || len(key) > 256 {
+	if sb.opts.Guest == nil || principal.TenantID == "" || principal.SandboxID != "" || command.Action != "claim" || command.TemplateID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: claim requires tenant authority, template, key and guest effects", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := sb.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
-	admission, err := service.commands.Prepare(command)
+	admission, err := sb.commands.Prepare(command)
 	if err != nil {
 		return empty, err
 	}
-	admission.MAC = service.commands.Identity.CommandMAC(principal, command)
-	if operation, found, err := service.existing(ctx, principal, key, admission); found || err != nil {
+	admission.MAC = sb.commands.Identity.CommandMAC(principal, command)
+	if operation, found, err := sb.existing(ctx, principal, key, admission); found || err != nil {
 		return operation, err
 	}
-	draining := service.availability.IsDraining()
+	draining := sb.availability.IsDraining()
 	if draining {
 		return empty, fmt.Errorf("%w: node is draining", errs.ErrExhausted)
 	}
-	template, err := supply.NewTemplateCatalog(service.store.Database).Owned(ctx, principal.TenantID, command.TemplateID)
+	template, err := supply.NewTemplateCatalog(sb.store.Database).Owned(ctx, principal.TenantID, command.TemplateID)
 	if err != nil {
 		return empty, err
 	}
 	if err = host.CheckConfig(&template.Config); err != nil {
 		return empty, err
 	}
-	if err = service.opts.Backend.Check(ctx, template.Config); err != nil {
+	if err = sb.opts.Backend.Check(ctx, template.Config); err != nil {
 		return empty, err
 	}
-	manifest, err := image.LoadManifest(ctx, service.store.Database, template.Config.Image)
+	manifest, err := image.LoadManifest(ctx, sb.store.Database, template.Config.Image)
 	if err != nil {
 		return empty, err
 	}
-	if err = image.VerifyFiles(manifest, filepath.Join(service.store.Directory, "images", manifest.Digest[7:])); err != nil {
+	if err = image.VerifyFiles(manifest, filepath.Join(sb.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
 	var source *machine.SnapshotSource
 	var frozen []byte
 	if template.SnapshotID != "" {
-		snapshot, err := service.history.LoadRestoreSource(ctx, service.store.Database, principal.TenantID, template.SnapshotID)
+		snapshot, err := sb.history.LoadRestoreSource(ctx, sb.store.Database, principal.TenantID, template.SnapshotID)
 		if err != nil {
 			return empty, err
 		}
@@ -86,7 +86,7 @@ func (service *Sandboxes) AdmitClaim(ctx context.Context, principal authorizatio
 		}, admission.Command})
 	}
 	if source != nil {
-		if warm, found, err := service.warmClaims.Admit(ctx, WarmClaimRequest{
+		if warm, found, err := sb.warmClaims.Admit(ctx, WarmClaimRequest{
 			Principal: principal,
 			Key:       key,
 			Admission: *admission,
@@ -96,7 +96,7 @@ func (service *Sandboxes) AdmitClaim(ctx context.Context, principal authorizatio
 			return warm, err
 		}
 	}
-	return service.provisioning.Admit(ctx, ProvisionAdmission{
+	return sb.provisioning.Admit(ctx, ProvisionAdmission{
 		Request: supply.ProvisionRequest{
 			TenantID: principal.TenantID,
 			Key:      key,

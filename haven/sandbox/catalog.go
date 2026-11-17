@@ -30,15 +30,15 @@ func NewCatalog(database store.DBTX) *Catalog {
 
 // OwnedRecord checks the persisted owner and authenticated visibility before
 // returning the domain record used by admission and transaction proofs.
-func (s *Catalog) OwnedRecord(ctx context.Context, principal authorization.Principal, id string) (ownership.Sandbox, error) {
-	tenant, err := sandboxOwner(ctx, s.database, id)
+func (c *Catalog) OwnedRecord(ctx context.Context, principal authorization.Principal, id string) (ownership.Sandbox, error) {
+	tenant, err := sandboxOwner(ctx, c.database, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ownership.Sandbox{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 		}
 		return ownership.Sandbox{}, err
 	}
-	record, err := LoadSandbox(ctx, s.database, id, tenant)
+	record, err := LoadSandbox(ctx, c.database, id, tenant)
 	if err != nil {
 		return record, err
 	}
@@ -48,25 +48,25 @@ func (s *Catalog) OwnedRecord(ctx context.Context, principal authorization.Princ
 	return record, nil
 }
 
-func (s *Catalog) Get(ctx context.Context, principal authorization.Principal, id string) (View, error) {
-	record, err := s.OwnedRecord(ctx, principal, id)
+func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id string) (View, error) {
+	record, err := c.OwnedRecord(ctx, principal, id)
 	if err != nil {
 		return View{}, err
 	}
 	if record.Identity.TemplateID == "" || record.Identity.Epoch == "" || record.Identity.CreatedAt.IsZero() {
 		return View{}, fmt.Errorf("%w: sandbox birth identity is incomplete", errs.ErrManualRecovery)
 	}
-	settings, err := LoadSettings(ctx, s.database, id)
+	settings, err := LoadSettings(ctx, c.database, id)
 	if err != nil {
 		return View{}, err
 	}
 	state, operationID := record.State, record.OperationID
-	fence, fenceErr := LifecycleFence(ctx, s.database, id)
+	fence, fenceErr := LifecycleFence(ctx, c.database, id)
 	if fenceErr != nil && !errors.Is(fenceErr, sql.ErrNoRows) {
 		return View{}, fenceErr
 	}
 	if fenceErr == nil {
-		lifecycle, lookup := LoadLifecycle(ctx, s.database, fence)
+		lifecycle, lookup := LoadLifecycle(ctx, c.database, fence)
 		if lookup == nil && lifecycle.Status != "succeeded" && lifecycle.Status != "failed" && lifecycle.Input.OwnerTenantID == record.TenantID && lifecycle.Input.Sandbox.ID == id {
 			switch lifecycle.Input.Command.Action {
 			case "rollback":
@@ -108,11 +108,11 @@ func (s *Catalog) Get(ctx context.Context, principal authorization.Principal, id
 	}, nil
 }
 
-func (s *Catalog) List(ctx context.Context, principal authorization.Principal) ([]types.Sandbox, error) {
+func (c *Catalog) List(ctx context.Context, principal authorization.Principal) ([]types.Sandbox, error) {
 	if principal.SandboxID != "" {
 		return nil, fmt.Errorf("%w: tenant access required", errs.ErrConflict)
 	}
-	ids, err := dbgen.New(s.database).ListSandboxIDs(ctx)
+	ids, err := dbgen.New(c.database).ListSandboxIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (s *Catalog) List(ctx context.Context, principal authorization.Principal) (
 		if !principal.Root && item.Tenant != principal.TenantID {
 			continue
 		}
-		value, err := s.Get(ctx, principal, item.ID)
+		value, err := c.Get(ctx, principal, item.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -130,8 +130,8 @@ func (s *Catalog) List(ctx context.Context, principal authorization.Principal) (
 	return out, nil
 }
 
-func (s *Catalog) GetCheckpoint(ctx context.Context, principal authorization.Principal, id string) (Checkpoint, error) {
-	checkpoint, err := LoadCheckpoint(ctx, s.database, id)
+func (c *Catalog) GetCheckpoint(ctx context.Context, principal authorization.Principal, id string) (Checkpoint, error) {
+	checkpoint, err := LoadCheckpoint(ctx, c.database, id)
 	if err != nil {
 		return checkpoint, err
 	}
@@ -141,11 +141,11 @@ func (s *Catalog) GetCheckpoint(ctx context.Context, principal authorization.Pri
 	return checkpoint, nil
 }
 
-func (s *Catalog) Checkpoints(ctx context.Context, principal authorization.Principal) ([]types.Checkpoint, error) {
+func (c *Catalog) Checkpoints(ctx context.Context, principal authorization.Principal) ([]types.Checkpoint, error) {
 	if principal.SandboxID != "" {
 		return nil, fmt.Errorf("%w: tenant access required", errs.ErrConflict)
 	}
-	checkpoints, err := CheckpointInventory(ctx, s.database)
+	checkpoints, err := CheckpointInventory(ctx, c.database)
 	out := make([]types.Checkpoint, 0, len(checkpoints))
 	for _, checkpoint := range checkpoints {
 		if principal.Root || checkpoint.TenantID == principal.TenantID {
@@ -177,8 +177,8 @@ func BoundSubjects(ctx context.Context, query store.DBTX) ([]RunningSubject, err
 	return subjects, nil
 }
 
-func (s *Catalog) Unfenced(ctx context.Context, id string) error {
-	_, err := LifecycleFence(ctx, s.database, id)
+func (c *Catalog) Unfenced(ctx context.Context, id string) error {
+	_, err := LifecycleFence(ctx, c.database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -190,16 +190,16 @@ func (s *Catalog) Unfenced(ctx context.Context, id string) error {
 
 // ResourceForData verifies persisted source and instance readiness for an
 // authorized view. Callers separately check the lease and live runtime state.
-func (s *Catalog) ResourceForData(ctx context.Context, view View) (machine.ResourceStep, error) {
-	record, err := LoadSandbox(ctx, s.database, view.ID, view.TenantID)
+func (c *Catalog) ResourceForData(ctx context.Context, view View) (machine.ResourceStep, error) {
+	record, err := LoadSandbox(ctx, c.database, view.ID, view.TenantID)
 	if err != nil {
 		return machine.ResourceStep{}, err
 	}
-	source, err := machine.LoadResourceStep(ctx, s.database, record.SourceOperation)
+	source, err := machine.LoadResourceStep(ctx, c.database, record.SourceOperation)
 	if err != nil {
 		return source, err
 	}
-	resource, current, owner, err := machine.LoadVM(ctx, s.database, source)
+	resource, current, owner, err := machine.LoadVM(ctx, c.database, source)
 	if err != nil {
 		return source, err
 	}

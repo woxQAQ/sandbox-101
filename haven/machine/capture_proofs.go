@@ -126,11 +126,11 @@ func CaptureBoundaries(step ResourceStep) []loom.CaptureBoundary {
 	return boundaries
 }
 
-func (service *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureStep) (VMRecord, error) {
+func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureStep) (VMRecord, error) {
 	input := step.Input
 	source := input.Source
 	var empty VMRecord
-	if err := service.validateStep(source); err != nil {
+	if err := c.validateStep(source); err != nil {
 		return empty, err
 	}
 	if (source.Action != "cold_start" && source.Action != "clone") || source.Status != "succeeded" || source.State.Witness == "" || source.State.Witness != input.Request.ExpectedInstance || source.State.Witness != source.Input.Resource.Instance || source.State.Observation == nil || source.State.DiskIdentity == nil || source.Input.TenantID != input.Request.TenantID || source.Input.SandboxID != input.Request.SandboxID {
@@ -144,10 +144,10 @@ func (service *Captures) captureProof(ctx context.Context, tx *sql.Tx, step Capt
 		return empty, fmt.Errorf("capture historical source changed")
 	}
 	publication := input.Snapshot
-	if publication.OperationID != step.OperationID || publication.SourceVM != source.Candidate || publication.SourceInstance != source.State.Witness || publication.TenantID != input.Request.TenantID || publication.Dir != filepath.Join(service.store.Directory, "snapshots", publication.ID) || publication.Manifest != nil {
+	if publication.OperationID != step.OperationID || publication.SourceVM != source.Candidate || publication.SourceInstance != source.State.Witness || publication.TenantID != input.Request.TenantID || publication.Dir != filepath.Join(c.store.Directory, "snapshots", publication.ID) || publication.Manifest != nil {
 		return empty, fmt.Errorf("capture destination changed")
 	}
-	sandboxRecord, err := service.ownership.ReadSandbox(ctx, tx, input.Request.SandboxID, input.Request.TenantID)
+	sandboxRecord, err := c.ownership.ReadSandbox(ctx, tx, input.Request.SandboxID, input.Request.TenantID)
 	if err != nil {
 		return empty, err
 	}

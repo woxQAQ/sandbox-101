@@ -68,19 +68,19 @@ func NewImages(state *store.State, dependencies ImageDependencies, options Image
 	}
 }
 
-func (service *Images) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (i *Images) fault(point string) error {
+	if i.faultPoint != nil {
+		return i.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *Images) dispatch(id string) {
-	if service.reviewed {
+func (i *Images) dispatch(id string) {
+	if i.reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	i.workers.Start(id, func() error {
+		handled, err := i.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -93,49 +93,49 @@ func (service *Images) dispatch(id string) {
 
 // Resume selects existing frozen steps, preserving cleanup-before-import order.
 // An absent image step lets the application's dispatcher try its next use case.
-func (service *Images) Resume(id string) (bool, error) {
-	if service.reviewed {
+func (i *Images) Resume(id string) (bool, error) {
+	if i.reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume image effects", errs.ErrManualRecovery)
 	}
-	cleanup, err := loadImageCleanup(service.ctx, service.database, id)
+	cleanup, err := loadImageCleanup(i.ctx, i.database, id)
 	if err == nil {
-		guard := service.guards.ImageCleanup(id)
+		guard := i.guards.ImageCleanup(id)
 		guard.Lock()
 		defer guard.Unlock()
-		cleanup, err = loadImageCleanup(service.ctx, service.database, id)
+		cleanup, err = loadImageCleanup(i.ctx, i.database, id)
 		if err != nil {
 			return true, err
 		}
 		if operation.Terminal(cleanup.Status) {
 			return true, nil
 		}
-		service.guards.Artifacts().Lock()
-		defer service.guards.Artifacts().Unlock()
-		return true, service.runImageCleanup(cleanup)
+		i.guards.Artifacts().Lock()
+		defer i.guards.Artifacts().Unlock()
+		return true, i.runImageCleanup(cleanup)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
-	step, err := loadImageImport(service.ctx, service.database, id)
+	step, err := loadImageImport(i.ctx, i.database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.ImageImport(id)
+	guard := i.guards.ImageImport(id)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = loadImageImport(service.ctx, service.database, id)
+	step, err = loadImageImport(i.ctx, i.database, id)
 	if err != nil {
 		return true, err
 	}
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	service.guards.Artifacts().Lock()
-	defer service.guards.Artifacts().Unlock()
-	return true, service.runImageImport(step)
+	i.guards.Artifacts().Lock()
+	defer i.guards.Artifacts().Unlock()
+	return true, i.runImageImport(step)
 }
 
 func ValidateImageImport(ctx context.Context, database store.DBTX, id string) error {
@@ -150,7 +150,7 @@ func ValidateImageCleanup(ctx context.Context, database store.DBTX, id string) e
 
 // CollectCandidate rechecks the artifact proof frozen by the GC parent before
 // admitting a separately owned collector. Admission repeats current custody checks.
-func (service *Images) CollectCandidate(ctx context.Context, principal authorization.Principal, key string, item types.GCItem) (operation.Record, error) {
+func (i *Images) CollectCandidate(ctx context.Context, principal authorization.Principal, key string, item types.GCItem) (operation.Record, error) {
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return operation.Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
@@ -159,7 +159,7 @@ func (service *Images) CollectCandidate(ctx context.Context, principal authoriza
 	}
 	switch item.Kind {
 	case "image_cache":
-		record, err := loadImageCache(ctx, service.database, item.CacheBuilder, item.CacheDiffID)
+		record, err := loadImageCache(ctx, i.database, item.CacheBuilder, item.CacheDiffID)
 		if err != nil {
 			return operation.Record{}, err
 		}
@@ -171,7 +171,7 @@ func (service *Images) CollectCandidate(ctx context.Context, principal authoriza
 			CacheDiffID:  item.CacheDiffID,
 		}
 	case "image_work":
-		source, err := loadImageImport(ctx, service.database, item.ID)
+		source, err := loadImageImport(ctx, i.database, item.ID)
 		if err != nil {
 			return operation.Record{}, err
 		}
@@ -181,5 +181,5 @@ func (service *Images) CollectCandidate(ctx context.Context, principal authoriza
 	default:
 		return operation.Record{}, fmt.Errorf("%w: unknown image collection kind", errs.ErrInvalid)
 	}
-	return service.AdmitCleanup(ctx, principal, key, request)
+	return i.AdmitCleanup(ctx, principal, key, request)
 }

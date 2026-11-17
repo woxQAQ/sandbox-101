@@ -58,52 +58,52 @@ func NewMaintenance(state *store.State, dependencies MaintenanceDependencies, ro
 	}
 }
 
-func (service *Maintenance) Dispatch(operationID string) {
-	if service.reviewed {
+func (m *Maintenance) Dispatch(operationID string) {
+	if m.reviewed {
 		return
 	}
-	service.workers.Start(operationID, func() error {
-		for _, resume := range service.routes {
+	m.workers.Start(operationID, func() error {
+		for _, resume := range m.routes {
 			if handled, err := resume(operationID); handled || err != nil {
 				return err
 			}
 		}
-		return service.provisioning.Continue(operationID)
+		return m.provisioning.Continue(operationID)
 	})
 }
 
 // Reconcile reads only retained steps; resource directories never establish
 // ownership and another operation service cannot supply missing receipts.
-func (service *Maintenance) Reconcile() error {
-	if service.reviewed {
+func (m *Maintenance) Reconcile() error {
+	if m.reviewed {
 		return nil
 	}
-	pending, err := service.operations.Unfinished(service.workers.Context())
+	pending, err := m.operations.Unfinished(m.workers.Context())
 	if err != nil {
 		return err
 	}
 	for _, operationID := range pending {
-		service.Dispatch(operationID)
+		m.Dispatch(operationID)
 	}
-	return service.plane.ReconcileBindings()
+	return m.plane.ReconcileBindings()
 }
 
-func (service *Maintenance) Maintain(ctx context.Context) error {
-	if service.reviewed {
+func (m *Maintenance) Maintain(ctx context.Context) error {
+	if m.reviewed {
 		return nil
 	}
-	if !service.lifetime.Begin() {
+	if !m.lifetime.Begin() {
 		return fmt.Errorf("%w: sandbox data admission is closed", errs.ErrConflict)
 	}
-	defer service.lifetime.End()
-	if err := service.Reconcile(); err != nil {
+	defer m.lifetime.End()
+	if err := m.Reconcile(); err != nil {
 		return err
 	}
-	if err := service.lifecycle.Reap(ctx); err != nil {
+	if err := m.lifecycle.Reap(ctx); err != nil {
 		return err
 	}
-	if service.availability.IsDraining() {
+	if m.availability.IsDraining() {
 		return nil
 	}
-	return service.supply.RefillReady(ctx)
+	return m.supply.RefillReady(ctx)
 }

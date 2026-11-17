@@ -58,23 +58,23 @@ func NewCaptureCleanup(state *store.State, dependencies CaptureCleanupDependenci
 	}
 }
 
-func (service *CaptureCleanup) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (cc *CaptureCleanup) fault(point string) error {
+	if cc.faultPoint != nil {
+		return cc.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *CaptureCleanup) inspectStoppedGenerations(generations []ResourceStep) error {
-	return InspectStoppedGenerations(service.ctx, service.inspector, generations)
+func (cc *CaptureCleanup) inspectStoppedGenerations(generations []ResourceStep) error {
+	return InspectStoppedGenerations(cc.ctx, cc.inspector, generations)
 }
 
-func (service *CaptureCleanup) dispatch(id string) {
-	if service.store.Reviewed {
+func (cc *CaptureCleanup) dispatch(id string) {
+	if cc.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	cc.workers.Start(id, func() error {
+		handled, err := cc.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -85,8 +85,8 @@ func (service *CaptureCleanup) dispatch(id string) {
 	})
 }
 
-func (service *CaptureCleanup) Resume(id string) (bool, error) {
-	if service.
+func (cc *CaptureCleanup) Resume(id string) (bool, error) {
+	if cc.
 		ownership ==
 		nil {
 		return false,
@@ -96,24 +96,24 @@ func (service *CaptureCleanup) Resume(id string) (bool, error) {
 					ErrManualRecovery)
 	}
 
-	if service.store.Reviewed {
+	if cc.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume raw cleanup", errs.ErrManualRecovery)
 	}
-	step, err := LoadCaptureCleanup(service.ctx, service.store.Database, id)
+	step, err := LoadCaptureCleanup(cc.ctx, cc.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.VM(step.Input.Capture.Input.Source.Candidate)
+	guard := cc.guards.VM(step.Input.Capture.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadCaptureCleanup(service.ctx, service.store.Database, id)
+	step, err = LoadCaptureCleanup(cc.ctx, cc.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runCaptureCleanup(step)
+	return true, cc.runCaptureCleanup(step)
 }
 
 func ValidateCaptureCleanup(ctx context.Context, database store.DBTX, id string) error {
@@ -174,8 +174,8 @@ func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCl
 	return step, nil
 }
 
-func (service *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupRequest, parent ResourceParent) (operation.Record, error) {
-	if service.
+func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupRequest, parent ResourceParent) (operation.Record, error) {
+	if cc.
 		ownership ==
 		nil {
 		return operation.
@@ -196,12 +196,12 @@ func (service *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanup
 		Request CaptureCleanupRequest
 	}{"capture_cleanup", request})
 	hash := operation.Digest(frozen)
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	cc.admission.Lock()
+	defer cc.admission.Unlock()
+	if err := cc.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := cc.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -213,7 +213,7 @@ func (service *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanup
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			cc.dispatch(cached.ID)
 		}
 		return cached, err
 	}
@@ -257,7 +257,7 @@ func (service *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanup
 	if owner != "" || instance != source.State.Witness || currentMachine.Deleting || currentMachine.AgentReady || !currentMachine.Verified {
 		return empty, fmt.Errorf("%w: raw capture source is not stopped and unowned", errs.ErrConflict)
 	}
-	sandbox, err := service.ownership.ReadSandbox(ctx, tx, capture.Input.Request.SandboxID, request.TenantID)
+	sandbox, err := cc.ownership.ReadSandbox(ctx, tx, capture.Input.Request.SandboxID, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -341,21 +341,21 @@ func (service *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanup
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.fault("capture_cleanup_admission_before_commit"); err != nil {
+	if err = cc.fault("capture_cleanup_admission_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = cc.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	cc.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) error {
-	current, err := LoadCaptureCleanup(service.ctx, tx, step.OperationID)
+func (cc *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) error {
+	current, err := LoadCaptureCleanup(cc.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -364,28 +364,28 @@ func (service *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupSt
 	}
 	capture := step.Input.Capture
 	source := capture.Input.Source
-	if err = CaptureCleanupProof(service.ctx, tx, capture, CaptureCleanupTarget{
+	if err = CaptureCleanupProof(cc.ctx, tx, capture, CaptureCleanupTarget{
 		VMID:     source.Candidate,
 		Instance: source.State.Witness,
 		Status:   "transferred",
 	}); err != nil {
 		return err
 	}
-	stopped, err := LoadStop(service.ctx, tx, step.Input.Stop.OperationID)
+	stopped, err := LoadStop(cc.ctx, tx, step.Input.Stop.OperationID)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(stopped, step.Input.Stop) {
 		return fmt.Errorf("raw capture original stop proof changed")
 	}
-	vm, instance, owner, err := LoadVM(service.ctx, tx, source)
+	vm, instance, owner, err := LoadVM(cc.ctx, tx, source)
 	if err != nil {
 		return err
 	}
 	if owner != step.OperationID || instance != source.State.Witness || vm.Deleting || vm.AgentReady {
 		return fmt.Errorf("raw capture current stopped ownership changed")
 	}
-	count, err := quota.New(tx).CountResourceReference(service.ctx, quota.ResourceReference{
+	count, err := quota.New(tx).CountResourceReference(cc.ctx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         source.Candidate,
 		HolderKind: "capture",
@@ -394,7 +394,7 @@ func (service *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupSt
 	if err != nil || count != 1 {
 		return fmt.Errorf("raw capture responsibility missing: %v", err)
 	}
-	projection, err := operation.New(tx).Projection(service.ctx, step.OperationID)
+	projection, err := operation.New(tx).Projection(cc.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -417,24 +417,24 @@ func (service *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupSt
 	return nil
 }
 
-func (service *CaptureCleanup) checkCaptureRaw(step CaptureCleanupStep) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (cc *CaptureCleanup) checkCaptureRaw(step CaptureCleanupStep) error {
+	cc.admission.Lock()
+	defer cc.admission.Unlock()
+	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	return service.captureRawProof(tx, step)
+	return cc.captureRawProof(tx, step)
 }
 
-func (service *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom.DeletionIntent, error) {
+func (cc *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
 	capture := step.Input.Capture
 	raw := capture.State.Boundary.Path
-	body, err := dbgen.New(service.store.Database).GetDeletionReceipt(service.ctx, dbgen.GetDeletionReceiptParams{
+	body, err := dbgen.New(cc.store.Database).GetDeletionReceipt(cc.ctx, dbgen.GetDeletionReceiptParams{
 		Path:        raw,
 		OperationID: step.OperationID,
 		StepKey:     "capture_cleanup",
@@ -452,7 +452,7 @@ func (service *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom
 	if !errors.Is(err, sql.ErrNoRows) || step.Phase != "admitted" {
 		return intent, fmt.Errorf("raw capture durable receipt missing: %w", err)
 	}
-	intent, err = loom.InspectPublishedCaptureRawDeletion(service.ctx, service.store.Directory, loom.CaptureRawDeletionTarget{
+	intent, err = loom.InspectPublishedCaptureRawDeletion(cc.ctx, cc.store.Directory, loom.CaptureRawDeletionTarget{
 		Resource:    capture.Input.Source.Input.Resource,
 		OperationID: capture.OperationID,
 		Boundary:    capture.State.Boundary,
@@ -461,20 +461,20 @@ func (service *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom
 	if err != nil {
 		return intent, err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+	cc.admission.Lock()
+	defer cc.admission.Unlock()
+	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return intent, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.captureRawProof(tx, *step); err != nil {
+	if err = cc.captureRawProof(tx, *step); err != nil {
 		return intent, err
 	}
 
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(service.ctx, dbgen.InsertDeletionReceiptParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(cc.ctx, dbgen.InsertDeletionReceiptParams{
 		Path:        raw,
 		OperationID: step.OperationID,
 		StepKey:     "capture_cleanup",
@@ -482,7 +482,7 @@ func (service *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom
 	})); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(service.ctx, dbgen.BeginPendingStepParams{
+	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(cc.ctx, dbgen.BeginPendingStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "capture_cleanup",
 		InputHash:    step.Hash,
@@ -496,30 +496,30 @@ func (service *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom
 	}
 	step.Phase = "deleting"
 	step.Status = "running"
-	if err = service.store.Checkpoint(); err != nil {
+	if err = cc.store.Checkpoint(); err != nil {
 		return intent, err
 	}
-	return intent, service.fault("capture_cleanup_receipt")
+	return intent, cc.fault("capture_cleanup_receipt")
 }
 
-func (service *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error {
+func (cc *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	if err := service.checkCaptureRaw(step); err != nil {
+	if err := cc.checkCaptureRaw(step); err != nil {
 		return err
 	}
 	source := step.Input.Capture.Input.Source
-	if err := service.inspectStoppedGenerations([]ResourceStep{
+	if err := cc.inspectStoppedGenerations([]ResourceStep{
 		source,
 	}); err != nil {
 		return err
 	}
-	intent, err := service.captureRawReceipt(&step)
+	intent, err := cc.captureRawReceipt(&step)
 	if err != nil {
 		return err
 	}
-	paths, err := loom.ResumeDeletion(service.ctx, service.store.Directory, intent)
+	paths, err := loom.ResumeDeletion(cc.ctx, cc.store.Directory, intent)
 	if err != nil {
 		return err
 	}
@@ -533,51 +533,51 @@ func (service *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error 
 	if err = loom.CheckLocalReaderIdentities(identities); err != nil {
 		return err
 	}
-	if err = service.checkCaptureRaw(step); err != nil {
+	if err = cc.checkCaptureRaw(step); err != nil {
 		return err
 	}
 	for _, path := range paths {
-		if err = loom.RemoveDeletionFile(service.ctx, service.store.Directory, intent, path); err != nil {
+		if err = loom.RemoveDeletionFile(cc.ctx, cc.store.Directory, intent, path); err != nil {
 			return err
 		}
-		if err = service.fault("capture_cleanup_unlinked"); err != nil {
+		if err = cc.fault("capture_cleanup_unlinked"); err != nil {
 			return err
 		}
 	}
-	if err = loom.RemoveDeletionDirectories(service.ctx, service.store.Directory, intent); err != nil {
+	if err = loom.RemoveDeletionDirectories(cc.ctx, cc.store.Directory, intent); err != nil {
 		return err
 	}
 	if err = loom.CheckLocalReaderIdentities(identities); err != nil {
 		return err
 	}
-	if err = service.fault("capture_cleanup_files_removed"); err != nil {
+	if err = cc.fault("capture_cleanup_files_removed"); err != nil {
 		return err
 	}
-	if err = service.inspectStoppedGenerations([]ResourceStep{
+	if err = cc.inspectStoppedGenerations([]ResourceStep{
 		source,
 	}); err != nil {
 		return err
 	}
-	return service.completeCaptureRaw(step, intent)
+	return cc.completeCaptureRaw(step, intent)
 }
 
-func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loom.DeletionIntent) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loom.DeletionIntent) error {
+	cc.admission.Lock()
+	defer cc.admission.Unlock()
+	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = service.captureRawProof(tx, step); err != nil {
+	if err = cc.captureRawProof(tx, step); err != nil {
 		return err
 	}
 	capture := step.Input.Capture
 	source := capture.Input.Source
 	responsibilities := quota.New(tx)
-	if err = responsibilities.RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.RemoveResourceReference(cc.ctx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         source.Candidate,
 		HolderKind: "capture",
@@ -585,7 +585,7 @@ func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, inten
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(service.ctx, quota.ResourceReference{
+	if err = responsibilities.RemoveResourceReference(cc.ctx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "capture",
@@ -594,19 +594,19 @@ func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, inten
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).CompleteTransferredCleanup(service.ctx, dbgen.CompleteTransferredCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteTransferredCleanup(cc.ctx, dbgen.CompleteTransferredCleanupParams{
 		ID:          "capture:" + capture.OperationID,
 		OperationID: capture.OperationID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanup(service.ctx, dbgen.CompletePendingCleanupParams{
+	if err = store.RequireOne(dbgen.New(tx).CompletePendingCleanup(cc.ctx, dbgen.CompletePendingCleanupParams{
 		ID:          "raw:" + step.OperationID,
 		OperationID: step.OperationID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReleaseStoppedOwnership(service.ctx, dbgen.ReleaseStoppedOwnershipParams{
+	if err = store.RequireOne(dbgen.New(tx).ReleaseStoppedOwnership(cc.ctx, dbgen.ReleaseStoppedOwnershipParams{
 		ID:              source.Candidate,
 		CurrentInstance: source.State.Witness,
 		OperationID: sql.NullString{
@@ -616,7 +616,7 @@ func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, inten
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(service.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
+	if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(cc.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
 		Path:        intent.Path,
 		OperationID: step.OperationID,
 		StepKey:     "capture_cleanup",
@@ -624,7 +624,7 @@ func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, inten
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(service.ctx, dbgen.CompleteRunningStepParams{
+	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(cc.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "capture_cleanup",
 		InputHash:    step.Hash,
@@ -633,16 +633,16 @@ func (service *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, inten
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(service.ctx, step.OperationID); err != nil {
+	if err = operations.Complete(cc.ctx, step.OperationID); err != nil {
 		return err
 	}
-	if err = service.fault("capture_cleanup_completion_before_commit"); err != nil {
+	if err = cc.fault("capture_cleanup_completion_before_commit"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return cc.store.Checkpoint()
 }
 
 // CaptureCleanupParentAuthority verifies a frozen rollback's raw capture and

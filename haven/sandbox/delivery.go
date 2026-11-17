@@ -31,11 +31,11 @@ func NewOperationDelivery(database *store.Database, operations *operation.Operat
 
 // PublicOperation authorizes delivery of the original business view. Status and
 // publication share one read snapshot; bearer tokens are derived only on delivery.
-func (s *OperationDelivery) PublicOperation(ctx context.Context, principal authorization.Principal, id string) (types.Operation, error) {
-	if _, err := s.operations.Operation(ctx, principal, id); err != nil {
+func (d *OperationDelivery) PublicOperation(ctx context.Context, principal authorization.Principal, id string) (types.Operation, error) {
+	if _, err := d.operations.Operation(ctx, principal, id); err != nil {
 		return types.Operation{}, err
 	}
-	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{
+	tx, err := d.database.BeginTx(ctx, &sql.TxOptions{
 		ReadOnly: true,
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func (s *OperationDelivery) PublicOperation(ctx context.Context, principal autho
 			if out.Result.Tokens == nil {
 				out.Result.Tokens = make(map[string]string)
 			}
-			out.Result.Tokens[sandbox.ID] = s.authentication.SandboxToken(sandbox.TenantID, sandbox.ID)
+			out.Result.Tokens[sandbox.ID] = d.authentication.SandboxToken(sandbox.TenantID, sandbox.ID)
 		}
 	}
 	return out, nil

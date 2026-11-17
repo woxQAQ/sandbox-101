@@ -137,8 +137,8 @@ func deletePolicyWitness(ctx context.Context, query store.DBTX, policy NetworkPo
 
 // Bind verifies physical policy installation and binds cleanup to the supplied
 // original retirement step. Sandbox validates its configuration before this call.
-func (service *DirectPolicies) Bind(ctx context.Context, step DirectRetirementStep, expected *loom.NetworkPolicy) (func() error, error) {
-	backend, ok := service.backend.(loom.NetworkPolicyBackend)
+func (dp *DirectPolicies) Bind(ctx context.Context, step DirectRetirementStep, expected *loom.NetworkPolicy) (func() error, error) {
+	backend, ok := dp.backend.(loom.NetworkPolicyBackend)
 	if !ok {
 		return nil, fmt.Errorf("%w: direct policy effects unavailable", errs.ErrIncompatible)
 	}
@@ -148,6 +148,6 @@ func (service *DirectPolicies) Bind(ctx context.Context, step DirectRetirementSt
 	return func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return service.retireDirect(cleanupCtx, step.OperationID)
+		return dp.retireDirect(cleanupCtx, step.OperationID)
 	}, nil
 }

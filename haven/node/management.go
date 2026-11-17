@@ -65,21 +65,21 @@ func ReadNodeStatus(ctx context.Context, metadata NodeMetadata) (types.NodeStatu
 	return status, err
 }
 
-func (service *Management) Status(ctx context.Context, principal authorization.Principal) (types.NodeStatus, error) {
+func (m *Management) Status(ctx context.Context, principal authorization.Principal) (types.NodeStatus, error) {
 	if !principal.Root || principal.SandboxID != "" {
 		return types.NodeStatus{}, errs.ErrForbidden
 	}
-	status, err := ReadNodeStatus(ctx, service.metadata)
+	status, err := ReadNodeStatus(ctx, m.metadata)
 	if err != nil {
 		return status, err
 	}
-	status.Draining = service.availability.IsDraining()
+	status.Draining = m.availability.IsDraining()
 	return status, nil
 }
 
 // Drain stops new admission under the shared registration guard.
-func (service *Management) Drain() {
-	service.availability.Drain()
+func (m *Management) Drain() {
+	m.availability.Drain()
 }
 
 func managementOperation(value operation.Record) types.ManagementOperation {
@@ -91,12 +91,12 @@ func managementOperation(value operation.Record) types.ManagementOperation {
 	}
 }
 
-func (service *Management) ManagementOperation(ctx context.Context, principal authorization.Principal, id string) (types.ManagementOperation, error) {
-	value, err := service.operations.GetManagementOperation(ctx, principal, id)
+func (m *Management) ManagementOperation(ctx context.Context, principal authorization.Principal, id string) (types.ManagementOperation, error) {
+	value, err := m.operations.GetManagementOperation(ctx, principal, id)
 	return managementOperation(value), err
 }
 
-func (service *Management) Manage(ctx context.Context, principal authorization.Principal, request types.ManagementRequest) (types.ManagementResponse, error) {
+func (m *Management) Manage(ctx context.Context, principal authorization.Principal, request types.ManagementRequest) (types.ManagementResponse, error) {
 	var response types.ManagementResponse
 	if !principal.Root || principal.SandboxID != "" {
 		return response, errs.ErrForbidden
@@ -108,26 +108,26 @@ func (service *Management) Manage(ctx context.Context, principal authorization.P
 		if request.Import == nil || request.GC != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: import requires only import options", errs.ErrInvalid)
 		}
-		accepted, err = service.images.AdmitImport(ctx, principal, request.Key, imageimport.ImageImportOptions(*request.Import))
+		accepted, err = m.images.AdmitImport(ctx, principal, request.Key, imageimport.ImageImportOptions(*request.Import))
 	case "gc":
 		if request.GC == nil || request.Import != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: gc requires only gc options", errs.ErrInvalid)
 		}
-		report, err := service.collector.Collect(ctx, principal, request.Key, *request.GC)
+		report, err := m.collector.Collect(ctx, principal, request.Key, *request.GC)
 		response.GC = &report
 		return response, err
 	case "supply_cleanup":
 		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: supply cleanup requires only original operation id", errs.ErrInvalid)
 		}
-		accepted, err = service.supplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
+		accepted, err = m.supplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
 			OperationID: request.OperationID,
 		})
 	case "image_cleanup":
 		if request.Import != nil || request.GC != nil {
 			return response, fmt.Errorf("%w: image cleanup accepts only original import or cache identity", errs.ErrInvalid)
 		}
-		accepted, err = service.images.AdmitCleanup(ctx, principal, request.Key, image.ImageCleanupRequest{
+		accepted, err = m.images.AdmitCleanup(ctx, principal, request.Key, image.ImageCleanupRequest{
 			ImportOperationID: request.OperationID,
 			CacheBuilder:      request.CacheBuilder,
 			CacheDiffID:       request.CacheDiffID,
@@ -142,7 +142,7 @@ func (service *Management) Manage(ctx context.Context, principal authorization.P
 	if err != nil {
 		return response, err
 	}
-	accepted, err = service.operations.WaitManagement(ctx, principal, accepted.ID)
+	accepted, err = m.operations.WaitManagement(ctx, principal, accepted.ID)
 	view := managementOperation(accepted)
 	response.Operation = &view
 	if err != nil && accepted.Status == "failed" {

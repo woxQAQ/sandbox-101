@@ -79,23 +79,23 @@ func NewCaptures(state *store.State, dependencies CapturesDependencies, options 
 	}
 }
 
-func (service *Captures) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (c *Captures) fault(point string) error {
+	if c.faultPoint != nil {
+		return c.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *Captures) validateStep(step ResourceStep) error {
-	return ValidateResourceStep(service.store.Directory, step)
+func (c *Captures) validateStep(step ResourceStep) error {
+	return ValidateResourceStep(c.store.Directory, step)
 }
 
-func (service *Captures) dispatch(id string) {
-	if service.store.Reviewed {
+func (c *Captures) dispatch(id string) {
+	if c.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		handled, err := service.Resume(id)
+	c.workers.Start(id, func() error {
+		handled, err := c.Resume(id)
 		if err != nil {
 			return err
 		}
@@ -106,8 +106,8 @@ func (service *Captures) dispatch(id string) {
 	})
 }
 
-func (service *Captures) Resume(id string) (bool, error) {
-	if service.
+func (c *Captures) Resume(id string) (bool, error) {
+	if c.
 		ownership ==
 		nil {
 		return false,
@@ -117,24 +117,24 @@ func (service *Captures) Resume(id string) (bool, error) {
 			)
 	}
 
-	if service.store.Reviewed {
+	if c.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume capture", errs.ErrManualRecovery)
 	}
-	step, err := LoadCapture(service.ctx, service.store.Database, id)
+	step, err := LoadCapture(c.ctx, c.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.VM(step.Input.Source.Candidate)
+	guard := c.guards.VM(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
-	step, err = LoadCapture(service.ctx, service.store.Database, id)
+	step, err = LoadCapture(c.ctx, c.store.Database, id)
 	if err != nil {
 		return true, err
 	}
-	return true, service.runCapture(step)
+	return true, c.runCapture(step)
 }
 
 type CaptureRequest struct {

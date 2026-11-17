@@ -100,16 +100,16 @@ func CompleteDirectReplacement(ctx context.Context, tx *sql.Tx, replacement Dire
 	}))
 }
 
-func (service *DirectPolicies) retireDirect(ctx context.Context, operationID string) error {
-	step, err := LoadDirectRetirement(ctx, service.store.Database, operationID)
+func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) error {
+	step, err := LoadDirectRetirement(ctx, dp.store.Database, operationID)
 	if err != nil {
 		return err
 	}
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	service.admission.Lock()
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	dp.admission.Lock()
+	tx, err := dp.store.Database.BeginTx(ctx, nil)
 	if err == nil {
 		current, lookup := LoadDirectRetirement(ctx, tx, operationID)
 		err = lookup
@@ -118,7 +118,7 @@ func (service *DirectPolicies) retireDirect(ctx context.Context, operationID str
 		}
 		source := step.Input.Source
 		if err == nil {
-			err = service.proofs.VerifyGeneration(ctx, tx, source)
+			err = dp.proofs.VerifyGeneration(ctx, tx, source)
 		}
 		if err == nil {
 			currentMachine, instance, owner, lookup := LoadVM(ctx, tx, source)
@@ -166,18 +166,18 @@ func (service *DirectPolicies) retireDirect(ctx context.Context, operationID str
 			err = errors.Join(err, tx.Rollback())
 		}
 	}
-	service.admission.Unlock()
+	dp.admission.Unlock()
 	if err != nil {
 		return err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = dp.store.Checkpoint(); err != nil {
 		return err
 	}
 	resource := step.Input.Source.Input.Resource
-	if err = service.backend.Network(ctx, resource, false); err != nil {
+	if err = dp.backend.Network(ctx, resource, false); err != nil {
 		return err
 	}
-	backend, ok := service.backend.(loom.NetworkPolicyBackend)
+	backend, ok := dp.backend.(loom.NetworkPolicyBackend)
 	if !ok {
 		return fmt.Errorf("%w: direct policy effects unavailable", errs.ErrIncompatible)
 	}
@@ -187,19 +187,19 @@ func (service *DirectPolicies) retireDirect(ctx context.Context, operationID str
 	if err = backend.VerifyNetworkPolicy(ctx, resource, nil); err != nil {
 		return err
 	}
-	observation, err := service.backend.Inspect(ctx, resource)
+	observation, err := dp.backend.Inspect(ctx, resource)
 	if err != nil {
 		return err
 	}
 	if observation.Network {
 		return fmt.Errorf("%w: direct retirement network-off unconfirmed", errs.ErrUnknown)
 	}
-	if err = service.fault("direct_retirement_effect"); err != nil {
+	if err = dp.fault("direct_retirement_effect"); err != nil {
 		return err
 	}
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err = service.store.Database.BeginTx(ctx, nil)
+	dp.admission.Lock()
+	defer dp.admission.Unlock()
+	tx, err = dp.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func (service *DirectPolicies) retireDirect(ctx context.Context, operationID str
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return service.store.Checkpoint()
+	return dp.store.Checkpoint()
 }
 
 func retireDirectGenerations(ctx context.Context, tx *sql.Tx, generations []ResourceStep, retirement string) error {

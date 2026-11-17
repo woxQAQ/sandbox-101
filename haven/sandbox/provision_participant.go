@@ -56,17 +56,17 @@ func (ProvisionHandoff) BlockActivation(ctx context.Context, tx *sql.Tx, id stri
 
 // AdmitIn joins resource intent and all charges to the caller's transaction.
 // A batch commits every destination before dispatching any effect.
-func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
+func (p *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
 	var empty operation.Record
 	request := admission.Request
 	tenantID, frozen := request.TenantID, request.Frozen
 	hash := operation.Digest(frozen)
 	selected, manifest, restore := request.Template, request.Image, request.Restore
 	claim, target := admission.Claim, admission.Target
-	if err := service.verifyProvisionSources(ctx, tx, admission); err != nil {
+	if err := p.verifyProvisionSources(ctx, tx, admission); err != nil {
 		return empty, err
 	}
-	allocation, err := service.checkProvisionBudget(ctx, tx, admission, free)
+	allocation, err := p.checkProvisionBudget(ctx, tx, admission, free)
 	if err != nil {
 		return empty, err
 	}
@@ -100,10 +100,10 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admissio
 		Slot:         slot,
 		NetworkToken: operation.NewID("net-"),
 	}
-	resource.Dir = filepath.Join(service.store.Directory, "vms", resource.VMID)
+	resource.Dir = filepath.Join(p.store.Directory, "vms", resource.VMID)
 	resource.Disk = filepath.Join(resource.Dir, "disks", accepted.ID+".raw")
 	resource.RunDir = filepath.Join(resource.Dir, "runs", resource.Instance)
-	resource.ImageDir = filepath.Join(service.store.Directory, "images", resource.Config.Image[7:])
+	resource.ImageDir = filepath.Join(p.store.Directory, "images", resource.Config.Image[7:])
 	action := "cold_start"
 	if restore != nil {
 		action = "clone"
@@ -334,7 +334,7 @@ func (service *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admissio
 		activation = target.Activation
 	}
 	if activation != nil {
-		if err = service.activations.AdmitIn(tx, accepted, input, *activation); err != nil {
+		if err = p.activations.AdmitIn(tx, accepted, input, *activation); err != nil {
 			return empty, err
 		}
 	}

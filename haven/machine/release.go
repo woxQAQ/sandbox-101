@@ -18,23 +18,23 @@ import (
 // AdmitRelease revokes the logical sandbox and gives cleanup an independent
 // intent. An immutable successful source witness is required; unresolved or
 // failed generation attempts retain their responsibility for review.
-func (service *VMDeletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.Record, error) {
-	if service.
+func (d *VMDeletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.Record, error) {
+	if d.
 		ownership ==
-		nil || service.handoff ==
+		nil || d.handoff ==
 		nil ||
-		service.
+		d.
 			usage == nil {
 		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
 
-	return service.AdmitReleaseForParent(ctx, request, nil)
+	return d.AdmitReleaseForParent(ctx, request, nil)
 }
 
-func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
-	if service.ownership == nil || service.handoff == nil || service.usage == nil {
+func (d *VMDeletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
+	if d.ownership == nil || d.handoff == nil || d.usage == nil {
 		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
@@ -49,13 +49,13 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 		Request ReleaseRequest
 	}{"release", request})
 	hash := operation.Digest(frozen)
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	closing := service.lifetime.Closing() || service.store.Reviewed
+	d.admission.Lock()
+	defer d.admission.Unlock()
+	closing := d.lifetime.Closing() || d.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := d.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -68,11 +68,11 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 		ID:   request.TenantID,
 	}, request.Key, hash); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
-			service.dispatch(cached.ID)
+			d.dispatch(cached.ID)
 		}
 		return cached, err
 	}
-	record, err := service.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
+	record, err := d.ownership.ReadSandbox(ctx, tx, request.SandboxID, request.TenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, fmt.Errorf("%w: sandbox not found", errs.ErrNotFound)
 	}
@@ -89,7 +89,7 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	if err != nil {
 		return empty, err
 	}
-	if err = service.validateStep(source); err != nil {
+	if err = d.validateStep(source); err != nil {
 		return empty, err
 	}
 	if (source.Action != "cold_start" && source.Action != "clone" && source.Action != "restore") || source.Status != "succeeded" || source.State.Phase != "complete" || source.State.Observation == nil || source.State.DiskIdentity == nil || source.State.Witness == "" || source.State.Witness != record.Instance || source.State.Witness != source.Input.Resource.Instance || source.Input.SandboxID != record.ID || source.Input.TenantID != record.TenantID || source.Candidate != record.VMID {
@@ -118,7 +118,7 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	if err != nil {
 		return empty, err
 	}
-	warm, err := service.usage.VMUsers(ctx, tx, record.VMID)
+	warm, err := d.usage.VMUsers(ctx, tx, record.VMID)
 	if err != nil {
 		return empty, err
 	}
@@ -126,14 +126,14 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	if err != nil {
 		return empty, err
 	}
-	generations, err := service.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
+	generations, err := d.proofs.CleanupGenerations(ctx, tx, source, quota.Holder{
 		Kind: "active_use",
 		ID:   "sandbox:" + record.ID,
 	})
 	if err != nil {
 		return empty, err
 	}
-	if err = service.proofs.VerifyGeneration(ctx, tx, source); err != nil {
+	if err = d.proofs.VerifyGeneration(ctx, tx, source); err != nil {
 		return empty, err
 	}
 	if err = CheckGenerationCounts(ctx, tx, source, generations); err != nil {
@@ -151,7 +151,7 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 			VMID:      record.VMID,
 		},
 	}
-	budget, err := service.ownership.CurrentSlotBudget(ctx, tx, record, source)
+	budget, err := d.ownership.CurrentSlotBudget(ctx, tx, record, source)
 	if err != nil {
 		return empty, err
 	}
@@ -216,7 +216,7 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
+	if err = d.handoff.TerminateSandbox(ctx, tx, SandboxTermination{
 		Sandbox:     record,
 		OperationID: accepted.ID,
 		TenantID:    record.TenantID,
@@ -296,25 +296,25 @@ func (service *VMDeletion) AdmitReleaseForParent(ctx context.Context, request Re
 			return empty, err
 		}
 	}
-	if err = service.fault("release_before_commit"); err != nil {
+	if err = d.fault("release_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = d.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	if err = service.store.Checkpoint(); err != nil {
+	if err = d.store.Checkpoint(); err != nil {
 		return accepted, err
 	}
-	if err = service.fault("release_admitted"); err != nil {
+	if err = d.fault("release_admitted"); err != nil {
 		return accepted, err
 	}
-	service.dispatch(accepted.ID)
+	d.dispatch(accepted.ID)
 	return accepted, nil
 }
 
-func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error) {
+func (d *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error) {
 	queries := dbgen.New(tx)
-	source, err := LoadResourceStep(service.ctx, tx, step.Input.SourceOperation)
+	source, err := LoadResourceStep(d.ctx, tx, step.Input.SourceOperation)
 	if err != nil {
 		return VMRecord{}, err
 	}
@@ -329,24 +329,24 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	expected.SlotDestination = step.Input.SlotDestination
 	expected.SlotBudget = step.Input.SlotBudget
 	expected.SlotAssignment = step.Input.SlotAssignment
-	if err = service.ownership.VerifyReleaseDestination(service.ctx, tx, step); err != nil {
+	if err = d.ownership.VerifyReleaseDestination(d.ctx, tx, step); err != nil {
 		return VMRecord{}, err
 	}
 	if !reflect.DeepEqual(expected, step.Input) {
 		return VMRecord{}, fmt.Errorf("release input differs from its frozen source")
 	}
-	currentMachine, instance, owner, err := LoadVM(service.ctx, tx, step)
+	currentMachine, instance, owner, err := LoadVM(d.ctx, tx, step)
 	if err != nil {
 		return currentMachine, err
 	}
 	if !currentMachine.Deleting || owner != step.OperationID || instance != step.ExpectedInstance {
 		return currentMachine, fmt.Errorf("release lost current instance ownership")
 	}
-	record, err := service.ownership.ReadSandbox(service.ctx, tx, step.Input.SandboxID, step.Input.TenantID)
+	record, err := d.ownership.ReadSandbox(d.ctx, tx, step.Input.SandboxID, step.Input.TenantID)
 	if err != nil {
 		return currentMachine, err
 	}
-	budget, budgetErr := service.ownership.CurrentSlotBudget(service.ctx, tx, record, source)
+	budget, budgetErr := d.ownership.CurrentSlotBudget(d.ctx, tx, record, source)
 	if budgetErr != nil {
 		return VMRecord{}, budgetErr
 	}
@@ -357,7 +357,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 		return currentMachine, fmt.Errorf("release cleanup destination changed")
 	}
 	operations := operation.New(tx)
-	cleanup, err := dbgen.New(tx).GetPendingCleanupBody(service.ctx, dbgen.GetPendingCleanupBodyParams{
+	cleanup, err := dbgen.New(tx).GetPendingCleanupBody(d.ctx, dbgen.GetPendingCleanupBodyParams{
 		ID:          "cleanup:" + step.OperationID,
 		OperationID: step.OperationID,
 	})
@@ -367,7 +367,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	if string(cleanup) != string(operation.Encode(step.Input)) {
 		return currentMachine, fmt.Errorf("cleanup frozen input changed")
 	}
-	projection, err := operations.Projection(service.ctx, step.OperationID)
+	projection, err := operations.Projection(d.ctx, step.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}
@@ -387,10 +387,10 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	if operation.Digest(request) != requestHash || kind != "tenant" || tenant != step.Input.TenantID || operation.Terminal(status) || frozen.Action != "release" || frozen.Request.TenantID != tenant || frozen.Request.SandboxID != record.ID || result.SandboxID != record.ID || result.VMID != step.Candidate {
 		return currentMachine, fmt.Errorf("release operation identity changed")
 	}
-	if err = service.validateStep(source); err != nil {
+	if err = d.validateStep(source); err != nil {
 		return currentMachine, err
 	}
-	retained, err := queries.GetRetainedVersion(service.ctx, dbgen.GetRetainedVersionParams{
+	retained, err := queries.GetRetainedVersion(d.ctx, dbgen.GetRetainedVersionParams{
 		VmID: step.Candidate,
 		ID:   source.OperationID,
 	})
@@ -407,7 +407,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	}) {
 		return currentMachine, fmt.Errorf("release resource version birth proof changed")
 	}
-	birth, err := queries.GetRetainedInstance(service.ctx, dbgen.GetRetainedInstanceParams{
+	birth, err := queries.GetRetainedInstance(d.ctx, dbgen.GetRetainedInstanceParams{
 		ID:   step.ExpectedInstance,
 		VmID: step.Candidate,
 	})
@@ -421,17 +421,17 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	if birth.OperationID != source.OperationID || !historical.Verified || !historical.AgentReady || historical.Deleting || !reflect.DeepEqual(historical.Resource, source.Input.Resource) || !reflect.DeepEqual(historical.Observation, source.State.Observation) {
 		return currentMachine, fmt.Errorf("release instance birth proof changed")
 	}
-	if err = CheckTransferredCaptures(service.ctx, tx, step); err != nil {
+	if err = CheckTransferredCaptures(d.ctx, tx, step); err != nil {
 		return currentMachine, err
 	}
-	generations, err := service.proofs.CleanupGenerations(service.ctx, tx, source, quota.Holder{
+	generations, err := d.proofs.CleanupGenerations(d.ctx, tx, source, quota.Holder{
 		Kind: "cleanup",
 		ID:   step.OperationID + ":resource",
 	})
 	if err != nil {
 		return currentMachine, err
 	}
-	if err = CheckGenerationCounts(service.ctx, tx, source, generations); err != nil {
+	if err = CheckGenerationCounts(d.ctx, tx, source, generations); err != nil {
 		return currentMachine, err
 	}
 	shape := step.Input.Resource.Config.Shape
@@ -443,7 +443,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 		}
 	}
 	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountMatchingReservation(service.ctx, quota.Reservation{
+	if count, err := responsibilities.CountMatchingReservation(d.ctx, quota.Reservation{
 		Owner:     "vm:" + step.Candidate,
 		Bytes:     vmBytes,
 		MemoryMiB: shape.MemoryMiB + 128,
@@ -453,16 +453,16 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	}
 	checks := []func() (int64, error){
 		func() (int64, error) {
-			return dbgen.New(tx).CountUnfinishedCleanupResource(service.ctx, dbgen.CountUnfinishedCleanupResourceParams{
+			return dbgen.New(tx).CountUnfinishedCleanupResource(d.ctx, dbgen.CountUnfinishedCleanupResourceParams{
 				ResourceKind: "vm",
 				ResourceID:   step.Candidate,
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceHolders(service.ctx, "vm", step.Candidate)
+			return responsibilities.CountResourceHolders(d.ctx, "vm", step.Candidate)
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(service.ctx, quota.ResourceReference{
+			return responsibilities.CountResourceReference(d.ctx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         step.Candidate,
 				HolderKind: "cleanup",
@@ -470,7 +470,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(service.ctx, quota.ResourceReference{
+			return responsibilities.CountResourceReference(d.ctx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         step.Input.Resource.Config.Image,
 				HolderKind: "vm",
@@ -478,7 +478,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountMatchingCost(service.ctx, quota.Cost{
+			return responsibilities.CountMatchingCost(d.ctx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        tenant,
 					Kind:            "vm_disk",
@@ -489,7 +489,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountMatchingCost(service.ctx, quota.Cost{
+			return responsibilities.CountMatchingCost(d.ctx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        tenant,
 					Kind:            step.Input.SlotBudget.Kind,
@@ -509,10 +509,10 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 	} {
 		checks = append(checks,
 			func() (int64, error) {
-				return responsibilities.CountTenantCostHolders(service.ctx, tenant, charge.kind, charge.key)
+				return responsibilities.CountTenantCostHolders(d.ctx, tenant, charge.kind, charge.key)
 			},
 			func() (int64, error) {
-				return responsibilities.CountCostReference(service.ctx, quota.CostReference{
+				return responsibilities.CountCostReference(d.ctx, quota.CostReference{
 					TenantID:   tenant,
 					Kind:       charge.kind,
 					Key:        charge.key,
@@ -522,13 +522,13 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 			},
 		)
 	}
-	if count, err := queries.CountInstances(service.ctx, step.Candidate); err != nil || count != int64(len(generations)) {
+	if count, err := queries.CountInstances(d.ctx, step.Candidate); err != nil || count != int64(len(generations)) {
 		return currentMachine, fmt.Errorf("release responsibility proof changed: %v", err)
 	}
-	if count, err := queries.CountVersions(service.ctx, step.Candidate); err != nil || count != int64(len(generations)) {
+	if count, err := queries.CountVersions(d.ctx, step.Candidate); err != nil || count != int64(len(generations)) {
 		return currentMachine, fmt.Errorf("release responsibility proof changed: %v", err)
 	}
-	if count, err := dbgen.New(tx).CountVMBackings(service.ctx, step.Candidate); err != nil || count != int64(expectedBacking) {
+	if count, err := dbgen.New(tx).CountVMBackings(d.ctx, step.Candidate); err != nil || count != int64(expectedBacking) {
 		return currentMachine, fmt.Errorf("release responsibility proof changed: %v", err)
 	}
 	for _, check := range checks {
@@ -536,7 +536,7 @@ func (service *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord
 			return currentMachine, fmt.Errorf("release responsibility proof changed: %v", err)
 		}
 	}
-	warm, err := service.usage.VMUsers(service.ctx, tx, step.Candidate)
+	warm, err := d.usage.VMUsers(d.ctx, tx, step.Candidate)
 	if err != nil || warm != 0 {
 		return currentMachine, fmt.Errorf("release responsibility proof changed: %v", err)
 	}

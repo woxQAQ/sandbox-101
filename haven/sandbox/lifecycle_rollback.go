@@ -17,59 +17,59 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (service *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if command.Action != "rollback" || command.SandboxID == "" || command.CheckpointID == "" || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: rollback requires tenant authority, sandbox, checkpoint and key", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
-	mac := service.commands.Identity.CommandMAC(principal, command)
-	if accepted, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+	mac := l.commands.Identity.CommandMAC(principal, command)
+	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return accepted, err
 	}
-	guard := service.guards.Configuration(command.SandboxID)
+	guard := l.guards.Configuration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	current, err := service.catalog.OwnedRecord(ctx, principal, command.SandboxID)
+	current, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 	if err != nil {
 		return empty, err
 	}
 	if current.State != "running" && current.State != "paused" {
 		return empty, fmt.Errorf("%w: rollback requires running or paused sandbox", errs.ErrConflict)
 	}
-	checkpoint, err := service.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
+	checkpoint, err := l.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
 	if err != nil {
 		return empty, err
 	}
 	if checkpoint.SandboxID != current.ID || checkpoint.TenantID != current.TenantID {
 		return empty, fmt.Errorf("%w: rollback checkpoint differs from sandbox owner", errs.ErrConflict)
 	}
-	snapshot, err := service.proofs.Snapshots().LoadRestoreSource(ctx, service.store.Database, current.TenantID, checkpoint.SnapshotID)
+	snapshot, err := l.proofs.Snapshots().LoadRestoreSource(ctx, l.store.Database, current.TenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
 	if err = machine.VerifyRestoreSourceFiles(snapshot); err != nil {
 		return empty, err
 	}
-	settings, err := LoadSettings(ctx, service.store.Database, current.ID)
+	settings, err := LoadSettings(ctx, l.store.Database, current.ID)
 	if err != nil {
 		return empty, err
 	}
-	source, err := machine.LoadResourceStep(ctx, service.store.Database, current.SourceOperation)
+	source, err := machine.LoadResourceStep(ctx, l.store.Database, current.SourceOperation)
 	if err != nil {
 		return empty, err
 	}
 	if string(operation.Encode(source.Input.Resource.Config)) != string(operation.Encode(snapshot.Snapshot.Manifest.Config)) {
 		return empty, fmt.Errorf("%w: rollback shape/image differs from sandbox", errs.ErrConflict)
 	}
-	if current.State == "running" && service.commands.CredentialsMissing(current.ID, settings) {
+	if current.State == "running" && l.commands.CredentialsMissing(current.ID, settings) {
 		return empty, fmt.Errorf("%w: host credentials must be supplied again before rollback", errs.ErrConflict)
 	}
-	rawCaptures, err := machine.PendingPublishedCaptures(ctx, service.store.Database, source)
+	rawCaptures, err := machine.PendingPublishedCaptures(ctx, l.store.Database, source)
 	if err != nil {
 		return empty, err
 	}
@@ -103,16 +103,16 @@ func (service *Lifecycle) AdmitRollback(ctx context.Context, principal authoriza
 		},
 	}
 	if current.State == "paused" {
-		return service.admitPausedRollback(ctx, parent, input, mac)
+		return l.admitPausedRollback(ctx, parent, input, mac)
 	}
 	admission := &LifecycleAdmission{
-		History: service.proofs.Snapshots(),
+		History: l.proofs.Snapshots(),
 		Parent:  parent,
 		Input:   input,
 		MAC:     mac,
 		Role:    "stop",
 	}
-	child, err := service.stops.AdmitForParent(ctx, machine.StopRequest{
+	child, err := l.stops.AdmitForParent(ctx, machine.StopRequest{
 		TenantID:         current.TenantID,
 		Key:              parent.ID + ":stop",
 		SandboxID:        current.ID,
@@ -121,26 +121,26 @@ func (service *Lifecycle) AdmitRollback(ctx context.Context, principal authoriza
 	if child.ID == "" {
 		return empty, err
 	}
-	service.registry.StageSandboxSecrets(parent.ID, current.ID)
+	l.registry.StageSandboxSecrets(parent.ID, current.ID)
 	if err != nil {
 		return parent, err
 	}
-	service.registry.CloseSandboxConnections(current.ID)
-	if err = service.activations.RevokeSandbox(current.ID); err != nil {
+	l.registry.CloseSandboxConnections(current.ID)
+	if err = l.activations.RevokeSandbox(current.ID); err != nil {
 		return parent, err
 	}
-	service.dispatch(parent.ID)
+	l.dispatch(parent.ID)
 	return parent, nil
 }
 
-func (service *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
+func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
 	var empty operation.Record
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := l.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -172,7 +172,7 @@ func (service *Lifecycle) admitPausedRollback(ctx context.Context, parent operat
 	if !reflect.DeepEqual(checkpoint, input.Rollback.Checkpoint) {
 		return empty, fmt.Errorf("%w: paused rollback checkpoint changed", errs.ErrConflict)
 	}
-	source, err := service.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
+	source, err := l.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -272,34 +272,34 @@ func (service *Lifecycle) admitPausedRollback(ctx context.Context, parent operat
 			return empty, err
 		}
 	}
-	if err = service.fault("paused_rollback_before_commit"); err != nil {
+	if err = l.fault("paused_rollback_before_commit"); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
 	parent.Status = "succeeded"
-	return parent, service.store.Checkpoint()
+	return parent, l.store.Checkpoint()
 }
 
-func (service *Lifecycle) runRollback(step LifecycleStep) error {
-	stopped, err := service.runResourceLink(step.OperationID, "stop")
+func (l *Lifecycle) runRollback(step LifecycleStep) error {
+	stopped, err := l.runResourceLink(step.OperationID, "stop")
 	if err != nil {
 		return err
 	}
-	if err = service.cleanupRollbackCaptures(step, stopped.ChildID); err != nil {
+	if err = l.cleanupRollbackCaptures(step, stopped.ChildID); err != nil {
 		return err
 	}
-	if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, "restore"); errors.Is(lookup, sql.ErrNoRows) {
+	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "restore"); errors.Is(lookup, sql.ErrNoRows) {
 		link := &LifecycleAdmission{
-			History: service.proofs.Snapshots(),
+			History: l.proofs.Snapshots(),
 			Parent: operation.Record{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
 			Role:  "restore",
 		}
-		_, err = service.provisioning.AdmitRestoreWithParent(service.ctx, machine.RestoreRequest{
+		_, err = l.provisioning.AdmitRestoreWithParent(l.ctx, machine.RestoreRequest{
 			TenantID:         step.Input.OwnerTenantID,
 			Key:              step.OperationID + ":restore",
 			SandboxID:        step.Input.Sandbox.ID,
@@ -313,36 +313,36 @@ func (service *Lifecycle) runRollback(step LifecycleStep) error {
 	} else if lookup != nil {
 		return lookup
 	}
-	restored, err := service.runResourceLink(step.OperationID, "restore")
+	restored, err := l.runResourceLink(step.OperationID, "restore")
 	if err != nil {
 		return err
 	}
-	child, err := machine.LoadResourceStep(service.ctx, service.store.Database, restored.ChildID)
+	child, err := machine.LoadResourceStep(l.ctx, l.store.Database, restored.ChildID)
 	if err != nil {
 		return err
 	}
-	if err = service.restoreActivation(step, child); err != nil {
+	if err = l.restoreActivation(step, child); err != nil {
 		return err
 	}
-	lock := service.guards.VM(child.Candidate)
+	lock := l.guards.VM(child.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
-	return service.activations.Continue(step.OperationID)
+	return l.activations.Continue(step.OperationID)
 }
 
-func (service *Lifecycle) cleanupRollbackCaptures(step LifecycleStep, stop string) error {
+func (l *Lifecycle) cleanupRollbackCaptures(step LifecycleStep, stop string) error {
 	for _, ref := range step.Input.Rollback.RawCaptures {
 		role := "raw:" + ref.OperationID
-		if _, _, lookup := machine.LoadResourceLink(service.ctx, service.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
+		if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
 			link := &LifecycleAdmission{
-				History: service.proofs.Snapshots(),
+				History: l.proofs.Snapshots(),
 				Parent: operation.Record{
 					ID: step.OperationID,
 				},
 				Input: step.Input,
 				Role:  role,
 			}
-			if _, err := service.captureCleanup.Admit(service.ctx, machine.CaptureCleanupRequest{
+			if _, err := l.captureCleanup.Admit(l.ctx, machine.CaptureCleanupRequest{
 				TenantID:           step.Input.OwnerTenantID,
 				Key:                step.OperationID + ":" + role,
 				CaptureOperationID: ref.OperationID,
@@ -353,7 +353,7 @@ func (service *Lifecycle) cleanupRollbackCaptures(step LifecycleStep, stop strin
 		} else if lookup != nil {
 			return lookup
 		}
-		if _, err := service.runResourceLink(step.OperationID, role); err != nil {
+		if _, err := l.runResourceLink(step.OperationID, role); err != nil {
 			return err
 		}
 	}

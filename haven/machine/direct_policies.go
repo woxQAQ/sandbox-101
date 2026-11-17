@@ -58,18 +58,18 @@ func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependenci
 	}
 }
 
-func (service *DirectPolicies) fault(point string) error {
-	if service.faultPoint != nil {
-		return service.faultPoint(point)
+func (dp *DirectPolicies) fault(point string) error {
+	if dp.faultPoint != nil {
+		return dp.faultPoint(point)
 	}
 	return nil
 }
 
-func (service *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
-	if service.store.Reviewed {
+func (dp *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
+	if dp.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume direct retirement", errs.ErrManualRecovery)
 	}
-	step, err := LoadDirectRetirement(ctx, service.store.Database, id)
+	step, err := LoadDirectRetirement(ctx, dp.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -79,8 +79,8 @@ func (service *DirectPolicies) Resume(ctx context.Context, id string) (bool, err
 	if operation.Terminal(step.Status) || step.State.Phase != "pending" {
 		return false, nil
 	}
-	guard := service.guards.Configuration(step.Input.Source.Input.SandboxID)
+	guard := dp.guards.Configuration(step.Input.Source.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	return true, service.retireDirect(ctx, id)
+	return true, dp.retireDirect(ctx, id)
 }

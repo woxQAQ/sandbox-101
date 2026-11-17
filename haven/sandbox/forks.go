@@ -112,87 +112,87 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 	}
 }
 
-func (service *Forks) fault(point string) error {
-	if service.opts.Fault != nil {
-		return service.opts.Fault(point)
+func (f *Forks) fault(point string) error {
+	if f.opts.Fault != nil {
+		return f.opts.Fault(point)
 	}
 	return nil
 }
 
-func (service *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := service.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (f *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
+	accepted, found, err := f.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
 	if found && err == nil && !operation.Terminal(accepted.Status) {
-		service.dispatch(accepted.ID)
+		f.dispatch(accepted.ID)
 	}
 	return accepted, found, err
 }
 
-func (service *Forks) dispatch(id string) {
-	if service.store.Reviewed {
+func (f *Forks) dispatch(id string) {
+	if f.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	f.workers.Start(id, func() error {
+		if handled, err := f.policies.Resume(f.ctx, id); handled || err != nil {
 			return err
 		}
-		_, err := service.Resume(id)
+		_, err := f.Resume(id)
 		return err
 	})
 }
 
-func (service *Forks) dispatchBranch(id string) {
-	if service.store.Reviewed {
+func (f *Forks) dispatchBranch(id string) {
+	if f.store.Reviewed {
 		return
 	}
-	service.workers.Start(id, func() error {
-		if handled, err := service.policies.Resume(service.ctx, id); handled || err != nil {
+	f.workers.Start(id, func() error {
+		if handled, err := f.policies.Resume(f.ctx, id); handled || err != nil {
 			return err
 		}
-		return service.provisioning.Continue(id)
+		return f.provisioning.Continue(id)
 	})
 }
 
-func (service *Forks) Resume(id string) (bool, error) {
-	if service.store.Reviewed {
+func (f *Forks) Resume(id string) (bool, error) {
+	if f.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume fork", errs.ErrManualRecovery)
 	}
-	group, err := LoadFork(service.ctx, service.store.Database, id)
+	group, err := LoadFork(f.ctx, f.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	guard := service.guards.ForkGroup(id)
+	guard := f.guards.ForkGroup(id)
 	guard.Lock()
 	defer guard.Unlock()
-	group, err = LoadFork(service.ctx, service.store.Database, id)
+	group, err = LoadFork(f.ctx, f.store.Database, id)
 	if err != nil {
 		return true, err
 	}
 	if operation.Terminal(group.Status) {
 		return true, nil
 	}
-	return true, service.runForkGroup(group)
+	return true, f.runForkGroup(group)
 }
 
-func (service *Forks) runResourceLink(parent, role string) (machine.ResourceLink, error) {
-	return service.links.Run(parent, role, func(link machine.ResourceLink) error {
-		if handled, err := service.policies.Resume(service.ctx, link.ChildID); handled || err != nil {
+func (f *Forks) runResourceLink(parent, role string) (machine.ResourceLink, error) {
+	return f.links.Run(parent, role, func(link machine.ResourceLink) error {
+		if handled, err := f.policies.Resume(f.ctx, link.ChildID); handled || err != nil {
 			return err
 		}
 		var handled bool
 		var err error
 		switch link.Kind {
 		case "capture":
-			handled, err = service.captures.Resume(link.ChildID)
+			handled, err = f.captures.Resume(link.ChildID)
 		case "discard":
-			handled, err = service.deletion.ResumeDiscard(link.ChildID)
+			handled, err = f.deletion.ResumeDiscard(link.ChildID)
 		case "lifecycle":
-			handled, err = service.lifecycle.Resume(link.ChildID)
+			handled, err = f.lifecycle.Resume(link.ChildID)
 		default:
 			return fmt.Errorf("unsupported fork resource kind %q", link.Kind)
 		}
@@ -296,36 +296,36 @@ type forkBranchAdmission struct {
 	Index  int
 }
 
-func (parent *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+func (admission *forkAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
 	child, kind, candidate := request.Child, request.Kind, request.Candidate
-	if parent.Input.Source == nil || kind != "capture" {
+	if admission.Input.Source == nil || kind != "capture" {
 		return fmt.Errorf("%w: fork capture dependency changed", errs.ErrConflict)
 	}
-	source, err := machine.LoadResourceStep(ctx, tx, parent.Input.Source.OperationID)
+	source, err := machine.LoadResourceStep(ctx, tx, admission.Input.Source.OperationID)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(source, *parent.Input.Source) || child.Result.VMID != source.Candidate || child.Result.SandboxID != source.Input.SandboxID || candidate != child.Result.SnapshotID {
+	if !reflect.DeepEqual(source, *admission.Input.Source) || child.Result.VMID != source.Candidate || child.Result.SandboxID != source.Input.SandboxID || candidate != child.Result.SnapshotID {
 		return fmt.Errorf("%w: fork capture original source changed", errs.ErrConflict)
 	}
-	parent.Parent.Result.SnapshotID = child.Result.SnapshotID
-	if err = parent.admitIntent(ctx, tx); err != nil {
+	admission.Parent.Result.SnapshotID = child.Result.SnapshotID
+	if err = admission.admitIntent(ctx, tx); err != nil {
 		return err
 	}
 	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
-		OperationID:      parent.Parent.ID,
+		OperationID:      admission.Parent.ID,
 		Role:             "capture",
-		ExpectedInstance: parent.Input.Source.State.Witness,
+		ExpectedInstance: admission.Input.Source.State.Witness,
 	}, request)
 }
 
-func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+func (admission *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
 	target, source, holder := claim.Sandbox, claim.Source, claim.Holder
-	group, err := LoadFork(ctx, tx, parent.Group.OperationID)
+	group, err := LoadFork(ctx, tx, admission.Group.OperationID)
 	if err != nil {
 		return nil, err
 	}
-	if group.Hash != parent.Group.Hash || operation.Terminal(group.Status) || group.State.Phase != "captured" || !reflect.DeepEqual(group.State.Snapshot, parent.Group.State.Snapshot) || group.State.Snapshot == nil || !reflect.DeepEqual(*group.State.Snapshot, source) || parent.Index < 0 || parent.Index >= len(group.Input.Targets) || !reflect.DeepEqual(group.Input.Targets[parent.Index], target) || holder != forkSlotHolder(group.OperationID, target.ID) {
+	if group.Hash != admission.Group.Hash || operation.Terminal(group.Status) || group.State.Phase != "captured" || !reflect.DeepEqual(group.State.Snapshot, admission.Group.State.Snapshot) || group.State.Snapshot == nil || !reflect.DeepEqual(*group.State.Snapshot, source) || admission.Index < 0 || admission.Index >= len(group.Input.Targets) || !reflect.DeepEqual(group.Input.Targets[admission.Index], target) || holder != forkSlotHolder(group.OperationID, target.ID) {
 		return nil, fmt.Errorf("%w: fork placement no longer owns its prefunded slot", errs.ErrConflict)
 	}
 	settings, err := LoadSettings(ctx, tx, target.ID)
@@ -338,19 +338,19 @@ func (parent *forkBranchAdmission) ValidateProvisionTarget(ctx context.Context, 
 	return nil, nil
 }
 
-func (parent *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
-	if request.Kind != "clone" || request.Child.Result.SandboxID != parent.Target.ID {
+func (admission *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	if request.Kind != "clone" || request.Child.Result.SandboxID != admission.Target.ID {
 		return fmt.Errorf("%w: fork branch resource identity changed", errs.ErrConflict)
 	}
 	if err := store.RequireOne(dbgen.New(tx).DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
-		SandboxID: parent.Target.ID,
-		Body:      operation.Encode(parent.Group.Input.Settings),
+		SandboxID: admission.Target.ID,
+		Body:      operation.Encode(admission.Group.Input.Settings),
 	})); err != nil {
 		return err
 	}
 	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
-		OperationID: parent.Group.OperationID,
-		Role:        fmt.Sprintf("branch:%d", parent.Index),
+		OperationID: admission.Group.OperationID,
+		Role:        fmt.Sprintf("branch:%d", admission.Index),
 	}, request)
 }
 
@@ -366,17 +366,17 @@ func forkTargetIDs(input ForkInput) []string {
 	return ids
 }
 
-func (service *Forks) saveFork(step *ForkStep, state ForkState) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	tx, err := service.store.Database.BeginTx(service.ctx, nil)
+func (f *Forks) saveFork(step *ForkStep, state ForkState) error {
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(service.ctx, dbgen.AdvanceLiveStepParams{
+	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "fork_group",
 		InputHash:    step.Hash,
@@ -389,11 +389,11 @@ func (service *Forks) saveFork(step *ForkStep, state ForkState) error {
 		return err
 	}
 	step.State = state
-	return service.store.Checkpoint()
+	return f.store.Checkpoint()
 }
 
-func (service *Forks) forkSecrets(group ForkStep) {
-	service.registry.CopyOperationSecrets(group.OperationID, group.State.Children...)
+func (f *Forks) forkSecrets(group ForkStep) {
+	f.registry.CopyOperationSecrets(group.OperationID, group.State.Children...)
 }
 
 func sameForkTargets(first, second []string) bool {

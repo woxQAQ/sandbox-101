@@ -17,8 +17,8 @@ import (
 
 // graphFence checks normalized roots before any collector can be admitted.
 // Unknown relationships are retained instead of being treated as absent users.
-func (service *Collector) graphFence(ctx context.Context) ([]types.GCItem, error) {
-	tx, err := service.store.Database.BeginTx(ctx, &sql.TxOptions{
+func (c *Collector) graphFence(ctx context.Context) ([]types.GCItem, error) {
+	tx, err := c.store.Database.BeginTx(ctx, &sql.TxOptions{
 		ReadOnly: true,
 	})
 	if err != nil {
@@ -80,7 +80,7 @@ func (service *Collector) graphFence(ctx context.Context) ([]types.GCItem, error
 				if source.Input.Restore == nil || source.Input.Restore.Snapshot.ID != lease.SnapshotID || source.State.BackingReady {
 					proofErr = fmt.Errorf("source lease original step mismatch")
 				} else {
-					proofErr = service.proofs.RestoreRelations(ctx, tx, source)
+					proofErr = c.proofs.RestoreRelations(ctx, tx, source)
 				}
 			}
 		case "warm_claim":
@@ -147,7 +147,7 @@ func (service *Collector) graphFence(ctx context.Context) ([]types.GCItem, error
 			})
 		}
 		knownBackings[path] = true
-		if err = service.proofs.RestoreRelations(ctx, tx, source); err != nil {
+		if err = c.proofs.RestoreRelations(ctx, tx, source); err != nil {
 			deferred = append(deferred, types.GCItem{
 				Kind:   "backing",
 				ID:     id,

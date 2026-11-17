@@ -59,29 +59,29 @@ func RenewActivityLease(ctx context.Context, query store.DBTX, id string, previo
 	return next.Deadline, err
 }
 
-func (service *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
 	if command.Action != "renew" || command.SandboxID == "" || principal.TenantID == "" || key == "" || len(key) > 256 || (principal.SandboxID != "" && principal.SandboxID != command.SandboxID) {
 		return empty, fmt.Errorf("%w: renew requires scoped sandbox and key", errs.ErrInvalid)
 	}
-	requestGuard := service.guards.TenantRequest(principal.TenantID, key)
+	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
-	mac := service.commands.Identity.CommandMAC(principal, command)
-	if accepted, found, err := service.existing(ctx, principal, key, &ClaimAdmission{
+	mac := l.commands.Identity.CommandMAC(principal, command)
+	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return accepted, err
 	}
-	guard := service.guards.Configuration(command.SandboxID)
+	guard := l.guards.Configuration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	if err := service.gate.Check(); err != nil {
+	l.admission.Lock()
+	defer l.admission.Unlock()
+	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}
-	tx, err := service.store.Database.BeginTx(ctx, nil)
+	tx, err := l.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
@@ -114,7 +114,7 @@ func (service *Lifecycle) AdmitRenew(ctx context.Context, principal authorizatio
 		if ttl == 0 {
 			ttl = settings.TTLSeconds
 		}
-		if ttl < 1 || ttl > int64(service.opts.MaxTTL.Seconds()) {
+		if ttl < 1 || ttl > int64(l.opts.MaxTTL.Seconds()) {
 			return empty, fmt.Errorf("%w: renew duration exceeds host bound", errs.ErrInvalid)
 		}
 		next.TTLSeconds = ttl
@@ -125,9 +125,9 @@ func (service *Lifecycle) AdmitRenew(ctx context.Context, principal authorizatio
 		}
 		ttl := command.TTLSeconds
 		if ttl == 0 {
-			ttl = int64(service.opts.PausedTTL.Seconds())
+			ttl = int64(l.opts.PausedTTL.Seconds())
 		}
-		if ttl < 1 || ttl > int64(service.opts.PausedTTL.Seconds()) {
+		if ttl < 1 || ttl > int64(l.opts.PausedTTL.Seconds()) {
 			return empty, fmt.Errorf("%w: paused renew duration exceeds host bound", errs.ErrInvalid)
 		}
 		next.PausedUntil = now.Add(time.Duration(ttl) * time.Second)
@@ -188,19 +188,19 @@ func (service *Lifecycle) AdmitRenew(ctx context.Context, principal authorizatio
 	})); err != nil {
 		return empty, err
 	}
-	if err = service.fault("renew_before_commit"); err != nil {
+	if err = l.fault("renew_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = service.committer.Commit(tx); err != nil {
+	if err = l.committer.Commit(tx); err != nil {
 		return empty, err
 	}
-	return accepted, service.store.Checkpoint()
+	return accepted, l.store.Checkpoint()
 }
 
 // Reap submits normal durable workflows with the exact observed lease deadline.
 // Renewal winning the configuration guard invalidates that expiration intent.
-func (service *Lifecycle) Reap(ctx context.Context) error {
-	candidates, err := LeaseCandidates(ctx, service.store.Database)
+func (l *Lifecycle) Reap(ctx context.Context) error {
+	candidates, err := LeaseCandidates(ctx, l.store.Database)
 	if err != nil {
 		return err
 	}
@@ -226,7 +226,7 @@ func (service *Lifecycle) Reap(ctx context.Context) error {
 	}
 	var failures []error
 	for _, item := range pending {
-		_, err := service.AdmitLifecycle(ctx, authorization.Principal{
+		_, err := l.AdmitLifecycle(ctx, authorization.Principal{
 			TenantID: item.tenant,
 		}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), operation.Command{
 			Action:        item.action,

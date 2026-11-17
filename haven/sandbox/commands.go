@@ -30,7 +30,7 @@ func NewSandboxCommands(maxTTL time.Duration, identity *operation.CommandIdentit
 	}
 }
 
-func (service *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, error) {
+func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, error) {
 	env, secrets, descriptors, err := SplitEnv(command.Env)
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func (service *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmiss
 	if ttl == 0 {
 		ttl = 300
 	}
-	if ttl < 1 || ttl > int64(service.maxTTL.Seconds()) {
+	if ttl < 1 || ttl > int64(sc.maxTTL.Seconds()) {
 		return nil, fmt.Errorf("%w: lease duration exceeds host bound", errs.ErrInvalid)
 	}
 	onExpire := command.OnExpire
@@ -78,11 +78,11 @@ func (service *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmiss
 	}, nil
 }
 
-func (service *SandboxCommands) CredentialsMissing(id string, settings Settings) bool {
+func (sc *SandboxCommands) CredentialsMissing(id string, settings Settings) bool {
 	if len(settings.Secrets) == 0 {
 		return false
 	}
-	secrets := service.registry.SandboxSecrets(id)
+	secrets := sc.registry.SandboxSecrets(id)
 	for name, descriptor := range settings.Secrets {
 		secret, ok := secrets[name]
 		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {

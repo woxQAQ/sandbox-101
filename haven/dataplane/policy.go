@@ -14,12 +14,12 @@ import (
 	"github.com/woxQAQ/haven/sandbox"
 )
 
-func (service *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View, settings sandbox.Settings, source machine.ResourceStep) error {
+func (p *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View, settings sandbox.Settings, source machine.ResourceStep) error {
 	expected, err := machine.DirectNetworkPolicy(settings.Policy)
 	if err != nil {
 		return err
 	}
-	policyRecord, err := machine.LoadPolicyWitness(ctx, service.store.Database, view.VMID)
+	policyRecord, err := machine.LoadPolicyWitness(ctx, p.store.Database, view.VMID)
 	if err != nil {
 		return err
 	}
@@ -27,14 +27,14 @@ func (service *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View
 	if instance != view.Instance || operationID != settings.Generation || string(body) != string(operation.Encode(expected)) {
 		return fmt.Errorf("%w: direct admission lacks exact configuration policy witness", errs.ErrManualRecovery)
 	}
-	activation, err := sandbox.LoadActivation(ctx, service.store.Database, operationID)
+	activation, err := sandbox.LoadActivation(ctx, p.store.Database, operationID)
 	if err != nil {
 		return err
 	}
 	if activation.Status != "succeeded" || activation.Phase != "complete" || activation.Input.ResourceHash != source.Hash || activation.Input.ExpectedInstance != view.Instance {
 		return fmt.Errorf("%w: direct admission original activation witness changed", errs.ErrManualRecovery)
 	}
-	backend, ok := service.opts.Backend.(loom.NetworkPolicyBackend)
+	backend, ok := p.opts.Backend.(loom.NetworkPolicyBackend)
 	if !ok {
 		return fmt.Errorf("%w: direct policy effects unavailable", errs.ErrIncompatible)
 	}
@@ -43,14 +43,14 @@ func (service *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View
 
 // repairDataNetwork submits the saved configuration with an observed generation.
 // A stale verification cannot revoke or overwrite a newer admitted policy.
-func (service *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) error {
+func (p *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) error {
 	env := map[string]operation.EnvVar{}
 	for name, value := range settings.Env {
 		env[name] = operation.EnvVar{
 			Value: value,
 		}
 	}
-	credentials := service.registry.SandboxSecrets(view.ID)
+	credentials := p.registry.SandboxSecrets(view.ID)
 	for name, descriptor := range settings.Secrets {
 		value, ok := credentials[name]
 		if !ok || value.Value == "" {
@@ -67,9 +67,9 @@ func (service *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Sett
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	accepted, err := service.sandboxes.AdmitConfigure(ctx, authorization.Principal{
+	accepted, err := p.sandboxes.AdmitConfigure(ctx, authorization.Principal{
 		TenantID: view.TenantID,
-	}, "network-revalidate:"+service.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
+	}, "network-revalidate:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
 		Action:             "configure",
 		SandboxID:          view.ID,
 		ObservedGeneration: settings.Generation,
@@ -85,6 +85,6 @@ func (service *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Sett
 	return nil
 }
 
-func (service *Plane) rejectNetwork(view sandbox.View, settings sandbox.Settings, cause error) error {
-	return errors.Join(cause, service.repairDataNetwork(view, settings))
+func (p *Plane) rejectNetwork(view sandbox.View, settings sandbox.Settings, cause error) error {
+	return errors.Join(cause, p.repairDataNetwork(view, settings))
 }

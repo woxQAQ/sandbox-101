@@ -13,15 +13,15 @@ func NewAvailability(registration Guard) *Availability {
 	}
 }
 
-func (service *Availability) Drain() {
-	service.registration.Lock()
-	service.draining = true
-	service.registration.Unlock()
+func (a *Availability) Drain() {
+	a.registration.Lock()
+	a.draining = true
+	a.registration.Unlock()
 }
 
-func (service *Availability) IsDraining() bool {
-	service.registration.Lock()
-	draining := service.draining
-	service.registration.Unlock()
+func (a *Availability) IsDraining() bool {
+	a.registration.Lock()
+	draining := a.draining
+	a.registration.Unlock()
 	return draining
 }

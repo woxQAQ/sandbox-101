@@ -15,8 +15,8 @@ import (
 	"github.com/woxQAQ/haven/loom"
 )
 
-func (service *ProxySockets) proxyResource(ctx context.Context, binding egress.Binding) (loom.Resource, error) {
-	sandbox, err := service.catalog.Get(ctx, authorization.Principal{
+func (ps *ProxySockets) proxyResource(ctx context.Context, binding egress.Binding) (loom.Resource, error) {
+	sandbox, err := ps.catalog.Get(ctx, authorization.Principal{
 		Root: true,
 	}, binding.SandboxID)
 	if err != nil {
@@ -25,7 +25,7 @@ func (service *ProxySockets) proxyResource(ctx context.Context, binding egress.B
 	if sandbox.TenantID != binding.TenantID || sandbox.VMID == "" {
 		return loom.Resource{}, fmt.Errorf("%w: proxy binding ownership changed", errs.ErrConflict)
 	}
-	source, err := service.catalog.ResourceForData(ctx, sandbox)
+	source, err := ps.catalog.ResourceForData(ctx, sandbox)
 	if err != nil {
 		return loom.Resource{}, err
 	}
@@ -33,7 +33,7 @@ func (service *ProxySockets) proxyResource(ctx context.Context, binding egress.B
 	if guest.Socket(resource) != binding.VSockPath {
 		return resource, fmt.Errorf("%w: proxy runtime path changed", errs.ErrConflict)
 	}
-	observation, err := service.backend.Inspect(ctx, resource)
+	observation, err := ps.backend.Inspect(ctx, resource)
 	if err != nil {
 		return resource, err
 	}
@@ -45,8 +45,8 @@ func (service *ProxySockets) proxyResource(ctx context.Context, binding egress.B
 
 // PrepareProxySocket transfers access to the exact verified VMM socket owner.
 // Both identities are anchored before changing the new portal inode.
-func (service *ProxySockets) PrepareProxySocket(ctx context.Context, binding egress.Binding, path string, info os.FileInfo) error {
-	resource, err := service.proxyResource(ctx, binding)
+func (ps *ProxySockets) PrepareProxySocket(ctx context.Context, binding egress.Binding, path string, info os.FileInfo) error {
+	resource, err := ps.proxyResource(ctx, binding)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (service *ProxySockets) PrepareProxySocket(ctx context.Context, binding egr
 	if err = unix.Fchownat(fd, "", int(identity.Uid), int(identity.Gid), unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return err
 	}
-	current, err := service.proxyResource(ctx, binding)
+	current, err := ps.proxyResource(ctx, binding)
 	if err != nil {
 		return err
 	}
@@ -97,10 +97,10 @@ func (service *ProxySockets) PrepareProxySocket(ctx context.Context, binding egr
 
 // RecoverStaleSocket supplies ownership permission only. Manager independently
 // proves the old listener dead and preserves replaced or reachable sockets.
-func (service *ProxySockets) RecoverStaleSocket(binding egress.Binding, path string, _ os.FileInfo) bool {
-	ctx, cancel := context.WithTimeout(service.ctx, 3*time.Second)
+func (ps *ProxySockets) RecoverStaleSocket(binding egress.Binding, path string, _ os.FileInfo) bool {
+	ctx, cancel := context.WithTimeout(ps.ctx, 3*time.Second)
 	defer cancel()
-	if _, err := service.proxyResource(ctx, binding); err != nil {
+	if _, err := ps.proxyResource(ctx, binding); err != nil {
 		return false
 	}
 	return path == binding.VSockPath+"_2049" || path == binding.VSockPath+"_2050"
