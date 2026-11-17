@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"reflect"
 
 	"github.com/woxQAQ/haven/image/internal/dbgen"
+	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
+	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/store"
 )
 
@@ -77,4 +81,27 @@ func fundedCaches(ctx context.Context, query store.DBTX, operationID string) ([]
 		caches = append(caches, cache)
 	}
 	return caches, nil
+}
+
+// Cache preserves the returned physical witness and its original funding operation.
+type Cache struct {
+	Witness         imageimport.ImageCacheWitness `json:"witness"`
+	SourceOperation string                        `json:"source_operation"`
+}
+
+type CacheKey struct {
+	Builder string
+	DiffID  string
+}
+
+// VerifyFiles binds the immutable catalog manifest to the sealed on-disk image.
+func VerifyFiles(manifest host.ImageManifest, directory string) error {
+	var disk host.ImageManifest
+	if err := loom.ReadJSON(filepath.Join(directory, "image.json"), &disk); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(disk, manifest) {
+		return fmt.Errorf("image file manifest differs from frozen catalog")
+	}
+	return manifest.Verify(directory, manifest.Digest)
 }

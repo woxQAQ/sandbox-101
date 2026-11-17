@@ -28,3 +28,9 @@ type Sandbox struct {
 	SnapshotID      string         `json:"snapshot_id,omitempty"`
 	SourceOperation string         `json:"source_operation"`
 }
+
+// GenerationRef names an immutable completed resource step without copying ancestry.
+type GenerationRef struct {
+	OperationID string `json:"operation_id"`
+	InputHash   string `json:"input_hash"`
+}
