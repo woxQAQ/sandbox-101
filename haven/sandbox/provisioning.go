@@ -44,9 +44,9 @@ type ProvisionDependencies struct {
 	Physical    *machine.Provisioning
 }
 
-// VMProvisioning admits and executes cold/clone/restore intents using the shared
+// Provisioning admits and executes cold/clone/restore intents using the shared
 // admission gate and workers. It owns no independent shutdown or runner state.
-type VMProvisioning struct {
+type Provisioning struct {
 	store       store.Workflow
 	ctx         context.Context
 	lifetime    *execution.Lifetime
@@ -65,8 +65,8 @@ type VMProvisioning struct {
 	physical    *machine.Provisioning
 }
 
-func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, options ProvisionOptions) *VMProvisioning {
-	return &VMProvisioning{
+func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, options ProvisionOptions) *Provisioning {
+	return &Provisioning{
 		store: store.Workflow{
 			Database:   state.Database(),
 			Directory:  state.Directory(),
@@ -91,14 +91,14 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 	}
 }
 
-func (p *VMProvisioning) fault(point string) error {
+func (p *Provisioning) fault(point string) error {
 	if p.faultPoint != nil {
 		return p.faultPoint(point)
 	}
 	return nil
 }
 
-func (p *VMProvisioning) Continue(id string) error {
+func (p *Provisioning) Continue(id string) error {
 	if p.store.Reviewed {
 		return fmt.Errorf("%w: reviewed rollback cannot provision VM", errs.ErrManualRecovery)
 	}
@@ -202,7 +202,7 @@ func (admission *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, 
 
 // AdmitBare exposes only the undelivered build/refill subset of resource admission.
 // It shares the original transaction, gate, workers and continuous VM guard.
-func (p *VMProvisioning) AdmitBare(ctx context.Context, request supply.ProvisionRequest, target supply.BareTarget) (operation.Record, error) {
+func (p *Provisioning) AdmitBare(ctx context.Context, request supply.ProvisionRequest, target supply.BareTarget) (operation.Record, error) {
 	return p.Admit(ctx, ProvisionAdmission{
 		Request: request,
 		Target: &ProvisionTarget{

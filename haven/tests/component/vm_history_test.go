@@ -57,7 +57,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				SandboxID:        claim.Result.SandboxID,
 				ExpectedInstance: history.State.Witness,
 			}
-			accepted, err := service.VMStops.AdmitStop(context.Background(), request)
+			accepted, err := service.Stops.AdmitStop(context.Background(), request)
 			if err == nil || accepted.ID != "" || backend.Count("stop") != 0 {
 				t.Fatal("unproved disk funding authorized stop", accepted, err)
 			}
@@ -76,7 +76,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 			if err = fixtures.RequireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {
 				t.Fatal(err)
 			}
-			accepted, err = service.VMStops.AdmitStop(context.Background(), request)
+			accepted, err = service.Stops.AdmitStop(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +107,7 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			if history.Status != "succeeded" {
 				t.Fatal(history.State)
 			}
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release",
 				SandboxID: claim.Result.SandboxID,

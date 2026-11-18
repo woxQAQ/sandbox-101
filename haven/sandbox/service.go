@@ -46,7 +46,7 @@ type SandboxDependencies struct {
 	Operations   *operation.Operations
 	Activations  *Activations
 	WarmClaims   *WarmClaims
-	Provisioning *VMProvisioning
+	Provisioning *Provisioning
 	Policies     *machine.DirectPolicies
 }
 
@@ -66,7 +66,7 @@ type Sandboxes struct {
 	operations   *operation.Operations
 	activations  *Activations
 	warmClaims   *WarmClaims
-	provisioning *VMProvisioning
+	provisioning *Provisioning
 	policies     *machine.DirectPolicies
 	opts         SandboxOptions
 	committer    *operation.Committer

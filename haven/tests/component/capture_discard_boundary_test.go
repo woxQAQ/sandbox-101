@@ -281,7 +281,7 @@ func TestHavenCaptureDiscardRejectsUnprovedBoundary(t *testing.T) {
 	if failed.Status != "failed" || failed.State.Boundary != nil {
 		t.Fatal("fixture established missing preparation proof", failed.State)
 	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
+	stop, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         request.TenantID,
 		Key:              "stop-unproved",
 		SandboxID:        request.SandboxID,

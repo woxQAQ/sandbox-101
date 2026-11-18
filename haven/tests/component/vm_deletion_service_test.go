@@ -48,7 +48,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 					if conflict {
 						request.ExpectedInstance = testfixture.NewID("run-")
 					}
-					return service.VMDeletion.AdmitDiscard(ctx, request)
+					return service.Deletion.AdmitDiscard(ctx, request)
 				}
 				request := machine.ReleaseRequest{
 					TenantID:  "tenant",
@@ -58,7 +58,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				if conflict {
 					request.SandboxID = testfixture.NewID("sandbox-")
 				}
-				return service.VMDeletion.AdmitRelease(ctx, request)
+				return service.Deletion.AdmitRelease(ctx, request)
 			}
 			accepted, err := admit(false)
 			if !errors.Is(err, errs.ErrInterrupted) || accepted.ID == "" {

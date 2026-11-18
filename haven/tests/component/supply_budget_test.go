@@ -50,7 +50,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 				Action  string
 				Request machine.FreshRequest
 			}{"claim", request})
-			operation, err := service.VMProvisioning.Admit(ctx, sandbox.ProvisionAdmission{
+			operation, err := service.Provisioning.Admit(ctx, sandbox.ProvisionAdmission{
 				Request: supply.ProvisionRequest{
 					TenantID: "tenant",
 					Key:      request.Key,
@@ -73,7 +73,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != budget.Units {
 				t.Fatal(slots, err)
 			}
-			release, err := service.VMDeletion.AdmitRelease(ctx, machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release",
 				SandboxID: operation.Result.SandboxID,

@@ -49,9 +49,9 @@ type ForkDependencies struct {
 	Commands     *SandboxCommands
 	Availability *execution.Availability
 	Operations   *operation.Operations
-	Provisioning *VMProvisioning
+	Provisioning *Provisioning
 	Captures     *machine.Captures
-	Deletion     *machine.VMDeletion
+	Deletion     *machine.Deletion
 	Lifecycle    *Lifecycle
 	Policies     *machine.DirectPolicies
 	Links        *machine.ResourceLinks
@@ -72,9 +72,9 @@ type Forks struct {
 	commands     *SandboxCommands
 	availability *execution.Availability
 	operations   *operation.Operations
-	provisioning *VMProvisioning
+	provisioning *Provisioning
 	captures     *machine.Captures
-	deletion     *machine.VMDeletion
+	deletion     *machine.Deletion
 	lifecycle    *Lifecycle
 	policies     *machine.DirectPolicies
 	links        *machine.ResourceLinks

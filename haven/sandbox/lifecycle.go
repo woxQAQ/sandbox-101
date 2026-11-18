@@ -49,10 +49,10 @@ type LifecycleDependencies struct {
 	Commands       *SandboxCommands
 	Activations    *Activations
 	WarmClaims     *WarmClaims
-	Provisioning   *VMProvisioning
+	Provisioning   *Provisioning
 	Captures       *machine.Captures
-	Stops          *machine.VMStops
-	Deletion       *machine.VMDeletion
+	Stops          *machine.Stops
+	Deletion       *machine.Deletion
 	CaptureDiscard *machine.CaptureDiscard
 	CaptureCleanup *machine.CaptureCleanup
 	Policies       *machine.DirectPolicies
@@ -75,10 +75,10 @@ type Lifecycle struct {
 	commands       *SandboxCommands
 	activations    *Activations
 	warmClaims     *WarmClaims
-	provisioning   *VMProvisioning
+	provisioning   *Provisioning
 	captures       *machine.Captures
-	stops          *machine.VMStops
-	deletion       *machine.VMDeletion
+	stops          *machine.Stops
+	deletion       *machine.Deletion
 	captureDiscard *machine.CaptureDiscard
 	captureCleanup *machine.CaptureCleanup
 	policies       *machine.DirectPolicies

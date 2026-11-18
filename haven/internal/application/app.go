@@ -61,13 +61,13 @@ type App struct {
 	SnapshotDeletion *machine.SnapshotDeletion
 	CaptureDiscard   *machine.CaptureDiscard
 	Captures         *machine.Captures
-	VMStops          *machine.VMStops
+	Stops          *machine.Stops
 	DirectPolicies   *machine.DirectPolicies
 	DirectBindings   *sandbox.DirectBindings
-	VMDeletion       *machine.VMDeletion
+	Deletion       *machine.Deletion
 	SupplyCleanup    *supply.SupplyCleanup
 	GC               *gc.Collector
-	VMProvisioning   *sandbox.VMProvisioning
+	Provisioning   *sandbox.Provisioning
 	Supply           *supply.Supply
 	Lifecycle        *sandbox.Lifecycle
 	Sandboxes        *sandbox.Sandboxes
@@ -206,7 +206,7 @@ func Open(opts Options) (*App, error) {
 		SafetyBytes: opts.SafetyBytes,
 		Fault:       opts.Fault,
 	})
-	service.VMStops = machine.NewVMStops(state, machine.VMStopsDependencies{
+	service.Stops = machine.NewVMStops(state, machine.VMStopsDependencies{
 		Guards:    guards,
 		Lifetime:  lifetime,
 		Workers:   workers,
@@ -220,7 +220,7 @@ func Open(opts Options) (*App, error) {
 		Backend: opts.Backend,
 	}, opts.Fault)
 	service.DirectBindings = sandbox.NewDirectBindings(state.Database(), service.DirectPolicies)
-	service.VMDeletion = machine.NewVMDeletion(state, machine.VMDeletionDependencies{
+	service.Deletion = machine.NewVMDeletion(state, machine.VMDeletionDependencies{
 		Guards:    guards,
 		Lifetime:  lifetime,
 		Workers:   workers,
@@ -236,9 +236,9 @@ func Open(opts Options) (*App, error) {
 		Gate:      admissionGate,
 		Workers:   workers,
 		Proofs:    resourceProofs,
-		Stops:     service.VMStops,
+		Stops:     service.Stops,
 		Captures:  service.CaptureDiscard,
-		Deletion:  service.VMDeletion,
+		Deletion:  service.Deletion,
 		Ownership: sandbox.SupplyCleanupHistory{},
 	}, opts.Fault)
 	service.GC = gc.NewCollector(state, gc.Dependencies{
@@ -293,7 +293,7 @@ func Open(opts Options) (*App, error) {
 		Handoff:   sandbox.ProvisionHandoff{},
 		Committer: committer,
 	}, opts.Fault)
-	service.VMProvisioning = sandbox.NewVMProvisioning(state, sandbox.ProvisionDependencies{
+	service.Provisioning = sandbox.NewVMProvisioning(state, sandbox.ProvisionDependencies{
 		Guards:      guards,
 		Lifetime:    lifetime,
 		Gate:        admissionGate,
@@ -323,9 +323,9 @@ func Open(opts Options) (*App, error) {
 		Commands:     commandIdentity,
 		Ownership:    sandbox.OwnershipHistory{},
 		Availability: service.Availability,
-		Provisioning: service.VMProvisioning,
+		Provisioning: service.Provisioning,
 		Captures:     service.Captures,
-		Deletion:     service.VMDeletion,
+		Deletion:     service.Deletion,
 		Policies:     service.DirectPolicies,
 		Links:        service.ResourceLinks,
 	}, supply.SupplyOptions{
@@ -342,8 +342,8 @@ func Open(opts Options) (*App, error) {
 		Proofs:       resourceProofs,
 		Committer:    committer,
 		Activations:  service.Activations,
-		Provisioning: service.VMProvisioning,
-		Deletion:     service.VMDeletion,
+		Provisioning: service.Provisioning,
+		Deletion:     service.Deletion,
 		Policies:     service.DirectPolicies,
 		Links:        service.ResourceLinks,
 	}, opts.Fault)
@@ -357,10 +357,10 @@ func Open(opts Options) (*App, error) {
 		Commands:       service.Commands,
 		Activations:    service.Activations,
 		WarmClaims:     service.WarmClaims,
-		Provisioning:   service.VMProvisioning,
+		Provisioning:   service.Provisioning,
 		Captures:       service.Captures,
-		Stops:          service.VMStops,
-		Deletion:       service.VMDeletion,
+		Stops:          service.Stops,
+		Deletion:       service.Deletion,
 		CaptureDiscard: service.CaptureDiscard,
 		CaptureCleanup: service.CaptureCleanup,
 		Policies:       service.DirectPolicies,
@@ -383,7 +383,7 @@ func Open(opts Options) (*App, error) {
 		Operations:   service.Operations,
 		Activations:  service.Activations,
 		WarmClaims:   service.WarmClaims,
-		Provisioning: service.VMProvisioning,
+		Provisioning: service.Provisioning,
 		Policies:     service.DirectPolicies,
 	}, sandbox.SandboxOptions{
 		Backend: opts.Backend,
@@ -400,9 +400,9 @@ func Open(opts Options) (*App, error) {
 		Commands:     service.Commands,
 		Availability: service.Availability,
 		Operations:   service.Operations,
-		Provisioning: service.VMProvisioning,
+		Provisioning: service.Provisioning,
 		Captures:     service.Captures,
-		Deletion:     service.VMDeletion,
+		Deletion:     service.Deletion,
 		Lifecycle:    service.Lifecycle,
 		Policies:     service.DirectPolicies,
 		Links:        service.ResourceLinks,
@@ -445,7 +445,7 @@ func Open(opts Options) (*App, error) {
 		Operations: service.Operations,
 	})
 	policies := service.DirectPolicies
-	deletion := service.VMDeletion
+	deletion := service.Deletion
 	service.Maintenance = maintenance.NewMaintenance(state, maintenance.MaintenanceDependencies{
 		Lifetime:     lifetime,
 		Workers:      workers,
@@ -453,7 +453,7 @@ func Open(opts Options) (*App, error) {
 		Lifecycle:    service.Lifecycle,
 		Supply:       service.Supply,
 		Dataplane:    service.Dataplane,
-		Provisioning: service.VMProvisioning,
+		Provisioning: service.Provisioning,
 	}, []maintenance.ResumeWorkflow{
 		func(id string) (bool, error) {
 			return policies.Resume(lifetime.Context(), id)
@@ -468,7 +468,7 @@ func Open(opts Options) (*App, error) {
 		service.Lifecycle.Resume,
 		service.SnapshotDeletion.Resume,
 		service.CaptureDiscard.Resume,
-		service.VMStops.Resume,
+		service.Stops.Resume,
 		deletion.ResumeDiscard,
 		service.Captures.Resume,
 		service.Activations.Resume,

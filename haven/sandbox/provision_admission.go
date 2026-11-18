@@ -23,7 +23,7 @@ import (
 
 // AdmitCold freezes a tenant-owned template and all resource identities with its
 // slot, disk budget and source reference. Delivery remains separately fenced.
-func (p *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
+func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
 	var empty operation.Record
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.TemplateID == "" {
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
@@ -70,7 +70,7 @@ func (p *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshReq
 	})
 }
 
-func (p *VMProvisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
+func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
 	var empty operation.Record
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
@@ -132,7 +132,7 @@ func (p *VMProvisioning) AdmitClone(ctx context.Context, request machine.CloneRe
 	})
 }
 
-func (p *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
+func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
 	var empty operation.Record
 	request, claim := admission.Request, admission.Claim
 	tenantID, key := request.TenantID, request.Key
@@ -197,7 +197,7 @@ func (p *VMProvisioning) Admit(ctx context.Context, admission ProvisionAdmission
 	return accepted, nil
 }
 
-func (p *VMProvisioning) dispatch(id string) {
+func (p *Provisioning) dispatch(id string) {
 	if p.store.Reviewed {
 		return
 	}
@@ -211,7 +211,7 @@ func (p *VMProvisioning) dispatch(id string) {
 
 // verifyProvisionSources rechecks preflight facts inside the allocation
 // transaction before writing any candidate, ownership or budget records.
-func (p *VMProvisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission) error {
+func (p *Provisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission) error {
 	request := admission.Request
 	selected, restore := request.Template, request.Restore
 	if admission.Claim != nil {
@@ -273,7 +273,7 @@ type provisionBudget struct {
 	RestoreBytes int64
 }
 
-func (p *VMProvisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (provisionBudget, error) {
+func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (provisionBudget, error) {
 	var empty provisionBudget
 	request, target := admission.Request, admission.Target
 	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)

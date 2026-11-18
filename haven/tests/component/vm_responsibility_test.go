@@ -30,7 +30,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	var workers sync.WaitGroup
 	for range 16 {
 		workers.Go(func() {
-			operation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+			operation, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "concurrent",
 				TemplateID: "cold",
@@ -67,7 +67,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 		}
 		return nil
 	})
-	operation, err := service.VMProvisioning.AdmitCold(ctx, machine.FreshRequest{
+	operation, err := service.Provisioning.AdmitCold(ctx, machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "cancel-wait",
 		TemplateID: "cold",
@@ -126,7 +126,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 			if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM operation_steps").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+			if _, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "denied",
 				TemplateID: "cold",
@@ -209,7 +209,7 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+				release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 					TenantID:  "tenant",
 					Key:       "release",
 					SandboxID: claim.Result.SandboxID,
@@ -255,7 +255,7 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 	if step := fixtures.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release",
 		SandboxID: claim.Result.SandboxID,

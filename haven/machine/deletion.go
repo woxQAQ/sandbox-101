@@ -20,10 +20,10 @@ type DeletionBackend interface {
 	Remove(context.Context, loom.Resource) error
 }
 
-// VMDeletion reclaims retained successful or failed generations using their
+// Deletion reclaims retained successful or failed generations using their
 // original funding and deletion receipts before the final transaction retires
 // physical responsibility. Release and discard retain distinct frozen proofs.
-type VMDeletion struct {
+type Deletion struct {
 	store      store.Workflow
 	ctx        context.Context
 	admission  execution.Guard
@@ -51,8 +51,8 @@ type VMDeletionDependencies struct {
 	Usage     VMUsageReader
 }
 
-func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, fault func(string) error) *VMDeletion {
-	return &VMDeletion{
+func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, fault func(string) error) *Deletion {
+	return &Deletion{
 		store: store.Workflow{
 			Database:   state.Database(),
 			Directory:  state.Directory(),
@@ -74,22 +74,22 @@ func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, faul
 	}
 }
 
-func (d *VMDeletion) fault(point string) error {
+func (d *Deletion) fault(point string) error {
 	if d.faultPoint != nil {
 		return d.faultPoint(point)
 	}
 	return nil
 }
 
-func (d *VMDeletion) validateStep(step ResourceStep) error {
+func (d *Deletion) validateStep(step ResourceStep) error {
 	return ValidateResourceStep(d.store.Directory, step)
 }
 
-func (d *VMDeletion) inspectStoppedGenerations(generations []ResourceStep) error {
+func (d *Deletion) inspectStoppedGenerations(generations []ResourceStep) error {
 	return InspectStoppedGenerations(d.ctx, d.backend, generations)
 }
 
-func (d *VMDeletion) dispatch(id string) {
+func (d *Deletion) dispatch(id string) {
 	if d.store.Reviewed {
 		return
 	}
@@ -106,13 +106,13 @@ func (d *VMDeletion) dispatch(id string) {
 
 // ResumeDiscard and ResumeRelease preserve their separate positions in the
 // application's recovery order while sharing the original per-VM lock domain.
-func (d *VMDeletion) ResumeDiscard(id string) (bool, error) {
+func (d *Deletion) ResumeDiscard(id string) (bool, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return false, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return false, fmt.Errorf("%w: required Deletion capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
@@ -137,13 +137,13 @@ func (d *VMDeletion) ResumeDiscard(id string) (bool, error) {
 	return true, d.runDiscard(step)
 }
 
-func (d *VMDeletion) ResumeRelease(id string) (bool, error) {
+func (d *Deletion) ResumeRelease(id string) (bool, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return false, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return false, fmt.Errorf("%w: required Deletion capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}

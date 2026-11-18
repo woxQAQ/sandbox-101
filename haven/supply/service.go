@@ -59,7 +59,7 @@ type SupplyDependencies struct {
 	Provisioning BareProvisioner
 	Ownership    machine.SandboxOwnershipReader
 	Captures     *machine.Captures
-	Deletion     *machine.VMDeletion
+	Deletion     *machine.Deletion
 	Policies     *machine.DirectPolicies
 	Links        *machine.ResourceLinks
 }
@@ -79,7 +79,7 @@ type Supply struct {
 	provisioning BareProvisioner
 	ownership    machine.SandboxOwnershipReader
 	captures     *machine.Captures
-	deletion     *machine.VMDeletion
+	deletion     *machine.Deletion
 	policies     *machine.DirectPolicies
 	links        *machine.ResourceLinks
 	opts         SupplyOptions

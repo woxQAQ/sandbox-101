@@ -25,7 +25,7 @@ type MaintenanceDependencies struct {
 	Lifecycle    *sandbox.Lifecycle
 	Supply       *supply.Supply
 	Dataplane    *dataplane.Plane
-	Provisioning *sandbox.VMProvisioning
+	Provisioning *sandbox.Provisioning
 }
 
 // Maintenance schedules recovery and periodic work through normal durable
@@ -40,7 +40,7 @@ type Maintenance struct {
 	lifecycle    *sandbox.Lifecycle
 	supply       *supply.Supply
 	plane        *dataplane.Plane
-	provisioning *sandbox.VMProvisioning
+	provisioning *sandbox.Provisioning
 }
 
 func NewMaintenance(state *store.State, dependencies MaintenanceDependencies, routes []ResumeWorkflow) *Maintenance {

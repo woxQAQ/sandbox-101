@@ -114,7 +114,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				if !errors.Is(err, errs.ErrInterrupted) {
 					t.Fatal(err)
 				}
-				if _, err = service.VMDeletion.AdmitRelease(ctx, machine.ReleaseRequest{
+				if _, err = service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
 					TenantID:  "tenant",
 					Key:       "bypass",
 					SandboxID: original.Result.SandboxID,

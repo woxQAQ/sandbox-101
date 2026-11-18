@@ -80,7 +80,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			clone := fixture.Clones[0]
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release-last-backing",
 				SandboxID: clone.Result.SandboxID,
@@ -244,7 +244,7 @@ func TestHavenSnapshotDeleteFence(t *testing.T) {
 		return nil
 	})
 	operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
-	if _, err := service.VMProvisioning.AdmitClone(context.Background(), machine.CloneRequest{
+	if _, err := service.Provisioning.AdmitClone(context.Background(), machine.CloneRequest{
 		TenantID:   "tenant",
 		Key:        "clone-tombstone",
 		SnapshotID: fixture.Capture.Result.SnapshotID,
@@ -306,7 +306,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 		reason := service.Workers.State(deletion.ID).Err
 		t.Fatal(step.Phase, reason)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release-other-backing",
 		SandboxID: fixture.Clones[0].Result.SandboxID,
@@ -318,7 +318,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 		t.Fatal(step.State)
 	}
 	fixtures.SnapshotDeleteCost(t, fixture, 192)
-	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), machine.DiscardRequest{
+	discard, err := service.Deletion.AdmitDiscard(context.Background(), machine.DiscardRequest{
 		TenantID:          "tenant",
 		Key:               "discard-last-backing",
 		SandboxID:         failedOperation.Result.SandboxID,

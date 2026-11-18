@@ -33,7 +33,7 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 			historical := fixtures.AwaitColdWorker(t, service, clone.ID)
 			fixtures.CloneLiability(t, service, historical, true)
 			frozen := testfixture.Encode(historical)
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release-clone",
 				SandboxID: clone.Result.SandboxID,

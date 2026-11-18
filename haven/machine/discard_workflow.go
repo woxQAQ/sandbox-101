@@ -17,7 +17,7 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (d *VMDeletion) markDiscard(step *DiscardStep, phase string) error {
+func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
 	d.admission.Lock()
 	defer d.admission.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
@@ -69,7 +69,7 @@ func (d *VMDeletion) markDiscard(step *DiscardStep, phase string) error {
 	return d.fault("discard_" + phase)
 }
 
-func (d *VMDeletion) discardGenerationSet(step DiscardStep) ([]ResourceStep, error) {
+func (d *Deletion) discardGenerationSet(step DiscardStep) ([]ResourceStep, error) {
 	d.admission.Lock()
 	defer d.admission.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
@@ -88,7 +88,7 @@ func (d *VMDeletion) discardGenerationSet(step DiscardStep) ([]ResourceStep, err
 	})
 }
 
-func (d *VMDeletion) runDiscard(step DiscardStep) error {
+func (d *Deletion) runDiscard(step DiscardStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
@@ -231,7 +231,7 @@ func (d *VMDeletion) runDiscard(step DiscardStep) error {
 	return d.completeDiscard(step)
 }
 
-func (d *VMDeletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error) {
+func (d *Deletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
 	source := step.Input.Source
 	r := source.Input.Resource
@@ -302,7 +302,7 @@ func (d *VMDeletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, err
 	return intent, d.fault("discard_deletion_intent")
 }
 
-func (d *VMDeletion) completeDiscard(step DiscardStep) error {
+func (d *Deletion) completeDiscard(step DiscardStep) error {
 	d.admission.Lock()
 	defer d.admission.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)

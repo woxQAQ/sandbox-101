@@ -38,9 +38,9 @@ type SupplyCleanup struct {
 	guards     SupplyCleanupGuards
 	workers    *execution.Workers
 	proofs     machine.ResourceProofs
-	stops      *machine.VMStops
+	stops      *machine.Stops
 	captures   *machine.CaptureDiscard
-	deletion   *machine.VMDeletion
+	deletion   *machine.Deletion
 	ownership  CleanupOwnershipReader
 	faultPoint func(string) error
 }
@@ -50,9 +50,9 @@ type SupplyCleanupDependencies struct {
 	Gate      execution.AdmissionGate
 	Workers   *execution.Workers
 	Proofs    machine.ResourceProofs
-	Stops     *machine.VMStops
+	Stops     *machine.Stops
 	Captures  *machine.CaptureDiscard
-	Deletion  *machine.VMDeletion
+	Deletion  *machine.Deletion
 	Ownership CleanupOwnershipReader
 }
 

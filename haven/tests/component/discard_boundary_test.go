@@ -19,7 +19,7 @@ func TestHavenDiscardAdmissionAtomicity(t *testing.T) {
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_discard_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source)); err == nil {
+	if _, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source)); err == nil {
 		t.Fatal("ignored handoff accepted discard")
 	}
 	sandboxView, err := sandbox.LoadSandbox(context.Background(), service.State.Database(), source.Input.SandboxID, source.Input.TenantID)
@@ -46,7 +46,7 @@ func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
 	backend.InspectError = errors.New("fixture unknown sibling")
 	backend.Mu.Unlock()
 	networks := backend.Count("network")
-	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
+	discard, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 	if source.Status != "failed" || source.State.Materials != nil {
 		t.Fatal("fixture unexpectedly established restore boundary", source.State)
 	}
-	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
+	discard, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 	if err != nil {
 		t.Fatal(err)
 	}

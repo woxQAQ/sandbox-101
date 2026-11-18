@@ -133,7 +133,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	if err != nil || retirement.State.Phase != "pending" || retirement.Status != "running" {
 		t.Fatal(retirement, err)
 	}
-	if _, err = service.VMDeletion.AdmitRelease(ctx, machine.ReleaseRequest{
+	if _, err = service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "bypass",
 		SandboxID: claim.Result.SandboxID,

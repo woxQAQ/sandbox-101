@@ -37,7 +37,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 				}
 				return nil
 			}
-			acceptedOperation, err := service.VMProvisioning.AdmitRestore(context.Background(), request)
+			acceptedOperation, err := service.Provisioning.AdmitRestore(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +55,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 				t.Fatal("failure lost old/new disk debt", cost, err)
 			}
 			faults.Set(nil)
-			discard, err := service.VMDeletion.AdmitDiscard(context.Background(), machine.DiscardRequest{
+			discard, err := service.Deletion.AdmitDiscard(context.Background(), machine.DiscardRequest{
 				TenantID:          "tenant",
 				Key:               "discard-target",
 				SandboxID:         request.SandboxID,
@@ -108,7 +108,7 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 				}
 				return nil
 			})
-			acceptedOperation, err := service.VMProvisioning.AdmitRestore(context.Background(), request)
+			acceptedOperation, err := service.Provisioning.AdmitRestore(context.Background(), request)
 			if err != nil && !errors.Is(err, errs.ErrInterrupted) {
 				t.Fatal(err)
 			}
@@ -146,7 +146,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if first.Status != "succeeded" {
 		t.Fatal(first.State)
 	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
+	stop, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         "tenant",
 		Key:              "stop-again",
 		SandboxID:        acceptedOperation.Result.SandboxID,
@@ -158,7 +158,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if proof := fixtures.AwaitStop(t, service, stop.ID); proof.Status != "succeeded" {
 		t.Fatal("second stop failed", proof)
 	}
-	second, err := service.VMProvisioning.AdmitRestore(context.Background(), machine.RestoreRequest{
+	second, err := service.Provisioning.AdmitRestore(context.Background(), machine.RestoreRequest{
 		TenantID:         "tenant",
 		Key:              "restore-again",
 		SandboxID:        acceptedOperation.Result.SandboxID,
@@ -178,7 +178,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM backing WHERE vm_id=?", restored.Candidate).Scan(&backing); err != nil || backing != 2 {
 		t.Fatal("multiple retained RAM versions lost", backing, err)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release-generations",
 		SandboxID: acceptedOperation.Result.SandboxID,
@@ -217,7 +217,7 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := service.VMProvisioning.AdmitRestore(context.Background(), request); err == nil {
+				if _, err := service.Provisioning.AdmitRestore(context.Background(), request); err == nil {
 					t.Fatal("admission denial ignored")
 				}
 				var versions, instances, operations int
@@ -245,7 +245,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 			if _, err := service.State.Database().Exec(statement); err != nil {
 				t.Fatal(err)
 			}
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release-restored",
 				SandboxID: acceptedOperation.Result.SandboxID,
@@ -280,7 +280,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 	if step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release-restored",
 		SandboxID: acceptedOperation.Result.SandboxID,

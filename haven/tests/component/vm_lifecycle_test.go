@@ -66,7 +66,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 				}
 				baseline[table] = count
 			}
-			if _, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+			if _, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 				TenantID:   "tenant",
 				Key:        "atomic",
 				TemplateID: "cold",
@@ -110,7 +110,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 			t.Fatal("cold step did not complete", step.State)
 		}
 		fixtures.ColdResponsibility(t, service, operation, true)
-		original, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+		original, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 			TenantID:   "tenant",
 			Key:        "committed",
 			TemplateID: "cold",
@@ -118,7 +118,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 		if err != nil || original.ID != operation.ID {
 			t.Fatal("same-key replay lost original admission", err)
 		}
-		if _, err = service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+		if _, err = service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 			TenantID:   "tenant",
 			Key:        "committed",
 			TemplateID: "changed",
@@ -262,7 +262,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	backend.FailBoot = false
 	backend.Mu.Unlock()
 	service = fixtures.ResumeColdService(t, service, backend)
-	replayed, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
+	replayed, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "failed",
 		TemplateID: "cold",
@@ -270,7 +270,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err != nil || !bytes.Equal(testfixture.Encode(replayed), originalBytes) || backend.Count("launch") != 1 {
 		t.Fatal("failed key was re-executed or enriched", err)
 	}
-	if _, err = service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	if _, err = service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "unproved-delete",
 		SandboxID: failed.Result.SandboxID,
@@ -293,7 +293,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		}
 		return nil
 	})
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release",
 		SandboxID: current.Result.SandboxID,
@@ -327,7 +327,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&held); err != nil || held != 64 {
 		t.Fatal("cleanup refunded unrelated unknown allocation", held, err)
 	}
-	cached, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	cached, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release",
 		SandboxID: current.Result.SandboxID,
@@ -361,7 +361,7 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 				t.Fatal(step.State)
 			}
 			armed = true
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release",
 				SandboxID: claim.Result.SandboxID,
@@ -405,7 +405,7 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 	if cold.Status != "succeeded" {
 		t.Fatal(cold.State)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release",
 		SandboxID: claim.Result.SandboxID,

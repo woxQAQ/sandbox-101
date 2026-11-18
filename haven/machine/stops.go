@@ -22,9 +22,9 @@ type StopBackend interface {
 	Network(context.Context, loom.Resource, bool) error
 }
 
-// VMStops retains the original generation and funding proof while confirming
+// Stops retains the original generation and funding proof while confirming
 // process exit and network removal before publishing the stopped state.
-type VMStops struct {
+type Stops struct {
 	store      store.Workflow
 	ctx        context.Context
 	admission  execution.Guard
@@ -46,8 +46,8 @@ type VMStopsDependencies struct {
 	Ownership StopOwnershipReader
 }
 
-func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func(string) error) *VMStops {
-	return &VMStops{
+func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func(string) error) *Stops {
+	return &Stops{
 		store: store.Workflow{
 			Database:   state.Database(),
 			Directory:  state.Directory(),
@@ -66,14 +66,14 @@ func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func
 	}
 }
 
-func (s *VMStops) fault(point string) error {
+func (s *Stops) fault(point string) error {
 	if s.faultPoint != nil {
 		return s.faultPoint(point)
 	}
 	return nil
 }
 
-func (s *VMStops) dispatch(id string) {
+func (s *Stops) dispatch(id string) {
 	if s.store.Reviewed {
 		return
 	}
@@ -89,13 +89,13 @@ func (s *VMStops) dispatch(id string) {
 	})
 }
 
-func (s *VMStops) Resume(id string) (bool, error) {
+func (s *Stops) Resume(id string) (bool, error) {
 	if s.
 		ownership ==
 		nil {
 		return false,
 
-			fmt.Errorf("%w: required VMStops capability port unavailable",
+			fmt.Errorf("%w: required Stops capability port unavailable",
 				errs.ErrManualRecovery,
 			)
 	}

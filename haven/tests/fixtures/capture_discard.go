@@ -65,7 +65,7 @@ func FailedCaptureFixtureWithFault(t *testing.T, final bool, fault func(string) 
 	if failed.Status != "failed" || failed.State.ResumeRequired {
 		t.Fatal("fixture capture did not fail with resumed source", failed.State)
 	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
+	stop, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         request.TenantID,
 		Key:              "stop-failed-capture",
 		SandboxID:        request.SandboxID,

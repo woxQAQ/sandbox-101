@@ -18,11 +18,11 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (p *VMProvisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.Record, error) {
+func (p *Provisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.Record, error) {
 	return p.AdmitRestoreWithParent(ctx, request, nil)
 }
 
-func (p *VMProvisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.Record, error) {
+func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.Record, error) {
 	link, _ := parent.(*LifecycleAdmission)
 	var empty operation.Record
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {

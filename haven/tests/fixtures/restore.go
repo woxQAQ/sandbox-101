@@ -88,7 +88,7 @@ func CloneFixtureWithFault(t *testing.T, fault func(string) error) (*application
 
 func AdmitCloneFixture(t *testing.T, service *application.App, snapshot, key string) operation.Record {
 	t.Helper()
-	acceptedOperation, err := service.VMProvisioning.AdmitClone(context.Background(), machine.CloneRequest{
+	acceptedOperation, err := service.Provisioning.AdmitClone(context.Background(), machine.CloneRequest{
 		TenantID:   "tenant",
 		Key:        key,
 		SnapshotID: snapshot,

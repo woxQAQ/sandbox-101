@@ -40,7 +40,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 			if _, err = machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "tenant", fixture.Capture.Result.SnapshotID); err == nil {
 				t.Fatal("deleted snapshot still in catalog")
 			}
-			if _, err = service.VMProvisioning.AdmitClone(context.Background(), machine.CloneRequest{
+			if _, err = service.Provisioning.AdmitClone(context.Background(), machine.CloneRequest{
 				TenantID:   "tenant",
 				Key:        "clone-deleted",
 				SnapshotID: fixture.Capture.Result.SnapshotID,
@@ -62,7 +62,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 				if err = loom.VerifyRestoreMaterials(source.State.Materials, source.Input.Resource, source.Input.Restore.Snapshot.Manifest.Files, false); err != nil {
 					t.Fatal("deletion damaged retained backing", err)
 				}
-				release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+				release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 					TenantID:  "tenant",
 					Key:       fmt.Sprintf("release-deleted-clone-%d", index),
 					SandboxID: clone.Result.SandboxID,

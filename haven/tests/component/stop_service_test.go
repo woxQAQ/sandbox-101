@@ -30,7 +30,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 				SandboxID:        claim.Result.SandboxID,
 				ExpectedInstance: source.State.Witness,
 			}
-			accepted, err := service.VMStops.AdmitStop(context.Background(), request)
+			accepted, err := service.Stops.AdmitStop(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_stop_completion"); err != nil {
 				t.Fatal(err)
 			}
-			replay, err := service.VMStops.AdmitStop(context.Background(), request)
+			replay, err := service.Stops.AdmitStop(context.Background(), request)
 			if err != nil || replay.ID != accepted.ID {
 				t.Fatal("stop replay changed immutable operation", replay, err)
 			}

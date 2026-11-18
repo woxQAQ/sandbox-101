@@ -19,7 +19,7 @@ func RawCleanupFixture(t *testing.T, fault func(string) error) (*application.App
 		t.Fatal(err)
 	}
 	capture := AwaitCapture(t, service, operation.ID)
-	stopped, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
+	stopped, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         "tenant",
 		Key:              "stop",
 		SandboxID:        request.SandboxID,

@@ -29,7 +29,7 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	if _, err = service.State.Database().Exec("DELETE FROM images WHERE digest=?", imageManifest.Digest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.VMProvisioning.AdmitCold(ctx, machine.FreshRequest{
+	if _, err = service.Provisioning.AdmitCold(ctx, machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "orphan",
 		TemplateID: "cold",
@@ -50,7 +50,7 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	if err = loom.WriteJSON(filepath.Join(directory, "image.json"), changed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.VMProvisioning.AdmitCold(ctx, machine.FreshRequest{
+	if _, err = service.Provisioning.AdmitCold(ctx, machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "changed",
 		TemplateID: "cold",

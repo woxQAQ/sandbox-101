@@ -61,7 +61,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			if err != nil || replay.ID != operation.ID || replay.Status != "succeeded" {
 				t.Fatal("discard same-key replay changed", replay, err)
 			}
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  request.TenantID,
 				Key:       "release-source",
 				SandboxID: request.SandboxID,

@@ -46,7 +46,7 @@ func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
 	if _, err := service.Tenants.PutTenant(ctx, root, tenant); err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := service.VMProvisioning.AdmitRestore(ctx, request)
+	accepted, err := service.Provisioning.AdmitRestore(ctx, request)
 	if err == nil || !strings.Contains(err.Error(), "restore tenant peak quota exhausted") || accepted.ID != "" {
 		t.Fatal("restore rounded away retained storage", accepted, err)
 	}
@@ -58,7 +58,7 @@ func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
 	if _, err = service.Tenants.PutTenant(ctx, root, tenant); err != nil {
 		t.Fatal(err)
 	}
-	accepted, err = service.VMProvisioning.AdmitRestore(ctx, request)
+	accepted, err = service.Provisioning.AdmitRestore(ctx, request)
 	if err != nil {
 		t.Fatal("exact quota boundary was rejected", err)
 	}

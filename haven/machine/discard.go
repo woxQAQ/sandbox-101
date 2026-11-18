@@ -78,26 +78,26 @@ func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (Dis
 
 // AdmitDiscard is an explicit sandbox-scoped cleanup of one fixed failed intent.
 // It never upgrades that failure to a successful generation or invents a witness.
-func (d *VMDeletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.Record, error) {
+func (d *Deletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.Record, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
 
 	return d.AdmitDiscardForParent(ctx, request, nil)
 }
 
-func (d *VMDeletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.Record, error) {
+func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.Record, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
 
@@ -329,7 +329,7 @@ func (d *VMDeletion) AdmitDiscardForParent(ctx context.Context, request DiscardR
 	return accepted, nil
 }
 
-func (d *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input discardInput) (VMRecord, error) {
+func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input discardInput) (VMRecord, error) {
 	var currentMachine VMRecord
 	source, request := input.Source, input.Request
 	if err := d.validateStep(source); err != nil {
@@ -447,7 +447,7 @@ func (d *VMDeletion) discardSource(ctx context.Context, tx *sql.Tx, input discar
 	return currentMachine, nil
 }
 
-func (d *VMDeletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardStep) (VMRecord, error) {
+func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardStep) (VMRecord, error) {
 	currentMachine, err := d.discardSource(ctx, tx, step.Input)
 	if err != nil {
 		return currentMachine, err

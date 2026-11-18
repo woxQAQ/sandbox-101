@@ -56,7 +56,7 @@ func (ProvisionHandoff) BlockActivation(ctx context.Context, tx *sql.Tx, id stri
 
 // AdmitIn joins resource intent and all charges to the caller's transaction.
 // A batch commits every destination before dispatching any effect.
-func (p *VMProvisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
+func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
 	var empty operation.Record
 	request := admission.Request
 	tenantID, frozen := request.TenantID, request.Frozen

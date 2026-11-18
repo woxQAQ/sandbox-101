@@ -35,8 +35,8 @@ type WarmClaimDependencies struct {
 	Proofs       machine.ResourceProofs
 	Committer    *operation.Committer
 	Activations  *Activations
-	Provisioning *VMProvisioning
-	Deletion     *machine.VMDeletion
+	Provisioning *Provisioning
+	Deletion     *machine.Deletion
 	Policies     *machine.DirectPolicies
 	Links        *machine.ResourceLinks
 }
@@ -53,8 +53,8 @@ type WarmClaims struct {
 	registry     *ephemeral.Registry
 	proofs       machine.ResourceProofs
 	activations  *Activations
-	provisioning *VMProvisioning
-	deletion     *machine.VMDeletion
+	provisioning *Provisioning
+	deletion     *machine.Deletion
 	policies     *machine.DirectPolicies
 	links        *machine.ResourceLinks
 	faultPoint   func(string) error

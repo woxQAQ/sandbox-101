@@ -18,7 +18,7 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (d *VMDeletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, error) {
+func (d *Deletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, error) {
 	d.admission.Lock()
 	defer d.admission.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
@@ -41,7 +41,7 @@ func (d *VMDeletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, er
 	})
 }
 
-func (d *VMDeletion) runRelease(step ResourceStep) error {
+func (d *Deletion) runRelease(step ResourceStep) error {
 	generations, err := d.releaseGenerationSet(step)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func (d *VMDeletion) runRelease(step ResourceStep) error {
 	return d.completeRelease(step)
 }
 
-func (d *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error) {
+func (d *Deletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
 	body, err := dbgen.New(d.store.Database).GetDeletionReceipt(d.ctx, dbgen.GetDeletionReceiptParams{
 		Path:        step.Input.Resource.Dir,
@@ -258,7 +258,7 @@ func (d *VMDeletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, err
 	return intent, d.fault("deletion_intent")
 }
 
-func (d *VMDeletion) completeRelease(step ResourceStep) error {
+func (d *Deletion) completeRelease(step ResourceStep) error {
 	d.admission.Lock()
 	defer d.admission.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
@@ -445,7 +445,7 @@ func (d *VMDeletion) completeRelease(step ResourceStep) error {
 	return d.fault("release_completed")
 }
 
-func (d *VMDeletion) markRelease(step *ResourceStep, phase string) error {
+func (d *Deletion) markRelease(step *ResourceStep, phase string) error {
 	next := step.State
 	next.Phase = phase
 	d.admission.Lock()

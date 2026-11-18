@@ -18,14 +18,14 @@ import (
 // AdmitRelease revokes the logical sandbox and gives cleanup an independent
 // intent. An immutable successful source witness is required; unresolved or
 // failed generation attempts retain their responsibility for review.
-func (d *VMDeletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.Record, error) {
+func (d *Deletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.Record, error) {
 	if d.
 		ownership ==
 		nil || d.handoff ==
 		nil ||
 		d.
 			usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
@@ -33,9 +33,9 @@ func (d *VMDeletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (
 	return d.AdmitReleaseForParent(ctx, request, nil)
 }
 
-func (d *VMDeletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
+func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
 	if d.ownership == nil || d.handoff == nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required VMDeletion capability port unavailable",
+		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
@@ -312,7 +312,7 @@ func (d *VMDeletion) AdmitReleaseForParent(ctx context.Context, request ReleaseR
 	return accepted, nil
 }
 
-func (d *VMDeletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error) {
+func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error) {
 	queries := dbgen.New(tx)
 	source, err := LoadResourceStep(d.ctx, tx, step.Input.SourceOperation)
 	if err != nil {

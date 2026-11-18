@@ -55,7 +55,7 @@ func SnapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release-snapshot-source",
 		SandboxID: original.Input.Request.SandboxID,

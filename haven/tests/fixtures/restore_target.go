@@ -163,7 +163,7 @@ func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 	if ready.Status != "succeeded" {
 		t.Fatal(ready.State)
 	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
+	stop, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         "tenant",
 		Key:              "target-stop",
 		SandboxID:        target.Result.SandboxID,
@@ -203,7 +203,7 @@ func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 func TargetFixture(t *testing.T) (*application.App, *generationRuntime, operation.Record, machine.ResourceStep) {
 	t.Helper()
 	service, backend, request, _ := TargetSetup(t)
-	restored, err := service.VMProvisioning.AdmitRestore(context.Background(), request)
+	restored, err := service.Provisioning.AdmitRestore(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

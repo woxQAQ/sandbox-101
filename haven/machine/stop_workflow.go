@@ -16,14 +16,14 @@ import (
 
 // AdmitStop is an internal resource boundary for an undelivered sandbox. Running
 // Activated sessions require their separate deactivation/pause workflow.
-func (s *VMStops) AdmitStop(ctx context.Context, request StopRequest) (operation.Record, error) {
+func (s *Stops) AdmitStop(ctx context.Context, request StopRequest) (operation.Record, error) {
 	if s.
 		ownership ==
 		nil {
 		return operation.
 				Record{},
 			fmt.Errorf(
-				"%w: required VMStops capability port unavailable",
+				"%w: required Stops capability port unavailable",
 
 				errs.ErrManualRecovery)
 	}
@@ -31,14 +31,14 @@ func (s *VMStops) AdmitStop(ctx context.Context, request StopRequest) (operation
 	return s.AdmitForParent(ctx, request, nil)
 }
 
-func (s *VMStops) AdmitForParent(ctx context.Context, request StopRequest, parent ResourceParent) (operation.Record, error) {
+func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent ResourceParent) (operation.Record, error) {
 	if s.
 		ownership ==
 		nil {
 		return operation.
 				Record{},
 			fmt.Errorf(
-				"%w: required VMStops capability port unavailable",
+				"%w: required Stops capability port unavailable",
 
 				errs.ErrManualRecovery)
 	}
@@ -178,7 +178,7 @@ func (s *VMStops) AdmitForParent(ctx context.Context, request StopRequest, paren
 	return accepted, nil
 }
 
-func (s *VMStops) stopProof(tx *sql.Tx, step StopStep) (ResourceStep, VMRecord, error) {
+func (s *Stops) stopProof(tx *sql.Tx, step StopStep) (ResourceStep, VMRecord, error) {
 	source, err := LoadResourceStep(s.ctx, tx, step.Input.SourceOperation)
 	if err != nil {
 		return source, VMRecord{}, err
@@ -234,7 +234,7 @@ func (s *VMStops) stopProof(tx *sql.Tx, step StopStep) (ResourceStep, VMRecord, 
 	return source, currentMachine, nil
 }
 
-func (s *VMStops) runStop(step StopStep) error {
+func (s *Stops) runStop(step StopStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}

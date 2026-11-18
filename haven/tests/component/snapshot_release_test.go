@@ -34,7 +34,7 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 			historical := fixtures.AwaitCapture(t, service, capture.ID)
 			fixtures.CapturePublished(t, service, historical, true)
 			historyBytes := testfixture.Encode(historical)
-			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  request.TenantID,
 				Key:       "release",
 				SandboxID: request.SandboxID,
@@ -91,7 +91,7 @@ func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_capture_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
+	if _, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  request.TenantID,
 		Key:       "release",
 		SandboxID: request.SandboxID,

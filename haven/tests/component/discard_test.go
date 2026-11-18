@@ -43,7 +43,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := fixtures.DiscardRequest(source)
-			operation, err := service.VMDeletion.AdmitDiscard(context.Background(), request)
+			operation, err := service.Deletion.AdmitDiscard(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				Original: testfixture.Encode(original),
 			})
 			service = testapp.ReopenCloneService(t, service, backend)
-			cached, err := service.VMDeletion.AdmitDiscard(context.Background(), request)
+			cached, err := service.Deletion.AdmitDiscard(context.Background(), request)
 			if err != nil || cached.ID != operation.ID || cached.Status != "succeeded" {
 				t.Fatal("completed discard did not replay original result", err)
 			}
@@ -94,7 +94,7 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			operation, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
+			operation, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 			if err != nil && !errors.Is(err, errs.ErrInterrupted) {
 				t.Fatal(err)
 			}
@@ -145,7 +145,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 				if _, err = service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				operation, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
+				operation, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -188,7 +188,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				}
 				return nil
 			})
-			operation, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
+			operation, err := service.Deletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 			if err != nil && !errors.Is(err, errs.ErrInterrupted) {
 				t.Fatal(err)
 			}
