@@ -15,7 +15,7 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-type Guards interface {
+type CollectorGuards interface {
 	Admission() execution.Guard
 	NodeRequest(string, string) execution.Guard
 	GarbageCollection() execution.Guard
@@ -32,7 +32,7 @@ type Collector struct {
 	nodeID     string
 	admission  execution.Guard
 	gate       execution.AdmissionGate
-	guards     Guards
+	guards     CollectorGuards
 	workers    *execution.Workers
 	proofs     machine.SnapshotProofs
 	operations *operation.Operations
@@ -43,8 +43,8 @@ type Collector struct {
 	faultPoint func(string) error
 }
 
-type Dependencies struct {
-	Guards     Guards
+type CollectorDependencies struct {
+	Guards     CollectorGuards
 	Gate       execution.AdmissionGate
 	Workers    *execution.Workers
 	Proofs     machine.SnapshotProofs
@@ -55,7 +55,7 @@ type Dependencies struct {
 	Raw        *machine.CaptureCleanup
 }
 
-func NewCollector(state *store.State, dependencies Dependencies, fault func(string) error) *Collector {
+func NewCollector(state *store.State, dependencies CollectorDependencies, fault func(string) error) *Collector {
 	return &Collector{
 		store: store.Workflow{
 			Database:   state.Database(),

@@ -16,30 +16,30 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-type Backend interface {
+type PlaneBackend interface {
 	Inspect(context.Context, loom.Resource) (loom.Observation, error)
 }
 
-type Guest interface {
+type PlaneGuest interface {
 	Connect(context.Context, loom.Resource) (net.Conn, error)
 	Forward(context.Context, loom.Resource, int) (net.Conn, error)
 }
 
-type Guards interface {
+type PlaneGuards interface {
 	Registration() execution.Guard
 	Sandbox(string) execution.Guard
 	Configuration(string) execution.Guard
 	AutoResume(string) execution.Guard
 }
 
-type Options struct {
-	Backend Backend
-	Guest   Guest
+type PlaneOptions struct {
+	Backend PlaneBackend
+	Guest   PlaneGuest
 	Epoch   string
 }
 
-type Dependencies struct {
-	Guards      Guards
+type PlaneDependencies struct {
+	Guards      PlaneGuards
 	Lifetime    *execution.Lifetime
 	Registry    *ephemeral.Registry
 	Commands    *sandbox.SandboxCommands
@@ -55,7 +55,7 @@ type Plane struct {
 	store       store.Workflow
 	ctx         context.Context
 	lifetime    *execution.Lifetime
-	guards      Guards
+	guards      PlaneGuards
 	mu          execution.Guard
 	registry    *ephemeral.Registry
 	epoch       string
@@ -66,10 +66,10 @@ type Plane struct {
 	lifecycle   *sandbox.Lifecycle
 	operations  *operation.Operations
 	activations *sandbox.Activations
-	opts        Options
+	opts        PlaneOptions
 }
 
-func NewPlane(state *store.State, dependencies Dependencies, options Options) *Plane {
+func NewPlane(state *store.State, dependencies PlaneDependencies, options PlaneOptions) *Plane {
 	return &Plane{
 		store: store.Workflow{
 			Database:   state.Database(),

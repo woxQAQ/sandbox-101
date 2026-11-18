@@ -241,7 +241,7 @@ func Open(opts Options) (*App, error) {
 		Deletion:  service.Deletion,
 		Ownership: sandbox.SupplyCleanupHistory{},
 	}, opts.Fault)
-	service.GC = gc.NewCollector(state, gc.Dependencies{
+	service.GC = gc.NewCollector(state, gc.CollectorDependencies{
 		Guards:     guards,
 		Gate:       admissionGate,
 		Workers:    workers,
@@ -416,7 +416,7 @@ func Open(opts Options) (*App, error) {
 		},
 		Fault: opts.Fault,
 	})
-	service.Dataplane = dataplane.NewPlane(state, dataplane.Dependencies{
+	service.Dataplane = dataplane.NewPlane(state, dataplane.PlaneDependencies{
 		Guards:      guards,
 		Lifetime:    lifetime,
 		Registry:    registry,
@@ -425,7 +425,7 @@ func Open(opts Options) (*App, error) {
 		Lifecycle:   service.Lifecycle,
 		Operations:  service.Operations,
 		Activations: service.Activations,
-	}, dataplane.Options{
+	}, dataplane.PlaneOptions{
 		Backend: opts.Backend,
 		Guest:   opts.Guest,
 		Epoch:   registry.Epoch(),
