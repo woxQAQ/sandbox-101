@@ -51,4 +51,3 @@ func (m *ManagementClient) Operation(ctx context.Context, id string) (types.Mana
 		Path:   "/v1/operations/" + url.PathEscape(id),
 	})
 }
-
