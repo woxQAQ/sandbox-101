@@ -12,9 +12,9 @@ func TestFlagsMatchSettings(t *testing.T) {
 	newFlagSet().VisitAll(func(flag *pflag.Flag) {
 		remaining[flag.Name] = true
 	})
-	typ := reflect.TypeOf(settings{})
-	for i := 0; i < typ.NumField(); i++ {
-		tag := typ.Field(i).Tag.Get("mapstructure")
+	typ := reflect.TypeFor[settings]()
+	for field := range typ.Fields() {
+		tag := field.Tag.Get("mapstructure")
 		if !remaining[tag] {
 			t.Errorf("settings field %q has no registered flag", tag)
 		}

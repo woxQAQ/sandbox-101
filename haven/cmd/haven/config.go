@@ -10,7 +10,7 @@ import (
 	"github.com/woxQAQ/haven/config"
 )
 
-func newFlagSet() *pflag.FlagSet {
+func parseConfig(args []string) (config.Daemon, error) {
 	flags := pflag.NewFlagSet("haven", pflag.ContinueOnError)
 	flags.SetInterspersed(false)
 	flags.String("config", "", "explicit configuration file")
@@ -42,11 +42,6 @@ func newFlagSet() *pflag.FlagSet {
 	flags.Duration("maintenance-interval", time.Second, "workflow, binding, lease and pool maintenance interval")
 	flags.Duration("gc-interval", time.Minute, "background collection interval (0 disables)")
 	flags.Int("gc-batch", 16, "maximum artifacts per collection pass")
-	return flags
-}
-
-func parseConfig(args []string) (config.Daemon, error) {
-	flags := newFlagSet()
 	var result config.Daemon
 	if err := flags.Parse(args); err != nil {
 		return result, err

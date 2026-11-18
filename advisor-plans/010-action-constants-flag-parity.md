@@ -61,7 +61,10 @@ Two paired-but-separated duplications:
 - `loom/cmd/loomctl/main.go`, `haven/node/management.go`
 - `sdk/cmd/havenctl/config.go` + new `sdk/cmd/havenctl/config_test.go`
 - `loom/cmd/loomctl/config.go` + new `loom/cmd/loomctl/config_test.go`
-- `haven/cmd/haven/config.go` + new `haven/cmd/haven/config_test.go`
+- `sdk/cmd/havenctl/config.go` + new `sdk/cmd/havenctl/config_test.go`
+
+(Review outcome: the haven daemon parity test was judged unnecessary and
+dropped; `haven/cmd/haven/config.go` stays untouched.)
 
 **Out of scope**:
 - `common/config/load.go` (the loader already validates what it can)
