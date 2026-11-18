@@ -62,8 +62,8 @@ type ResourceStep struct {
 	OperationID      string
 	Key              string
 	Action           string
-	Status           string
 	Hash             string
+	Status           string
 	Candidate        string
 	ExpectedInstance string
 	Input            ResourceInput

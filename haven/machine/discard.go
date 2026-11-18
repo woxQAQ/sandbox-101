@@ -24,15 +24,15 @@ type DiscardRequest struct {
 	ExpectedInstance  string `json:"expected_instance"`
 }
 
-// discardInput freezes a failed intent, not a synthesized success witness.
+// DiscardInput freezes a failed intent, not a synthesized success witness.
 // CurrentInstance can remain empty for a candidate that never reached launch.
-type discardInput struct {
+type DiscardInput struct {
 	Request         DiscardRequest `json:"request"`
 	Source          ResourceStep   `json:"source"`
 	CurrentInstance string         `json:"current_instance"`
 }
 
-type discardState struct {
+type DiscardState struct {
 	Phase string `json:"phase"`
 }
 
@@ -40,8 +40,8 @@ type DiscardStep struct {
 	OperationID string
 	Hash        string
 	Status      string
-	Input       discardInput
-	State       discardState
+	Input       DiscardInput
+	State       DiscardState
 }
 
 func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (DiscardStep, error) {
@@ -160,7 +160,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	if owner != source.OperationID || currentMachine.Deleting || currentMachine.Verified || currentMachine.AgentReady || source.Candidate != record.VMID || current != "" && !ExpectedCurrentInstance(source, current) {
 		return empty, fmt.Errorf("%w: discard candidate no longer belongs to failed intent", errs.ErrManualRecovery)
 	}
-	input := discardInput{
+	input := DiscardInput{
 		Request:         request,
 		Source:          source,
 		CurrentInstance: current,
@@ -211,7 +211,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		CandidateResourceID: source.Candidate,
 		ExpectedInstance:    request.ExpectedInstance,
 		Status:              "pending",
-		Body: operation.Encode(discardState{
+		Body: operation.Encode(DiscardState{
 			Phase: "admitted",
 		}),
 	})); err != nil {
@@ -329,7 +329,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	return accepted, nil
 }
 
-func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input discardInput) (VMRecord, error) {
+func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardInput) (VMRecord, error) {
 	var currentMachine VMRecord
 	source, request := input.Source, input.Request
 	if err := d.validateStep(source); err != nil {

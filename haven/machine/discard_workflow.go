@@ -31,7 +31,7 @@ func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
 	if err != nil {
 		return err
 	}
-	next := discardState{
+	next := DiscardState{
 		Phase: phase,
 	}
 	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(d.ctx, dbgen.AdvanceLiveStepParams{
@@ -399,7 +399,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 			return err
 		}
 	}
-	next := discardState{
+	next := DiscardState{
 		Phase: "complete",
 	}
 	responsibilities := quota.New(tx)
