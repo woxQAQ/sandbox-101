@@ -20,7 +20,7 @@ err = manager.Bind(ctx, egress.BindingTarget{
     VSockPath: vmVsockPath,
 },
     egress.Policy{
-        Mode: "relay",
+        Mode: "proxy",
         AllowedHosts: []string{"api.example.com"},
         MaxConnections: 256,
     },
@@ -42,8 +42,8 @@ caPEM := manager.CACertPEM()
 binding, _ := manager.Binding(sandboxID)
 _ = caPEM
 _ = binding
-// Install CA trust, placeholders and relay configuration through activation.
-// Keep the VM NIC disabled in relay mode; then publish the sandbox handle.
+// Install CA trust, placeholders and proxy configuration through activation.
+// Keep the VM NIC disabled in proxy mode; then publish the sandbox handle.
 ```
 
 `Bind` returns only after both Unix listeners exist and have mode `0600`. `Options.PrepareSocket` can grant an independently verified VMM UID/GID ownership before listeners serve requests. The production service verifies the tenant/VM/instance/vsock path, anchors the new socket inode without following symlinks, and changes ownership to the nonroot owner of the verified VMM's own vsock socket. Permissions remain 0600; a failed handoff closes the binding. Standalone managers with no callback retain their creating process's identity. For a CH vsock path `/private/vm/io/vsock`, guest connections to host vsock port 2049 arrive at `/private/vm/io/vsock_2049`; port 2050 arrives at `/private/vm/io/vsock_2050`. There is no additional `CONNECT 2049` handshake on these guest-to-host streams: they carry the HTTP proxy or SOCKS5 protocol directly. The caller must provide an absolute, clean path in a control-plane-owned runtime directory, inaccessible to guests and untrusted host processes. Provision socket access for the CH process under the same trusted host identity.
@@ -55,7 +55,7 @@ The `ctx` argument covers installation. Canceling it after successful `Bind` doe
 Modes are explicit and fail closed:
 
 - `none` creates no egress listeners and accepts no secrets.
-- `relay` creates HTTP/CONNECT and SOCKS5 listeners and keeps the VM NIC disabled.
+- `proxy` creates HTTP/CONNECT and SOCKS5 listeners and keeps the VM NIC disabled.
 - `direct` requires `Options.InstallDirect(ctx, Binding, Policy) (teardown func() error, err error)`. This callback must synchronously install all host/netns policies while the VM NIC is disabled, return teardown even after partial installation, and return success only when policies are effective. `Bind` never enables a NIC. The parent enables it only after successful installation and guest activation. The parent must disable the NIC before revoking direct rules. Secrets in direct mode are rejected because an unconstrained raw NIC path cannot support host-only credential substitution. The callback must implement and validate the actual network policy itself; proxy guards do not inspect direct packets.
 
 By default, existing files and sockets cause binding to fail. Restart reconciliation can set `Options.RecoverStaleSocket func(Binding, string, os.FileInfo) bool`, but must first prove exclusive ownership of that VM runtime directory and that the previous binding is dead. Even with that proof the package refuses regular files, reachable sockets, permission failures and changed inodes; only an unchanged socket with `ECONNREFUSED`/`ENOENT` can be removed. Normal teardown also checks file identity before unlinking, so it preserves replacement sockets. The exclusive-directory requirement is essential to preventing pathname replacement races.

@@ -37,13 +37,13 @@ func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, 
 	}
 	policy := command.Policy
 	if policy.Mode == "" {
-		policy.Mode = "relay"
+		policy.Mode = "proxy"
 	}
-	if policy.Mode != "none" && policy.Mode != "relay" && policy.Mode != "direct" {
+	if policy.Mode != "none" && policy.Mode != "proxy" && policy.Mode != "direct" {
 		return nil, fmt.Errorf("%w: invalid network mode", errs.ErrInvalid)
 	}
-	if len(secrets) > 0 && policy.Mode != "relay" {
-		return nil, fmt.Errorf("%w: host credentials require relay mode", errs.ErrInvalid)
+	if len(secrets) > 0 && policy.Mode != "proxy" {
+		return nil, fmt.Errorf("%w: host credentials require proxy mode", errs.ErrInvalid)
 	}
 	if policy.Mode == "direct" {
 		if _, err = machine.DirectNetworkPolicy(policy); err != nil {

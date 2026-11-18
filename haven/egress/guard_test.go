@@ -46,7 +46,7 @@ func TestGuardRejectsSpecialAndMixedAnswers(t *testing.T) {
 		"ff02::1",
 	}
 	p, err := compilePolicy(Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestGuardRejectsSpecialAndMixedAnswers(t *testing.T) {
 			},
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		nil,
 	)
@@ -116,7 +116,7 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 			},
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		nil,
 	)
@@ -139,7 +139,7 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 			DialContext: targetDialer(up.Listener.Addr().String(), nil),
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		map[string]Secret{
 			"key": {
@@ -159,7 +159,7 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 
 func TestPrivateCIDROptInRequiresExplicitAllowance(t *testing.T) {
 	policy := Policy{
-		Mode: "relay",
+		Mode: "proxy",
 		AllowedCIDRs: []string{
 			"10.2.0.0/16",
 			"169.254.0.0/16",
@@ -219,7 +219,7 @@ func TestRevokeCancelsInFlightNumericDial(t *testing.T) {
 			},
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		nil,
 	)

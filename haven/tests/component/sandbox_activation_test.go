@@ -151,7 +151,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	acceptedOperation := (fixtures.SandboxClaims{
 		App: service,
 	}).Claim(t, "secret-claim", env, egress.Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	})
 	for _, activation := range guest.Activations {
 		for _, value := range activation.Env {
@@ -203,7 +203,7 @@ func TestHavenSecretRestart(t *testing.T) {
 		SandboxID: acceptedOperation.Result.SandboxID,
 		Env:       env,
 		Policy: egress.Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 	})
 	if err != nil {
@@ -231,7 +231,7 @@ func TestHavenSecretRestart(t *testing.T) {
 		SandboxID: acceptedOperation.Result.SandboxID,
 		Env:       env,
 		Policy: egress.Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 	}); err == nil {
 		t.Fatal("credential change reused fixed idempotency identity")

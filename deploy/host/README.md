@@ -36,7 +36,7 @@ capture 父目录由 root 持有、模式 0711；只有 `ch` 叶交给 VMM。禁
 
 部署前审查并加载 [宿主防火墙示例](sandbox-engine.nft)，启用 IPv4 forwarding，协调宿主 firewall priorities。`inet sandbox_engine` 是保留的内核资源 identity；不要在 VMM 存活时清空 `active_ifaces`/`active_ips`。IPv6 与 VMM-originated IP 被阻断。
 
-Haven 按 off → 安装并核验策略 → Admin/Workload ready → on → 最终交付执行 direct。`none`/`relay` NIC 保持关闭。CIDR/flow、精确实例退休及实际规则核验见 [网络策略](../../docs/network-policy.md)。未知 namespace/link/进程或缺失 receipt 保留现场，不能凭目录名删除。
+Haven 按 off → 安装并核验策略 → Admin/Workload ready → on → 最终交付执行 direct。`none`/`proxy` NIC 保持关闭。CIDR/flow、精确实例退休及实际规则核验见 [网络策略](../../docs/network-policy.md)。未知 namespace/link/进程或缺失 receipt 保留现场，不能凭目录名删除。
 
 ## 安装和首次启动
 

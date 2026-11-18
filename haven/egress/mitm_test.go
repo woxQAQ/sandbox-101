@@ -40,7 +40,7 @@ func mitmBoundsFixture(t *testing.T) (*Manager, Binding, *atomic.Int32, *atomic.
 			}
 		},
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, map[string]Secret{
 		"TOKEN": {
 			Value: "host-only-test-value",
@@ -192,7 +192,7 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 		IdleTimeout: 30 * time.Second,
 		DialContext: targetDialer(up.Listener.Addr().String(), &dials),
 	}, Policy{
-		Mode:           "relay",
+		Mode:           "proxy",
 		MaxConnections: 1,
 	}, nil)
 	conn := mitmClient(t, m, b)
@@ -339,7 +339,7 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 					RootCAs:     pool,
 					DialContext: targetDialer(up.Listener.Addr().String(), nil),
 				}, Policy{
-					Mode:           "relay",
+					Mode:           "proxy",
 					MaxConnections: 1,
 				}, nil)
 				active := m.bindings[b.SandboxID]

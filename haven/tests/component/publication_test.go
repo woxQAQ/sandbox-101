@@ -129,7 +129,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	acceptedRecord := (fixtures.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim-before-publication-fault", nil, egress.Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	})
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER reject_public_delivery BEFORE INSERT ON operation_publications BEGIN SELECT RAISE(ABORT,'publication blocked'); END`); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 	})
 	if err != nil {
@@ -167,7 +167,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 	})
 	if err != nil {

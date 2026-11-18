@@ -59,7 +59,7 @@ func TestHTTPSAuditFailureBlocksDialAndRecoveryAllowsNextRequest(t *testing.T) {
 			return nil
 		},
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, map[string]Secret{
 		"explicit": {
 			Value: "Bearer host-explicit-secret",
@@ -130,7 +130,7 @@ func TestHTTPProxyAndHostValidation(t *testing.T) {
 			DialContext: targetDialer(up.Listener.Addr().String(), &dials),
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 			AllowedHosts: []string{
 				"example.com",
 			},
@@ -173,7 +173,7 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 			},
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		nil,
 	)
@@ -256,7 +256,7 @@ func TestCONNECTRejectsPlaintextSNIAndInnerHostMismatch(t *testing.T) {
 
 func TestRevokeClosesHijackedCONNECT(t *testing.T) {
 	m, b := newTestManager(t, Options{}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, nil)
 	conn := connectTunnel(t, b.HTTPPath, "example.com:443")
 	defer conn.Close()

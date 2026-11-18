@@ -11,15 +11,15 @@ type Shape struct {
 	DiskMiB   int64 `json:"disk_mib"`
 }
 
-// Policy controls outbound access. Mode is none, relay or direct.
+// Policy controls outbound access. Mode is none, proxy or direct.
 type Policy struct {
 	Mode           string   `json:"mode"`
-	AllowedHosts   []string `json:"allowed_hosts,omitempty"`   // Relay-only host allowlist.
+	AllowedHosts   []string `json:"allowed_hosts,omitempty"`   // Proxy-only host allowlist.
 	AllowedCIDRs   []string `json:"allowed_cidrs,omitempty"`   // Canonical IPv4 prefixes for direct mode.
 	MaxConnections int      `json:"max_connections,omitempty"` // Direct-mode tracked flow limit.
 }
 
-// Injection supplies a host-only credential to matching relay HTTP requests.
+// Injection supplies a host-only credential to matching proxy HTTP requests.
 type Injection struct {
 	Hosts       []string `json:"hosts"`
 	Header      string   `json:"header"`

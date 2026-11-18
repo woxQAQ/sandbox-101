@@ -127,7 +127,7 @@ pub async fn activate(agent: &Arc<Agent>, frame: &Frame) -> Result<Frame> {
     ensure!(!id.is_empty() && id.len() <= 128, "invalid sandbox_id");
     let network = string(&p, "network")?;
     ensure!(
-        ["none", "relay", "direct"].contains(&network),
+        ["none", "proxy", "direct"].contains(&network),
         "invalid network mode"
     );
     let env = env_map(&p)?;

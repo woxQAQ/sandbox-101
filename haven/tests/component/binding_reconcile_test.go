@@ -131,7 +131,7 @@ func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
 	claim := (fixtures.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
-		Mode: "relay",
+		Mode: "proxy",
 		AllowedHosts: []string{
 			"unused.invalid",
 		},

@@ -22,7 +22,7 @@ pub async fn listeners(agent: Arc<Agent>) -> Result<()> {
         tokio::spawn(async move {
             let _permit = permit;
             let mut policy = agent.policy_changed.subscribe();
-            if agent.activation.lock().await.network != "relay" {
+            if agent.activation.lock().await.network != "proxy" {
                 return;
             }
             let host = tokio::select! {

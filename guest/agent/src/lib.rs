@@ -273,7 +273,7 @@ impl Agent {
                 )));
             }
         };
-        if activation.network == "relay" {
+        if activation.network == "proxy" {
             for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] {
                 env.insert(k.into(), "http://127.0.0.1:3128".into());
             }

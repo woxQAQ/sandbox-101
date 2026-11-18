@@ -27,7 +27,7 @@ func TestSOCKS5TCPAndGuards(t *testing.T) {
 			DialContext: targetDialer(up.Listener.Addr().String(), &dials),
 		},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 			AllowedHosts: []string{
 				"example.com",
 			},
@@ -66,7 +66,7 @@ func TestSOCKS5TCPAndGuards(t *testing.T) {
 		t,
 		Options{},
 		Policy{
-			Mode: "relay",
+			Mode: "proxy",
 		},
 		map[string]Secret{
 			"key": {
@@ -108,7 +108,7 @@ func TestSOCKS5HalfClose(t *testing.T) {
 	_, b := newTestManager(t, Options{
 		DialContext: targetDialer(up.Addr().String(), nil),
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, nil)
 	conn, status := socksConnect(t, b.SOCKSPath, "example.com", 1)
 	defer conn.Close()

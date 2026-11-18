@@ -228,7 +228,7 @@ func TestConnectionBudgetAndRevoke(t *testing.T) {
 			DialContext: targetDialer(up.Listener.Addr().String(), nil),
 		},
 		Policy{
-			Mode:           "relay",
+			Mode:           "proxy",
 			MaxConnections: 1,
 		},
 		nil,
@@ -315,7 +315,7 @@ func TestModesActivationAndExistingPaths(t *testing.T) {
 		TenantID:  "t",
 		VSockPath: base,
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, nil); err == nil {
 		t.Fatal("overwrote existing path")
 	}
@@ -384,7 +384,7 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	p := Policy{
-		Mode: "relay",
+		Mode: "proxy",
 		AllowedHosts: []string{
 			"example.com",
 		},

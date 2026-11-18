@@ -48,7 +48,7 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		TenantID:  "t",
 		VSockPath: base,
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestOwnedStaleSocketRecoveryAndLiveSocketProtection(t *testing.T) {
 		TenantID:  "t",
 		VSockPath: base,
 	}, Policy{
-		Mode: "relay",
+		Mode: "proxy",
 	}, nil); err == nil {
 		t.Fatal("replaced a live socket")
 	}

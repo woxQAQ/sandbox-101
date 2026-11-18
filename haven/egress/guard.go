@@ -24,7 +24,7 @@ func compilePolicy(p Policy, allowPrivate bool) (compiledPolicy, error) {
 		hosts:   make(map[string]struct{}),
 		private: allowPrivate,
 	}
-	if c.mode != "none" && c.mode != "relay" && c.mode != "direct" {
+	if c.mode != "none" && c.mode != "proxy" && c.mode != "direct" {
 		return c, errors.New("egress: unsupported network mode")
 	}
 	if c.max == 0 {

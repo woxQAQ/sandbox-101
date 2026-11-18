@@ -119,7 +119,7 @@ async fn portal_separation_activation_and_multiplex() {
     .await;
     assert!(!denied.last().unwrap().error.is_empty());
     let mut admin = connection(agent.clone(), Portal::Admin);
-    let frames=rpc(&mut admin,request("activate","activate",json!({"sandbox_id":"S1","hostname":"ignored-on-resume","network":"relay","reset_identity":false,"env":{"X":"claimed"}}))).await;
+    let frames=rpc(&mut admin,request("activate","activate",json!({"sandbox_id":"S1","hostname":"ignored-on-resume","network":"proxy","reset_identity":false,"env":{"X":"claimed"}}))).await;
     success(&frames);
     assert_eq!(agent.environment().await.unwrap()["X"], "claimed");
     assert_eq!(

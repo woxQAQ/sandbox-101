@@ -37,7 +37,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 				TenantID: "tenant",
 			}
 			wide := egress.Policy{
-				Mode: "relay",
+				Mode: "proxy",
 				AllowedHosts: []string{
 					"old.invalid",
 				},
@@ -119,7 +119,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					},
 				},
 				Policy: egress.Policy{
-					Mode: "relay",
+					Mode: "proxy",
 					AllowedHosts: []string{
 						"new.invalid",
 					},

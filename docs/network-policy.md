@@ -14,7 +14,7 @@ Version is 1. The resource policy requires an explicit connection count 1..65535
 
 Mandatory denial covers unspecified/this-network, RFC1918, CGNAT, loopback, link-local/cloud metadata, IETF protocol assignments, documentation, 6to4 relay, benchmarking, multicast, reserved/broadcast space and Azure `168.63.129.16`. Only IPv4 TCP/UDP/ICMP outbound flows and tracked replies are admitted. Reply rules check the original destination under the current policy, so old conntrack does not bypass narrower replacement. IPv6 forwarding and VMM-originated IP sockets are blocked; namespace loopback/vsock are independent.
 
-`allowed_hosts` must be empty in direct mode. Haven rejects hostname constraints and host-only secret/injection before installation; it never silently drops names or resolves them once into CIDRs. Direct does not enforce TLS/HTTP identity or inject L7 credentials. Use relay for those requirements.
+`allowed_hosts` must be empty in direct mode. Haven rejects hostname constraints and host-only secret/injection before installation; it never silently drops names or resolves them once into CIDRs. Direct does not enforce TLS/HTTP identity or inject L7 credentials. Use proxy for those requirements.
 
 The namespace-local nft `ct count` budget is shared across outbound/reply traffic and all destinations. It counts TCP/UDP/ICMP flows under kernel lifetime rules, not requests, FDs or guest sockets. Completed TCP can leave the count before conntrack expiration; close does not promise an immediate free slot. Both directions enforce the same count after replacement. Host deployment separately provides bandwidth, packet-rate and conntrack allocation quotas; forward filtering does not bound allocations before the hook.
 

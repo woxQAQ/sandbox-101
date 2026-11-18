@@ -200,8 +200,8 @@ func (m *Manager) Bind(ctx context.Context, target BindingTarget, policy Policy,
 	if err != nil {
 		return err
 	}
-	if p.mode != "relay" && len(creds) != 0 {
-		return errors.New("egress: credentials require relay mode")
+	if p.mode != "proxy" && len(creds) != 0 {
+		return errors.New("egress: credentials require proxy mode")
 	}
 	if len(creds) != 0 && m.opts.Audit == nil && m.opts.AuditRecord == nil {
 		return errors.New("egress: credentials require a host audit sink")
@@ -236,7 +236,7 @@ func (m *Manager) Bind(ctx context.Context, target BindingTarget, policy Policy,
 		conns:   make(map[*trackedConn]struct{}),
 	}
 	switch p.mode {
-	case "relay":
+	case "proxy":
 		if !filepath.IsAbs(vsockPath) || filepath.Clean(vsockPath) != vsockPath {
 			cancel()
 			return errors.New("egress: absolute clean vsock path required")

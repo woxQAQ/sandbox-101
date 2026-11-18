@@ -37,7 +37,7 @@ func ValidateNetworkPolicy(p *api.NetworkPolicy) error {
 		return errors.New("network policy requires version 1 and max_connections in 1..65535")
 	}
 	if len(p.AllowedHosts) != 0 {
-		return errors.New("direct policy cannot enforce allowed_hosts; use relay or an explicit IPv4 CIDR policy")
+		return errors.New("direct policy cannot enforce allowed_hosts; use proxy or an explicit IPv4 CIDR policy")
 	}
 	if len(p.AllowedCIDRs) > 256 {
 		return errors.New("at most 256 direct IPv4 prefixes are supported")
