@@ -110,6 +110,13 @@ func (c *Client) Change(ctx context.Context, id, key string, command types.Comma
 	})
 }
 
+func (c *Client) Status(ctx context.Context) (types.NodeStatus, error) {
+	return call[types.NodeStatus](ctx, c, controlRequest{
+		Method: "GET",
+		Path:   "/v1/status",
+	})
+}
+
 func (c *Client) List(ctx context.Context) ([]types.Sandbox, error) {
 	return call[[]types.Sandbox](ctx, c, controlRequest{
 		Method: "GET",
