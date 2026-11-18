@@ -222,37 +222,45 @@ func TestHTTPSSecretInjectionAndNonLeak(t *testing.T) {
 	}
 }
 
-func TestRedactionAcrossReadBoundaries(t *testing.T) {
-	body := &redactingBody{
-		source: io.NopCloser(
-			&oneByteReader{
-				data: []byte("prefix-host-secret-suffix-host-secret"),
-			},
-		),
-		values: []string{
-			"host-secret",
+func TestRedactionSurvivesFragmentedUpstreamBody(t *testing.T) {
+	const real = "Bearer host-only-fragmented-secret"
+	// The upstream flushes inside the secret so the client-facing body arrives
+	// in pieces; redaction must match across chunk boundaries, not per read.
+	up := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			cut := len(real) / 2
+			_, _ = io.WriteString(w, "prefix "+real[:cut])
+			w.(http.Flusher).Flush()
+			_, _ = io.WriteString(w, real[cut:]+" suffix")
+		}),
+	)
+	defer up.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(up.Certificate())
+	m, b := newTestManager(
+		t,
+		Options{
+			RootCAs:     pool,
+			DialContext: targetDialer(up.Listener.Addr().String(), nil),
 		},
+		Policy{
+			Mode: "relay",
+		},
+		map[string]Secret{
+			"API_TOKEN": {
+				Value: real,
+				Hosts: []string{
+					"example.com",
+				},
+				Header: "Authorization",
+			},
+		},
+	)
+	resp, err := proxyClient(t, m, b).Get("https://example.com/")
+	body := readResponse(t, resp, err)
+	if strings.Contains(body, real) || body != "prefix [redacted] suffix" {
+		t.Fatalf("fragmented secret leaked through the proxy body: %q", body)
 	}
-	data, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "prefix-[redacted]-suffix-[redacted]" {
-		t.Fatal(string(data))
-	}
-}
-
-type oneByteReader struct {
-	data []byte
-}
-
-func (r *oneByteReader) Read(p []byte) (int, error) {
-	if len(r.data) == 0 {
-		return 0, io.EOF
-	}
-	p[0] = r.data[0]
-	r.data = r.data[1:]
-	return 1, nil
 }
 
 func TestCredentialsRequireAuditAndEncodedPlaceholdersAreDenied(t *testing.T) {

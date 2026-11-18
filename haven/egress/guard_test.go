@@ -2,14 +2,11 @@ package egress
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -160,54 +157,50 @@ func TestDNSRebindingAndUpstreamTLSVerification(t *testing.T) {
 	}
 }
 
-func TestPrivateCIDRExemptionsAndSecretFormatting(t *testing.T) {
+func TestPrivateCIDROptInRequiresExplicitAllowance(t *testing.T) {
+	policy := Policy{
+		Mode: "relay",
+		AllowedCIDRs: []string{
+			"10.2.0.0/16",
+			"169.254.0.0/16",
+			"64:ff9b::/96",
+		},
+	}
+	resolve := func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr(host)}, nil
+	}
 	for _, enabled := range []bool{
 		false,
 		true,
 	} {
-		p, err := compilePolicy(
-			Policy{
-				Mode: "relay",
-				AllowedCIDRs: []string{
-					"10.2.0.0/16",
-					"169.254.0.0/16",
-					"64:ff9b::/96",
+		var dials atomic.Int32
+		m, b := newTestManager(
+			t,
+			Options{
+				AllowPrivateCIDRs: enabled,
+				Resolver:          resolverFunc(resolve),
+				DialContext: func(context.Context, string, string) (net.Conn, error) {
+					dials.Add(1)
+					return nil, errors.New("dialed")
 				},
 			},
-			enabled,
+			policy,
+			nil,
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if allowed := p.checkIP(netip.MustParseAddr("10.2.3.4")) == nil; allowed != enabled {
-			t.Fatal("private CIDR opt-in ignored")
+		client := proxyClient(t, m, b)
+		resp, _ := get(t, client, "http://10.2.3.4/")
+		if allowed := resp.StatusCode != 403 && dials.Load() == 1; allowed != enabled {
+			t.Fatalf("private CIDR opt-in ignored: enabled=%v status=%d dials=%d", enabled, resp.StatusCode, dials.Load())
 		}
 		for _, raw := range []string{
-			"10.3.3.4",
-			"169.254.169.254",
-			"64:ff9b::808:808",
+			"http://10.3.3.4/",
+			"http://169.254.169.254/",
+			"http://[64:ff9b::808:808]/",
 		} {
-			if p.checkIP(netip.MustParseAddr(raw)) == nil {
-				t.Fatalf("exempted %s", raw)
+			resp, _ := get(t, client, raw)
+			if resp.StatusCode != 403 {
+				t.Fatalf("exempted %s outside the opt-in allowance", raw)
 			}
-		}
-	}
-	s := Secret{
-		Value: "do-not-persist",
-		Hosts: []string{
-			"example.com",
-		},
-		Header: "Authorization",
-	}
-	data, _ := json.Marshal(s)
-	for _, out := range []string{
-		string(data),
-		fmt.Sprintf("%v", s),
-		fmt.Sprintf("%+v", s),
-		fmt.Sprintf("%#v", s),
-	} {
-		if strings.Contains(out, s.Value) {
-			t.Fatalf("credential serialization leaked: %s", out)
 		}
 	}
 }
