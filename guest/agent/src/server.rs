@@ -27,10 +27,13 @@ impl Output {
     pub async fn send(&self, frame: Frame) -> Result<()> {
         tokio::select! {
             _ = self.cancel.cancelled() => bail!(Internal => "connection closed"),
-            result = tokio::time::timeout(Duration::from_secs(30),self.tx.send(frame)) => {
+            result = tokio::time::timeout(Duration::from_secs(30), self.tx.send(frame)) => {
                 match result {
                     Ok(Ok(())) => Ok(()),
-                    _ => { self.cancel.cancel(); bail!(Internal => "output stalled or disconnected") }
+                    _ => {
+                        self.cancel.cancel();
+                        bail!(Internal => "output stalled or disconnected")
+                    }
                 }
             }
         }
@@ -81,7 +84,13 @@ where
                 _ = writer_cancel.cancelled() => break,
                 frame = rx.recv() => {
                     let Some(frame) = frame else { break; };
-                    if !matches!(tokio::time::timeout(Duration::from_secs(30),wire::write_frame(&mut write,&frame)).await,Ok(Ok(()))) { writer_cancel.cancel(); break; }
+                    if !matches!(
+                        tokio::time::timeout(Duration::from_secs(30), wire::write_frame(&mut write, &frame)).await,
+                        Ok(Ok(()))
+                    ) {
+                        writer_cancel.cancel();
+                        break;
+                    }
                 }
             }
         }
@@ -90,47 +99,100 @@ where
         Arc::new(Mutex::new(BTreeMap::new()));
     let outcome = async {
         loop {
-            let next = if let Some(frame) = first.take() { Some(frame) } else { tokio::select! { _ = cancel.cancelled() => break, result = wire::read_frame(&mut read) => result? } };
-            let Some(frame) = next else { break; };
-            ensure!(!frame.id.is_empty() && frame.id.len() <= 128 && frame.method.len() <= 128, "invalid request identity");
+            let next = if let Some(frame) = first.take() {
+                Some(frame)
+            } else {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    result = wire::read_frame(&mut read) => result?
+                }
+            };
+            let Some(frame) = next else {
+                break;
+            };
+            ensure!(
+                !frame.id.is_empty() && frame.id.len() <= 128 && frame.method.len() <= 128,
+                "invalid request identity"
+            );
             ensure!(frame.error.is_empty(), "client error frames are invalid");
             if frame.method.is_empty() {
-                ensure!(frame.data.len() <= wire::CHUNK, "input chunk exceeds 64 KiB");
-                ensure!(frame.params.as_ref().is_none_or(|p|p.fields.is_empty()), "continuation must not carry params");
+                ensure!(
+                    frame.data.len() <= wire::CHUNK,
+                    "input chunk exceeds 64 KiB"
+                );
+                ensure!(
+                    frame.params.as_ref().is_none_or(|p| p.fields.is_empty()),
+                    "continuation must not carry params"
+                );
                 let sender = active.lock().await.get(&frame.id).cloned();
-                if let Some(sender) = sender {
-                    tokio::select! {
-                        _ = cancel.cancelled() => break,
-                        result = tokio::time::timeout(Duration::from_secs(30), sender.send(frame)) => {
-                            ensure!(matches!(result,Ok(Ok(()))), "input stalled or RPC already completed");
-                        }
+                let Some(sender) = sender else {
+                    bail!("continuation for unknown request");
+                };
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    result = tokio::time::timeout(Duration::from_secs(30), sender.send(frame)) => {
+                        ensure!(
+                            matches!(result, Ok(Ok(()))),
+                            "input stalled or RPC already completed"
+                        );
                     }
-                } else { bail!("continuation for unknown request"); }
+                }
                 continue;
             }
             let mut requests = active.lock().await;
             // Duplicate active IDs are a connection error, never a second execution.
-            ensure!(!requests.contains_key(&frame.id), "duplicate active request id");
-            let slots=if portal==Portal::Workload{agent.requests.clone()}else{agent.control_requests.clone()};
-            let permit = if requests.len() < 16 { slots.try_acquire_owned().ok() } else { None };
+            ensure!(
+                !requests.contains_key(&frame.id),
+                "duplicate active request id"
+            );
+            let slots = if portal == Portal::Workload {
+                agent.requests.clone()
+            } else {
+                agent.control_requests.clone()
+            };
+            let permit = if requests.len() < 16 {
+                slots.try_acquire_owned().ok()
+            } else {
+                None
+            };
             let Some(permit) = permit else {
                 drop(requests);
-                Output {request:frame.clone(),tx:tx.clone(),cancel:cancel.clone()}.send(frame.failure(Error::new(ErrorCode::ResourceExhausted, "request capacity exhausted"))).await?;
+                Output {
+                    request: frame.clone(),
+                    tx: tx.clone(),
+                    cancel: cancel.clone(),
+                }
+                .send(frame.failure(Error::new(
+                    ErrorCode::ResourceExhausted,
+                    "request capacity exhausted",
+                )))
+                .await?;
                 continue;
             };
-            let (input_tx,input) = mpsc::channel(8);
-            requests.insert(frame.id.clone(),input_tx); drop(requests);
-            let agent = agent.clone(); let active = active.clone();
-            let output = Output {request:frame.clone(),tx:tx.clone(),cancel:cancel.clone()};
+            let (input_tx, input) = mpsc::channel(8);
+            requests.insert(frame.id.clone(), input_tx);
+            drop(requests);
+            let agent = agent.clone();
+            let active = active.clone();
+            let output = Output {
+                request: frame.clone(),
+                tx: tx.clone(),
+                cancel: cancel.clone(),
+            };
             tokio::spawn(async move {
                 let _permit = permit;
-                let result = dispatch(agent,portal,&output,input).await.or_context(|| request_context(&frame));
-                if let Err(error) = result { let _ = output.send(frame.failure(error)).await; }
+                let result = dispatch(agent, portal, &output, input)
+                    .await
+                    .or_context(|| request_context(&frame));
+                if let Err(error) = result {
+                    let _ = output.send(frame.failure(error)).await;
+                }
                 active.lock().await.remove(&frame.id);
             });
         }
         Ok(())
-    }.await;
+    }
+    .await;
     cancel.cancel();
     writer.await?;
     outcome
@@ -165,7 +227,13 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
                     + agent
                         .active_streams
                         .load(std::sync::atomic::Ordering::SeqCst);
-                out.done(json!({"quiescent":running==0 && sessions==0 && in_flight==0,"in_flight":in_flight,"running_processes":running,"sessions":sessions})).await
+                out.done(json!({
+                    "quiescent": running == 0 && sessions == 0 && in_flight == 0,
+                    "in_flight": in_flight,
+                    "running_processes": running,
+                    "sessions": sessions,
+                }))
+                .await
             }
             _ => bail!(Unauthorized => "method is not authorized on admin portal"),
         };
@@ -181,7 +249,18 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
     match f.method.as_str() {
         "info" => {
             let a = agent.activation.lock().await;
-            out.done(json!({"protocol":1,"portal":"workload","sandbox_id":a.sandbox_id,"network":a.network,"active":!a.sandbox_id.is_empty(),"processes":agent.processes.lock().await.len(),"in_flight":(128-agent.requests.available_permits()).saturating_sub(1)+agent.active_streams.load(std::sync::atomic::Ordering::SeqCst),"quiesced":agent.quiesced.load(std::sync::atomic::Ordering::SeqCst)})).await
+            out.done(json!({
+                "protocol": 1,
+                "portal": "workload",
+                "sandbox_id": a.sandbox_id,
+                "network": a.network,
+                "active": !a.sandbox_id.is_empty(),
+                "processes": agent.processes.lock().await.len(),
+                "in_flight": (128 - agent.requests.available_permits()).saturating_sub(1)
+                    + agent.active_streams.load(std::sync::atomic::Ordering::SeqCst),
+                "quiesced": agent.quiesced.load(std::sync::atomic::Ordering::SeqCst),
+            }))
+            .await
         }
         "activate" | "quiesce" | "prepare_template" => {
             bail!(Unauthorized => "method is not authorized on workload portal")
@@ -226,8 +305,8 @@ async fn dispatch(agent: Arc<Agent>, portal: Portal, out: &Output, input: Input)
 pub async fn next_input(input: &mut Input, out: &Output) -> Result<Frame> {
     tokio::select! {
         _ = out.cancel.cancelled() => bail!(Internal => "connection closed"),
-        result = tokio::time::timeout(Duration::from_secs(60),input.recv()) => {
-            result?.ok_or_else(||Error::new(ErrorCode::Internal, "input closed without eof"))
+        result = tokio::time::timeout(Duration::from_secs(60), input.recv()) => {
+            result?.ok_or_else(|| Error::new(ErrorCode::Internal, "input closed without eof"))
         }
     }
 }
