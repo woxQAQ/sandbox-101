@@ -94,3 +94,11 @@ func CaptureDiscardLiability(t *testing.T, service *application.App, failed mach
 		t.Fatal("capture liability changed without retirement", cost, reserved, err)
 	}
 }
+
+func CaptureDiscardPaths(step machine.CaptureDiscardStep) []string {
+	source := step.Input.Source
+	return []string{
+		filepath.Join(source.Input.Source.Input.Resource.Dir, "capture", source.OperationID),
+		source.Input.Snapshot.Dir,
+	}
+}

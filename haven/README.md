@@ -3,7 +3,7 @@
 Haven 按 image、machine、supply、sandbox、dataplane、gc、node 组织业务用例与私有 sqlc。
 `internal/application` 是 daemon 和测试共用的组装入口；internal/publication、internal/recovery
 和 internal/maintenance 组合跨能力投影、只读验证与固定顺序的恢复。所有组件共用 store、
-execution/access 及关闭边界，HTTP 与管理 adapter 直接接收所需用例。
+execution/ephemeral 及关闭边界，HTTP 与管理 adapter 直接接收所需用例。
 
 template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services 与表仓库包已删除。
 各 owner 直接消费私有 dbgen，跨能力入口表达历史证明、授权、资源接纳或事务参与。
@@ -20,9 +20,10 @@ template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services �
 | `authorization/`、`image/`、`machine/` | 单能力 Service/SQLite 与缺少能力端口时的留责边界，不构造完整 App |
 | `internal/testfixture/` | 私有 store、效果替身和故障注入；不得反向依赖 application/testapp |
 | `internal/testapp/` | 完整 App 组装与重启 fixture；仅跨能力/运行场景使用，生产包禁止导入 |
+| `tests/fixtures/` | component/native 共享的领域场景夹具（claim/capture/restore/GC 等）；位于夹具分层顶端，生产包禁止导入 |
 
 `component` 表示应用组件集成测试，不是独立函数单测，也不证明 VM 或 kernel 路径。
-组件套件的 `parallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
+组件套件的 `fixtures.ParallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
 包调度或测试归属变化不构成旧 120 秒超时的性能修复证据。
 测试使用自建状态，不接管现有 daemon、未知资源或真实旧库。
 
