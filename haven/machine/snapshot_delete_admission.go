@@ -13,13 +13,10 @@ import (
 )
 
 func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request SnapshotDeleteRequest) (operation.Record, error) {
-	if sd.
-		usage ==
-		nil {
-		return operation.Record{}, fmt.
-			Errorf("%w: required SnapshotDeletion capability port unavailable",
-				errs.ErrManualRecovery,
-			)
+	if sd.usage == nil {
+		return operation.Record{}, fmt.Errorf("%w: required SnapshotDeletion capability port unavailable",
+			errs.ErrManualRecovery,
+		)
 	}
 
 	var empty operation.Record

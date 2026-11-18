@@ -84,13 +84,10 @@ func (sd *SnapshotDeletion) dispatch(id string) {
 }
 
 func (sd *SnapshotDeletion) Resume(id string) (bool, error) {
-	if sd.
-		usage == nil {
-		return false,
-			fmt.
-				Errorf("%w: required SnapshotDeletion capability port unavailable",
-					errs.ErrManualRecovery,
-				)
+	if sd.usage == nil {
+		return false, fmt.Errorf("%w: required SnapshotDeletion capability port unavailable",
+			errs.ErrManualRecovery,
+		)
 	}
 
 	if sd.store.Reviewed {

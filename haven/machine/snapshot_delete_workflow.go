@@ -109,7 +109,13 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 		if err = json.Unmarshal(parent.Body, &result); err != nil {
 			return nil, err
 		}
-		if operation.Digest(parent.Request) != parent.RequestHash || operation.Terminal(parent.Status) || parent.ScopeKind != "tenant" || parent.ScopeID != request.TenantID || original.Action != "snapshot_delete" || original.Request != request || result.SnapshotID != snapshot.ID {
+		if operation.Digest(parent.Request) != parent.RequestHash ||
+			operation.Terminal(parent.Status) ||
+			parent.ScopeKind != "tenant" ||
+			parent.ScopeID != request.TenantID ||
+			original.Action != "snapshot_delete" ||
+			original.Request != request ||
+			result.SnapshotID != snapshot.ID {
 			return nil, fmt.Errorf("snapshot delete parent identity changed")
 		}
 	}
