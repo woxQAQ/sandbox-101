@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/spf13/pflag"
 
-	"github.com/woxQAQ/haven/common/config"
+	loader "github.com/woxQAQ/haven/common/config"
 )
 
 type settings struct {
@@ -28,6 +28,6 @@ func parseConfig(args []string) (settings, []string, error) {
 	if err := flags.Parse(args); err != nil {
 		return result, nil, err
 	}
-	err := config.Load(flags, "HAVENCTL", &result)
+	err := loader.Load(flags, "HAVENCTL", &result)
 	return result, flags.Args(), err
 }

@@ -40,74 +40,71 @@ func run(arguments []string) error {
 	client := sdk.NewManagement(cfg.Socket)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if args[0] == "status" {
+	var value any
+	switch args[0] {
+	case "status":
 		if len(args) != 1 {
 			return errors.New("status takes no arguments")
 		}
-		value, err := client.Status(ctx)
-		if err != nil {
-			return err
-		}
-		return cli.JSON(os.Stdout, value)
-	}
-	if args[0] == "operation" {
+		value, err = client.Status(ctx)
+	case "operation":
 		if len(args) != 2 {
 			return errors.New("operation requires an id")
 		}
-		value, err := client.Operation(ctx, args[1])
-		if err != nil {
-			return err
+		value, err = client.Operation(ctx, args[1])
+	case "import", "gc", "supply-cleanup", "image-cleanup", "request":
+		if len(args) != 1 {
+			return errors.New("management commands take options before the command")
 		}
-		return cli.JSON(os.Stdout, value)
-	}
-	if len(args) != 1 {
-		return errors.New("management commands take options before the command")
-	}
-	request := types.ManagementRequest{
-		Key: cfg.Key,
-	}
-	switch args[0] {
-	case "import":
-		request.Action = "import"
-		request.Import = &types.ImageImport{
-			Layout:          cfg.OCILayout,
-			Digest:          cfg.Digest,
-			Materialization: cfg.Materialization,
-			MaxBytes:        cfg.MaxBytes,
-			MaxFiles:        cfg.MaxFiles,
+		request := types.ManagementRequest{
+			Key: cfg.Key,
 		}
-	case "gc":
-		request.Action = "gc"
-		request.GC = &types.GCOptions{
-			DryRun: cfg.DryRun,
-			Batch:  cfg.GCBatch,
-			Budget: cfg.GCBudget,
-		}
-	case "supply-cleanup":
-		request.Action = "supply_cleanup"
-		request.OperationID = cfg.SourceOperation
-	case "image-cleanup":
-		request.Action = "image_cleanup"
-		request.OperationID = cfg.SourceOperation
-		request.CacheBuilder = cfg.CacheBuilder
-		request.CacheDiffID = cfg.CacheDiffID
-	case "request":
-		if err := cli.ReadJSONFile(cfg.RequestFile, &request); err != nil {
-			return err
-		}
-		if cfg.Key != "" {
-			if request.Key != "" && request.Key != cfg.Key {
-				return errors.New("request file key differs from --key")
+		switch args[0] {
+		case "import":
+			request.Action = "import"
+			request.Import = &types.ImageImport{
+				Layout:          cfg.OCILayout,
+				Digest:          cfg.Digest,
+				Materialization: cfg.Materialization,
+				MaxBytes:        cfg.MaxBytes,
+				MaxFiles:        cfg.MaxFiles,
 			}
-			request.Key = cfg.Key
+		case "gc":
+			request.Action = "gc"
+			request.GC = &types.GCOptions{
+				DryRun: cfg.DryRun,
+				Batch:  cfg.GCBatch,
+				Budget: cfg.GCBudget,
+			}
+		case "supply-cleanup":
+			request.Action = "supply_cleanup"
+			request.OperationID = cfg.SourceOperation
+		case "image-cleanup":
+			request.Action = "image_cleanup"
+			request.OperationID = cfg.SourceOperation
+			request.CacheBuilder = cfg.CacheBuilder
+			request.CacheDiffID = cfg.CacheDiffID
+		case "request":
+			if err := cli.ReadJSONFile(cfg.RequestFile, &request); err != nil {
+				return err
+			}
+			if cfg.Key != "" {
+				if request.Key != "" && request.Key != cfg.Key {
+					return errors.New("request file key differs from --key")
+				}
+				request.Key = cfg.Key
+			}
 		}
+		if request.Key == "" && (request.Action != "gc" || request.GC == nil || !request.GC.DryRun) {
+			return errors.New("--key is required; reuse it when retrying this intent")
+		}
+		value, err = client.Manage(ctx, request)
 	default:
+		if len(args) != 1 {
+			return errors.New("management commands take options before the command")
+		}
 		return fmt.Errorf("unknown command %q", args[0])
 	}
-	if request.Key == "" && (request.Action != "gc" || request.GC == nil || !request.GC.DryRun) {
-		return errors.New("--key is required; reuse it when retrying this intent")
-	}
-	value, err := client.Manage(ctx, request)
 	if err != nil {
 		return err
 	}
