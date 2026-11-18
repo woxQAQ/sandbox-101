@@ -11,10 +11,11 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var enteredOnce, releasedOnce sync.Once
 	interrupted := errors.New("fixture interrupted after durable completion")
@@ -76,7 +77,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	releasedOnce.Do(func() {
 		close(release)
 	})
-	awaitColdWorker(t, service, accepted.ID)
+	fixtures.AwaitColdWorker(t, service, accepted.ID)
 	worker = service.Workers.State(accepted.ID)
 	if worker.Active || !worker.Completed || !errors.Is(worker.Err, interrupted) {
 		t.Fatal("worker result was not published atomically", worker)
@@ -87,7 +88,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 		t.Fatal("runner diagnostic rewrote committed operation success", result, err)
 	}
 	service.Maintenance.Dispatch(accepted.ID)
-	awaitColdWorker(t, service, accepted.ID)
+	fixtures.AwaitColdWorker(t, service, accepted.ID)
 	worker = service.Workers.State(accepted.ID)
 	if worker.Active || !worker.Completed || worker.Err != nil || backend.Count("launch") != 1 {
 		t.Fatal("completed replay retained stale diagnostics or duplicated effects", worker)

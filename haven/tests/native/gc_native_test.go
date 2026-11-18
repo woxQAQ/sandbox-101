@@ -11,6 +11,8 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -19,24 +21,24 @@ import (
 // an unregistered directory remains unknown regardless of its age or contents.
 func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	t.Parallel()
-	fixture, layout, layers, published := importFixture(t)
+	fixture, layout, layers, published := fixtures.ImportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	root := authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}
-	orphan := putOCILayer(t, layout, append(bootLayerEntries(), fileEntry("orphan", "data")), false)
-	orphanImage := putOCIManifest(t, layout, "failed-cache-owner", []ociLayerFixture{
+	orphan := fixtures.PutOCILayer(t, layout, append(fixtures.BootLayerEntries(), fixtures.FileEntry("orphan", "data")), false)
+	orphanImage := fixtures.PutOCIManifest(t, layout, "failed-cache-owner", []fixtures.OCILayerFixture{
 		orphan,
 	})
-	fixture.faults.Set(func(point string) error {
+	fixture.Faults.Set(func(point string) error {
 		if point == "image_import_layer_saved" {
 			return errors.New("known native import abort")
 		}
 		return nil
 	})
-	if _, err := fixture.ImportOCI(ctx, ImportOptions{
+	if _, err := fixture.ImportOCI(ctx, imageimport.ImageImportOptions{
 		Layout:   layout,
 		Digest:   orphanImage,
 		MaxBytes: 4 << 20,
@@ -44,14 +46,14 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	}); err == nil {
 		t.Fatal("missing failed import")
 	}
-	fixture.faults.Set(nil)
-	orphanPath := filepath.Join(fixture.opts.StateDir, "layer-cache", published.Builder[7:], orphan.diff.Encoded())
-	unknown := filepath.Join(fixture.opts.StateDir, "layer-cache", published.Builder[7:], ".pending-unknown")
+	fixture.Faults.Set(nil)
+	orphanPath := filepath.Join(fixture.Opts.StateDir, "layer-cache", published.Builder[7:], orphan.Diff.Encoded())
+	unknown := filepath.Join(fixture.Opts.StateDir, "layer-cache", published.Builder[7:], ".pending-unknown")
 	if err := os.Mkdir(unknown, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	work := fixture.importWork(t, published.Digest)
-	if _, err := fixture.service.GC.Collect(ctx, root, "native-dry", types.GCOptions{
+	work := fixture.ImportWork(t, published.Digest)
+	if _, err := fixture.Service.GC.Collect(ctx, root, "native-dry", types.GCOptions{
 		DryRun: true,
 		Budget: 20 * time.Second,
 	}); err != nil {
@@ -68,7 +70,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	}
 	var deferred []types.GCItem
 	for index := range 3 {
-		report, err := fixture.service.GC.Collect(ctx, root, string(rune('a'+index)), types.GCOptions{
+		report, err := fixture.Service.GC.Collect(ctx, root, string(rune('a'+index)), types.GCOptions{
 			Budget: 20 * time.Second,
 		})
 		if err != nil {
@@ -96,14 +98,14 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	if !unknownReported {
 		t.Fatal("unknown stage not reported", deferred)
 	}
-	if err := published.Verify(filepath.Join(fixture.opts.StateDir, "images", published.Digest[7:]), published.Digest); err != nil {
+	if err := published.Verify(filepath.Join(fixture.Opts.StateDir, "images", published.Digest[7:]), published.Digest); err != nil {
 		t.Fatal("GC broke published layer cache", err)
 	}
-	second := putOCIManifest(t, layout, "gc-concurrent", layers)
+	second := fixtures.PutOCIManifest(t, layout, "gc-concurrent", layers)
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Go(func() {
-			_, err := fixture.ImportOCI(ctx, ImportOptions{
+			_, err := fixture.ImportOCI(ctx, imageimport.ImageImportOptions{
 				Layout:   layout,
 				Digest:   second,
 				MaxBytes: 4 << 20,
@@ -115,7 +117,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 		})
 	}
 	for index := range 10 {
-		_, err := fixture.service.GC.Collect(ctx, root, "concurrent-"+string(rune('a'+index)), types.GCOptions{
+		_, err := fixture.Service.GC.Collect(ctx, root, "concurrent-"+string(rune('a'+index)), types.GCOptions{
 			Budget: 20 * time.Second,
 		})
 		if err != nil && !errors.Is(err, errs.ErrConflict) {

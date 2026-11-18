@@ -15,17 +15,18 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenReleaseFailedCapture(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, runtime, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	runtime.Before = func(name string, _ loom.Resource) error {
@@ -70,7 +71,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 }
 
 func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, boundary := range []string{
 		"paused",
 		"boot",
@@ -79,7 +80,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			var factory func(*testfixture.ColdRuntime) loom.Backend
 			if boundary == "rollback" {
-				factory = generationBackend
+				factory = fixtures.GenerationBackend
 			}
 			service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, factory)
 			principal := authorization.Principal{
@@ -157,19 +158,19 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 }
 
 func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, state := range []string{
 		"running",
 		"paused",
 	} {
 		t.Run(state, func(t *testing.T) {
-			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, generationBackend)
+			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.GenerationBackend)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -224,14 +225,14 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 }
 
 func TestHavenForkUsesCheckpointOwner(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -284,19 +285,19 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 }
 
 func TestHavenResumeFailurePreservesSleep(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, boundary := range []string{
 		"boot",
 		"activate",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			service, runtime, guest, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+			service, runtime, guest, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -358,14 +359,14 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 }
 
 func TestHavenDataResumeConverges(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -401,14 +402,14 @@ func TestHavenDataResumeConverges(t *testing.T) {
 }
 
 func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -442,7 +443,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 }
 
 func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, action := range []string{
 		"checkpoint",
 		"pause",
@@ -450,9 +451,9 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 	} {
 		t.Run(action, func(t *testing.T) {
 			service, _, _, _ := testapp.SandboxFixture(t)
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			acceptedRecord, err := service.SandboxRequests.Submit(context.Background(), authorization.Principal{

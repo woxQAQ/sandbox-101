@@ -13,10 +13,11 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, failed := range []bool{
 		false,
 		true,
@@ -25,7 +26,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			false: "ready",
 			true:  "failed",
 		}[failed], func(t *testing.T) {
-			service, runtime, _ := goldenSupplyFixture(t, 1)
+			service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 			if failed {
 				runtime.Mu.Lock()
 				runtime.FailBoot = true
@@ -77,13 +78,13 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 }
 
 func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, boundary := range []string{
 		"supply_cleanup_admitted",
 		"supply_cleanup_completion_before_commit",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			service, _, _ := goldenSupplyFixtureWithFault(t, 1, func(point string) error {
+			service, _, _ := fixtures.GoldenSupplyFixtureWithFault(t, 1, func(point string) error {
 				if point == boundary {
 					return errs.ErrInterrupted
 				}

@@ -1,4 +1,4 @@
-package native
+package fixtures
 
 import (
 	"context"
@@ -22,7 +22,7 @@ type imageImportEvidence struct {
 	}
 }
 
-func observeImageImport(ctx context.Context, database store.DBTX, id string) (imageImportEvidence, error) {
+func ObserveImageImport(ctx context.Context, database store.DBTX, id string) (imageImportEvidence, error) {
 	var evidence imageImportEvidence
 	if err := image.ValidateImageImport(ctx, database, id); err != nil {
 		return evidence, err

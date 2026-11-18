@@ -13,7 +13,6 @@ just build
 just test check test-race
 just integration
 just smoke
-python3 -I scripts/check-architecture.py
 ```
 
 `just lint` 含 `go fix`；只读检查使用 `golangci-lint run ./haven/... ./loom/... ./sdk/... ./types/... ./common/... ./tools/... ./operator/... ./protocol/gen/...`。测试、runner 与实际材料边界见 [scripts](../scripts/README.md)。

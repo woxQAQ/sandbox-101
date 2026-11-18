@@ -9,10 +9,11 @@ import (
 
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCaptureDiscardRejectsCustodyFromAnotherStage(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, stage := range []string{
 		"admission",
 		"execution",
@@ -23,7 +24,7 @@ func TestHavenCaptureDiscardRejectsCustodyFromAnotherStage(t *testing.T) {
 			"holder",
 		} {
 			t.Run(stage+"/"+fact, func(t *testing.T) {
-				service, backend, request, failed := failedCaptureFixtureWithFault(t, true, func(point string) error {
+				service, backend, request, failed := fixtures.FailedCaptureFixtureWithFault(t, true, func(point string) error {
 					if point == "capture_discard_admitted" {
 						return errs.ErrInterrupted
 					}
@@ -86,8 +87,8 @@ func TestHavenCaptureDiscardRejectsCustodyFromAnotherStage(t *testing.T) {
 					if handled, err := service.CaptureDiscard.Resume(discardID); !handled || err == nil {
 						t.Fatal("execution accepted original capture custody", handled, err)
 					}
-					step, err := loadCaptureDiscard(ctx, service.State.Database(), discardID)
-					if err != nil || step.Phase != "admitted" || terminal(step.Status) {
+					step, err := machine.LoadCaptureDiscard(ctx, service.State.Database(), discardID)
+					if err != nil || step.Phase != "admitted" || fixtures.Terminal(step.Status) {
 						t.Fatal("rejected execution advanced the child", step, err)
 					}
 					var receipts int
@@ -95,7 +96,7 @@ func TestHavenCaptureDiscardRejectsCustodyFromAnotherStage(t *testing.T) {
 						t.Fatal("rejected custody authorized deletion receipts", receipts, err)
 					}
 				}
-				captureDiscardLiability(t, service, failed, 192)
+				fixtures.CaptureDiscardLiability(t, service, failed, 192)
 				for _, path := range []string{
 					failed.State.Boundary.Path,
 					failed.Input.Snapshot.Dir,

@@ -1,4 +1,4 @@
-package component
+package fixtures
 
 import (
 	"context"
@@ -20,7 +20,7 @@ var lifecycleTestSlots = make(chan struct{}, 4)
 
 // Each lifecycle case owns its store, files and injected runtime. Four concurrent
 // cases bound temporary RAM/copy pressure while retaining every recovery matrix.
-func parallelLifecycle(t *testing.T) {
+func ParallelLifecycle(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 	lifecycleTestSlots <- struct{}{}
@@ -29,19 +29,19 @@ func parallelLifecycle(t *testing.T) {
 	})
 }
 
-func coldService(t *testing.T, fault func(string) error) (*application.App, *testfixture.ColdRuntime) {
+func ColdService(t *testing.T, fault func(string) error) (*application.App, *testfixture.ColdRuntime) {
 	t.Helper()
-	return coldServiceWithBackend(t, fault, nil)
+	return ColdServiceWithBackend(t, fault, nil)
 }
 
-func coldServiceWithBackend(t *testing.T, fault func(string) error, factory func(*testfixture.ColdRuntime) loom.Backend) (*application.App, *testfixture.ColdRuntime) {
+func ColdServiceWithBackend(t *testing.T, fault func(string) error, factory func(*testfixture.ColdRuntime) loom.Backend) (*application.App, *testfixture.ColdRuntime) {
 	t.Helper()
 	return testapp.ColdServiceWithOptions(t, application.Options{
 		Fault: fault,
 	}, factory)
 }
 
-func coldClaim(t *testing.T, service *application.App, key string) operation.Record {
+func ColdClaim(t *testing.T, service *application.App, key string) operation.Record {
 	t.Helper()
 	acceptedOperation, err := service.VMProvisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",
@@ -54,7 +54,7 @@ func coldClaim(t *testing.T, service *application.App, key string) operation.Rec
 	return acceptedOperation
 }
 
-func awaitColdWorker(t *testing.T, service *application.App, id string) machine.ResourceStep {
+func AwaitColdWorker(t *testing.T, service *application.App, id string) machine.ResourceStep {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -64,7 +64,7 @@ func awaitColdWorker(t *testing.T, service *application.App, id string) machine.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !active && (seen || terminal(step.Status)) {
+		if !active && (seen || Terminal(step.Status)) {
 			return step
 		}
 		if time.Now().After(deadline) {
@@ -74,12 +74,12 @@ func awaitColdWorker(t *testing.T, service *application.App, id string) machine.
 	}
 }
 
-func resumeColdService(t *testing.T, old *application.App, backend *testfixture.ColdRuntime) *application.App {
+func ResumeColdService(t *testing.T, old *application.App, backend *testfixture.ColdRuntime) *application.App {
 	t.Helper()
-	return resumeColdServiceWithFault(t, old, backend, nil)
+	return ResumeColdServiceWithFault(t, old, backend, nil)
 }
 
-func resumeColdServiceWithFault(t *testing.T, old *application.App, backend *testfixture.ColdRuntime, fault func(string) error) *application.App {
+func ResumeColdServiceWithFault(t *testing.T, old *application.App, backend *testfixture.ColdRuntime, fault func(string) error) *application.App {
 	t.Helper()
 	if err := old.Close(context.Background()); err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func resumeColdServiceWithFault(t *testing.T, old *application.App, backend *tes
 	return service
 }
 
-func coldResponsibility(t *testing.T, service *application.App, acceptedOperation operation.Record, witness bool) {
+func ColdResponsibility(t *testing.T, service *application.App, acceptedOperation operation.Record, witness bool) {
 	t.Helper()
 	var slots, storage, pending, disks int64
 	if err := service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='vm_disk'),0) FROM quota_resources WHERE source_operation_id=?", acceptedOperation.ID).Scan(&slots, &storage, &pending, &disks); err != nil {

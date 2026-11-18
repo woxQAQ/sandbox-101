@@ -13,19 +13,20 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'denied'",
 		"IGNORE",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			service, backend, _, _ := testapp.SandboxFixture(t)
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_link_completion BEFORE UPDATE OF status ON operation_steps WHEN OLD.action='resource_link' AND NEW.status='succeeded' BEGIN SELECT RAISE(%s); END", mode)); err != nil {
@@ -42,7 +43,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitFixtureWorker(t, service, accepted.ID)
+			fixtures.WaitFixtureWorker(t, service, accepted.ID)
 			if worker := service.Workers.State(accepted.ID); !worker.Completed || worker.Err == nil {
 				t.Fatal("denied dependency completion was accepted", worker)
 			}

@@ -5,18 +5,19 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStopCompletionAtomicity(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private stop failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, backend := coldService(t, nil)
-			claim := coldClaim(t, service, "source")
-			source := awaitColdWorker(t, service, claim.ID)
+			service, backend := fixtures.ColdService(t, nil)
+			claim := fixtures.ColdClaim(t, service, "source")
+			source := fixtures.AwaitColdWorker(t, service, claim.ID)
 			if source.Status != "succeeded" {
 				t.Fatal(source.State)
 			}
@@ -33,7 +34,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			step := awaitStop(t, service, accepted.ID)
+			step := fixtures.AwaitStop(t, service, accepted.ID)
 			if step.Status != "running" || step.Phase != "stop_intent" || service.Workers.State(accepted.ID).Err == nil {
 				t.Fatal("failed stop completion lost retryable intent", step)
 			}
@@ -56,7 +57,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 			if err != nil || replay.ID != accepted.ID {
 				t.Fatal("stop replay changed immutable operation", replay, err)
 			}
-			done := awaitStop(t, service, accepted.ID)
+			done := fixtures.AwaitStop(t, service, accepted.ID)
 			if done.Status != "succeeded" || done.Phase != "complete" || done.Hash != step.Hash || done.Input != step.Input {
 				t.Fatal("stop replay did not complete original proof", done)
 			}

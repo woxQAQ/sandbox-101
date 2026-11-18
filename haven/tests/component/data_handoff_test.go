@@ -13,17 +13,18 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	acceptedRecord := (sandboxClaims{
+	acceptedRecord := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "handoff", nil, egress.Policy{
+	}).Claim(t, "handoff", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -10,17 +10,18 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/gc"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private GC completion failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, runtime, _ := goldenSupplyFixture(t, 1)
+			service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			runtime.Mu.Lock()

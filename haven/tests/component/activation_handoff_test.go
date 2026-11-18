@@ -10,24 +10,25 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private activation handoff refusal'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			paused, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
@@ -63,7 +64,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("activation succeeded without its final handoff", failed, err)
 			}
-			waitFixtureWorker(t, service, failed.ID)
+			fixtures.WaitFixtureWorker(t, service, failed.ID)
 			checkResponsibility(1)
 			retained, err := service.Catalog.Get(ctx, principal, before.ID)
 			if err != nil || retained.State != "paused" || retained.SnapshotID != before.SnapshotID {

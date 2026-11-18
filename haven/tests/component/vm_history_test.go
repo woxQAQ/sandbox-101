@@ -9,21 +9,22 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"source",
 		"amount",
 		"holder",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend := coldService(t, nil)
-			claim := coldClaim(t, service, "source")
-			history := awaitColdWorker(t, service, claim.ID)
-			other := coldClaim(t, service, "other")
-			if history.Status != "succeeded" || awaitColdWorker(t, service, other.ID).Status != "succeeded" {
+			service, backend := fixtures.ColdService(t, nil)
+			claim := fixtures.ColdClaim(t, service, "source")
+			history := fixtures.AwaitColdWorker(t, service, claim.ID)
+			other := fixtures.ColdClaim(t, service, "other")
+			if history.Status != "succeeded" || fixtures.AwaitColdWorker(t, service, other.ID).Status != "succeeded" {
 				t.Fatal("fixture resources did not complete")
 			}
 			var before []byte
@@ -43,7 +44,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				query = "UPDATE quota_refs SET holder_id=? WHERE tenant_id='tenant' AND kind='vm_disk' AND resource_key=? AND holder_kind='active_use'"
 				changed, original = "sandbox:"+other.Result.SandboxID, "sandbox:"+claim.Result.SandboxID
 			}
-			if err := requireWrite(service.State.Database().Exec(query, changed, history.Input.DiskKey)); err != nil {
+			if err := fixtures.RequireWrite(service.State.Database().Exec(query, changed, history.Input.DiskKey)); err != nil {
 				t.Fatal(err)
 			}
 			var charged int64
@@ -72,14 +73,14 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 			if err != nil || !bytes.Equal(testfixture.Encode(frozen), testfixture.Encode(history)) {
 				t.Fatal("rejected stop rewrote original witness", err)
 			}
-			if err = requireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {
+			if err = fixtures.RequireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {
 				t.Fatal(err)
 			}
 			accepted, err = service.VMStops.AdmitStop(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stopped := awaitStop(t, service, accepted.ID); stopped.Status != "succeeded" || backend.Count("stop") != 1 {
+			if stopped := fixtures.AwaitStop(t, service, accepted.ID); stopped.Status != "succeeded" || backend.Count("stop") != 1 {
 				t.Fatal("restored original proof did not permit exactly one stop", stopped)
 			}
 		})
@@ -87,7 +88,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 }
 
 func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"version-owner",
 		"instance-owner",
@@ -95,14 +96,14 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 		"missing-instance",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend := coldService(t, func(point string) error {
+			service, backend := fixtures.ColdService(t, func(point string) error {
 				if point == "release_admitted" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			claim := coldClaim(t, service, "claim")
-			history := awaitColdWorker(t, service, claim.ID)
+			claim := fixtures.ColdClaim(t, service, "claim")
+			history := fixtures.AwaitColdWorker(t, service, claim.ID)
 			if history.Status != "succeeded" {
 				t.Fatal(history.State)
 			}
@@ -122,19 +123,19 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			}
 			switch damage {
 			case "version-owner":
-				err = requireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE id=?", release.ID, claim.ID))
+				err = fixtures.RequireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE id=?", release.ID, claim.ID))
 			case "instance-owner":
-				err = requireWrite(service.State.Database().Exec("UPDATE instances SET operation_id=? WHERE vm_id=?", release.ID, claim.Result.VMID))
+				err = fixtures.RequireWrite(service.State.Database().Exec("UPDATE instances SET operation_id=? WHERE vm_id=?", release.ID, claim.Result.VMID))
 			case "missing-version":
-				err = requireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE id=?", claim.ID))
+				err = fixtures.RequireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE id=?", claim.ID))
 			case "missing-instance":
-				err = requireWrite(service.State.Database().Exec("DELETE FROM instances WHERE vm_id=?", claim.Result.VMID))
+				err = fixtures.RequireWrite(service.State.Database().Exec("DELETE FROM instances WHERE vm_id=?", claim.Result.VMID))
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			service.Maintenance.Dispatch(release.ID)
-			step := awaitColdWorker(t, service, release.ID)
+			step := fixtures.AwaitColdWorker(t, service, release.ID)
 			if step.Status == "succeeded" || service.Workers.State(release.ID).Err == nil || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 				t.Fatal("current ownership replaced the original generation proof", step.State)
 			}

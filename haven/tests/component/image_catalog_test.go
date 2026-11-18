@@ -10,11 +10,12 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend := coldService(t, nil)
+	fixtures.ParallelLifecycle(t)
+	service, backend := fixtures.ColdService(t, nil)
 	ctx := context.Background()
 	template, err := supply.NewTemplateCatalog(service.State.Database()).Cold(ctx, "tenant", "cold")
 	if err != nil {
@@ -39,8 +40,8 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", imageManifest.Digest, testfixture.Encode(imageManifest)); err != nil {
 		t.Fatal(err)
 	}
-	operation := coldClaim(t, service, "published")
-	if step := awaitColdWorker(t, service, operation.ID); step.Status != "succeeded" {
+	operation := fixtures.ColdClaim(t, service, "published")
+	if step := fixtures.AwaitColdWorker(t, service, operation.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
 	before := backend.Count("prepare")

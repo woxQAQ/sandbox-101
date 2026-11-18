@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'denied'",
 		"IGNORE",
 	} {
 		t.Run(mode, func(t *testing.T) {
-			service, _, capture, request := rawCleanupFixture(t, nil)
+			service, _, capture, request := fixtures.RawCleanupFixture(t, nil)
 			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_raw_transfer BEFORE UPDATE OF status ON cleanup_intents WHEN OLD.resource_kind='capture' AND NEW.status='transferred' BEGIN SELECT RAISE(%s); END", mode)); err != nil {
 				t.Fatal(err)
 			}
@@ -41,7 +43,7 @@ func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if done := awaitRawCleanup(t, service, accepted.ID); done.Status != "succeeded" {
+			if done := fixtures.AwaitRawCleanup(t, service, accepted.ID); done.Status != "succeeded" {
 				t.Fatal(done)
 			}
 		})
@@ -49,8 +51,8 @@ func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
 }
 
 func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, capture, request := rawCleanupFixture(t, nil)
+	fixtures.ParallelLifecycle(t)
+	service, backend, capture, request := fixtures.RawCleanupFixture(t, nil)
 	backend.Mu.Lock()
 	backend.InspectError = errors.New("private fixture observation unavailable")
 	backend.Mu.Unlock()
@@ -58,7 +60,7 @@ func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitRetainedRaw(t, service, accepted.ID)
+	fixtures.AwaitRetainedRaw(t, service, accepted.ID)
 	if _, err = os.Stat(capture.State.Boundary.Path); err != nil {
 		t.Fatal("unknown instance allowed raw removal", err)
 	}
@@ -73,8 +75,8 @@ func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
 	if err != nil || replay.ID != accepted.ID {
 		t.Fatal("replay changed raw cleanup identity", replay, err)
 	}
-	waitFixtureWorker(t, service, accepted.ID)
-	if done := awaitRawCleanup(t, service, accepted.ID); done.Status != "succeeded" {
+	fixtures.WaitFixtureWorker(t, service, accepted.ID)
+	if done := fixtures.AwaitRawCleanup(t, service, accepted.ID); done.Status != "succeeded" {
 		t.Fatal(done)
 	}
 }

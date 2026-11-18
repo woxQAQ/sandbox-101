@@ -11,12 +11,13 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := goldenSupplyFixture(t, 1)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 	runtime.Mu.Lock()
 	runtime.FailBoot = true
 	runtime.Mu.Unlock()
@@ -72,14 +73,14 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 }
 
 func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)

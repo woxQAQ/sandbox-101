@@ -8,17 +8,19 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCaptureDiscardRequiresOwnPendingResult(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, field := range []string{
 		"sandbox_id",
 		"vm_id",
 		"snapshot_id",
 	} {
 		t.Run(field, func(t *testing.T) {
-			service, _, request, failed := failedCaptureFixtureWithFault(t, true, func(point string) error {
+			service, _, request, failed := fixtures.FailedCaptureFixtureWithFault(t, true, func(point string) error {
 				if point == "capture_discard_admitted" {
 					return errs.ErrInterrupted
 				}
@@ -51,15 +53,15 @@ func TestHavenCaptureDiscardRequiresOwnPendingResult(t *testing.T) {
 			if handled, err := service.CaptureDiscard.Resume(accepted.ID); !handled || err == nil {
 				t.Fatal("discard inherited missing identity from the failed capture", handled, err)
 			}
-			step, err := loadCaptureDiscard(ctx, service.State.Database(), accepted.ID)
-			if err != nil || step.Phase != "admitted" || terminal(step.Status) {
+			step, err := machine.LoadCaptureDiscard(ctx, service.State.Database(), accepted.ID)
+			if err != nil || step.Phase != "admitted" || fixtures.Terminal(step.Status) {
 				t.Fatal("incomplete result advanced the discard", step, err)
 			}
 			var receipts int
 			if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM deletion_intents WHERE operation_id=?", accepted.ID).Scan(&receipts); err != nil || receipts != 0 {
 				t.Fatal("incomplete result authorized deletion receipts", receipts, err)
 			}
-			captureDiscardLiability(t, service, failed, 192)
+			fixtures.CaptureDiscardLiability(t, service, failed, 192)
 			for _, path := range []string{
 				failed.State.Boundary.Path,
 				failed.Input.Snapshot.Dir,

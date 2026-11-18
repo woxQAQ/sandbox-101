@@ -10,22 +10,23 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSandboxOperationAuthorization(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	tenant := authorization.Principal{
 		TenantID: "tenant",
 	}
-	first := (sandboxClaims{
+	first := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "one", nil, egress.Policy{
+	}).Claim(t, "one", nil, egress.Policy{
 		Mode: "none",
 	})
-	second := (sandboxClaims{
+	second := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "two", nil, egress.Policy{
+	}).Claim(t, "two", nil, egress.Policy{
 		Mode: "none",
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

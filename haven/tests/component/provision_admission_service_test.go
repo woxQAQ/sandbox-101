@@ -7,12 +7,13 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, request, prior := targetSetup(t)
+	fixtures.ParallelLifecycle(t)
+	service, _, request, prior := fixtures.TargetSetup(t)
 	ctx := context.Background()
 	var charged int64
 	if err := service.State.Database().QueryRowContext(ctx, "SELECT SUM(storage_mib) FROM quota_resources WHERE tenant_id=?", request.TenantID).Scan(&charged); err != nil {
@@ -61,7 +62,7 @@ func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal("exact quota boundary was rejected", err)
 	}
-	if step := awaitColdWorker(t, service, accepted.ID); step.Status != "succeeded" {
+	if step := fixtures.AwaitColdWorker(t, service, accepted.ID); step.Status != "succeeded" {
 		t.Fatal("accepted restore failed", step.State)
 	}
 }

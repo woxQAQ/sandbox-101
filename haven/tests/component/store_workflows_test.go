@@ -15,11 +15,12 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := goldenSupplyFixtureWithFault(t, 1, func(point string) error {
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.GoldenSupplyFixtureWithFault(t, 1, func(point string) error {
 		if point == "activation_off_intent" {
 			return errs.ErrInterrupted
 		}
@@ -49,7 +50,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, principal, claim.ID); !errors.Is(err, errs.ErrInterrupted) {
 		t.Fatal(err)
 	}
-	waitFixtureWorker(t, service, claim.ID)
+	fixtures.WaitFixtureWorker(t, service, claim.ID)
 	if _, err = service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='warm_claim'", testfixture.Encode(sandbox.WarmClaimState{
 		Phase: "unsupported-stage",
 	}), claim.ID); err != nil {
@@ -61,7 +62,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	if err = service.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	before := storeSnapshot(t, options.StateDir)
+	before := fixtures.StoreSnapshot(t, options.StateDir)
 	launches := runtime.Count("launch")
 	opened, err := application.Open(options)
 	if opened != nil {
@@ -70,7 +71,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	if !errors.Is(err, store.ErrRecovery) {
 		t.Fatal("malformed durable step passed startup", err)
 	}
-	if after := storeSnapshot(t, options.StateDir); !reflect.DeepEqual(before, after) {
+	if after := fixtures.StoreSnapshot(t, options.StateDir); !reflect.DeepEqual(before, after) {
 		for path, value := range before {
 			if !reflect.DeepEqual(after[path], value) {
 				t.Log("changed", path, value, after[path])

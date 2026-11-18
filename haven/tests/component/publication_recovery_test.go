@@ -12,20 +12,21 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, corruption := range []string{
 		"identity",
 		"http_error",
 	} {
 		t.Run(corruption, func(t *testing.T) {
 			service, runtime, _, _ := testapp.SandboxFixture(t)
-			operation := (sandboxClaims{
+			operation := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "public-corruption", nil, egress.Policy{
+			}).Claim(t, "public-corruption", nil, egress.Policy{
 				Mode: "none",
 			})
 			view, err := service.Delivery.PublicOperation(context.Background(), authorization.Principal{
@@ -54,7 +55,7 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 			if err = service.Close(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			before := storeSnapshot(t, options.StateDir)
+			before := fixtures.StoreSnapshot(t, options.StateDir)
 			launches := runtime.Count("launch")
 			opened, err := application.Open(options)
 			if opened != nil {
@@ -63,7 +64,7 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 			if !errors.Is(err, store.ErrRecovery) {
 				t.Fatal("corrupt delivery passed startup", err)
 			}
-			if after := storeSnapshot(t, options.StateDir); !reflect.DeepEqual(before, after) {
+			if after := fixtures.StoreSnapshot(t, options.StateDir); !reflect.DeepEqual(before, after) {
 				t.Fatal("rejected delivery changed private state")
 			}
 			if runtime.Count("launch") != launches {

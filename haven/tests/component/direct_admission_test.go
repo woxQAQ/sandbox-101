@@ -13,11 +13,12 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := directFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.DirectFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
@@ -27,19 +28,19 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, policy)
-	waitFixtureWorker(t, service, claim.ID)
+	}).Claim(t, "claim", nil, policy)
+	fixtures.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	before, err := service.Catalog.Get(ctx, principal, claim.Result.SandboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.policyMu.Lock()
-	runtime.policy[before.VMID] = nil
-	runtime.policyMu.Unlock()
+	runtime.PolicyMu.Lock()
+	runtime.Policy[before.VMID] = nil
+	runtime.PolicyMu.Unlock()
 	if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err == nil {
 		t.Fatal("data admission accepted missing host policy")
 	}
@@ -72,9 +73,9 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime.policyMu.Lock()
-	count := len(runtime.events)
-	runtime.policyMu.Unlock()
+	runtime.PolicyMu.Lock()
+	count := len(runtime.Events)
+	runtime.PolicyMu.Unlock()
 	if _, err = service.Sandboxes.AdmitConfigure(ctx, principal, "stale-observer", operation.Command{
 		Action:             "configure",
 		SandboxID:          before.ID,
@@ -83,9 +84,9 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	}); err == nil {
 		t.Fatal("stale observer superseded current policy")
 	}
-	runtime.policyMu.Lock()
-	current := len(runtime.events)
-	runtime.policyMu.Unlock()
+	runtime.PolicyMu.Lock()
+	current := len(runtime.Events)
+	runtime.PolicyMu.Unlock()
 	if current != count {
 		t.Fatal("stale observer changed host networking")
 	}
@@ -96,8 +97,8 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 }
 
 func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, manager := directFixtureWithFault(t, func(point string) error {
+	fixtures.ParallelLifecycle(t)
+	service, runtime, manager := fixtures.DirectFixtureWithFault(t, func(point string) error {
 		if point == "direct_retirement_effect" {
 			return errs.ErrInterrupted
 		}
@@ -106,15 +107,15 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
 		AllowedCIDRs: []string{
 			"8.8.8.8/32",
 		},
 	})
-	waitFixtureWorker(t, service, claim.ID)
+	fixtures.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
@@ -131,11 +132,11 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 		t.Fatal(before, err)
 	}
 	// A process restart loses proxy callbacks; the durable retirement owns recovery.
-	manager.cleanupMu.Lock()
-	manager.cleanups = map[string]func() error{}
-	manager.cleanupMu.Unlock()
+	manager.CleanupMu.Lock()
+	manager.Cleanups = map[string]func() error{}
+	manager.CleanupMu.Unlock()
 	service = testapp.ReopenCloneService(t, service, runtime)
-	manager.service = service
+	manager.Service = service
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		step, err := machine.LoadDirectRetirement(ctx, service.State.Database(), claim.ID)
@@ -169,13 +170,13 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 }
 
 func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"hostname",
 		"host_credential",
 	} {
 		t.Run(kind, func(t *testing.T) {
-			service, runtime, _ := directFixture(t)
+			service, runtime, _ := fixtures.DirectFixture(t)
 			policy := egress.Policy{
 				Mode: "direct",
 				AllowedCIDRs: []string{

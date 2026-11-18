@@ -37,7 +37,7 @@ just smoke
 
 二进制输出为 `bin/{haven,havenctl,loomctl}`。test、vet 与 race 覆盖 Haven、Loom、SDK、types、common、tools 和 protocol 模块；workspace lint 另包含 operator。`just test-race` 保留每包 10 分钟超时。`just integration` 构建真实 Rust Unix fixture，验证 Haven/SQLite、HTTP 与 guest RPC。`just smoke` 在自建私有状态中启动一个真实 daemon，检查两个 CLI、writer 排他、配置、重启、GC 和离线备份。这两个入口均不启动 VM。
 
-Haven 的版本化 migration SQL 同时供运行时初始化和 sqlc 使用。修改领域 SQL 后运行 `just generate-sql`、`just check-sql`；生成绑定纳入版本控制，普通构建不需要 sqlc。检查在私有临时目录生成，能识别缺失、修改和多余文件，不改写工作树。版本与事务边界见 [store migrations](haven/store/README.md)。架构门禁同时检查实际 import graph 和 Go AST，拒绝 controller 绕过业务服务、根兼容 facade 与手写业务 SQL；负例验证拒绝能力，SQLite 维护例外在 store 契约中逐项列明。
+Haven 的版本化 migration SQL 同时供运行时初始化和 sqlc 使用。修改领域 SQL 后运行 `just generate-sql`、`just check-sql`；生成绑定纳入版本控制，普通构建不需要 sqlc。检查在私有临时目录生成，能识别缺失、修改和多余文件，不改写工作树。版本与事务边界见 [store migrations](haven/store/README.md)。
 
 普通测试缺少工具或 ownership 权限时可能跳过 native 项。`just test-native` 强制 EROFS 覆盖，保留 race、count=1、300s 设置，stdout 仅输出 Go test JSON。native gate 还要求 shared/merged 物化与 GC 的实际 pass 事件：
 

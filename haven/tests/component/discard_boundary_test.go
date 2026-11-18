@@ -10,15 +10,16 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDiscardAdmissionAtomicity(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, source := failedColdFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, backend, source := fixtures.FailedColdFixture(t)
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_discard_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.VMDeletion.AdmitDiscard(context.Background(), discardRequest(source)); err == nil {
+	if _, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source)); err == nil {
 		t.Fatal("ignored handoff accepted discard")
 	}
 	sandboxView, err := sandbox.LoadSandbox(context.Background(), service.State.Database(), source.Input.SandboxID, source.Input.TenantID)
@@ -39,17 +40,17 @@ func TestHavenDiscardAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, source := failedColdFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, backend, source := fixtures.FailedColdFixture(t)
 	backend.Mu.Lock()
 	backend.InspectError = errors.New("fixture unknown sibling")
 	backend.Mu.Unlock()
 	networks := backend.Count("network")
-	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), discardRequest(source))
+	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := awaitDiscard(t, service, discard.ID)
+	result := fixtures.AwaitDiscard(t, service, discard.ID)
 	if result.Status == "succeeded" || backend.Count("stop") != 1 || backend.Count("network") != networks || backend.Count("remove") != 0 {
 		t.Fatal("unknown full inventory authorized a device mutation")
 	}
@@ -60,15 +61,15 @@ func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
 }
 
 func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, snapshot := cloneFixtureWithFault(t, func(point string) error {
+	fixtures.ParallelLifecycle(t)
+	service, backend, snapshot := fixtures.CloneFixtureWithFault(t, func(point string) error {
 		if point == "restore_prepare_intent" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	operation := admitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
-	pending := awaitColdWorker(t, service, operation.ID)
+	operation := fixtures.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
+	pending := fixtures.AwaitColdWorker(t, service, operation.ID)
 	if err := os.MkdirAll(pending.Input.Resource.RestoreDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -77,15 +78,15 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	source := awaitColdWorker(t, service, operation.ID)
+	source := fixtures.AwaitColdWorker(t, service, operation.ID)
 	if source.Status != "failed" || source.State.Materials != nil {
 		t.Fatal("fixture unexpectedly established restore boundary", source.State)
 	}
-	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), discardRequest(source))
+	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), fixtures.DiscardRequest(source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := awaitDiscard(t, service, discard.ID)
+	result := fixtures.AwaitDiscard(t, service, discard.ID)
 	if result.Status == "succeeded" {
 		t.Fatal("current pathname created missing historical directory proof")
 	}

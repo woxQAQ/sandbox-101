@@ -9,10 +9,11 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, tracked := range []bool{
 		false,
 		true,
@@ -22,9 +23,9 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 			true:  "tracked",
 		}[tracked], func(t *testing.T) {
 			service, _, guest, manager := testapp.SandboxFixture(t)
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			principal := authorization.Principal{
@@ -86,11 +87,11 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 }
 
 func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, manager := testapp.SandboxFixture(t)
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "binding-diagnostic", nil, egress.Policy{
+	}).Claim(t, "binding-diagnostic", nil, egress.Policy{
 		Mode: "none",
 	})
 	failure := errors.New("fixture cannot revoke residual binding")
@@ -122,14 +123,14 @@ func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *tes
 }
 
 func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, backend, _, manager := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "relay",
 		AllowedHosts: []string{
 			"unused.invalid",

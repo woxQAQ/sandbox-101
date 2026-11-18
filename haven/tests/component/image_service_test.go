@@ -10,29 +10,17 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/image"
-	"github.com/woxQAQ/haven/internal/application"
-	"github.com/woxQAQ/haven/internal/testfixture"
-	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-// This private recovery fixture starts with a frozen plan whose source vanished
-// before staging. The real runner prepares owned directories and records failure;
-// no EROFS materialization, namespace or VM behavior is represented by this fixture.
-func pendingImageRecovery(t *testing.T) (*application.App, string, imageimport.ImageImportOptions) {
-	t.Helper()
-	service, _ := coldService(t, nil)
-	id, options := testfixture.SeedPendingImageImport(t, service.State)
-	return service, id, options
-}
-
 func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, condition := range []string{
 		"ignored_step",
 		"changed_charge",
 	} {
 		t.Run(condition, func(t *testing.T) {
-			service, id, options := pendingImageRecovery(t)
+			service, id, options := fixtures.PendingImageRecovery(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			root := authorization.Principal{

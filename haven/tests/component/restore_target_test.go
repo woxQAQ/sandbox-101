@@ -5,218 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-type generationRuntime struct {
-	*restorableRuntime
-
-	generations    sync.Mutex
-	known          map[string]loom.Resource
-	states         map[string]loom.Observation
-	unknownSibling bool
-}
-
-func generationBackend(runtime *testfixture.ColdRuntime) loom.Backend {
-	return &generationRuntime{
-		restorableRuntime: &restorableRuntime{runtime},
-		known:             map[string]loom.Resource{},
-		states:            map[string]loom.Observation{},
-	}
-}
-
-func (backend *generationRuntime) Inspect(_ context.Context, r loom.Resource) (loom.Observation, error) {
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	if backend.unknownSibling {
-		return loom.Observation{}, fmt.Errorf("fixture unknown sibling")
-	}
-	for id, resource := range backend.known {
-		if resource.VMID == r.VMID && id != r.Instance && backend.states[id].Alive {
-			return loom.Observation{}, fmt.Errorf("fixture live sibling")
-		}
-	}
-	return backend.states[r.Instance], nil
-}
-
-func (backend *generationRuntime) Launch(ctx context.Context, r loom.Resource, restore bool) error {
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	backend.Mu.Lock()
-	backend.Observations[r.VMID] = loom.Observation{}
-	backend.Mu.Unlock()
-	if err := backend.ColdRuntime.Launch(ctx, r, restore); err != nil {
-		return err
-	}
-	backend.Mu.Lock()
-	observation := backend.Observations[r.VMID]
-	backend.Mu.Unlock()
-	backend.known[r.Instance] = r
-	backend.states[r.Instance] = observation
-	return nil
-}
-
-func (backend *generationRuntime) Boot(ctx context.Context, r loom.Resource, restore bool) error {
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	backend.Mu.Lock()
-	backend.Observations[r.VMID] = backend.states[r.Instance]
-	backend.Mu.Unlock()
-	if err := backend.ColdRuntime.Boot(ctx, r, restore); err != nil {
-		return err
-	}
-	backend.Mu.Lock()
-	backend.states[r.Instance] = backend.Observations[r.VMID]
-	backend.Mu.Unlock()
-	return nil
-}
-
-func (backend *generationRuntime) Stop(_ context.Context, r loom.Resource) error {
-	if err := backend.Effect("stop", r); err != nil {
-		return err
-	}
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	backend.states[r.Instance] = loom.Observation{}
-	backend.Mu.Lock()
-	backend.Observations[r.VMID] = loom.Observation{}
-	backend.Mu.Unlock()
-	return nil
-}
-
-func (backend *generationRuntime) Network(_ context.Context, r loom.Resource, on bool) error {
-	if err := backend.Effect("network", r); err != nil {
-		return err
-	}
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	for id, resource := range backend.known {
-		if resource.VMID == r.VMID && id != r.Instance && backend.states[id].Alive {
-			return fmt.Errorf("fixture cannot mutate devices with live sibling")
-		}
-	}
-	observation := backend.states[r.Instance]
-	observation.Network = on
-	backend.states[r.Instance] = observation
-	return nil
-}
-
-func (backend *generationRuntime) Remove(_ context.Context, r loom.Resource) error {
-	if err := backend.Effect("remove", r); err != nil {
-		return err
-	}
-	observation, err := backend.Inspect(context.Background(), r)
-	if err != nil {
-		return err
-	}
-	if observation.Alive {
-		return fmt.Errorf("fixture removal of live instance")
-	}
-	return nil
-}
-
-func (backend *generationRuntime) Pause(ctx context.Context, r loom.Resource) error {
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	if err := backend.ColdRuntime.Pause(ctx, r); err != nil {
-		return err
-	}
-	observation := backend.states[r.Instance]
-	observation.Paused = true
-	backend.states[r.Instance] = observation
-	return nil
-}
-
-func (backend *generationRuntime) Resume(ctx context.Context, r loom.Resource) error {
-	backend.generations.Lock()
-	defer backend.generations.Unlock()
-	if err := backend.ColdRuntime.Resume(ctx, r); err != nil {
-		return err
-	}
-	observation := backend.states[r.Instance]
-	observation.Paused = false
-	backend.states[r.Instance] = observation
-	return nil
-}
-
-func targetSetup(t *testing.T) (*application.App, *generationRuntime, machine.RestoreRequest, machine.ResourceStep) {
-	t.Helper()
-	return targetSetupWithFault(t, nil)
-}
-
-func targetSetupWithFault(t *testing.T, fault func(string) error) (*application.App, *generationRuntime, machine.RestoreRequest, machine.ResourceStep) {
-	t.Helper()
-	service, _ := coldServiceWithBackend(t, fault, generationBackend)
-	backend := service.Options.Backend.(*generationRuntime)
-	capture, _ := captureReady(t, service, "target-source")
-	if proof := awaitCapture(t, service, capture.ID); proof.Status != "succeeded" {
-		t.Fatal(proof.State)
-	}
-	target := coldClaim(t, service, "target")
-	ready := awaitColdWorker(t, service, target.ID)
-	if ready.Status != "succeeded" {
-		t.Fatal(ready.State)
-	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
-		TenantID:         "tenant",
-		Key:              "target-stop",
-		SandboxID:        target.Result.SandboxID,
-		ExpectedInstance: ready.State.Witness,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		worker := service.Workers.State(stop.ID)
-		active, seen := worker.Active, worker.Completed
-		if !active && seen {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("stop did not finish")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	result, err := service.Operations.GetOperation(context.Background(), "tenant", stop.ID)
-	if err != nil || result.Status != "succeeded" {
-		reason := service.Workers.State(stop.ID).Err
-		t.Fatal("stop did not succeed", result, reason, err)
-	}
-	request := machine.RestoreRequest{
-		TenantID:         "tenant",
-		Key:              "restore",
-		SandboxID:        target.Result.SandboxID,
-		SnapshotID:       capture.Result.SnapshotID,
-		ExpectedInstance: ready.State.Witness,
-		StopOperationID:  stop.ID,
-	}
-	return service, backend, request, ready
-}
-
-func targetFixture(t *testing.T) (*application.App, *generationRuntime, operation.Record, machine.ResourceStep) {
-	t.Helper()
-	service, backend, request, _ := targetSetup(t)
-	restored, err := service.VMProvisioning.AdmitRestore(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	step := awaitColdWorker(t, service, restored.ID)
-	return service, backend, restored, step
-}
-
 func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, point := range []string{
 		"restore_candidate_copied",
 		"restore_resources_ready",
@@ -224,7 +24,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			faults := &testfixture.SnapshotFaults{}
-			service, backend, request, prior := targetSetupWithFault(t, faults.Check)
+			service, backend, request, prior := fixtures.TargetSetupWithFault(t, faults.Check)
 			faults.Set(func(candidate string) error {
 				if point == "restore_candidate_copied" && candidate == point {
 					return errs.ErrInterrupted
@@ -241,10 +41,10 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			failed := awaitColdWorker(t, service, acceptedOperation.ID)
+			failed := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
 			if point == "restore_candidate_copied" {
 				service = testapp.ReopenCloneService(t, service, backend)
-				failed = awaitColdWorker(t, service, acceptedOperation.ID)
+				failed = fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
 			}
 			backend.Before = nil
 			if failed.Status != "failed" || failed.State.Witness != "" {
@@ -265,7 +65,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			deleted := awaitDiscard(t, service, discard.ID)
+			deleted := fixtures.AwaitDiscard(t, service, discard.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(discard.ID).Err
 				t.Fatal("multi-version discard failed", deleted.State, reason)
@@ -282,7 +82,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, point := range []string{
 		"restore_admitted",
 		"restore_prepare_intent",
@@ -301,7 +101,7 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			faults := &testfixture.SnapshotFaults{}
-			service, backend, request, prior := targetSetupWithFault(t, faults.Check)
+			service, backend, request, prior := fixtures.TargetSetupWithFault(t, faults.Check)
 			faults.Set(func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
@@ -313,10 +113,10 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "restore_admitted" {
-				awaitColdWorker(t, service, acceptedOperation.ID)
+				fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			step := awaitColdWorker(t, service, acceptedOperation.ID)
+			step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
 			incomplete := point == "restore_candidate_prepared" || point == "restore_candidate_copied" || point == "restore_candidate_renamed" || point == "restore_candidate_synced"
 			if incomplete && (step.Status != "failed" || !step.State.RestoreBlocked) || !incomplete && step.Status != "succeeded" {
 				t.Fatal("target recovery state", step.State)
@@ -340,29 +140,9 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 	}
 }
 
-func awaitStop(t *testing.T, service *application.App, id string) machine.StopStep {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		worker := service.Workers.State(id)
-		active, seen := worker.Active, worker.Completed
-		if !active && seen {
-			step, err := machine.LoadStop(context.Background(), service.State.Database(), id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return step
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("stop worker timed out")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, acceptedOperation, first := targetFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, backend, acceptedOperation, first := fixtures.TargetFixture(t)
 	if first.Status != "succeeded" {
 		t.Fatal(first.State)
 	}
@@ -375,7 +155,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof := awaitStop(t, service, stop.ID); proof.Status != "succeeded" {
+	if proof := fixtures.AwaitStop(t, service, stop.ID); proof.Status != "succeeded" {
 		t.Fatal("second stop failed", proof)
 	}
 	second, err := service.VMProvisioning.AdmitRestore(context.Background(), machine.RestoreRequest{
@@ -389,7 +169,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored := awaitColdWorker(t, service, second.ID)
+	restored := fixtures.AwaitColdWorker(t, service, second.ID)
 	if restored.Status != "succeeded" || len(restored.Input.Ancestors) != 2 {
 		reason := service.Workers.State(second.ID).Err
 		t.Fatal(restored.State, reason)
@@ -406,7 +186,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof := awaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
+	if proof := fixtures.AwaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
 		reason := service.Workers.State(release.ID).Err
 		t.Fatal(proof.State, reason)
 	}
@@ -416,7 +196,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -432,7 +212,7 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+mode, func(t *testing.T) {
-				service, _, request, prior := targetSetup(t)
+				service, _, request, prior := fixtures.TargetSetup(t)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_target_admission BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
@@ -450,13 +230,13 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'fixture generation retirement rejection'",
 		"IGNORE",
 	} {
 		t.Run(mode, func(t *testing.T) {
-			service, backend, acceptedOperation, step := targetFixture(t)
+			service, backend, acceptedOperation, step := fixtures.TargetFixture(t)
 			if step.Status != "succeeded" {
 				t.Fatal(step.State)
 			}
@@ -473,8 +253,8 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pending := awaitColdWorker(t, service, release.ID)
-			if terminal(pending.Status) {
+			pending := fixtures.AwaitColdWorker(t, service, release.ID)
+			if fixtures.Terminal(pending.Status) {
 				t.Fatal("retirement denial committed", pending.State)
 			}
 			var instances, versions, cost int
@@ -485,7 +265,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 				t.Fatal(err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			done := awaitColdWorker(t, service, release.ID)
+			done := fixtures.AwaitColdWorker(t, service, release.ID)
 			if done.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
@@ -495,8 +275,8 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, acceptedOperation, step := targetFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, backend, acceptedOperation, step := fixtures.TargetFixture(t)
 	if step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
@@ -508,7 +288,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted := awaitColdWorker(t, service, release.ID)
+	deleted := fixtures.AwaitColdWorker(t, service, release.ID)
 	if deleted.Status != "succeeded" {
 		reason := service.Workers.State(release.ID).Err
 		t.Fatal("multi-version release failed", deleted.State, reason)
@@ -523,8 +303,8 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTarget(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, acceptedOperation, step := targetFixture(t)
+	fixtures.ParallelLifecycle(t)
+	service, backend, acceptedOperation, step := fixtures.TargetFixture(t)
 	if step.Status != "succeeded" {
 		reason := service.Workers.State(acceptedOperation.ID).Err
 		t.Fatal("restore failed", step.State, reason)

@@ -9,10 +9,11 @@ import (
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenEgressFactoryUsesOwnedCallbacks(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	var host application.EgressCallbacks
 	service, _ := testapp.ColdServiceWithOptions(t, application.Options{
 		EgressFactory: func(callbacks application.EgressCallbacks) (application.Egress, string, error) {

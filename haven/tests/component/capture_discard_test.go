@@ -5,108 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-func awaitCaptureDiscard(t *testing.T, service *application.App, id string) captureDiscardStep {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		worker := service.Workers.State(id)
-		active, seen := worker.Active, worker.Completed
-		step, err := loadCaptureDiscard(context.Background(), service.State.Database(), id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !active && (seen || terminal(step.Status)) {
-			return step
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("capture discard worker timed out", step.Phase)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func failedCaptureFixture(t *testing.T, final bool) (*application.App, *testfixture.ColdRuntime, CaptureDiscardRequest, machine.CaptureStep) {
-	t.Helper()
-	return failedCaptureFixtureWithFault(t, final, nil)
-}
-
-func failedCaptureFixtureWithFault(t *testing.T, final bool, fault func(string) error) (*application.App, *testfixture.ColdRuntime, CaptureDiscardRequest, machine.CaptureStep) {
-	t.Helper()
-	point := "captured"
-	if final {
-		point = "publish_intent"
-	}
-	service, backend := coldService(t, func(candidate string) error {
-		if candidate == point {
-			return errs.ErrInterrupted
-		}
-		return nil
-	})
-	operation, request := captureReady(t, service, "failed-capture")
-	before := awaitCapture(t, service, operation.ID)
-	if final {
-		if err := os.Chmod(filepath.Join(before.Input.Snapshot.Dir, "ch/state.json"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(before.Input.Snapshot.Dir, "ch/state.json"), []byte("damaged captured bytes"), 0o444); err != nil {
-			t.Fatal(err)
-		}
-	}
-	service = resumeColdServiceWithFault(t, service, backend, fault)
-	failed := awaitCapture(t, service, operation.ID)
-	if failed.Status != "failed" || failed.State.ResumeRequired {
-		t.Fatal("fixture capture did not fail with resumed source", failed.State)
-	}
-	stop, err := service.VMStops.AdmitStop(context.Background(), machine.StopRequest{
-		TenantID:         request.TenantID,
-		Key:              "stop-failed-capture",
-		SandboxID:        request.SandboxID,
-		ExpectedInstance: request.ExpectedInstance,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stopped := awaitStop(t, service, stop.ID); stopped.Status != "succeeded" {
-		t.Fatal("fixture source stop failed", stopped)
-	}
-	return service, backend, CaptureDiscardRequest{
-		TenantID:          request.TenantID,
-		Key:               "discard-capture",
-		SandboxID:         request.SandboxID,
-		FailedOperationID: operation.ID,
-		ExpectedInstance:  request.ExpectedInstance,
-		StopOperationID:   stop.ID,
-	}, failed
-}
-
-func captureDiscardLiability(t *testing.T, service *application.App, failed machine.CaptureStep, want int) {
-	t.Helper()
-	var cost, reserved int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM reservations WHERE owner=?)", failed.OperationID, "snapshot:"+failed.Input.Snapshot.ID).Scan(&cost, &reserved); err != nil || cost != want || (want > 0) != (reserved == 1) {
-		t.Fatal("capture liability changed without retirement", cost, reserved, err)
-	}
-}
-
 func TestHavenCaptureDiscard(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, final := range []bool{
 		false,
 		true,
 	} {
 		t.Run(fmt.Sprint(final), func(t *testing.T) {
-			service, backend, request, failed := failedCaptureFixture(t, final)
+			service, backend, request, failed := fixtures.FailedCaptureFixture(t, final)
 			original, err := service.Operations.GetOperation(context.Background(), request.TenantID, failed.OperationID)
 			if err != nil {
 				t.Fatal(err)
@@ -115,13 +30,13 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			done := awaitCaptureDiscard(t, service, operation.ID)
+			done := fixtures.AwaitCaptureDiscard(t, service, operation.ID)
 			if done.Status != "succeeded" {
 				reason := service.Workers.State(operation.ID).Err
 				t.Fatal("capture discard failed", done, reason)
 			}
-			captureDiscardLiability(t, service, failed, 0)
-			for _, path := range captureDiscardPaths(done) {
+			fixtures.CaptureDiscardLiability(t, service, failed, 0)
+			for _, path := range fixtures.CaptureDiscardPaths(done) {
 				if _, err = os.Lstat(path); !os.IsNotExist(err) {
 					t.Fatal("capture directory retained", path, err)
 				}
@@ -153,7 +68,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal("cleanup did not unblock source release", err)
 			}
-			if step := awaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
+			if step := fixtures.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
 				t.Fatal(step.State)
 			}
 			if backend.Count("launch") != 1 {
@@ -164,7 +79,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 }
 
 func TestHavenCaptureDiscardRecovery(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, point := range []string{
 		"capture_discard_admitted",
 		"capture_discard_receipts",
@@ -175,7 +90,7 @@ func TestHavenCaptureDiscardRecovery(t *testing.T) {
 		"capture_discard_completed",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend, request, failed := failedCaptureFixtureWithFault(t, true, func(candidate string) error {
+			service, backend, request, failed := fixtures.FailedCaptureFixtureWithFault(t, true, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
@@ -186,15 +101,15 @@ func TestHavenCaptureDiscardRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "capture_discard_admitted" {
-				awaitCaptureDiscard(t, service, operation.ID)
+				fixtures.AwaitCaptureDiscard(t, service, operation.ID)
 			}
-			service = resumeColdService(t, service, backend)
-			step := awaitCaptureDiscard(t, service, operation.ID)
+			service = fixtures.ResumeColdService(t, service, backend)
+			step := fixtures.AwaitCaptureDiscard(t, service, operation.ID)
 			if step.Status != "succeeded" {
 				reason := service.Workers.State(operation.ID).Err
 				t.Fatal(step, reason)
 			}
-			captureDiscardLiability(t, service, failed, 0)
+			fixtures.CaptureDiscardLiability(t, service, failed, 0)
 			original, err := machine.LoadCapture(context.Background(), service.State.Database(), failed.OperationID)
 			if err != nil || !reflect.DeepEqual(original, failed) {
 				t.Fatal("recovery changed original failure", err)
@@ -207,7 +122,7 @@ func TestHavenCaptureDiscardRecovery(t *testing.T) {
 }
 
 func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -224,7 +139,7 @@ func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+mode, func(t *testing.T) {
-				service, backend, request, failed := failedCaptureFixture(t, true)
+				service, backend, request, failed := fixtures.FailedCaptureFixture(t, true)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_capture_retirement BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
@@ -233,12 +148,12 @@ func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				pending := awaitCaptureDiscard(t, service, operation.ID)
-				if terminal(pending.Status) || pending.Phase != "files_removed" {
+				pending := fixtures.AwaitCaptureDiscard(t, service, operation.ID)
+				if fixtures.Terminal(pending.Status) || pending.Phase != "files_removed" {
 					t.Fatal("retirement denial committed", pending)
 				}
-				captureDiscardLiability(t, service, failed, 192)
-				for _, path := range captureDiscardPaths(pending) {
+				fixtures.CaptureDiscardLiability(t, service, failed, 192)
+				for _, path := range fixtures.CaptureDiscardPaths(pending) {
 					if _, err = os.Lstat(path); !os.IsNotExist(err) {
 						t.Fatal("fixture did not reclaim physical material", err)
 					}
@@ -246,11 +161,11 @@ func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 				if _, err = service.State.Database().Exec("DROP TRIGGER deny_capture_retirement"); err != nil {
 					t.Fatal(err)
 				}
-				service = resumeColdService(t, service, backend)
-				if step := awaitCaptureDiscard(t, service, operation.ID); step.Status != "succeeded" {
+				service = fixtures.ResumeColdService(t, service, backend)
+				if step := fixtures.AwaitCaptureDiscard(t, service, operation.ID); step.Status != "succeeded" {
 					t.Fatal(step)
 				}
-				captureDiscardLiability(t, service, failed, 0)
+				fixtures.CaptureDiscardLiability(t, service, failed, 0)
 			})
 		}
 	}

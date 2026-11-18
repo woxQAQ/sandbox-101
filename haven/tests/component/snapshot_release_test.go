@@ -12,10 +12,11 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, point := range []string{
 		"release_admitted",
 		"release_unlinked",
@@ -23,15 +24,15 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 		"none",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend := coldService(t, func(candidate string) error {
+			service, backend := fixtures.ColdService(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			capture, request := captureReady(t, service, "checkpoint")
-			historical := awaitCapture(t, service, capture.ID)
-			capturePublished(t, service, historical, true)
+			capture, request := fixtures.CaptureReady(t, service, "checkpoint")
+			historical := fixtures.AwaitCapture(t, service, capture.ID)
+			fixtures.CapturePublished(t, service, historical, true)
 			historyBytes := testfixture.Encode(historical)
 			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  request.TenantID,
@@ -42,10 +43,10 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "release_admitted" {
-				awaitColdWorker(t, service, release.ID)
+				fixtures.AwaitColdWorker(t, service, release.ID)
 			}
-			service = resumeColdService(t, service, backend)
-			deleted := awaitColdWorker(t, service, release.ID)
+			service = fixtures.ResumeColdService(t, service, backend)
+			deleted := fixtures.AwaitColdWorker(t, service, release.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal("capture cleanup did not follow VM release", deleted.State, reason)
@@ -82,11 +83,11 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 }
 
 func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend := coldService(t, nil)
-	operation, request := captureReady(t, service, "handoff")
-	historical := awaitCapture(t, service, operation.ID)
-	capturePublished(t, service, historical, true)
+	fixtures.ParallelLifecycle(t)
+	service, backend := fixtures.ColdService(t, nil)
+	operation, request := fixtures.CaptureReady(t, service, "handoff")
+	historical := fixtures.AwaitCapture(t, service, operation.ID)
+	fixtures.CapturePublished(t, service, historical, true)
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_capture_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}

@@ -9,49 +9,16 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-func goldenSupplyFixture(t *testing.T, target int) (*application.App, *testfixture.ColdRuntime, *testfixture.WorkloadFixture) {
-	t.Helper()
-	return goldenSupplyFixtureWithFault(t, target, nil)
-}
-
-func goldenSupplyFixtureWithFault(t *testing.T, target int, fault func(string) error) (*application.App, *testfixture.ColdRuntime, *testfixture.WorkloadFixture) {
-	t.Helper()
-	service, runtime, guest, _ := testapp.SandboxFixtureWithBackend(t, fault, restorableBackend)
-	principal := authorization.Principal{
-		TenantID: "tenant",
-	}
-	cold, err := service.TemplateCatalog.GetTemplate(context.Background(), principal, "cold")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	spec := operation.TemplateSpec{
-		ID:         "golden",
-		Image:      cold.Image,
-		Shape:      cold.Shape,
-		TargetWarm: target,
-	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "build", operation.Command{
-		Action:   "template_build",
-		Template: &spec,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return service, runtime, guest
-}
-
 func TestHavenRefillConservesPoolOccupation(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := goldenSupplyFixture(t, 1)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
@@ -95,8 +62,8 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 }
 
 func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := goldenSupplyFixture(t, 1)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 	runtime.Mu.Lock()
 	runtime.FailBoot = true
 	runtime.Mu.Unlock()
@@ -118,13 +85,13 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 }
 
 func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixtureWithBackend(t, func(point string) error {
 		if point == "build_warmup_intent" {
 			return errs.ErrInterrupted
 		}
 		return nil
-	}, restorableBackend)
+	}, fixtures.RestorableBackend)
 	var executions atomic.Int64
 	guest.Before = func(name string, _ loom.Resource) error {
 		if name == "exec" {
@@ -181,8 +148,8 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 }
 
 func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
@@ -231,7 +198,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 }
 
 func TestHavenTemplatePutOwnerAndReplay(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",

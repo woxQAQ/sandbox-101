@@ -7,12 +7,13 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _ := goldenSupplyFixture(t, 1)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
 	runtime.Mu.Lock()
 	runtime.FailBoot = true
 	runtime.Mu.Unlock()

@@ -11,17 +11,18 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRenewPreservesConfiguration(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (sandboxClaims{
+	claim := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	id := claim.Result.SandboxID
@@ -76,7 +77,7 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 }
 
 func TestHavenLeaseReaper(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, state := range []string{
 		"kill",
 		"pause",
@@ -87,9 +88,9 @@ func TestHavenLeaseReaper(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
 			id := claim.Result.SandboxID
@@ -114,7 +115,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 				settings.Deadline = deadline
 				settings.OnExpire = state
 			}
-			if err = requireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), id)); err != nil {
+			if err = fixtures.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), id)); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Command{

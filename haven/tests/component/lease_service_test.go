@@ -12,10 +12,11 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, state := range []string{
 		"running",
 		"paused",
@@ -29,9 +30,9 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				principal := authorization.Principal{
 					TenantID: "tenant",
 				}
-				claim := (sandboxClaims{
+				claim := (fixtures.SandboxClaims{
 					App: service,
-				}).claim(t, "claim", nil, egress.Policy{
+				}).Claim(t, "claim", nil, egress.Policy{
 					Mode: "none",
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

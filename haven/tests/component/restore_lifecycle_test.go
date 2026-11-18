@@ -12,25 +12,26 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, point := range []string{
 		"release_admitted",
 		"release_unlinked",
 		"release_completion_before_commit",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend, source := cloneFixtureWithFault(t, func(candidate string) error {
+			service, backend, source := fixtures.CloneFixtureWithFault(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-			historical := awaitColdWorker(t, service, clone.ID)
-			cloneLiability(t, service, historical, true)
+			clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+			historical := fixtures.AwaitColdWorker(t, service, clone.ID)
+			fixtures.CloneLiability(t, service, historical, true)
 			frozen := testfixture.Encode(historical)
 			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
@@ -41,10 +42,10 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "release_admitted" {
-				awaitColdWorker(t, service, release.ID)
+				fixtures.AwaitColdWorker(t, service, release.ID)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			deleted := awaitColdWorker(t, service, release.ID)
+			deleted := fixtures.AwaitColdWorker(t, service, release.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal("clone cleanup did not converge", deleted.State, reason)
@@ -69,17 +70,17 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 }
 
 func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	t.Run("source-lease-fk", func(t *testing.T) {
 		faults := &testfixture.SnapshotFaults{}
-		service, backend, source := cloneFixtureWithFault(t, faults.Check)
+		service, backend, source := fixtures.CloneFixtureWithFault(t, faults.Check)
 		faults.Set(func(point string) error {
 			if point == "admission_committed" {
 				return errs.ErrInterrupted
 			}
 			return nil
 		})
-		clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+		clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
 		if _, err := service.State.Database().Exec("DELETE FROM snapshots WHERE id=?", source.Result.SnapshotID); err == nil {
 			t.Fatal("source catalog retired while leased")
 		}
@@ -87,7 +88,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 			t.Fatal("unexecuted clone already launched")
 		}
 		service = testapp.ReopenCloneService(t, service, backend)
-		cloneLiability(t, service, awaitColdWorker(t, service, clone.ID), true)
+		fixtures.CloneLiability(t, service, fixtures.AwaitColdWorker(t, service, clone.ID), true)
 	})
 	for _, damage := range []string{
 		"disk",
@@ -95,14 +96,14 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 		"missing-proof",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend, source := cloneFixtureWithFault(t, func(point string) error {
+			service, backend, source := fixtures.CloneFixtureWithFault(t, func(point string) error {
 				if point == "restore_resources_ready" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-			before := awaitColdWorker(t, service, clone.ID)
+			clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+			before := fixtures.AwaitColdWorker(t, service, clone.ID)
 			switch damage {
 			case "disk":
 				if err := os.Truncate(before.Input.Resource.Disk, 0); err != nil {
@@ -129,7 +130,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 				}
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			after := awaitColdWorker(t, service, clone.ID)
+			after := fixtures.AwaitColdWorker(t, service, clone.ID)
 			if after.Status == "succeeded" || after.State.Witness != "" || backend.Count("launch") != 1 {
 				t.Fatal("damaged handoff became a runtime witness", after.State)
 			}
@@ -145,11 +146,11 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 }
 
 func TestHavenRestoreCloneCanBeCaptured(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend, source := cloneFixture(t)
-	clone := admitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-	ready := awaitColdWorker(t, service, clone.ID)
-	cloneLiability(t, service, ready, true)
+	fixtures.ParallelLifecycle(t)
+	service, backend, source := fixtures.CloneFixture(t)
+	clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+	ready := fixtures.AwaitColdWorker(t, service, clone.ID)
+	fixtures.CloneLiability(t, service, ready, true)
 	capture, err := service.Captures.AdmitCapture(context.Background(), machine.CaptureRequest{
 		TenantID:         "tenant",
 		Key:              "clone-capture",
@@ -159,8 +160,8 @@ func TestHavenRestoreCloneCanBeCaptured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := awaitCapture(t, service, capture.ID)
-	capturePublished(t, service, proof, true)
+	proof := fixtures.AwaitCapture(t, service, capture.ID)
+	fixtures.CapturePublished(t, service, proof, true)
 	if backend.Count("launch") != 2 || backend.Count("capture") != 2 {
 		t.Fatal("resnapshot unexpectedly restarted a clone")
 	}

@@ -9,29 +9,14 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-func waitFixtureWorker(t *testing.T, service *application.App, id string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		active := service.Workers.State(id).Active
-		if !active {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("private workflow worker still active")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 func TestHavenConfigureFailureMatrix(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, stage := range []string{
 		"inspect",
 		"network_off",
@@ -57,9 +42,9 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					"old.invalid",
 				},
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", map[string]operation.EnvVar{
+			}).Claim(t, "claim", map[string]operation.EnvVar{
 				"REVISION": {
 					Value: "old",
 				},
@@ -75,7 +60,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			defer func() {
 				_ = connection.Close()
 			}()
-			waitFixtureWorker(t, service, claim.ID)
+			fixtures.WaitFixtureWorker(t, service, claim.ID)
 			var statement string
 			switch stage {
 			case "inspect":
@@ -144,7 +129,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("failure changed accepted goal", failed, err)
 			}
-			waitFixtureWorker(t, service, failed.ID)
+			fixtures.WaitFixtureWorker(t, service, failed.ID)
 			var fence string
 			if err = service.State.Database().QueryRow("SELECT operation_id FROM configuration_fences WHERE sandbox_id=?", before.ID).Scan(&fence); err != nil || fence != failed.ID {
 				t.Fatal("failure lost durable fence", fence, failed, err)

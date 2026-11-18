@@ -38,11 +38,11 @@ image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、cap
 
 私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v9 schema、冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
 
-旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。门禁按 Go 类型核对 step namespace，并按 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
+旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。step namespace 与 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
 
 `store.State` 独占数据库、writer lock、node key 与 HEAD。各能力构造函数通过本能力的 `Dependencies` 明确接收原 guards、Lifetime/Workers、证明与协作端口，运行配置由独立 options 或故障注入参数传入；构造过程只装配这些依赖，不从通用容器查找或回填缺失端口。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`ephemeral.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 dataplane.Audits、dataplane.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
 
-架构门禁同时检查实际 Go import graph 和编译源码 AST：禁止 controller 绕过用例或回指 App、业务层手写 SQL、跨领域 dbgen 导入，以及根兼容 facade。仅保留逐函数/逐语句审阅的 SQLite 维护例外。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
+controller 不得绕过用例或回指 App，业务层不得手写 SQL、跨领域导入 dbgen 或恢复根兼容 facade。SQLite 维护操作的范围见 [store 契约](../haven/store/README.md)。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
 
 业务 API 与客户端契约见 [Sandbox](../haven/sandbox/api.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [验收记录](acceptance.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
 

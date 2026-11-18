@@ -1,11 +1,11 @@
-package component
+package fixtures
 
 import (
 	"database/sql"
 	"fmt"
 )
 
-func requireWrite(result sql.Result, err error) error {
+func RequireWrite(result sql.Result, err error) error {
 	if err != nil {
 		return err
 	}
@@ -22,6 +22,6 @@ func requireWrite(result sql.Result, err error) error {
 	return nil
 }
 
-func terminal(status string) bool {
+func Terminal(status string) bool {
 	return status == "succeeded" || status == "failed"
 }

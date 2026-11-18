@@ -10,30 +10,18 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-type blockingCloseRuntime struct {
-	*testfixture.ColdRuntime
-
-	entered chan struct{}
-	release <-chan struct{}
-}
-
-func (backend *blockingCloseRuntime) Close() error {
-	close(backend.entered)
-	<-backend.release
-	return nil
-}
-
 func TestHavenStepShutdownBackendDeadline(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	release := make(chan struct{})
-	var closer *blockingCloseRuntime
-	service, _ := coldServiceWithBackend(t, nil, func(backend *testfixture.ColdRuntime) loom.Backend {
-		closer = &blockingCloseRuntime{
+	var closer *fixtures.BlockingCloseRuntime
+	service, _ := fixtures.ColdServiceWithBackend(t, nil, func(backend *testfixture.ColdRuntime) loom.Backend {
+		closer = &fixtures.BlockingCloseRuntime{
 			ColdRuntime: backend,
-			entered:     make(chan struct{}),
-			release:     release,
+			Entered:     make(chan struct{}),
+			Release:     release,
 		}
 		return closer
 	})
@@ -58,11 +46,11 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 		t.Fatal("backend close blocked the caller beyond its deadline")
 	}
 	select {
-	case <-closer.entered:
+	case <-closer.Entered:
 	case <-time.After(time.Second):
 		t.Fatal("backend finalization did not start")
 	}
-	if other, err := openStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
+	if other, err := fixtures.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
 		if other != nil {
 			_ = other.Close()
 		}
@@ -74,7 +62,7 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 	if err := service.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	state, err := openStore(service.State.Directory(), false)
+	state, err := fixtures.OpenStore(service.State.Directory(), false)
 	if err != nil {
 		t.Fatal("completed finalization did not release the writer", err)
 	}

@@ -20,7 +20,7 @@ writer lock 仍由 State 持有，迁移完成后才执行原 checkpoint/HEAD �
 
 store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通过本包 `internal/dbgen` 生成。metadata 初始化使用原事务；版本按完整整数比较，不窄化后接受错误版本。`AppendAudit` 在调用者业务接纳保护内执行事务，核验追加恰好一行，提交后 checkpoint；HEAD 错误不会被解释为事务回滚。
 
-手写维护 SQL 的允许范围由 `scripts/check-haven-shape.go` 按编译源码 AST、文件、函数及完整语句/调用核验，不豁免整个 store 目录：
+手写维护 SQL 限于以下操作；新增操作需要审阅其事务、归属和恢复语义：
 
 | 位置 | 允许的维护操作 |
 |---|---|

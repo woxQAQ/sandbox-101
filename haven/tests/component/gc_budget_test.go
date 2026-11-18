@@ -8,12 +8,13 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCBatchAndCancellation(t *testing.T) {
-	parallelLifecycle(t)
-	service, _, _ := goldenSupplyFixture(t, 2)
+	fixtures.ParallelLifecycle(t)
+	service, _, _ := fixtures.GoldenSupplyFixture(t, 2)
 	tenant := authorization.Principal{
 		TenantID: "tenant",
 	}

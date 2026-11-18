@@ -10,10 +10,11 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -33,52 +34,52 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+mode, func(t *testing.T) {
-				fixture := snapshotDeleteFixture(t, 0)
-				service := fixture.service
+				fixture := fixtures.SnapshotDeleteFixture(t, 0)
+				service := fixture.Service
 				statement := fmt.Sprintf("CREATE TRIGGER deny_snapshot_retirement BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				operation := admitSnapshotDeleteFixture(t, fixture)
-				step := awaitSnapshotDelete(t, service, operation.ID)
-				if terminal(step.Status) || step.Phase != "files_removed" {
+				operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
+				step := fixtures.AwaitSnapshotDelete(t, service, operation.ID)
+				if fixtures.Terminal(step.Status) || step.Phase != "files_removed" {
 					t.Fatal("snapshot retirement denial committed", step.Phase)
 				}
-				snapshotDeleteCost(t, fixture, 192)
+				fixtures.SnapshotDeleteCost(t, fixture, 192)
 				if _, err := os.Stat(step.Input.Source.Snapshot.Dir); !os.IsNotExist(err) {
 					t.Fatal("fixture did not reclaim snapshot bytes", err)
 				}
 				if _, err := service.State.Database().Exec("DROP TRIGGER deny_snapshot_retirement"); err != nil {
 					t.Fatal(err)
 				}
-				fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
-				if done := awaitSnapshotDelete(t, fixture.service, operation.ID); done.Status != "succeeded" {
-					reason := fixture.service.Workers.State(operation.ID).Err
+				fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
+				if done := fixtures.AwaitSnapshotDelete(t, fixture.Service, operation.ID); done.Status != "succeeded" {
+					reason := fixture.Service.Workers.State(operation.ID).Err
 					t.Fatal(done.Phase, reason)
 				}
-				snapshotDeleteCost(t, fixture, 0)
+				fixtures.SnapshotDeleteCost(t, fixture, 0)
 			})
 		}
 	}
 }
 
 func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'fixture backing fee rejection'",
 		"IGNORE",
 	} {
 		t.Run(mode, func(t *testing.T) {
-			fixture := snapshotDeleteFixture(t, 1)
-			service := fixture.service
-			operation := admitSnapshotDeleteFixture(t, fixture)
-			if step := awaitSnapshotDelete(t, service, operation.ID); step.Status != "succeeded" {
+			fixture := fixtures.SnapshotDeleteFixture(t, 1)
+			service := fixture.Service
+			operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
+			if step := fixtures.AwaitSnapshotDelete(t, service, operation.ID); step.Status != "succeeded" {
 				t.Fatal(step.Phase)
 			}
 			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_backing_fee BEFORE DELETE ON quota_resources WHEN OLD.kind='snapshot' BEGIN SELECT RAISE(%s); END", mode)); err != nil {
 				t.Fatal(err)
 			}
-			clone := fixture.clones[0]
+			clone := fixture.Clones[0]
 			release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release-last-backing",
@@ -87,11 +88,11 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			step := awaitColdWorker(t, service, release.ID)
-			if terminal(step.Status) || step.State.Phase != "files_removed" {
+			step := fixtures.AwaitColdWorker(t, service, release.ID)
+			if fixtures.Terminal(step.Status) || step.State.Phase != "files_removed" {
 				t.Fatal("backing fee denial partially retired VM", step.State)
 			}
-			snapshotDeleteCost(t, fixture, 192)
+			fixtures.SnapshotDeleteCost(t, fixture, 192)
 			var backing, versions int
 			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE vm_id=?)", clone.Result.VMID, clone.Result.VMID).Scan(&backing, &versions); err != nil || backing != 1 || versions != 1 {
 				t.Fatal("last backing retirement not atomic", backing, versions, err)
@@ -99,18 +100,18 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_backing_fee"); err != nil {
 				t.Fatal(err)
 			}
-			fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
-			if done := awaitColdWorker(t, fixture.service, release.ID); done.Status != "succeeded" {
-				reason := fixture.service.Workers.State(release.ID).Err
+			fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
+			if done := fixtures.AwaitColdWorker(t, fixture.Service, release.ID); done.Status != "succeeded" {
+				reason := fixture.Service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
 			}
-			snapshotDeleteCost(t, fixture, 0)
+			fixtures.SnapshotDeleteCost(t, fixture, 0)
 		})
 	}
 }
 
 func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"unknown",
 		"replaced",
@@ -120,9 +121,9 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 		"raw_reappeared",
 	} {
 		t.Run(kind, func(t *testing.T) {
-			fixture := snapshotDeleteFixture(t, 0)
-			service := fixture.service
-			snapshot, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "tenant", fixture.capture.Result.SnapshotID)
+			fixture := fixtures.SnapshotDeleteFixture(t, 0)
+			service := fixture.Service
+			snapshot, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "tenant", fixture.Capture.Result.SnapshotID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,7 +164,7 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 					_ = file.Close()
 				}()
 			case "raw_reappeared":
-				capture, err := machine.LoadCapture(context.Background(), service.State.Database(), fixture.capture.ID)
+				capture, err := machine.LoadCapture(context.Background(), service.State.Database(), fixture.Capture.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -171,11 +172,11 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			operation := admitSnapshotDeleteFixture(t, fixture)
-			if step := awaitSnapshotDelete(t, service, operation.ID); terminal(step.Status) {
+			operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
+			if step := fixtures.AwaitSnapshotDelete(t, service, operation.ID); fixtures.Terminal(step.Status) {
 				t.Fatal("uncertain snapshot retired", step.Phase)
 			}
-			snapshotDeleteCost(t, fixture, 192)
+			fixtures.SnapshotDeleteCost(t, fixture, 192)
 			if marker != "" {
 				if data, err := os.ReadFile(marker); err != nil || string(data) != "retained" {
 					t.Fatal("unknown material removed", err)
@@ -186,7 +187,7 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -202,121 +203,121 @@ func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+mode, func(t *testing.T) {
-				fixture := snapshotDeleteFixture(t, 0)
-				service := fixture.service
+				fixture := fixtures.SnapshotDeleteFixture(t, 0)
+				service := fixture.Service
 				statement := fmt.Sprintf("CREATE TRIGGER deny_snapshot_admission BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+				if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 					TenantID:   "tenant",
 					Key:        "delete-denied",
-					SnapshotID: fixture.capture.Result.SnapshotID,
+					SnapshotID: fixture.Capture.Result.SnapshotID,
 				}); err == nil {
 					t.Fatal("snapshot admission denial ignored")
 				}
 				var operations, deleting int
-				if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations WHERE idem_key='delete-denied'),(SELECT deleting FROM snapshots WHERE id=?)", fixture.capture.Result.SnapshotID).Scan(&operations, &deleting); err != nil || operations != 0 || deleting != 0 {
+				if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations WHERE idem_key='delete-denied'),(SELECT deleting FROM snapshots WHERE id=?)", fixture.Capture.Result.SnapshotID).Scan(&operations, &deleting); err != nil || operations != 0 || deleting != 0 {
 					t.Fatal("snapshot fence partially committed", operations, deleting, err)
 				}
-				snapshotDeleteCost(t, fixture, 192)
+				fixtures.SnapshotDeleteCost(t, fixture, 192)
 			})
 		}
 	}
 }
 
 func TestHavenSnapshotDeleteFence(t *testing.T) {
-	parallelLifecycle(t)
-	fixture := snapshotDeleteFixture(t, 0)
-	service := fixture.service
-	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+	fixtures.ParallelLifecycle(t)
+	fixture := fixtures.SnapshotDeleteFixture(t, 0)
+	service := fixture.Service
+	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 		TenantID:   "foreign",
 		Key:        "foreign-delete",
-		SnapshotID: fixture.capture.Result.SnapshotID,
+		SnapshotID: fixture.Capture.Result.SnapshotID,
 	}); err == nil {
 		t.Fatal("foreign snapshot deletion accepted")
 	}
-	fixture.faults.Set(func(point string) error {
+	fixture.Faults.Set(func(point string) error {
 		if point == "snapshot_delete_admitted" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	operation := admitSnapshotDeleteFixture(t, fixture)
+	operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
 	if _, err := service.VMProvisioning.AdmitClone(context.Background(), machine.CloneRequest{
 		TenantID:   "tenant",
 		Key:        "clone-tombstone",
-		SnapshotID: fixture.capture.Result.SnapshotID,
+		SnapshotID: fixture.Capture.Result.SnapshotID,
 	}); err == nil {
 		t.Fatal("new reader crossed deleting fence")
 	}
-	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 		TenantID:   "tenant",
 		Key:        "second-delete",
-		SnapshotID: fixture.capture.Result.SnapshotID,
+		SnapshotID: fixture.Capture.Result.SnapshotID,
 	}); err == nil {
 		t.Fatal("second collector crossed deleting fence")
 	}
-	fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
-	if done := awaitSnapshotDelete(t, fixture.service, operation.ID); done.Status != "succeeded" {
+	fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
+	if done := fixtures.AwaitSnapshotDelete(t, fixture.Service, operation.ID); done.Status != "succeeded" {
 		t.Fatal(done.Phase)
 	}
-	snapshotDeleteCost(t, fixture, 0)
+	fixtures.SnapshotDeleteCost(t, fixture, 0)
 }
 
 func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
-	parallelLifecycle(t)
-	fixture := snapshotDeleteFixture(t, 1)
-	service := fixture.service
-	fixture.faults.Set(func(point string) error {
+	fixtures.ParallelLifecycle(t)
+	fixture := fixtures.SnapshotDeleteFixture(t, 1)
+	service := fixture.Service
+	fixture.Faults.Set(func(point string) error {
 		if point == "admission_committed" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	leased := admitCloneFixture(t, service, fixture.capture.Result.SnapshotID, "leased-clone")
+	leased := fixtures.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "leased-clone")
 	var leases int
 	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM source_leases WHERE operation_id=?", leased.ID).Scan(&leases); err != nil || leases != 1 {
 		t.Fatal("fixture did not retain source lease", leases, err)
 	}
-	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), SnapshotDeleteRequest{
+	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 		TenantID:   "tenant",
 		Key:        "delete-leased",
-		SnapshotID: fixture.capture.Result.SnapshotID,
+		SnapshotID: fixture.Capture.Result.SnapshotID,
 	}); err == nil {
 		t.Fatal("snapshot deleted with unresolved source lease")
 	}
-	snapshotDeleteCost(t, fixture, 192)
+	fixtures.SnapshotDeleteCost(t, fixture, 192)
 }
 
 func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
-	parallelLifecycle(t)
-	fixture := snapshotDeleteFixture(t, 1)
-	service := fixture.service
-	fixture.runtime.FailBoot = true
-	failedOperation := admitCloneFixture(t, service, fixture.capture.Result.SnapshotID, "failed-retained-clone")
-	failed := awaitColdWorker(t, service, failedOperation.ID)
-	fixture.runtime.FailBoot = false
+	fixtures.ParallelLifecycle(t)
+	fixture := fixtures.SnapshotDeleteFixture(t, 1)
+	service := fixture.Service
+	fixture.Runtime.FailBoot = true
+	failedOperation := fixtures.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "failed-retained-clone")
+	failed := fixtures.AwaitColdWorker(t, service, failedOperation.ID)
+	fixture.Runtime.FailBoot = false
 	if failed.Status != "failed" || !failed.State.BackingReady {
 		t.Fatal("fixture did not retain failed backing", failed.State)
 	}
-	deletion := admitSnapshotDeleteFixture(t, fixture)
-	if step := awaitSnapshotDelete(t, service, deletion.ID); step.Status != "succeeded" {
+	deletion := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
+	if step := fixtures.AwaitSnapshotDelete(t, service, deletion.ID); step.Status != "succeeded" {
 		reason := service.Workers.State(deletion.ID).Err
 		t.Fatal(step.Phase, reason)
 	}
 	release, err := service.VMDeletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 		TenantID:  "tenant",
 		Key:       "release-other-backing",
-		SandboxID: fixture.clones[0].Result.SandboxID,
+		SandboxID: fixture.Clones[0].Result.SandboxID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step := awaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
+	if step := fixtures.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
-	snapshotDeleteCost(t, fixture, 192)
+	fixtures.SnapshotDeleteCost(t, fixture, 192)
 	discard, err := service.VMDeletion.AdmitDiscard(context.Background(), machine.DiscardRequest{
 		TenantID:          "tenant",
 		Key:               "discard-last-backing",
@@ -327,25 +328,25 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step := awaitDiscard(t, service, discard.ID); step.Status != "succeeded" {
+	if step := fixtures.AwaitDiscard(t, service, discard.ID); step.Status != "succeeded" {
 		reason := service.Workers.State(discard.ID).Err
 		t.Fatal(step.State, reason)
 	}
-	snapshotDeleteCost(t, fixture, 0)
+	fixtures.SnapshotDeleteCost(t, fixture, 0)
 }
 
 func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
-	parallelLifecycle(t)
-	fixture := snapshotDeleteFixture(t, 0)
-	service := fixture.service
-	fixture.faults.Set(func(point string) error {
+	fixtures.ParallelLifecycle(t)
+	fixture := fixtures.SnapshotDeleteFixture(t, 0)
+	service := fixture.Service
+	fixture.Faults.Set(func(point string) error {
 		if point == "snapshot_delete_receipt" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	operation := admitSnapshotDeleteFixture(t, fixture)
-	step := awaitSnapshotDelete(t, service, operation.ID)
+	operation := fixtures.AdmitSnapshotDeleteFixture(t, fixture)
+	step := fixtures.AwaitSnapshotDelete(t, service, operation.ID)
 	if step.Phase != "deleting" {
 		t.Fatal(step.Phase)
 	}
@@ -361,17 +362,17 @@ func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
 	if err = os.RemoveAll(step.Input.Source.Snapshot.Dir); err != nil {
 		t.Fatal(err)
 	}
-	fixture.service = testapp.ReopenCloneService(t, service, fixture.backend)
-	if pending := awaitSnapshotDelete(t, fixture.service, operation.ID); terminal(pending.Status) {
+	fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
+	if pending := fixtures.AwaitSnapshotDelete(t, fixture.Service, operation.ID); fixtures.Terminal(pending.Status) {
 		t.Fatal("unlinked reader was treated as reclaimed")
 	}
-	snapshotDeleteCost(t, fixture, 192)
+	fixtures.SnapshotDeleteCost(t, fixture, 192)
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	fixture.service = testapp.ReopenCloneService(t, fixture.service, fixture.backend)
-	if done := awaitSnapshotDelete(t, fixture.service, operation.ID); done.Status != "succeeded" {
+	fixture.Service = testapp.ReopenCloneService(t, fixture.Service, fixture.Backend)
+	if done := fixtures.AwaitSnapshotDelete(t, fixture.Service, operation.ID); done.Status != "succeeded" {
 		t.Fatal(done.Phase)
 	}
-	snapshotDeleteCost(t, fixture, 0)
+	fixtures.SnapshotDeleteCost(t, fixture, 0)
 }

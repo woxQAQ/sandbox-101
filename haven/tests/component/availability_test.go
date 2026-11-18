@@ -10,10 +10,11 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	ctx := context.Background()
 	principal := authorization.Principal{

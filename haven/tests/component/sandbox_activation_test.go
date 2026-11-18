@@ -12,47 +12,15 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-// sandboxClaims borrows the App used by both claim admission and its operation
-// wait, keeping the test's execution target fixed across those steps.
-type sandboxClaims struct {
-	App *application.App
-}
-
-func (fixture sandboxClaims) claim(t *testing.T, key string, env map[string]operation.EnvVar, policy egress.Policy) operation.Record {
-	service := fixture.App
-	t.Helper()
-	acceptedOperation, err := service.Sandboxes.AdmitClaim(context.Background(), authorization.Principal{
-		TenantID: "tenant",
-	}, key, operation.Command{
-		Action:     "claim",
-		TemplateID: "cold",
-		TTLSeconds: 60,
-		Env:        env,
-		Policy:     policy,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	acceptedOperation, err = service.Operations.Wait(ctx, authorization.Principal{
-		TenantID: "tenant",
-	}, acceptedOperation.ID)
-	if err != nil {
-		reason := service.Workers.State(acceptedOperation.ID).Err
-		t.Fatal("sandbox claim failed", acceptedOperation, err, reason)
-	}
-	return acceptedOperation
-}
-
 func TestHavenClaimDelivery(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, runtime, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := (sandboxClaims{
+	acceptedOperation := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", map[string]operation.EnvVar{
+	}).Claim(t, "claim", map[string]operation.EnvVar{
 		"VISIBLE": {
 			Value: "guest-value",
 		},
@@ -88,11 +56,11 @@ func TestHavenClaimDelivery(t *testing.T) {
 }
 
 func TestHavenConfigureAdmission(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := (sandboxClaims{
+	acceptedOperation := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "claim", nil, egress.Policy{
+	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
 	})
 	entered, finish := make(chan struct{}), make(chan struct{})
@@ -163,7 +131,7 @@ func TestHavenConfigureAdmission(t *testing.T) {
 }
 
 func TestHavenSecretRestart(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, runtime, guest, manager := testapp.SandboxFixture(t)
 	secretFlag := false
 	const secret = "fixture-host-value-never-a-real-credential"
@@ -180,9 +148,9 @@ func TestHavenSecretRestart(t *testing.T) {
 			},
 		},
 	}
-	acceptedOperation := (sandboxClaims{
+	acceptedOperation := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "secret-claim", env, egress.Policy{
+	}).Claim(t, "secret-claim", env, egress.Policy{
 		Mode: "relay",
 	})
 	for _, activation := range guest.Activations {

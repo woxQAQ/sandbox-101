@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/loom"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
@@ -22,7 +22,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 		"image_import_publication_before_commit",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			options := privateOCIImport(t)
+			options := fixtures.PrivateOCIImport(t)
 			service, runtime, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
 				if point == boundary {
 					return errs.ErrInterrupted
@@ -38,8 +38,8 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitImportInterruption(t, service, operation.ID)
-			before, err := observeImageImport(ctx, service.State.Database(), operation.ID)
+			fixtures.WaitImportInterruption(t, service, operation.ID)
+			before, err := fixtures.ObserveImageImport(ctx, service.State.Database(), operation.ID)
 			if err != nil || before.State.Proof == nil {
 				t.Fatal(before, err)
 			}
@@ -54,7 +54,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 			if err != nil || result.Result.ImageDigest != options.Digest {
 				t.Fatal(result, err)
 			}
-			after, err := observeImageImport(ctx, service.State.Database(), operation.ID)
+			after, err := fixtures.ObserveImageImport(ctx, service.State.Database(), operation.ID)
 			if err != nil || !reflect.DeepEqual(before.State.Proof, after.State.Proof) || !reflect.DeepEqual(before.State.Boundary, after.State.Boundary) {
 				t.Fatal("recovery replaced original output proof", before, after, err)
 			}
@@ -63,7 +63,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 }
 
 func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
-	options := privateOCIImport(t)
+	options := fixtures.PrivateOCIImport(t)
 	service, runtime, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
 		if point == "image_import_materialized" {
 			return errs.ErrInterrupted
@@ -79,8 +79,8 @@ func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitImportInterruption(t, service, operation.ID)
-	step, err := observeImageImport(ctx, service.State.Database(), operation.ID)
+	fixtures.WaitImportInterruption(t, service, operation.ID)
+	step, err := fixtures.ObserveImageImport(ctx, service.State.Database(), operation.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,21 +118,5 @@ func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
 	}
 	if _, err = os.Stat(original); err != nil {
 		t.Fatal("original output was removed", err)
-	}
-}
-
-func waitImportInterruption(t *testing.T, service *application.App, id string) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		worker := service.Workers.State(id)
-		active, last := worker.Active, worker.Err
-		if !active && last != nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("image effect interruption missing")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }

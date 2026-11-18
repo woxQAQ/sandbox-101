@@ -17,10 +17,11 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, change := range []string{
 		"configuration",
 		"configuration_provenance",
@@ -33,12 +34,12 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (sandboxClaims{
+			claim := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "claim", nil, egress.Policy{
+			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			waitFixtureWorker(t, service, claim.ID)
+			fixtures.WaitFixtureWorker(t, service, claim.ID)
 			entered, release := make(chan struct{}), make(chan struct{})
 			guest.Before = func(name string, _ loom.Resource) error {
 				if name == "connect" {
@@ -118,7 +119,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 				shutdownCtx, stop := context.WithTimeout(ctx, 5*time.Millisecond)
 				defer stop()
 				_ = service.Close(shutdownCtx)
-				if unexpected, err := openStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
+				if unexpected, err := fixtures.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
 					if unexpected != nil {
 						_ = unexpected.Close()
 					}

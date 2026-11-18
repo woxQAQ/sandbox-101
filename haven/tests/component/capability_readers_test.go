@@ -9,13 +9,14 @@ import (
 
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCapabilityReadersBorrowReadOnlySnapshot(t *testing.T) {
-	parallelLifecycle(t)
-	service, _ := coldService(t, nil)
-	accepted := coldClaim(t, service, "readonly-proof")
-	source := awaitColdWorker(t, service, accepted.ID)
+	fixtures.ParallelLifecycle(t)
+	service, _ := fixtures.ColdService(t, nil)
+	accepted := fixtures.ColdClaim(t, service, "readonly-proof")
+	source := fixtures.AwaitColdWorker(t, service, accepted.ID)
 	if source.Status != "succeeded" {
 		t.Fatal(source)
 	}

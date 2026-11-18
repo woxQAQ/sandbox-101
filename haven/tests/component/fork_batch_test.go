@@ -17,18 +17,19 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (sandboxClaims{
+	source := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "source", map[string]operation.EnvVar{
+	}).Claim(t, "source", map[string]operation.EnvVar{
 		"SOURCE_ONLY": {
 			Value: "not-inherited",
 		},
@@ -127,14 +128,14 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 }
 
 func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (sandboxClaims{
+	source := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "source", nil, egress.Policy{
+	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	if _, err := service.Tenants.PutTenant(context.Background(), authorization.Principal{
@@ -166,16 +167,16 @@ func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
 }
 
 func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	source := (sandboxClaims{
+	source := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "source", nil, egress.Policy{
+	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	var failed atomic.Bool
@@ -210,15 +211,15 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 }
 
 func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, faults.Check, restorableBackend)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, faults.Check, fixtures.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (sandboxClaims{
+	source := (fixtures.SandboxClaims{
 		App: service,
-	}).claim(t, "source", nil, egress.Policy{
+	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
 	checkpoint, err := service.SandboxRequests.Execute(context.Background(), principal, "checkpoint", operation.Command{

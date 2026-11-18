@@ -2,31 +2,28 @@ package component
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
-	"syscall"
 	"testing"
 
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStoreExclusiveOwner(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	directory := filepath.Join(t.TempDir(), "state")
-	first, err := openStore(directory, true)
+	first, err := fixtures.OpenStore(directory, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = first.Close()
 	})
-	if second, err := openStore(directory, false); !errors.Is(err, store.ErrConflict) {
+	if second, err := fixtures.OpenStore(directory, false); !errors.Is(err, store.ErrConflict) {
 		if second != nil {
 			_ = second.Close()
 		}
@@ -65,7 +62,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := openStore(directory, false)
+	reopened, err := fixtures.OpenStore(directory, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +81,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 }
 
 func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, initialize := range []bool{
 		false,
 		true,
@@ -101,15 +98,15 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 				if err := os.Chmod(directory, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				storeTestSQL(t, filepath.Join(directory, legacy.name), legacy.schema)
-				before := storeSnapshot(t, directory)
-				if state, err := openStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
+				fixtures.StoreTestSQL(t, filepath.Join(directory, legacy.name), legacy.schema)
+				before := fixtures.StoreSnapshot(t, directory)
+				if state, err := fixtures.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
 					if state != nil {
 						_ = state.Close()
 					}
 					t.Fatalf("legacy state accepted: %v", err)
 				}
-				if after := storeSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+				if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 					t.Fatal("legacy state changed during rejection")
 				}
 			})
@@ -130,7 +127,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := filepath.Join(t.TempDir(), "state")
-			state, err := openStore(directory, true)
+			state, err := fixtures.OpenStore(directory, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,15 +143,15 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			case "corrupt-db":
 				err = os.WriteFile(filepath.Join(directory, "haven.db"), []byte("corrupt fixture"), 0o600)
 			case "foreign-application":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA application_id=0; CREATE TABLE engine_marker(value TEXT)")
+				fixtures.StoreTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA application_id=0; CREATE TABLE engine_marker(value TEXT)")
 			case "future-version":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA user_version=99")
+				fixtures.StoreTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA user_version=99")
 			case "missing-table":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "DROP TABLE backing")
+				fixtures.StoreTestSQL(t, filepath.Join(directory, "haven.db"), "DROP TABLE backing")
 			case "foreign-trigger":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "CREATE TRIGGER foreign_guard BEFORE UPDATE ON operations BEGIN SELECT 1; END")
+				fixtures.StoreTestSQL(t, filepath.Join(directory, "haven.db"), "CREATE TRIGGER foreign_guard BEFORE UPDATE ON operations BEGIN SELECT 1; END")
 			case "dangling-reference":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA foreign_keys=OFF; INSERT INTO vms VALUES('dangling',1,'','created','missing',x'7b7d')")
+				fixtures.StoreTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA foreign_keys=OFF; INSERT INTO vms VALUES('dangling',1,'','created','missing',x'7b7d')")
 			case "recovery-gate":
 				err = os.WriteFile(filepath.Join(directory, "RECOVERY_REQUIRED"), []byte("review required"), 0o600)
 			case "missing-key":
@@ -165,14 +162,14 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := storeSnapshot(t, directory)
-			if state, err := openStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
+			before := fixtures.StoreSnapshot(t, directory)
+			if state, err := fixtures.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
 				if state != nil {
 					_ = state.Close()
 				}
 				t.Fatalf("unsupported state accepted: %v", err)
 			}
-			if after := storeSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+			if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 				t.Fatal("rejection modified files, identities, modes or directory entries")
 			}
 		})
@@ -180,7 +177,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 	t.Run("symlink-state", func(t *testing.T) {
 		parent := t.TempDir()
 		directory := filepath.Join(parent, "state")
-		state, err := openStore(directory, true)
+		state, err := fixtures.OpenStore(directory, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,24 +188,24 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 		if err = os.Symlink(directory, alias); err != nil {
 			t.Fatal(err)
 		}
-		before := storeSnapshot(t, parent)
-		if state, err := openStore(alias, false); !errors.Is(err, store.ErrRecovery) {
+		before := fixtures.StoreSnapshot(t, parent)
+		if state, err := fixtures.OpenStore(alias, false); !errors.Is(err, store.ErrRecovery) {
 			if state != nil {
 				_ = state.Close()
 			}
 			t.Fatalf("symlink state accepted: %v", err)
 		}
-		if after := storeSnapshot(t, parent); !reflect.DeepEqual(before, after) {
+		if after := fixtures.StoreSnapshot(t, parent); !reflect.DeepEqual(before, after) {
 			t.Fatal("symlink rejection modified the original state")
 		}
 	})
 }
 
 func TestHavenStoreRejectsRollbackBehindHead(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	parent := t.TempDir()
 	directory := filepath.Join(parent, "state")
-	state, err := openStore(directory, true)
+	state, err := fixtures.OpenStore(directory, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,75 +226,14 @@ func TestHavenStoreRejectsRollbackBehindHead(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(directory, "haven.db"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := storeSnapshot(t, directory)
-	if reopened, err := openStore(directory, false); !errors.Is(err, store.ErrRecovery) {
+	before := fixtures.StoreSnapshot(t, directory)
+	if reopened, err := fixtures.OpenStore(directory, false); !errors.Is(err, store.ErrRecovery) {
 		if reopened != nil {
 			_ = reopened.Close()
 		}
 		t.Fatalf("metadata behind durable HEAD accepted: %v", err)
 	}
-	if after := storeSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+	if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 		t.Fatal("rollback rejection modified the retained point")
 	}
-}
-
-func storeTestSQL(t *testing.T, path, statement string) {
-	t.Helper()
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = database.Exec(statement); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err = database.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-type storeFileSnapshot struct {
-	Mode  fs.FileMode
-	Inode uint64
-	Hash  [32]byte
-	Link  string
-}
-
-func storeSnapshot(t *testing.T, directory string) map[string]storeFileSnapshot {
-	t.Helper()
-	files := map[string]storeFileSnapshot{}
-	if err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		value := storeFileSnapshot{
-			Mode:  info.Mode(),
-			Inode: info.Sys().(*syscall.Stat_t).Ino,
-		}
-		if info.Mode().IsRegular() {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			value.Hash = sha256.Sum256(data)
-		} else if info.Mode()&os.ModeSymlink != 0 {
-			value.Link, err = os.Readlink(path)
-			if err != nil {
-				return err
-			}
-		}
-		relative, _ := filepath.Rel(directory, path)
-		files[relative] = value
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return files
 }

@@ -10,24 +10,26 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/tests/fixtures"
+
 	operation "github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 )
 
 func TestHavenForkCompletionRejectsSQL(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+			service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			source := (sandboxClaims{
+			source := (fixtures.SandboxClaims{
 				App: service,
-			}).claim(t, "source", nil, egress.Policy{
+			}).Claim(t, "source", nil, egress.Policy{
 				Mode: "none",
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -62,7 +64,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 				t.Fatal("rejected group completion reported success")
 			}
 			group, err := sandbox.LoadFork(ctx, service.State.Database(), accepted.ID)
-			if err != nil || terminal(group.Status) || group.State.Phase != "allocated" || len(group.State.Children) != 2 {
+			if err != nil || fixtures.Terminal(group.Status) || group.State.Phase != "allocated" || len(group.State.Children) != 2 {
 				t.Fatal("failed completion lost committed branch progress", group, err)
 			}
 			var leases, publications int

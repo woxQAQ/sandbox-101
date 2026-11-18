@@ -14,4 +14,4 @@ ResourceUsage 与 UnresolvedTemplates 接收调用方 DBTX，供 machine deletio
 
 PoolState 已删除。LoadPoolReservation 解码并核对冻结身份；ValidateWarmCatalog/ReadyWarm 核对原 refill 与永久 owner，SelectWarm 在调用方事务中按原顺序消费 ready row、删除 warm 引用并标记 selected。RetireSelectedReservation 仍以原 body 和 selected 状态作 CAS；ObsoleteWarmCandidates 保留候选顺序及出错前已收集的结果。内部计数和状态转换直接使用本包生成查询。
 
-supply/supply_cleanup 的 payload、推进、cleanup 与 backoff 查询均来自本包私有 SQL；架构门禁限制 StepKey 和 cleanup ID namespace。最终验证与环境缺项见 [计划](../../plans/027-haven-capability-boundaries.md)。
+supply/supply_cleanup 的 payload、推进、cleanup 与 backoff 查询均来自本包私有 SQL；StepKey 和 cleanup ID namespace 区分持久记录的归属。最终验证与环境缺项见 [计划](../../plans/027-haven-capability-boundaries.md)。

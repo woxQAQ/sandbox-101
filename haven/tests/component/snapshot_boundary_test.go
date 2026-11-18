@@ -13,10 +13,11 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"extra-file",
 		"symlink",
@@ -29,7 +30,7 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 			var sourcePath string
 			var setupErr error
 			var backend *testfixture.ColdRuntime
-			service, backend = coldService(t, func(phase string) error {
+			service, backend = fixtures.ColdService(t, func(phase string) error {
 				if modified {
 					return nil
 				}
@@ -69,12 +70,12 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 				}
 				return setupErr
 			})
-			operation, _ := captureReady(t, service, "writer")
-			step := awaitCapture(t, service, operation.ID)
+			operation, _ := fixtures.CaptureReady(t, service, "writer")
+			step := fixtures.AwaitCapture(t, service, operation.ID)
 			if setupErr != nil || !modified {
 				t.Fatal("writer fixture did not execute", setupErr)
 			}
-			capturePublished(t, service, step, damage == "writer-after-copy")
+			fixtures.CapturePublished(t, service, step, damage == "writer-after-copy")
 			observation, err := backend.Inspect(context.Background(), step.Input.Source.Input.Resource)
 			if err != nil || observation.Paused || !observation.Alive {
 				t.Fatal("untrusted capture stranded the source", err)
@@ -101,8 +102,8 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 }
 
 func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
-	parallelLifecycle(t)
-	service, backend := coldService(t, nil)
+	fixtures.ParallelLifecycle(t)
+	service, backend := fixtures.ColdService(t, nil)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	t.Cleanup(func() {
@@ -117,7 +118,7 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 		}
 		return nil
 	}
-	operation, _ := captureReady(t, service, "shutdown")
+	operation, _ := fixtures.CaptureReady(t, service, "shutdown")
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -152,19 +153,19 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 	t.Cleanup(func() {
 		_ = resumed.Close(context.Background())
 	})
-	step := awaitCapture(t, resumed, operation.ID)
+	step := fixtures.AwaitCapture(t, resumed, operation.ID)
 	if step.Status != "failed" || backend.Count("capture") != 1 || backend.Count("launch") != 1 {
 		t.Fatal("shutdown recaptured unproved bytes or restarted source", step.State)
 	}
-	capturePublished(t, resumed, step, false)
+	fixtures.CapturePublished(t, resumed, step, false)
 }
 
 func TestHavenSnapshotOwnerIsPermanent(t *testing.T) {
-	parallelLifecycle(t)
-	service, _ := coldService(t, nil)
-	operation, _ := captureReady(t, service, "owner")
-	step := awaitCapture(t, service, operation.ID)
-	capturePublished(t, service, step, true)
+	fixtures.ParallelLifecycle(t)
+	service, _ := fixtures.ColdService(t, nil)
+	operation, _ := fixtures.CaptureReady(t, service, "owner")
+	step := fixtures.AwaitCapture(t, service, operation.ID)
+	fixtures.CapturePublished(t, service, step, true)
 	if _, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "other", step.Input.Snapshot.ID); err == nil {
 		t.Fatal("foreign tenant could read capture")
 	}

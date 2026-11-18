@@ -14,11 +14,12 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
-	parallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, restorableBackend)
+	fixtures.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
 	var captures atomic.Int64
 	runtime.Before = func(name string, _ loom.Resource) error {
 		if name == "capture" {

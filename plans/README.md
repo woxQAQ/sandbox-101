@@ -4,7 +4,7 @@
 
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
-| [027：按业务能力重组 Haven](027-haven-capability-boundaries.md) | IMPLEMENTED / VALIDATION_BLOCKED | 能力、私有 SQL、fixture/测试、门禁与文档实施完成；剩余普通 120s 超时及真实 native ownership 验收 |
+| [027：按业务能力重组 Haven](027-haven-capability-boundaries.md) | IMPLEMENTED / VALIDATION_BLOCKED | 能力、私有 SQL、测试与文档实施完成；剩余普通 120s 超时及真实 native ownership 验收 |
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
@@ -27,7 +27,7 @@
 
 ## 当前源码入口
 
-根目录仅保留 `go.work`，控制面位于 `haven/`，效果库位于 `loom/`，wire DTO 位于 `types/`，SDK 位于 `sdk/`，共享代码位于 `common/`，开发工具位于 `tools/`。Haven 的 `internal/application` 负责 App 组装和最终关闭；单能力 Service/SQLite 测试在 owner 包，跨能力/完整 App 场景在 `tests/component`，实际镜像在 `tests/native`。`internal/testfixture` 提供基础材料，`internal/testapp` 单独组装完整 App，生产包不得导入。业务用例和私有 SQL 已归 image/machine/supply/sandbox/data/collection/node，跨能力组合位于 internal；旧 services/表仓库目录已删除。构建入口为 `justfile`；CLI 显式使用 `--request-file FILE`，不读取 stdin。历史通过只绑定原树，当前验证以实际命令为准。
+根目录仅保留 `go.work`，控制面位于 `haven/`，效果库位于 `loom/`，wire DTO 位于 `types/`，SDK 位于 `sdk/`，共享代码位于 `common/`，开发工具位于 `tools/`。Haven 的 `internal/application` 负责 App 组装和最终关闭；单能力 Service/SQLite 测试在 owner 包，跨能力/完整 App 场景在 `tests/component`，实际镜像在 `tests/native`。`internal/testfixture` 提供基础材料，`internal/testapp` 单独组装完整 App，`tests/fixtures` 集中 component/native 共用的场景辅助代码，生产包不得导入。架构检查脚本及其回归入口已删除；旧计划和证据中的相关命令只记录历史验证。业务用例和私有 SQL 已归 image/machine/supply/sandbox/data/collection/node，跨能力组合位于 internal；旧 services/表仓库目录已删除。构建入口为 `justfile`；CLI 显式使用 `--request-file FILE`，不读取 stdin。历史通过只绑定原树，当前验证以实际命令为准。
 
 ## 恢复工作前
 

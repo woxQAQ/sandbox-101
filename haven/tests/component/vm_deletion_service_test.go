@@ -10,10 +10,11 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, action := range []string{
 		"release",
 		"discard",
@@ -27,10 +28,10 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				}
 				return nil
 			})
-			service, backend := coldService(t, faults.Check)
+			service, backend := fixtures.ColdService(t, faults.Check)
 			backend.FailBoot = action == "discard"
-			claim := coldClaim(t, service, "source")
-			source := awaitColdWorker(t, service, claim.ID)
+			claim := fixtures.ColdClaim(t, service, "source")
+			source := fixtures.AwaitColdWorker(t, service, claim.ID)
 			want := "succeeded"
 			if action == "discard" {
 				want = "failed"
@@ -43,7 +44,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 			backend.Mu.Unlock()
 			admit := func(conflict bool) (operation.Record, error) {
 				if action == "discard" {
-					request := discardRequest(source)
+					request := fixtures.DiscardRequest(source)
 					if conflict {
 						request.ExpectedInstance = testfixture.NewID("run-")
 					}
@@ -91,9 +92,9 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				t.Fatal("matching cleanup replay changed operation", replay, err)
 			}
 			if action == "discard" {
-				awaitDiscard(t, service, accepted.ID)
+				fixtures.AwaitDiscard(t, service, accepted.ID)
 			} else {
-				awaitColdWorker(t, service, accepted.ID)
+				fixtures.AwaitColdWorker(t, service, accepted.ID)
 			}
 			done, err := testfixture.ObserveStep(ctx, service.State.Database(), accepted.ID, key)
 			if err != nil || done.Status != "succeeded" || done.Hash != before.Hash || !bytes.Equal(done.Input, before.Input) || done.Candidate != before.Candidate || done.ExpectedInstance != before.ExpectedInstance {

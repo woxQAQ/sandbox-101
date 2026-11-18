@@ -2,58 +2,21 @@ package native
 
 import (
 	"context"
-	"errors"
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/tests/fixtures"
+
 	image "github.com/woxQAQ/haven/image"
-	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/types"
 )
 
-func failedCachedImport(t *testing.T, fault func(string) error) (*application.App, operation.Record) {
-	t.Helper()
-	options := privateOCIImport(t)
-	var abort atomic.Bool
-	abort.Store(true)
-	service, _, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
-		if abort.Load() && point == "image_import_layer_saved" {
-			return errors.New("known fixture abort after cache responsibility persisted")
-		}
-		if fault != nil {
-			return fault(point)
-		}
-		return nil
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	acceptedOperation, err := service.Images.AdmitImport(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "root",
-	}, "import", options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := service.Operations.WaitManagement(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "root",
-	}, acceptedOperation.ID)
-	if err == nil || result.Status != "failed" {
-		t.Fatal(result, err)
-	}
-	waitImportInterruption(t, service, acceptedOperation.ID)
-	abort.Store(false)
-	return service, result
-}
-
 func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
-	service, original := failedCachedImport(t, nil)
+	service, original := fixtures.FailedCachedImport(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	root := authorization.Principal{
@@ -94,7 +57,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 		"image_cleanup_completion_before_commit",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			service, original := failedCachedImport(t, func(point string) error {
+			service, original := fixtures.FailedCachedImport(t, func(point string) error {
 				if point == boundary {
 					return errs.ErrInterrupted
 				}
@@ -112,7 +75,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitImportInterruption(t, service, collector.ID)
+			fixtures.WaitImportInterruption(t, service, collector.ID)
 			var imports int
 			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner=?", "import:"+original.ID).Scan(&imports); err != nil || imports != 1 {
 				t.Fatal("unconfirmed collection retired import charge", imports, err)

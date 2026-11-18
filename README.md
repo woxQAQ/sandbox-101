@@ -41,8 +41,6 @@ Binaries go to `bin/{haven,havenctl,loomctl}`. Test, vet and race recipes cover 
 
 Haven's versioned SQL migrations are the shared input for runtime initialization and sqlc. After changing domain SQL, run `just generate-sql` and `just check-sql`; generated bindings are checked in, so ordinary builds do not need sqlc. The check generates in a private temporary directory and detects missing, changed and unexpected files. See [store migrations](haven/store/README.md) for version and transaction boundaries.
 
-The architecture gate checks the compiled import graph and Go AST, including controller dependencies, root facade removal and raw SQL boundaries. Its negative fixtures verify rejection; reviewed SQLite maintenance exceptions are listed in the store contract.
-
 Quick tests may skip native checks when tools or ownership privileges are unavailable. `just test-native` requires EROFS coverage and emits Go test JSON with the existing race/count=1/300s settings. The native gate additionally requires actual shared/merged materialization and GC pass events:
 
 ```nu

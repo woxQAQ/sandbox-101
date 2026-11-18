@@ -20,7 +20,15 @@ depend on application. `haven/internal/testapp` separately composes full App fix
 production packages may import neither package. Owner external test packages exercise
 single-capability Service/SQLite behavior. `haven/tests/component` retains App,
 cross-capability, restart and shutdown scenarios; `haven/tests/native` owns real image-tool
-cases and the separately tagged KVM suite. Go test entrypoints use `-p=1` across packages,
+cases and the separately tagged KVM suite. Both suites import `haven/tests/fixtures`
+for runtime doubles, private input builders, observations, waits and shared assertions;
+scenario directories contain only `Test...` entrypoints. Fixture files are ordinary Go
+sources so they can be imported; Linux helpers retain the `_linux.go` suffix and KVM
+helpers retain the `linux && kvm` build tag. Only symbols needed by scenarios are exported.
+Production packages must not import test fixtures. Public APIs are called through their owning
+packages, without local aliases or forwarding wrappers. Tests exercise Haven behavior
+rather than individual Loom validation/decoding helpers.
+Go test entrypoints use `-p=1` across packages,
 retain four lifecycle slots and preserve the ordinary 120s/race 10m/native 300s budgets.
 Moving tests does not establish a performance fix. These are behavior tests rather than
 isolated helper function unit tests.

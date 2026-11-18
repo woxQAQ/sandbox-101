@@ -13,16 +13,17 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private collector completion failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, _, _ := goldenSupplyFixture(t, 1)
+			service, _, _ := fixtures.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			original, err := service.SandboxRequests.Execute(ctx, authorization.Principal{

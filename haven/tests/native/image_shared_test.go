@@ -2,65 +2,39 @@ package native
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
-	"encoding/gob"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
-	"testing/fstest"
+
+	"github.com/woxQAQ/haven/loom"
+	"github.com/woxQAQ/haven/loom/host"
+	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/tests/fixtures"
 
 	ocidigest "github.com/opencontainers/go-digest"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/woxQAQ/haven/internal/testfixture"
 )
-
-func importSharedFixture(t *testing.T, layers ...[]tarEntry) (*nativeImageFixture, string, ImageManifest) {
-	t.Helper()
-	requireEROFS(t)
-	layout := t.TempDir()
-	var fixtures []ociLayerFixture
-	for i, entries := range layers {
-		fixtures = append(fixtures, putOCILayer(t, layout, entries, i%2 == 0))
-	}
-	image := putOCIManifest(t, layout, "shared", fixtures)
-	e := newNativeImageFixture(t)
-	t.Cleanup(func() {
-		e.Close()
-	})
-	m, err := e.ImportOCI(
-		context.Background(),
-		ImportOptions{
-			Layout:   layout,
-			Digest:   image,
-			MaxBytes: 8 << 20,
-			MaxFiles: 1000,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e, layout, m
-}
 
 func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 	t.Parallel()
 	base := append(
-		bootLayerEntries(),
-		fileEntry("target", "old inode"),
-		fileEntry("duplicate", "lower"),
-		dirEntry("directory"),
-		fileEntry("directory/hidden", "hidden"),
-		fileEntry("file-to-directory", "old file"),
-		dirEntry("opaque"),
-		fileEntry("opaque/hidden", "hidden"),
+		fixtures.BootLayerEntries(),
+		fixtures.FileEntry("target", "old inode"),
+		fixtures.FileEntry("duplicate", "lower"),
+		fixtures.DirEntry("directory"),
+		fixtures.FileEntry("directory/hidden", "hidden"),
+		fixtures.FileEntry("file-to-directory", "old file"),
+		fixtures.DirEntry("opaque"),
+		fixtures.FileEntry("opaque/hidden", "hidden"),
 	)
-	sym := tarEntry{
-		header: tar.Header{
+	sym := fixtures.TarEntry{
+		Header: tar.Header{
 			Name:     "symbolic",
 			Typeflag: tar.TypeSymlink,
 			Linkname: "target",
@@ -70,36 +44,36 @@ func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 		},
 	}
 	payload := strings.Repeat("shared-payload", 32768)
-	top := []tarEntry{
-		hardEntry("old-alias", "target"),
-		fileEntry("target", "new inode"),
-		hardEntry("forward-a", "forward-b"),
-		hardEntry("forward-b", "future"),
-		fileEntry("future", payload),
-		fileEntry("future", "replacement"),
-		fileEntry("duplicate", "first"),
-		hardEntry("duplicate-old", "duplicate"),
-		fileEntry("duplicate", "last"),
+	top := []fixtures.TarEntry{
+		fixtures.HardEntry("old-alias", "target"),
+		fixtures.FileEntry("target", "new inode"),
+		fixtures.HardEntry("forward-a", "forward-b"),
+		fixtures.HardEntry("forward-b", "future"),
+		fixtures.FileEntry("future", payload),
+		fixtures.FileEntry("future", "replacement"),
+		fixtures.FileEntry("duplicate", "first"),
+		fixtures.HardEntry("duplicate-old", "duplicate"),
+		fixtures.FileEntry("duplicate", "last"),
 		sym,
-		hardEntry("symbolic-alias", "symbolic"),
-		fileEntry("directory", "now a file"),
-		dirEntry("file-to-directory"),
-		fileEntry("file-to-directory/child", "child"),
-		fileEntry("opaque/.wh..wh..opq", ""),
-		fileEntry("opaque/new", "new"),
-		fileEntry("whiteout-before", "old"),
-		fileEntry(".wh.whiteout-before", ""),
-		fileEntry(".wh.whiteout-after", ""),
-		fileEntry("whiteout-after", "new"),
-		fileEntry("implicit/deep/file", "implicit"),
-		hardEntry("replaced-parent/alias", "late"),
-		fileEntry("replaced-parent", "replacement"),
-		fileEntry("late", "late target"),
-		hardEntry("overwritten-alias", "never-created"),
-		fileEntry("overwritten-alias", "replacement"),
+		fixtures.HardEntry("symbolic-alias", "symbolic"),
+		fixtures.FileEntry("directory", "now a file"),
+		fixtures.DirEntry("file-to-directory"),
+		fixtures.FileEntry("file-to-directory/child", "child"),
+		fixtures.FileEntry("opaque/.wh..wh..opq", ""),
+		fixtures.FileEntry("opaque/new", "new"),
+		fixtures.FileEntry("whiteout-before", "old"),
+		fixtures.FileEntry(".wh.whiteout-before", ""),
+		fixtures.FileEntry(".wh.whiteout-after", ""),
+		fixtures.FileEntry("whiteout-after", "new"),
+		fixtures.FileEntry("implicit/deep/file", "implicit"),
+		fixtures.HardEntry("replaced-parent/alias", "late"),
+		fixtures.FileEntry("replaced-parent", "replacement"),
+		fixtures.FileEntry("late", "late target"),
+		fixtures.HardEntry("overwritten-alias", "never-created"),
+		fixtures.FileEntry("overwritten-alias", "replacement"),
 	}
-	e, layout, m := importSharedFixture(t, base, top)
-	root := extractManifest(t, e, m)
+	e, layout, m := fixtures.ImportSharedFixture(t, base, top)
+	root := fixtures.ExtractManifest(t, e, m)
 	for n, want := range map[string]string{
 		"target":                  "new inode",
 		"old-alias":               "old inode",
@@ -153,20 +127,20 @@ func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 			t.Fatalf("implicit directory missing: %s %v", n, err)
 		}
 	}
-	if st, err := os.Stat(filepath.Join(e.opts.StateDir, m.Artifacts[0].Path)); err != nil || st.Size() >= int64(len(payload))/4 {
+	if st, err := os.Stat(filepath.Join(e.Opts.StateDir, m.Artifacts[0].Path)); err != nil || st.Size() >= int64(len(payload))/4 {
 		t.Fatalf("fsmeta duplicated regular data: %v %v", st, err)
 	}
 	// Rebuild this broader view using only authenticated caches, including
 	// the first future payload after its original target name was replaced.
-	sourceFile, err := blob(layout, m.Digest)
+	sourceFile, err := host.Blob(layout, m.Digest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var sourceManifest v1.Manifest
-	if err = readBlobJSON(sourceFile, m.Digest, &sourceManifest); err != nil {
+	if err = host.ReadBlobJSON(sourceFile, m.Digest, &sourceManifest); err != nil {
 		t.Fatal(err)
 	}
-	var layers []ociLayerFixture
+	var layers []fixtures.OCILayerFixture
 	for i, layerDigest := range m.Layers {
 		p := filepath.Join(layout, "blobs", "sha256", layerDigest[7:])
 		if err := os.Remove(p); err != nil {
@@ -174,16 +148,16 @@ func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 		}
 		layers = append(
 			layers,
-			ociLayerFixture{
-				diff:       ocidigest.Digest(m.DiffIDs[i]),
-				descriptor: sourceManifest.Layers[i],
+			fixtures.OCILayerFixture{
+				Diff:       ocidigest.Digest(m.DiffIDs[i]),
+				Descriptor: sourceManifest.Layers[i],
 			},
 		)
 	}
-	second := putOCIManifest(t, layout, "cache-only-shared", layers)
+	second := fixtures.PutOCIManifest(t, layout, "cache-only-shared", layers)
 	rebuilt, err := e.ImportOCI(
 		context.Background(),
-		ImportOptions{
+		imageimport.ImageImportOptions{
 			Layout:   layout,
 			Digest:   second,
 			MaxBytes: 8 << 20,
@@ -198,7 +172,7 @@ func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 			t.Fatal("broader OCI semantics changed per-diff cache identity")
 		}
 	}
-	rebuiltRoot := extractManifest(t, e, rebuilt)
+	rebuiltRoot := fixtures.ExtractManifest(t, e, rebuilt)
 	if got, err := os.ReadFile(filepath.Join(rebuiltRoot, "forward-a")); err != nil || string(got) != payload {
 		t.Fatalf("cache-only forward link lost data: %v", err)
 	}
@@ -206,13 +180,13 @@ func TestActualSharedOCIEntryOrderingAndForwardLinks(t *testing.T) {
 
 func TestActualSharedOCIRootOpaqueAndReplacement(t *testing.T) {
 	t.Parallel()
-	base := append(bootLayerEntries(), fileEntry("hidden", "hidden"))
-	top := append([]tarEntry{
-		fileEntry(".wh..wh..opq", ""),
-	}, bootLayerEntries()...)
-	top = append(top, fileEntry("visible", "visible"))
-	e, _, m := importSharedFixture(t, base, top)
-	root := extractManifest(t, e, m)
+	base := append(fixtures.BootLayerEntries(), fixtures.FileEntry("hidden", "hidden"))
+	top := append([]fixtures.TarEntry{
+		fixtures.FileEntry(".wh..wh..opq", ""),
+	}, fixtures.BootLayerEntries()...)
+	top = append(top, fixtures.FileEntry("visible", "visible"))
+	e, _, m := fixtures.ImportSharedFixture(t, base, top)
+	root := fixtures.ExtractManifest(t, e, m)
 	if _, err := os.Stat(filepath.Join(root, "hidden")); !os.IsNotExist(err) {
 		t.Fatalf("root opaque did not hide lower child: %v", err)
 	}
@@ -223,33 +197,33 @@ func TestActualSharedOCIRootOpaqueAndReplacement(t *testing.T) {
 
 func TestActualSharedOCIRejectsUnresolvedLinksAndSymlinkParents(t *testing.T) {
 	t.Parallel()
-	requireEROFS(t)
-	for name, top := range map[string][]tarEntry{
-		"missing":        {hardEntry("alias", "missing")},
-		"cycle":          {hardEntry("first", "second"), hardEntry("second", "first")},
-		"directory":      {hardEntry("alias", "boot")},
-		"self directory": {hardEntry("boot", "boot")},
+	fixtures.RequireEROFS(t)
+	for name, top := range map[string][]fixtures.TarEntry{
+		"missing":        {fixtures.HardEntry("alias", "missing")},
+		"cycle":          {fixtures.HardEntry("first", "second"), fixtures.HardEntry("second", "first")},
+		"directory":      {fixtures.HardEntry("alias", "boot")},
+		"self directory": {fixtures.HardEntry("boot", "boot")},
 		"symlink parent": {{
-			header: tar.Header{
+			Header: tar.Header{
 				Name:     "parent",
 				Typeflag: tar.TypeSymlink,
 				Linkname: "/outside",
 				Mode:     0o777,
 			},
-		}, fileEntry("parent/escaped", "refused")},
+		}, fixtures.FileEntry("parent/escaped", "refused")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			layout := t.TempDir()
-			layers := []ociLayerFixture{
-				putOCILayer(t, layout, bootLayerEntries(), true),
-				putOCILayer(t, layout, top, false),
+			layers := []fixtures.OCILayerFixture{
+				fixtures.PutOCILayer(t, layout, fixtures.BootLayerEntries(), true),
+				fixtures.PutOCILayer(t, layout, top, false),
 			}
-			image := putOCIManifest(t, layout, name, layers)
-			e := newNativeImageFixture(t)
+			image := fixtures.PutOCIManifest(t, layout, name, layers)
+			e := fixtures.NewNativeImageFixture(t)
 			defer e.Close()
 			if _, err := e.ImportOCI(
 				context.Background(),
-				ImportOptions{
+				imageimport.ImageImportOptions{
 					Layout:   layout,
 					Digest:   image,
 					MaxBytes: 4 << 20,
@@ -259,7 +233,7 @@ func TestActualSharedOCIRejectsUnresolvedLinksAndSymlinkParents(t *testing.T) {
 				t.Fatal("invalid namespace was published")
 			}
 			var count int
-			if err := e.db.QueryRow("SELECT count(*) FROM images WHERE digest=?", image).
+			if err := e.DB.QueryRow("SELECT count(*) FROM images WHERE digest=?", image).
 				Scan(&count); err != nil || count != 0 {
 				t.Fatalf("failed OCI import has catalog entry: %d %v", count, err)
 			}
@@ -270,16 +244,16 @@ func TestActualSharedOCIRejectsUnresolvedLinksAndSymlinkParents(t *testing.T) {
 //nolint:staticcheck // Binary xattrs must survive deterministic tar cache serialization.
 func TestActualSharedOCIDeterministicCachesAndMetadata(t *testing.T) {
 	t.Parallel()
-	entry := fileEntry("payload", strings.Repeat("payload", 4096))
-	entry.header.Xattrs = map[string]string{
+	entry := fixtures.FileEntry("payload", strings.Repeat("payload", 4096))
+	entry.Header.Xattrs = map[string]string{
 		"user.z":      "z",
 		"user.binary": "\x00\xff\x80",
 		"user.a":      "a",
 	}
-	entry.header.Format = tar.FormatPAX
-	entries := append(bootLayerEntries(), dirEntry("."), entry)
-	_, _, first := importSharedFixture(t, entries)
-	_, _, second := importSharedFixture(t, entries)
+	entry.Header.Format = tar.FormatPAX
+	entries := append(fixtures.BootLayerEntries(), fixtures.DirEntry("."), entry)
+	_, _, first := fixtures.ImportSharedFixture(t, entries)
+	_, _, second := fixtures.ImportSharedFixture(t, entries)
 	if first.Builder != second.Builder || !reflect.DeepEqual(first.Files, second.Files) ||
 		!reflect.DeepEqual(first.Artifacts, second.Artifacts) {
 		t.Fatal("identical source/config/profile produced different immutable output")
@@ -288,38 +262,38 @@ func TestActualSharedOCIDeterministicCachesAndMetadata(t *testing.T) {
 
 func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	t.Parallel()
-	requireEROFS(t)
+	fixtures.RequireEROFS(t)
 	ctx := context.Background()
-	tools, err := imageTools(ctx)
+	tools, err := host.ImageTools(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	delete(tools, "go-erofs")
-	builder := imageBuilder(tools)
+	builder := host.ImageBuilder(tools)
 	layout := t.TempDir()
-	layer := putOCILayer(t, layout, bootLayerEntries(), false)
-	image := putOCIManifest(t, layout, "legacy-native", []ociLayerFixture{
+	layer := fixtures.PutOCILayer(t, layout, fixtures.BootLayerEntries(), false)
+	image := fixtures.PutOCIManifest(t, layout, "legacy-native", []fixtures.OCILayerFixture{
 		layer,
 	})
-	e := newNativeImageFixture(t)
+	e := fixtures.NewNativeImageFixture(t)
 	defer e.Close()
-	input := filepath.Join(layout, "blobs", "sha256", layer.descriptor.Digest.Encoded())
-	n, count, err := validateLayer(layerInput{
+	input := filepath.Join(layout, "blobs", "sha256", layer.Descriptor.Digest.Encoded())
+	n, count, err := host.ValidateLayer(host.LayerInput{
 		Path:      input,
-		MediaType: layer.descriptor.MediaType,
-		DiffID:    layer.diff.String(),
-	}, layerLimits{
+		MediaType: layer.Descriptor.MediaType,
+		DiffID:    layer.Diff.String(),
+	}, host.LayerLimits{
 		MaxBytes: 4 << 20,
 		MaxFiles: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := buildLayerCache(ctx, e.opts.StateDir, layerCacheRequest{
-		Input: layerInput{
+	cache, err := host.BuildLayerCache(ctx, e.Opts.StateDir, host.LayerCacheRequest{
+		Input: host.LayerInput{
 			Path:      input,
-			MediaType: layer.descriptor.MediaType,
-			DiffID:    layer.diff.String(),
+			MediaType: layer.Descriptor.MediaType,
+			DiffID:    layer.Diff.String(),
 		},
 		Builder: builder,
 		Bytes:   n,
@@ -328,161 +302,74 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := cache.Artifact(e.opts.StateDir, 0)
+	artifact, err := cache.Artifact(e.Opts.StateDir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(e.opts.StateDir, "images", image[7:])
+	out := filepath.Join(e.Opts.StateDir, "images", image[7:])
 	if err = os.MkdirAll(out, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err = materializeFsmeta(ctx, fsmetaLayers{
-		StateRoot: e.opts.StateDir,
+	if err = host.MaterializeFsmeta(ctx, host.FsmetaLayers{
+		StateRoot: e.Opts.StateDir,
 		Output:    out,
-		Artifacts: []ImageArtifact{
+		Artifacts: []host.ImageArtifact{
 			artifact,
 		},
 	}, image); err != nil {
 		t.Fatal(err)
 	}
-	hashes, err := hashTree(out)
+	hashes, err := loom.HashTree(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := ImageArtifact{
+	meta := host.ImageArtifact{
 		Role:      "fsmeta",
 		Path:      filepath.Join("images", image[7:], "fsmeta.erofs"),
 		SHA256:    hashes["fsmeta.erofs"],
 		GuestPath: "/sandbox/ro/fsmeta.erofs",
 		Serial:    "sandbox-root",
 	}
-	m := ImageManifest{
+	m := host.ImageManifest{
 		Format:       2,
-		Layout:       LayeredEROFSLayout,
+		Layout:       host.LayeredEROFSLayout,
 		Digest:       image,
 		Architecture: runtime.GOARCH,
 		Layers: []string{
-			layer.descriptor.Digest.String(),
+			layer.Descriptor.Digest.String(),
 		},
 		DiffIDs: []string{
-			layer.diff.String(),
+			layer.Diff.String(),
 		},
 		Tools:   tools,
 		Files:   hashes,
 		Builder: builder,
-		Artifacts: []ImageArtifact{
+		Artifacts: []host.ImageArtifact{
 			meta,
 			artifact,
 		},
 	}
-	if err = writeJSON(filepath.Join(out, "image.json"), m); err != nil {
+	if err = loom.WriteJSON(filepath.Join(out, "image.json"), m); err != nil {
 		t.Fatal(err)
 	}
-	if err = sealTree(out); err != nil {
+	if err = loom.SealTree(out); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.db.Exec("INSERT INTO images VALUES(?,?)", image, testfixture.Encode(m)); err != nil {
+	if _, err = e.DB.Exec("INSERT INTO images VALUES(?,?)", image, testfixture.Encode(m)); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.Verify(out, image); err != nil {
 		t.Fatal(err)
 	}
-	reimported, err := e.ImportOCI(ctx, ImportOptions{
+	reimported, err := e.ImportOCI(ctx, imageimport.ImageImportOptions{
 		Layout: layout,
 		Digest: image,
 	})
 	if err != nil || !reflect.DeepEqual(m, reimported) {
 		t.Fatalf("old catalog identity changed: %v", err)
 	}
-	root := extractManifest(t, e, reimported)
+	root := fixtures.ExtractManifest(t, e, reimported)
 	if got, err := os.ReadFile(filepath.Join(root, "boot/vmlinux")); err != nil || string(got) != "kernel-fixture" {
 		t.Fatalf("old catalog lost native contents: %v", err)
-	}
-}
-
-//nolint:staticcheck // Reject mixed deprecated xattr fields in the persisted cache format.
-func TestSharedCachedIndexBoundsAndValidation(t *testing.T) {
-	valid := cacheHeader(fileEntry("safe", "data").header)
-	for name, mutate := range map[string]func(*cachedHeader){
-		"unsafe path": func(h *cachedHeader) {
-			h.Header.Name = "../escape"
-		},
-		"special file": func(h *cachedHeader) {
-			h.Header.Typeflag = tar.TypeChar
-		},
-		"invalid attributes": func(h *cachedHeader) {
-			h.Xattrs = []headerAttribute{
-				{
-					Name:  "user.z",
-					Value: "z",
-				},
-				{
-					Name:  "user.a",
-					Value: "a",
-				},
-			}
-		},
-		"mixed attributes": func(h *cachedHeader) {
-			h.Header.Xattrs = map[string]string{
-				"user.x": "x",
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := valid
-			mutate(&h)
-			var data bytes.Buffer
-			if err := gob.NewEncoder(&data).Encode([]cachedHeader{
-				h,
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := sharedHeaders(
-				fstest.MapFS{
-					"headers.gob": &fstest.MapFile{
-						Data: data.Bytes(),
-					},
-				},
-				layerCache{
-					Bytes:   4096,
-					Entries: 1,
-				},
-			); err == nil {
-				t.Fatal("invalid cached operations accepted")
-			}
-		})
-	}
-	var data bytes.Buffer
-	enc := gob.NewEncoder(&data)
-	if err := enc.Encode([]cachedHeader{
-		valid,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := enc.Encode("extra object"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sharedHeaders(
-		fstest.MapFS{
-			"headers.gob": &fstest.MapFile{
-				Data: data.Bytes(),
-			},
-		},
-		layerCache{
-			Bytes:   4096,
-			Entries: 1,
-		},
-	); err == nil {
-		t.Fatal("trailing cached index accepted")
-	}
-	if _, err := sharedHeaders(
-		fstest.MapFS{
-			"headers.gob": &fstest.MapFile{
-				Data: make([]byte, 65537),
-			},
-		},
-		layerCache{},
-	); err == nil {
-		t.Fatal("unbounded cached index accepted")
 	}
 }

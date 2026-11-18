@@ -17,10 +17,11 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
-	parallelLifecycle(t)
+	fixtures.ParallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixture(t)
 	privatePath := filepath.Join(t.TempDir(), "private-host-input")
 	_, failure := os.ReadFile(privatePath)
