@@ -20,7 +20,7 @@ honor its STOP conditions, and update your row when done.
 | 002 | Unify machine/sandbox service naming (drop stray VM prefixes) | P2 | M | — | DONE |
 | 003 | Split snapshot_delete.go by workflow role | P2 | S | 002 | DONE |
 | 004 | Export discard step input/state | P2 | S | 002 | DONE |
-| 005 | Single-source the checkpoint action spellings | P2 | S | — | DONE |
+| 005 | Single-source the checkpoint action spellings | P2 | S | — | REJECTED (constants for one action among literal siblings created a worse mixed style; resolved with cross-referencing comments at the two translation points instead) |
 | 006 | Unify sdk receiver names | P3 | S | — | DONE |
 | 007 | Align havenctl/loomctl entrypoint shape | P3 | M | — | DONE |
 | 008 | Prefix gc/dataplane dependency names | P3 | S | 002 | DONE |

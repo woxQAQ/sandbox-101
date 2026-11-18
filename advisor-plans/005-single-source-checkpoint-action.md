@@ -19,6 +19,14 @@
 
 ## Why this matters
 
+> **Review outcome (2026-11-18)**: the constant-based approach below was
+> implemented and then reverted after review. Using constants for a single
+> action while every sibling action stays a literal created a worse mixed
+> style than the duplication it removed. The final state keeps literals
+> everywhere and documents the stored/public spelling pair with
+> cross-referencing comments at the two translation points
+> (`haven/operation/identity.go` decode and `haven/httpapi/http.go` mutate).
+
 One logical action — deleting a checkpoint — exists under two spellings:
 `checkpoint_delete` (stored in the operations table, matched in recovery) and
 `delete_checkpoint` (public operation view). The mapping is re-implemented by
