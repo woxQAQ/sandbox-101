@@ -15,7 +15,7 @@ type settings struct {
 	RequestFile string `mapstructure:"request-file"`
 }
 
-func parseConfig(args []string) (settings, []string, error) {
+func newFlagSet() *pflag.FlagSet {
 	flags := pflag.NewFlagSet("havenctl", pflag.ContinueOnError)
 	flags.SetInterspersed(false)
 	flags.String("config", "", "explicit configuration file")
@@ -24,6 +24,11 @@ func parseConfig(args []string) (settings, []string, error) {
 	flags.String("tenant", "", "root administrator's target tenant")
 	flags.String("key", "", "stable idempotency key for one intent")
 	flags.String("request-file", "", "private JSON intent file for tenant, claim, template or change")
+	return flags
+}
+
+func parseConfig(args []string) (settings, []string, error) {
+	flags := newFlagSet()
 	var result settings
 	if err := flags.Parse(args); err != nil {
 		return result, nil, err

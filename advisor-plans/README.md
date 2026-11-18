@@ -16,15 +16,15 @@ honor its STOP conditions, and update your row when done.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Restore rustfmt coverage on guest server.rs | P1 | S | — | TODO |
-| 002 | Unify machine/sandbox service naming (drop stray VM prefixes) | P2 | M | — | TODO |
-| 003 | Split snapshot_delete.go by workflow role | P2 | S | 002 | TODO |
-| 004 | Export discard step input/state | P2 | S | 002 | TODO |
-| 005 | Single-source the checkpoint action spellings | P2 | S | — | TODO |
-| 006 | Unify sdk receiver names | P3 | S | — | TODO |
-| 007 | Align havenctl/loomctl entrypoint shape | P3 | M | — | TODO |
-| 008 | Prefix gc/dataplane dependency names | P3 | S | 002 | TODO |
-| 009 | Give httpapi Adapter its Management dependency | P3 | S | 005 | TODO |
+| 001 | Restore rustfmt coverage on guest server.rs | P1 | S | — | DONE |
+| 002 | Unify machine/sandbox service naming (drop stray VM prefixes) | P2 | M | — | DONE |
+| 003 | Split snapshot_delete.go by workflow role | P2 | S | 002 | DONE |
+| 004 | Export discard step input/state | P2 | S | 002 | DONE |
+| 005 | Single-source the checkpoint action spellings | P2 | S | — | DONE |
+| 006 | Unify sdk receiver names | P3 | S | — | DONE |
+| 007 | Align havenctl/loomctl entrypoint shape | P3 | M | — | DONE |
+| 008 | Prefix gc/dataplane dependency names | P3 | S | 002 | DONE |
+| 009 | Give httpapi Adapter its Management dependency | P3 | S | 005 | DONE |
 | 010 | Management action constants + CLI flag/struct parity tests | P3 | M | 007 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
