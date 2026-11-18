@@ -56,7 +56,7 @@ type SupplyDependencies struct {
 	Committer    *operation.Committer
 	Commands     *operation.CommandIdentity
 	Availability *execution.Availability
-	Provisioning RawProvisioner
+	Provisioning BareProvisioner
 	Ownership    machine.SandboxOwnershipReader
 	Captures     *machine.Captures
 	Deletion     *machine.VMDeletion
@@ -76,7 +76,7 @@ type Supply struct {
 	proofs       machine.ResourceProofs
 	commands     *operation.CommandIdentity
 	availability *execution.Availability
-	provisioning RawProvisioner
+	provisioning BareProvisioner
 	ownership    machine.SandboxOwnershipReader
 	captures     *machine.Captures
 	deletion     *machine.VMDeletion

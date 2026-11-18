@@ -33,7 +33,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 		t.Run(fmt.Sprintf("%s-%d", budget.Kind, budget.Units), func(t *testing.T) {
 			service, _ := fixtures.ColdService(t, nil)
 			ctx := context.Background()
-			template, err := supply.NewTemplateCatalog(service.State.Database()).Cold(ctx, "tenant", "cold")
+			template, err := supply.NewTemplateCatalog(service.State.Database()).Fresh(ctx, "tenant", "cold")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -42,7 +42,7 @@ func (p *VMProvisioning) AdmitCold(ctx context.Context, request machine.FreshReq
 		}
 		return cached, err
 	}
-	selected, err := supply.NewTemplateCatalog(p.store.Database).Cold(ctx, request.TenantID, request.TemplateID)
+	selected, err := supply.NewTemplateCatalog(p.store.Database).Fresh(ctx, request.TenantID, request.TemplateID)
 	if err != nil {
 		return empty, err
 	}
@@ -234,7 +234,7 @@ func (p *VMProvisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx,
 	}
 	if restore == nil && !provisional {
 		catalog := supply.NewTemplateCatalog(tx)
-		loader := catalog.Cold
+		loader := catalog.Fresh
 		if admission.Claim != nil {
 			loader = catalog.Owned
 		}

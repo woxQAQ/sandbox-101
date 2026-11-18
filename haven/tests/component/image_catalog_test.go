@@ -17,7 +17,7 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 	fixtures.ParallelLifecycle(t)
 	service, backend := fixtures.ColdService(t, nil)
 	ctx := context.Background()
-	template, err := supply.NewTemplateCatalog(service.State.Database()).Cold(ctx, "tenant", "cold")
+	template, err := supply.NewTemplateCatalog(service.State.Database()).Fresh(ctx, "tenant", "cold")
 	if err != nil {
 		t.Fatal(err)
 	}

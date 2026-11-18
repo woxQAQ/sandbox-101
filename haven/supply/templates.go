@@ -37,13 +37,13 @@ func NewTemplateCatalog(database store.DBTX) *TemplateCatalog {
 	}
 }
 
-func (tc *TemplateCatalog) Cold(ctx context.Context, tenant, id string) (TemplateRecord, error) {
+func (tc *TemplateCatalog) Fresh(ctx context.Context, tenant, id string) (TemplateRecord, error) {
 	record, err := tc.Owned(ctx, tenant, id)
 	if err != nil {
 		return record, err
 	}
 	if record.SnapshotID != "" || record.TargetWarm != 0 {
-		return record, fmt.Errorf("%w: cold workflow requires a cold template without a warm pool", errs.ErrIncompatible)
+		return record, fmt.Errorf("%w: fresh workflow requires a fresh template without a warm pool", errs.ErrIncompatible)
 	}
 	return record, nil
 }
@@ -259,13 +259,13 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 		Action  string
 		Request machine.FreshRequest
 	}{"claim", request})
-	child, err := s.provisioning.AdmitRaw(ctx, ProvisionRequest{
+	child, err := s.provisioning.AdmitBare(ctx, ProvisionRequest{
 		TenantID: spec.TenantID,
 		Key:      request.Key,
 		Frozen:   frozen,
 		Template: input.Template,
 		Image:    manifest,
-	}, RawTarget{
+	}, BareTarget{
 		NewSandboxID: input.SandboxID,
 		Budget: &quota.SlotBudget{
 			Kind:  "build_slot",

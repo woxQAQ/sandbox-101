@@ -138,7 +138,7 @@ type ClaimAdmission struct {
 }
 
 // ProvisionAdmission joins one preflight request to its business transaction
-// participants. Supply's raw port cannot supply claim credentials or placement
+// participants. Supply's bare port cannot supply claim credentials or placement
 // on an existing sandbox.
 type ProvisionAdmission struct {
 	Request supply.ProvisionRequest
@@ -200,9 +200,9 @@ func (admission *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, 
 	}, nil
 }
 
-// AdmitRaw exposes only the undelivered build/refill subset of resource admission.
+// AdmitBare exposes only the undelivered build/refill subset of resource admission.
 // It shares the original transaction, gate, workers and continuous VM guard.
-func (p *VMProvisioning) AdmitRaw(ctx context.Context, request supply.ProvisionRequest, target supply.RawTarget) (operation.Record, error) {
+func (p *VMProvisioning) AdmitBare(ctx context.Context, request supply.ProvisionRequest, target supply.BareTarget) (operation.Record, error) {
 	return p.Admit(ctx, ProvisionAdmission{
 		Request: request,
 		Target: &ProvisionTarget{

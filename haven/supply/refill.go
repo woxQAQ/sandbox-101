@@ -252,14 +252,14 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 		Action  string
 		Request machine.CloneRequest
 	}{"clone", request})
-	child, err := s.provisioning.AdmitRaw(ctx, ProvisionRequest{
+	child, err := s.provisioning.AdmitBare(ctx, ProvisionRequest{
 		TenantID: selected.TenantID,
 		Key:      request.Key,
 		Frozen:   frozen,
 		Template: selected,
 		Image:    manifest,
 		Restore:  &source,
-	}, RawTarget{
+	}, BareTarget{
 		NewSandboxID: input.SandboxID,
 		Budget: &quota.SlotBudget{
 			Kind:  "sandbox_slot",
