@@ -36,26 +36,28 @@ type Services struct {
 }
 
 type Adapter struct {
-	requests       *sandbox.SandboxRequests
-	plane          *dataplane.Plane
 	authentication *authorization.Authentication
 	catalog        *sandbox.Catalog
 	templates      *supply.TemplateCatalog
 	operations     *operation.Operations
 	delivery       *sandbox.OperationDelivery
 	tenants        *authorization.Tenants
+	requests       *sandbox.SandboxRequests
+	plane          *dataplane.Plane
+	management     *node.Management
 }
 
 func New(dependencies Services) http.Handler {
 	adapter := &Adapter{
-		requests:       dependencies.Requests,
-		plane:          dependencies.Dataplane,
 		authentication: dependencies.Authentication,
 		catalog:        dependencies.Catalog,
 		templates:      dependencies.Templates,
 		operations:     dependencies.Operations,
 		delivery:       dependencies.Delivery,
 		tenants:        dependencies.Tenants,
+		requests:       dependencies.Requests,
+		plane:          dependencies.Dataplane,
+		management:     dependencies.Management,
 	}
 	router := gin.New()
 	router.RedirectTrailingSlash = false
@@ -102,23 +104,8 @@ func New(dependencies Services) http.Handler {
 	router.Any("/preview/*path", gin.WrapF(adapter.preview))
 	v1 := router.Group("/v1", adapter.authenticate)
 	v1.POST("/tenants", adapter.putTenant)
-	v1.GET("/status", func(c *gin.Context) {
-		value, err := dependencies.Management.Status(c.Request.Context(), principal(c))
-		respond(c.Writer, value, err)
-	})
-	v1.POST("/drain", func(c *gin.Context) {
-		if !principal(c).Root {
-			writeFailure(c.Writer, types.ApiError{
-				Code:    types.ErrForbidden,
-				Message: "root access required",
-			})
-			return
-		}
-		dependencies.Management.Drain()
-		writeJSON(c.Writer, 200, map[string]bool{
-			"draining": true,
-		})
-	})
+	v1.GET("/status", adapter.status)
+	v1.POST("/drain", adapter.drain)
 	v1.GET("/sandboxes", func(c *gin.Context) {
 		value, err := adapter.catalog.List(c.Request.Context(), principal(c))
 		respond(c.Writer, value, err)
@@ -191,6 +178,25 @@ func (adapter *Adapter) authenticate(c *gin.Context) {
 		value.TenantID = c.GetHeader("X-Tenant-ID")
 	}
 	c.Set("principal", value)
+}
+
+func (adapter *Adapter) status(c *gin.Context) {
+	value, err := adapter.management.Status(c.Request.Context(), principal(c))
+	respond(c.Writer, value, err)
+}
+
+func (adapter *Adapter) drain(c *gin.Context) {
+	if !principal(c).Root {
+		writeFailure(c.Writer, types.ApiError{
+			Code:    types.ErrForbidden,
+			Message: "root access required",
+		})
+		return
+	}
+	adapter.management.Drain()
+	writeJSON(c.Writer, 200, map[string]bool{
+		"draining": true,
+	})
 }
 
 func (adapter *Adapter) putTenant(c *gin.Context) {
