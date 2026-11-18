@@ -68,7 +68,7 @@ func validateWorkflowProof(ctx context.Context, database store.DBTX, origin stor
 		} else {
 			_, _, proofErr = machine.LoadResourceLink(ctx, database, item.OperationID, strings.TrimPrefix(item.Key, "link:"))
 		}
-	case item.Key == "configuration" && item.Action == "configure_paused", item.Key == "lease" && item.Action == "renew", item.Key == "checkpoint_delete" && item.Action == "checkpoint_delete":
+	case item.Key == "configuration" && item.Action == "configure_paused", item.Key == "lease" && item.Action == "renew", item.Key == "checkpoint_delete" && item.Action == operation.ActionCheckpointDelete:
 	default:
 		proofErr = fmt.Errorf("unsupported control step kind")
 	}
