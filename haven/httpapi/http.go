@@ -142,7 +142,7 @@ func New(dependencies Services) http.Handler {
 		adapter.mutate(c, c.Param("action"), c.Param("id"), "")
 	})
 	v1.DELETE("/checkpoints/:id", func(c *gin.Context) {
-		adapter.mutate(c, operation.ActionCheckpointDeletePublic, "", c.Param("id"))
+		adapter.mutate(c, "delete_checkpoint", "", c.Param("id"))
 	})
 	v1.POST("/checkpoints/:id/fork", func(c *gin.Context) {
 		adapter.mutate(c, "fork", "", c.Param("id"))
@@ -308,7 +308,7 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 		})
 		return
 	}
-	if action == operation.ActionCheckpointDelete {
+	if action == "checkpoint_delete" {
 		writeFailure(c.Writer, types.ApiError{
 			Code:    types.ErrInvalid,
 			Message: "unsupported sandbox action",
@@ -350,10 +350,10 @@ func (adapter *Adapter) mutate(c *gin.Context, action, sandboxID, checkpointID s
 		writeError(c.Writer, err)
 		return
 	}
-	// Stored and public spellings are paired in operation; translate at this
-	// admission boundary only.
-	if action == operation.ActionCheckpointDeletePublic {
-		intent.Action = operation.ActionCheckpointDelete
+	// Clients use the public "delete_checkpoint" spelling; the stored action is
+	// "checkpoint_delete". The reverse translation lives in operation decode.
+	if action == "delete_checkpoint" {
+		intent.Action = "checkpoint_delete"
 	}
 	operation, err := adapter.requests.Submit(request.Context(), principal(c), request.Header.Get("Idempotency-Key"), intent)
 	if err != nil {

@@ -116,7 +116,7 @@ func CheckpointInventory(ctx context.Context, query store.DBTX) ([]Checkpoint, e
 
 func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
 	var empty operation.Record
-	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != operation.ActionCheckpointDelete || command.CheckpointID == "" {
+	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "checkpoint_delete" || command.CheckpointID == "" {
 		return empty, fmt.Errorf("%w: checkpoint deletion requires tenant authority, checkpoint and key", errs.ErrInvalid)
 	}
 	guard := l.guards.TenantRequest(principal.TenantID, key)
@@ -168,7 +168,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	frozen := operation.Encode(struct {
 		Action  string
 		Request operation.Command
-	}{operation.ActionCheckpointDelete, operation.SanitizedCommand(command)})
+	}{"checkpoint_delete", operation.SanitizedCommand(command)})
 	input := operation.Encode(struct {
 		Checkpoint  Checkpoint
 		Publication machine.SnapshotSource
@@ -193,7 +193,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
 		OperationID:         record.ID,
 		StepKey:             "checkpoint_delete",
-		Action:              operation.ActionCheckpointDelete,
+		Action:              "checkpoint_delete",
 		InputHash:           operation.Digest(input),
 		Input:               input,
 		CandidateResourceID: checkpoint.SnapshotID,

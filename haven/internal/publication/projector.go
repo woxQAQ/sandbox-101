@@ -42,7 +42,7 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 			out.Result.Sandboxes = append(out.Result.Sandboxes, *child.Result.Sandbox)
 			out.ChargeTenantID = child.Result.Sandbox.TenantID
 		}
-	} else if out.Command.Action != "checkpoint" && out.Command.Action != operation.ActionCheckpointDeletePublic {
+	} else if out.Command.Action != "checkpoint" && out.Command.Action != "delete_checkpoint" {
 		for _, sandboxID := range out.IDs {
 			value, err := sandbox.NewCatalog(q).Get(ctx, authorization.Principal{
 				Root: true,

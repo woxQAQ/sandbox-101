@@ -17,14 +17,6 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-// Checkpoint deletion is stored under ActionCheckpointDelete and published
-// under ActionCheckpointDeletePublic. HTTP admission (httpapi) and public
-// operation decode below are the only two points allowed to translate.
-const (
-	ActionCheckpointDelete       = "checkpoint_delete"
-	ActionCheckpointDeletePublic = "delete_checkpoint"
-)
-
 // Scope keeps an operation's durable authorization kind and identity together.
 // The caller must still establish authority before querying that scope.
 type Scope struct {
@@ -172,8 +164,10 @@ func AcceptedCommand(request []byte) (types.Command, error) {
 	if command.Action == "" {
 		return command, fmt.Errorf("%w: public operation lacks accepted command", errs.ErrManualRecovery)
 	}
-	if command.Action == ActionCheckpointDelete {
-		command.Action = ActionCheckpointDeletePublic
+	// Checkpoint deletion is stored as "checkpoint_delete" and published as
+	// "delete_checkpoint"; the reverse translation lives in httpapi's mutate.
+	if command.Action == "checkpoint_delete" {
+		command.Action = "delete_checkpoint"
 	}
 	return command, nil
 }

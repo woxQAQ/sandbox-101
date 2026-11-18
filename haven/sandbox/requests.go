@@ -48,7 +48,7 @@ func (sr *SandboxRequests) Submit(ctx context.Context, principal authorization.P
 		return sr.sandboxes.AdmitClaim(ctx, principal, key, command)
 	case "configure":
 		return sr.sandboxes.AdmitConfigure(ctx, principal, key, command)
-	case operation.ActionCheckpointDelete:
+	case "checkpoint_delete":
 		return sr.lifecycle.AdmitCheckpointDelete(ctx, principal, key, command)
 	case "refill":
 		return sr.supply.AdmitRefill(ctx, principal, key, command)
