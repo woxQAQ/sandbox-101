@@ -63,6 +63,15 @@ type GCReport struct {
 	Blocked     bool      `json:"blocked"`
 }
 
+// Management actions accepted on the private administration socket. The daemon
+// and loomctl both use these constants; the strings are wire contract.
+const (
+	ManagementActionImport        = "import"
+	ManagementActionGC            = "gc"
+	ManagementActionSupplyCleanup = "supply_cleanup"
+	ManagementActionImageCleanup  = "image_cleanup"
+)
+
 // ManagementRequest is a node-scoped intent authenticated by local peer credentials.
 // Key is required for mutations; OperationID identifies the original cleanup source.
 type ManagementRequest struct {

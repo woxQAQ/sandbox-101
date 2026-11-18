@@ -61,7 +61,7 @@ func run(arguments []string) error {
 		}
 		switch args[0] {
 		case "import":
-			request.Action = "import"
+			request.Action = types.ManagementActionImport
 			request.Import = &types.ImageImport{
 				Layout:          cfg.OCILayout,
 				Digest:          cfg.Digest,
@@ -70,17 +70,17 @@ func run(arguments []string) error {
 				MaxFiles:        cfg.MaxFiles,
 			}
 		case "gc":
-			request.Action = "gc"
+			request.Action = types.ManagementActionGC
 			request.GC = &types.GCOptions{
 				DryRun: cfg.DryRun,
 				Batch:  cfg.GCBatch,
 				Budget: cfg.GCBudget,
 			}
 		case "supply-cleanup":
-			request.Action = "supply_cleanup"
+			request.Action = types.ManagementActionSupplyCleanup
 			request.OperationID = cfg.SourceOperation
 		case "image-cleanup":
-			request.Action = "image_cleanup"
+			request.Action = types.ManagementActionImageCleanup
 			request.OperationID = cfg.SourceOperation
 			request.CacheBuilder = cfg.CacheBuilder
 			request.CacheDiffID = cfg.CacheDiffID
@@ -95,7 +95,7 @@ func run(arguments []string) error {
 				request.Key = cfg.Key
 			}
 		}
-		if request.Key == "" && (request.Action != "gc" || request.GC == nil || !request.GC.DryRun) {
+		if request.Key == "" && (request.Action != types.ManagementActionGC || request.GC == nil || !request.GC.DryRun) {
 			return errors.New("--key is required; reuse it when retrying this intent")
 		}
 		value, err = client.Manage(ctx, request)

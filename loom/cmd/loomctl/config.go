@@ -9,7 +9,7 @@ import (
 	"github.com/woxQAQ/haven/loom/config"
 )
 
-func parseConfig(args []string) (config.CLI, []string, error) {
+func newFlagSet() *pflag.FlagSet {
 	flags := pflag.NewFlagSet("loomctl", pflag.ContinueOnError)
 	flags.SetInterspersed(false)
 	flags.String("config", "", "explicit configuration file")
@@ -27,6 +27,11 @@ func parseConfig(args []string) (config.CLI, []string, error) {
 	flags.String("source-operation", "", "original supply or import operation")
 	flags.String("cache-builder", "", "original image-cache builder identity")
 	flags.String("cache-diff-id", "", "original image-cache diff identity")
+	return flags
+}
+
+func parseConfig(args []string) (config.CLI, []string, error) {
+	flags := newFlagSet()
 	var result config.CLI
 	if err := flags.Parse(args); err != nil {
 		return result, nil, err

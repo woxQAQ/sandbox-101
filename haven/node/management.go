@@ -104,26 +104,26 @@ func (m *Management) Manage(ctx context.Context, principal authorization.Princip
 	var accepted operation.Record
 	var err error
 	switch request.Action {
-	case "import":
+	case types.ManagementActionImport:
 		if request.Import == nil || request.GC != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: import requires only import options", errs.ErrInvalid)
 		}
 		accepted, err = m.images.AdmitImport(ctx, principal, request.Key, imageimport.ImageImportOptions(*request.Import))
-	case "gc":
+	case types.ManagementActionGC:
 		if request.GC == nil || request.Import != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: gc requires only gc options", errs.ErrInvalid)
 		}
 		report, err := m.collector.Collect(ctx, principal, request.Key, *request.GC)
 		response.GC = &report
 		return response, err
-	case "supply_cleanup":
+	case types.ManagementActionSupplyCleanup:
 		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			return response, fmt.Errorf("%w: supply cleanup requires only original operation id", errs.ErrInvalid)
 		}
 		accepted, err = m.supplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
 			OperationID: request.OperationID,
 		})
-	case "image_cleanup":
+	case types.ManagementActionImageCleanup:
 		if request.Import != nil || request.GC != nil {
 			return response, fmt.Errorf("%w: image cleanup accepts only original import or cache identity", errs.ErrInvalid)
 		}
