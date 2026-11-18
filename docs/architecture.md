@@ -42,9 +42,9 @@ image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、cap
 
 `store.State` 独占数据库、writer lock、node key 与 HEAD。各能力构造函数通过本能力的 `Dependencies` 明确接收原 guards、Lifetime/Workers、证明与协作端口，运行配置由独立 options 或故障注入参数传入；构造过程只装配这些依赖，不从通用容器查找或回填缺失端口。`execution` 唯一持有关闭接纳、在途计数、worker 结果及具名锁域，数据登记和 Close 共用 Registration 短锁；`ephemeral.Registry` 唯一持有内存凭据、binding、连接和 daemon epoch。数据最终交接继续在原 Configuration guard 下重检，关闭等待原 Lifetime，见 [执行契约](../haven/execution/README.md)。egress factory 只接收绑定到 dataplane.Audits、dataplane.ProxySockets、sandbox.DirectBindings 的四项 `EgressCallbacks`。宿主 Guest port 与真实客户端见 [guest](../haven/guest/README.md)。
 
-controller 不得绕过用例或回指 App，业务层不得手写 SQL、跨领域导入 dbgen 或恢复根兼容 facade。SQLite 维护操作的范围见 [store 契约](../haven/store/README.md)。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，不将组件通过视为 native、KVM 或生产资格。
+controller 不得绕过用例或回指 App，业务层不得手写 SQL、跨领域导入 dbgen 或恢复根兼容 facade。SQLite 维护操作的范围见 [store 契约](../haven/store/README.md)。当前实施证据见 [027](../plans/evidence/027-capability-map.md)，剩余验收见 [未完成索引](../plans/README.md#待完成验收)，实际镜像工具、guest 启动与部署验证各自记录运行结果。
 
-业务 API 与客户端契约见 [Sandbox](../haven/sandbox/api.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [验收记录](acceptance.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
+业务 API 与客户端契约见 [Sandbox](../haven/sandbox/api.md)，配置、管理和备份见 [Haven control](haven-control.md)，资源步骤、引用和回收见 [集成契约](engine-integration.md)。旧双 daemon 的历史验收单列在 [历史验证记录](verification-history.md)，不作为当前源码的通过证据。源码删除、部署材料更新与实际宿主切换是独立事项。
 
 ## 职责与执行边界
 
@@ -115,4 +115,4 @@ Haven 构造可信根、可达性、回收候选和持久删除责任；Loom 只
 
 离线备份取得同一 writer lock，将 DB/key/HEAD 作为同一点保存。旧 schema、缺证明或恢复回退在 writable startup/effects 前拒绝。review 只授权元数据诊断，不重放 pending、不恢复数据授权、不补 GC witness；整个 DB 和本地历史一起回退超出本地 HEAD 检测范围。
 
-组件 Service/SQLite、真实 Rust transport、native OCI、跨 UID capture、kernel-isolation、KVM 与 production 分别提供证据。`haven/tests/component` 使用真实 App/SQLite 和显式注入的效果替身；`haven/tests/native` 使用真实镜像工具，KVM 用例仍受独立 build tag 约束。`haven/internal/testfixture` 提供私有 store/runtime 材料且不依赖 application；`internal/testapp` 单独提供完整 App 组装。单能力 Service/SQLite 测试位于 owner 的外部测试包，跨能力/重启/关闭场景留在 component；Go 包使用 `-p=1` 串行调度且生命周期场景仍限四个。生产包不得导入任一 fixture 包；HTTP/管理 controller 也不得反向依赖 `internal/application`。host fixture 不证明 guest boot 或 Linux 隔离。当前镜像/测试调整记录在 [归档计划 026](../.agents/archive/026-direct-image-tools-and-tests.md)，VM 缺项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；历史通过不挪用到新树。
+组件 Service/SQLite、Rust transport、原生 OCI、跨 UID capture、宿主网络与 cgroup 策略、guest 镜像与快照恢复、Haven 生命周期分别提供证据。`haven/tests/component` 使用真实 App/SQLite 和显式注入的效果替身；`haven/tests/native` 使用真实镜像工具，guest 启动与恢复场景使用 `guest_image` build tag。`haven/internal/testfixture` 提供私有 store/runtime 材料且不依赖 application；`internal/testapp` 单独提供完整 App 组装。单能力 Service/SQLite 测试位于 owner 的外部测试包，跨能力/重启/关闭场景留在 component；Go 包使用 `-p=1` 串行调度且生命周期场景仍限四个。生产包不得导入任一 fixture 包；HTTP/管理 controller 也不得反向依赖 `internal/application`。host fixture 不证明 guest boot 或 Linux 隔离。当前镜像/测试调整记录在 [归档计划 026](../.agents/archive/026-direct-image-tools-and-tests.md)，VM 缺项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；历史通过不挪用到新树。

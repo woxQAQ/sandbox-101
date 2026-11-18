@@ -1,8 +1,12 @@
-# Acceptance record
+# Historical verification runs
 
 The single-host implementation has historical passes for production-daemon lifecycle, launcher/adoption, golden/warm provisioning, guest/TAP TCP, standalone VMM/guest and kernel-isolation acceptance, alongside unit/race tests, Rust transport integration and actual daemon/CLI smoke. Each result below belongs to its recorded source, materials and runtime limits; it is not a claim that the current tree or later harness changes were revalidated.
 
-Current entrypoints are under [Reproduce](#reproduce). Source-controlled plan receipts are in the [archive](../.agents/archive/README.md); links under `build/` and machine-local paths are retained historical artifacts and may be unavailable in another checkout. No latency/density SLO is established by this record.
+For current commands and prerequisites, see the [runner guide](../scripts/README.md). The commands, suite names and artifact paths below identify the original executions. Source-controlled receipts are in the [archive](../.agents/archive/README.md).
+
+## Reading the earlier suite names
+
+In these records, `kvm-e2e` booted a guest to inspect the image and snapshot restores. `kernel-isolation-e2e` exercised host networking and cgroup limits. `production-e2e` ran the daemon lifecycle in a private test deployment. The current equivalents are `guest-image-e2e`, `host-policy-e2e` and `runtime-e2e`. When describing tenant-facing behavior, use the Sandbox API or the specific operation, such as claim, fork or resume. The word *acceptance* in an old report identifies the checks its authors required for that revision. Deployment qualification also depends on the target host and its configured budgets.
 
 ## Historical HEAD revalidation — 2026-11-08
 
@@ -18,9 +22,9 @@ Commit `b4f2b2f750d63a5c36e49f13d58ad91d926b9a24` passed fresh standalone KVM an
 
 Fresh evidence: [KVM log](../build/head-vm-pu14c8xn/kvm.log), [production log](../build/head-vm-pu14c8xn/production/run.xqFAZHtS/test.log), and [run report](../build/head-vm-pu14c8xn/REPORT.md). Standalone KVM used a new private 24 GiB tmpfs and namespace-local subordinate-ID files; the host mappings were not changed. Synthetic standalone RAM/disk payloads were released after copying diagnostics. The retention filter also omitted the newly generated OCI, so production used the separately verified existing OCI for the unchanged guest; no KVM retry was needed. Production retained its normal state archive. This run does not repeat kernel-isolation enforcement, throughput measurements or cross-host qualification.
 
-## Reproduce
+## Commands and host used for the recorded runs
 
-On an x86_64 Linux host with working user namespaces and user-authorized KVM/TUN, supply the tools and artifacts described in the [integration test inputs](../scripts/README.md#vm-test-inputs). The commands below describe the current entrypoints; the recorded results remain historical and do not validate subsequent harness changes.
+The dual-daemon checkout used the following commands on x86_64 Linux with user namespaces and KVM/TUN access.
 
 ```sh
 bash scripts/prepare-acceptance-materials.sh /absolute/path/to/materials
@@ -34,7 +38,7 @@ SANDBOX_PRODUCTION_IO_MAX="$ENGINE_IO_MAX" make production-e2e \
   PRODUCTION_OCI_LAYOUT=/absolute/path/to/a/bootable-oci-layout
 ```
 
-Set `ENGINE_IO_MAX` to the verified device budget described in [host deployment](../deploy/host/README.md#durable-storage-and-resource-limits). The production runner needs subordinate UID/GID mappings and usable `/dev/fuse`. It builds and starts both real daemons in fresh namespaces under its own delegated transient user service. Its private bindfs view serves byte/inode-bounded tmpfs state while charging underlying writes to the owned storage service; VMM limits stay RAM plus 128 MiB. Direct tmpfs capture is unsuitable here: a 512 MiB diagnostic guest reached its exact 640 MiB limit, recorded `oom=1`, `oom_kill=1` and retained about 499 MiB shmem after death. The bindfs primitive proves matching stat/maps identity, private COW, hardlinks and real dropped-UID permissions. Production block-backed deployments must validate their selected filesystem, shape and storage budget separately.
+Set `ENGINE_IO_MAX` to the verified device budget described in [host deployment](../deploy/host/README.md#存储与资源预算). The production runner needs subordinate UID/GID mappings and usable `/dev/fuse`. It builds and starts both real daemons in fresh namespaces under its own delegated transient user service. Its private bindfs view serves byte/inode-bounded tmpfs state while charging underlying writes to the owned storage service; VMM limits stay RAM plus 128 MiB. Direct tmpfs capture is unsuitable here: a 512 MiB diagnostic guest reached its exact 640 MiB limit, recorded `oom=1`, `oom_kill=1` and retained about 499 MiB shmem after death. The bindfs primitive proves matching stat/maps identity, private COW, hardlinks and real dropped-UID permissions. Production block-backed deployments must validate their selected filesystem, shape and storage budget separately.
 
 The materials preparation step verifies caller-supplied artifacts without invoking an environment provider. Kernel-isolation acceptance also needs native ip/nft/unshare tools and a systemd user manager that delegates cpu, memory, io and pids. Missing prerequisites fail explicitly. The kernel runner creates a new transient user service and private namespaces, modifies only the resources it owns, then cleans them. Keep `KERNEL_ARTIFACTS_DIR` on block-backed storage: its I/O probe deliberately fails when no real backing device accounts for the writes.
 
@@ -177,10 +181,10 @@ Successful suite durations are evidence of completion, not cold-start or product
 
 ## Remaining acceptance and implementation boundaries
 
-The standalone VMM runs as the invoking device-authorized nonroot user; the separate production runner proves the actual root launcher, restricted root/mounts, UID/GID reduction, KVM/TAP fd handoff, live adoption, complete sandbox lifecycle and guest/TAP policy path. Its endpoints and quotas belong to fresh isolated resources. Each deployment still needs qualification of its real block-device budgets, external firewall/iptables priorities, bandwidth/packet quotas, MTU/offload/fragment handling, concurrent capacity and teardown configuration; use [Haven deployment](../deploy/host/README.md#备份恢复与验收). Actual block-I/O throttling is proven by the separate kernel suite, since the production fixture stores data in tmpfs.
+The standalone VMM runs as the invoking device-authorized nonroot user; the separate production runner proves the actual root launcher, restricted root/mounts, UID/GID reduction, KVM/TAP fd handoff, live adoption, complete sandbox lifecycle and guest/TAP policy path. Its endpoints and quotas belong to fresh isolated resources. Each deployment still needs qualification of its real block-device budgets, external firewall/iptables priorities, bandwidth/packet quotas, MTU/offload/fragment handling, concurrent capacity and teardown configuration; use [Haven deployment](../deploy/host/README.md#备份恢复与部署验证). Actual block-I/O throttling is proven by the separate kernel suite, since the production fixture stores data in tmpfs.
 
 Boot-time guest-root raw block-device write rejection is proven by the standalone fixture; production mountinfo additionally records readonly boot/image/restore bindings. The accepted runtime materials are Linux/x86_64 on the recorded CPU and filesystem configuration. No performance/density targets or cross-host compatibility are claimed.
 
 The default shared materializer now uses native per-diff-ID payload caches and pinned go-erofs metadata-only composition, covering broader OCI namespace semantics without per-image regular-data duplication. Fresh real guest/COW acceptance proves cross-layer and true forward hardlinks, root metadata, implicit parents and duplicate replacement alongside ACL/capability values. Existing native-rebuild catalog identities remain readable. Explicit umoci compatibility remains separate and still refuses true forward links to nonexistent targets. Both paths retain the documented limits for special files, zstd, unsupported metadata and more than 16 layers; see [the image contract](image-materialization.md#oci-namespace-semantics-and-limits).
 
-Tree transfer supports its documented metadata subset and normalizes ownership; arbitrary owner restoration, privileged xattrs/ACLs, sparse layout and recursive watch are outside that contract. Published images and operation/idempotency history remain retained. Unknown ownership, incomplete metadata and recovery evidence conservatively fence GC; reviewed rollback does not automatically authorize history collection. See [GC](engine-integration.md#reference-aware-garbage-collection), [guest limits](../guest/README.md#validation-limits) and [host acceptance](../deploy/host/README.md#recovery-and-acceptance).
+Tree transfer supports its documented metadata subset and normalizes ownership; arbitrary owner restoration, privileged xattrs/ACLs, sparse layout and recursive watch are outside that contract. Published images and operation/idempotency history remain retained. Unknown ownership, incomplete metadata and recovery evidence conservatively fence GC; reviewed rollback does not automatically authorize history collection. See [GC](engine-integration.md#reference-aware-garbage-collection), [guest limits](../guest/README.md#validation-limits) and [host deployment checks](../deploy/host/README.md#备份恢复与部署验证).

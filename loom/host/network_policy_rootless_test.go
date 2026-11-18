@@ -1,4 +1,4 @@
-//go:build linux && kernel_isolation
+//go:build linux && host_policy
 
 package host
 
@@ -25,7 +25,7 @@ import (
 // This does not exercise the privileged VMM launcher, CH/TAP fd handoff,
 // deployed host quotas, or daemon adoption. The host-policy receipt and its
 // admission sets are fixtures inside the new network namespace.
-func TestKernelIsolationRootlessNetwork(t *testing.T) {
+func TestHostPolicyRootlessNetwork(t *testing.T) {
 	if !rootlessRun(t, "network") {
 		return
 	}
@@ -34,10 +34,10 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	r := Resource{
-		VMID:         "kernel-isolation",
+		VMID:         "host-policy",
 		Instance:     "current-instance",
 		Dir:          dir,
-		NetworkToken: "kernel-isolation",
+		NetworkToken: "host-policy",
 		Slot:         2,
 	}
 	b := &CloudHypervisor{
@@ -66,7 +66,7 @@ func TestKernelIsolationRootlessNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	ns, host, _, mapped, hostIP, peerIP := netNames(r)
-	guest := "kernel-isolation-guest"
+	guest := "host-policy-guest"
 	rootlessCommand(t, "ip", "netns", "add", guest)
 	// Keep the host-created namespace, uplink, NAT and ownership receipt;
 	// replace its TAP endpoint with a local kernel peer carrying guest packets.
@@ -344,14 +344,14 @@ func rootlessNetworkProbe(t *testing.T, ns, target string, allow bool) {
 		"exec",
 		ns,
 		exe,
-		"-test.run=^TestKernelIsolationRootlessProbe$",
+		"-test.run=^TestHostPolicyRootlessProbe$",
 		"-test.timeout=3s",
 	)
 	cmd.Env = append(
 		os.Environ(),
 		rootlessChildEnv+"=probe",
-		"SANDBOX_KERNEL_PROBE_TARGET="+target,
-		fmt.Sprintf("SANDBOX_KERNEL_PROBE_ALLOW=%t", allow),
+		"SANDBOX_HOST_POLICY_PROBE_TARGET="+target,
+		fmt.Sprintf("SANDBOX_HOST_POLICY_PROBE_ALLOW=%t", allow),
 		"GOMAXPROCS=1",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -359,12 +359,12 @@ func rootlessNetworkProbe(t *testing.T, ns, target string, allow bool) {
 		t.Logf("guest routes: %s", rootlessCommand(t, "ip", "-n", ns, "-j", "route", "show", "table", "all"))
 		t.Logf(
 			"router routes: %s",
-			rootlessCommand(t, "ip", "-n", "sbe-kernel-isolation", "-j", "route", "show", "table", "all"),
+			rootlessCommand(t, "ip", "-n", "sbe-host-policy", "-j", "route", "show", "table", "all"),
 		)
 		t.Logf("outer routes: %s", rootlessCommand(t, "ip", "-j", "route", "show", "table", "all"))
 		t.Logf(
 			"router nft rules: %s",
-			rootlessCommand(t, "ip", "netns", "exec", "sbe-kernel-isolation", "nft", "list", "ruleset"),
+			rootlessCommand(t, "ip", "netns", "exec", "sbe-host-policy", "nft", "list", "ruleset"),
 		)
 		t.Fatalf("TCP probe %s allow=%v: %v: %s", target, allow, err, out)
 	}
@@ -385,13 +385,13 @@ func rootlessNetworkFlows(t *testing.T, ns string, targets []string) *rootlessOw
 		"exec",
 		ns,
 		exe,
-		"-test.run=^TestKernelIsolationRootlessFlowHolder$",
+		"-test.run=^TestHostPolicyRootlessFlowHolder$",
 		"-test.timeout=9s",
 	)
 	cmd.Env = append(
 		os.Environ(),
 		rootlessChildEnv+"=flow-holder",
-		"SANDBOX_KERNEL_FLOW_TARGETS="+strings.Join(targets, ","),
+		"SANDBOX_HOST_POLICY_FLOW_TARGETS="+strings.Join(targets, ","),
 		"GOMAXPROCS=1",
 	)
 	input, err := cmd.StdinPipe()
@@ -428,12 +428,12 @@ func rootlessNetworkFlows(t *testing.T, ns string, targets []string) *rootlessOw
 	return owned
 }
 
-func TestKernelIsolationRootlessFlowHolder(t *testing.T) {
+func TestHostPolicyRootlessFlowHolder(t *testing.T) {
 	if os.Getenv(rootlessChildEnv) != "flow-holder" {
 		t.Skip("bounded TCP subprocess only")
 	}
 	rootlessRequireNamespaces(t)
-	for _, target := range strings.Split(os.Getenv("SANDBOX_KERNEL_FLOW_TARGETS"), ",") {
+	for _, target := range strings.Split(os.Getenv("SANDBOX_HOST_POLICY_FLOW_TARGETS"), ",") {
 		conn, err := net.DialTimeout("tcp4", target, 1500*time.Millisecond)
 		if err != nil {
 			t.Fatal(err)
@@ -455,19 +455,19 @@ func TestKernelIsolationRootlessFlowHolder(t *testing.T) {
 	}
 }
 
-func TestKernelIsolationRootlessProbe(t *testing.T) {
+func TestHostPolicyRootlessProbe(t *testing.T) {
 	if os.Getenv(rootlessChildEnv) != "probe" {
 		t.Skip("private network subprocess only")
 	}
 	rootlessRequireNamespaces(t)
-	allow := os.Getenv("SANDBOX_KERNEL_PROBE_ALLOW") == "true"
+	allow := os.Getenv("SANDBOX_HOST_POLICY_PROBE_ALLOW") == "true"
 	dialTimeout := 450 * time.Millisecond
 	if allow {
 		// A new route after link activation may require ARP and a TCP SYN
 		// retransmission. Allow one retransmit while keeping every probe bounded.
 		dialTimeout = 1500 * time.Millisecond
 	}
-	conn, err := net.DialTimeout("tcp4", os.Getenv("SANDBOX_KERNEL_PROBE_TARGET"), dialTimeout)
+	conn, err := net.DialTimeout("tcp4", os.Getenv("SANDBOX_HOST_POLICY_PROBE_TARGET"), dialTimeout)
 	if !allow {
 		if err == nil {
 			_ = conn.Close()

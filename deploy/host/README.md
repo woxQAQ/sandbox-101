@@ -60,8 +60,8 @@ loomctl --key import-reviewed-image --oci-layout /private/oci --digest 'sha256:R
 
 重启保留 state、资源绝对路径、mounts、cgroups、namespaces、CH binary 和 nft sets。`KillMode=process`、`SendSIGKILL=no` 与 VMM 的独立 scope 保持 daemon/VMM 生命周期分离；同时审查父 slice 的退出策略。Haven 只接续有原意图和精确现场证明的实例；host reboot 后丢失的 kernel anchors 不自动重建。
 
-## 备份、恢复与验收
+## 备份、恢复与部署验证
 
 使用 [统一离线备份与恢复门禁](../../docs/haven-control.md#统一离线备份与恢复)。备份由停服后的同一 writer lock 排他取得，覆盖完整 DB/key/HEAD，不复制磁盘、镜像、快照或 RAM。恢复 review 只解锁元数据诊断，不授权数据面、工作流 replay 或 GC。DB 与完整本地历史一起回退无法靠本机 HEAD 检出。
 
-[测试输入与 runner](../../scripts/README.md) 分别定义 capture、kernel-isolation、KVM、production 和显式 `SANDBOX_E2E_*` 私有部署验收。production 保留 512 MiB shape、真实 launcher、daemon-failure 后精确 live adoption、golden/warm、fork/resume 后 TAP/SNAT 断言。缺材料/namespace/mapping/device/delegation 时记 BLOCKED。历史双 daemon [验收记录](../../docs/acceptance.md) 不证明当前 Haven 或任意实际宿主通过；当前迁移证据见 [计划 024](../../plans/024-haven-loom-single-control-design.md)。本文件和 service 更新不表示已有宿主已切换。
+`just runtime-e2e` 在新建私有环境中以 512 MiB 默认 guest shape 运行真实 launcher，检查 daemon 重启后接管原 VM、golden/warm 供给及 fork/resume 后的 TAP/SNAT。`just privileged-e2e` 在 `SANDBOX_E2E_*` 指定的私有部署上检查 sandbox 生命周期。记录目标宿主的设备、预算、namespace/mapping 与 delegation，缺少必需输入时标记 BLOCKED。运行条件见[测试入口](../../scripts/README.md)，旧双 daemon 的结果见[历史验证记录](../../docs/verification-history.md)，当前迁移缺项见[计划 024](../../plans/024-haven-loom-single-control-design.md)。

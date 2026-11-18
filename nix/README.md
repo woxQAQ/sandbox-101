@@ -3,7 +3,7 @@
 The default development shell supplies the tools listed in the
 [project README](../README.md#build-and-local-verification). Run the same just
 recipes inside or outside the shell; common scripts do not invoke Nix or require
-NixOS. There is no separate acceptance shell or automatically prepared VM fixture.
+NixOS. Prepare VM materials separately for the tests that boot a guest.
 
 ## Development and static guest
 

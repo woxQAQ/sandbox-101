@@ -37,4 +37,4 @@ cache 物理费用从 import reservation 扣出后独立持有。清理 import w
 
 `image/import_replay_test.go` 在外部测试包直接组装 Images、Workers 和私有 SQLite，验证冲突请求不派发、匹配请求恢复冻结输入。`haven/tests/component/image_service_test.go` 保留整笔完成写入被 IGNORE／费用不匹配时留责，以及全局 Reconcile 后恢复的跨能力场景。两者共享 testfixture 的冻结 import 输入；源在 staging 前已经缺失，不运行 EROFS 物化。
 
-真实 OCI、cache、输出替换和回收测试继续经过 Loom importer；缺真实工具、UID 或文件元数据能力时普通入口按既有规则记录 SKIP/FAIL，required-native 必须报告失败或阻塞，不能由上述组件测试替代。KVM、kernel isolation 和 production 证据分别取得。
+真实 OCI、cache、输出替换和回收测试继续经过 Loom importer；缺真实工具、UID 或文件元数据能力时普通入口按既有规则记录 SKIP/FAIL，required-native 必须报告失败或阻塞，不能由上述组件测试替代。Guest 启动和快照恢复由 `guest-image-e2e` 检查。

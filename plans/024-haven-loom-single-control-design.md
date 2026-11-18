@@ -6,7 +6,7 @@
 
 ## 1. 状态、决定与范围
 
-- Status：STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED。旧控制模块、双 daemon 与 engine UDS facade 已删除；workspace、CI、native gate、KVM/production runner 和部署示例已迁到单 Haven。原 native/guest/生产断言保留，补上未知 cache 报告、跨 fork writer-lock handoff 与 capture runner TMPDIR 修复。当前 schema 仍为 9。最终组件、完整 race、六项 Rust integration、六组 smoke、静态及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**，原 JSON/race/count=1/300s 不变；实际 capture/kernel-isolation 通过。当前 Haven 的 KVM boot/production 因未提供显式私有材料、rootfs、OCI 与 I/O 预算保持 BLOCKED。当前证据见 [阶段 F](evidence/024-stage-f-retirement.md)，[阶段 E](evidence/024-stage-e-entrypoints.md) 与 [阶段 D](evidence/024-stage-d-control-matrix.md) 的结果只绑定各自历史完成树。既有部署未切换；017/020/021 继续暂停，未提交、推送或合入，整体不标为实施全部完成。随后按命名约束将完整 daemon 生命周期入口改为 `runtime-e2e` / `SANDBOX_RUNTIME_*`，并完成受影响的定向验证；原全量数据仅绑定整理前的 F 树，当前命名映射与验证见 F 证据的“后续命名整理”。
+- Status：STAGE_F_PARTIAL / VM_TESTS_BLOCKED。旧控制模块、双 daemon 与 engine UDS facade 已删除；workspace、CI、native gate、guest 镜像测试、Haven 生命周期测试和部署示例已迁到单 Haven。原 native/guest/生产断言保留，补上未知 cache 报告、跨 fork writer-lock handoff 与 capture runner TMPDIR 修复。当前 schema 仍为 9。最终组件、完整 race、六项 Rust integration、六组 smoke、静态及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**，原 JSON/race/count=1/300s 不变；实际跨 UID capture、宿主网络与 cgroup 策略检查通过。当前 Haven 的 guest 镜像启动与 daemon 生命周期测试因未提供显式私有材料、rootfs、OCI 与 I/O 预算保持 BLOCKED。当前证据见 [阶段 F](evidence/024-stage-f-retirement.md)，[阶段 E](evidence/024-stage-e-entrypoints.md) 与 [阶段 D](evidence/024-stage-d-control-matrix.md) 的结果只绑定各自历史完成树。既有部署未切换；017/020/021 继续暂停，未提交、推送或合入，整体不标为实施全部完成。随后按命名约束将完整 daemon 生命周期入口改为 `runtime-e2e` / `SANDBOX_RUNTIME_*`，并完成受影响的定向验证；原全量数据仅绑定整理前的 F 树，当前命名映射与验证见 F 证据的“后续命名整理”。
 - Priority：P1；Effort：L；Risk：HIGH；Category：architecture / migration。
 - Planned at：`d6ced5b`，2026-11-12。
 - Depends on：无；017、020、021 继续 PAUSED，不作为本任务自动执行的依赖。
@@ -164,7 +164,7 @@ loom/                          # 资源描述、实际观察、Linux/VMM/文件�
 internal/haven/                # 业务、资源工作流、SQLite、reconcile、GC、恢复
 internal/agent/                # 现有业务 Admin/Workload 宿主适配
 internal/egress/               # 现有出站代理与内存 secret
-integration/                   # 实际服务、CLI、Rust fixture 与 production 验收
+integration/                   # 实际服务、CLI、Rust fixture 与 Haven 生命周期
 ```
 
 先保留 `internal/haven/` 为一个可理解的控制模块，按 `vm_*`、`snapshot_*`、`image_*`、`gc_*` 等文件划分职责；不预拆独立 controller/store 服务。
@@ -458,9 +458,9 @@ python3 -I scripts/check-architecture.py
 1. 删除旧 daemon、UDS engine client/facade、旧模块与双库运行路径；迁移必要测试后再删文件。
 2. 更新 Makefile、CI、native gate、runner 模块/测试定位与部署材料；保留原 gate 的 required-native、超时、JSON 输出及必须观察 pass 的语义。
 3. 当前文档改为 Haven/Loom；专项契约仍分别维护。历史验收与研究不做全局替换。017/020/021 保持暂停，在索引注明后续实施前需映射新架构。
-4. 最后运行下节全量与真实路径门槛；明确未运行项，不以 host fixture 通过替代 production。
+4. 最后运行下节全量与真实路径门槛；单独记录 Haven 启动和接管 VM 的结果。
 
-F 的旧边界清除、入口/测试/部署迁移已实现；最终组件、Rust/smoke、静态与完整 required-native 通过（677 pass、0 fail/skip，Haven 278.938s），capture/kernel 实际检查通过。当前 KVM boot/production 材料缺失，整体为 PARTIAL/BLOCKED。完整检查与失败修复见 [阶段 F 证据](evidence/024-stage-f-retirement.md)，不由历史 E/D 的通过代替。
+F 的旧边界清除、入口/测试/部署迁移已实现；最终组件、Rust/smoke、静态与完整 required-native 通过（677 pass、0 fail/skip，Haven 278.938s），跨 UID capture 与宿主策略检查通过。当前 guest 镜像与 Haven 生命周期测试材料缺失，整体为 PARTIAL/BLOCKED。完整检查与失败修复见 [阶段 F 证据](evidence/024-stage-f-retirement.md)，不由历史 E/D 的通过代替。
 
 构建/组件门槛：
 
@@ -481,17 +481,17 @@ golangci-lint run ./... ./operator/... ./protocol/gen/...
 ```nu
 python3 scripts/check-native-gate.py --negative
 python3 scripts/check-native-gate.py
-make capture-isolation-e2e
-make kernel-isolation-e2e
+just capture-isolation-e2e
+just host-policy-e2e
 ```
 
 native gate 内仍必须设置 `SANDBOX_REQUIRE_EROFS_TESTS=1`，要求实际 pass，缺工具/namespace/mapping 不能变成通过。
 
-VM 材料齐备后，使用显式准备的私有材料目录；下列环境变量必须指向调用方准备的材料，不得替换为真实业务 state：
+VM 材料齐备后，使用显式准备的私有材料目录；两个入口从环境读取 `VM_MATERIALS_DIR`，其余输入按[测试说明](../scripts/README.md#vm-test-inputs)分别提供。guest 镜像测试目前在同一进程内导入并启动 VM。merged OCI 导入要求有效 UID 0，而独立 VMM 测试要求普通用户，完整运行还需解决这两步的身份交接。
 
 ```nu
-make kvm-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"KVM_ROOTFS_DIR=($env.KVM_ROOTFS_DIR)" $"KVM_ARTIFACTS_DIR=($env.KVM_ARTIFACTS_DIR)"
-make runtime-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"RUNTIME_OCI_LAYOUT=($env.RUNTIME_OCI_LAYOUT)" $"RUNTIME_ARTIFACTS_DIR=($env.RUNTIME_ARTIFACTS_DIR)"
+just guest-image-e2e
+just runtime-e2e
 ```
 
 完整 daemon 生命周期还需按现有 runner 提供 `SANDBOX_RUNTIME_IO_MAX`，保留原 512 MiB shape、launcher/接管、golden/warm、fork/resume 后真实 TAP/SNAT 断言。缺少任何条件标记 BLOCKED；不得由本计划推导 sudo、生产宿主操作、停止旧服务或额外材料下载的授权。
@@ -515,10 +515,10 @@ make runtime-e2e $"KVM_MATERIALS_DIR=($env.KVM_MATERIALS_DIR)" $"RUNTIME_OCI_LAY
 | `TestHavenConfigureAdmission` | revoke/fence/最终短 guard、迟到接纳与 stale instance 均 fail-closed | `sandboxd/configure_test.go`、`data_admission_test.go` |
 | `TestHavenSecretRestart` | 真值不进入 DB/step/audit/快照；重启后未重供凭据不接纳 | `sandboxd/configure_test.go:2414` |
 | `TestHavenHTTPContractAndIdempotency` + 单 daemon smoke | UDS 身份及权限；租户不能调用；raw 业务绕过拒绝；两 CLI 查询同一 operation/VM | 当前 HTTP/CLI 行为，新增同进程断言 |
-| `TestHavenStepShutdownKeepsWriterUntilWorkersExit`、`TestHavenStepShutdownBackendDeadline` | 停接纳/撤连接、安全收尾顺序、deadline 后责任保留、重启不连坐杀/重启 VM | 现有 Close/restart 与 production adoption 场景 |
+| `TestHavenStepShutdownKeepsWriterUntilWorkersExit`、`TestHavenStepShutdownBackendDeadline` | 停接纳/撤连接、安全收尾顺序、deadline 后责任保留、重启不连坐杀/重启 VM | 现有 Close/restart 与 Haven 接管存活 VM 场景 |
 | `TestHavenBackupRecoveryFence` | 同一备份覆盖两类事实；恢复阻断、ack 不授予 GC、不重放回退意图 | `sandboxd/backup_test.go`、`engine/admin_test.go` |
 | 真实 Rust fixture | Upgrade 预读、half-close、keyed exec、Preview 与 guest 门户权限不退化 | `sandboxd/integration/transport_test.go` |
-| native / kernel / KVM / production | 各自真实边界全部保留，新宿主实际执行 launcher 与接管 | `scripts/README.md` 及现有 runners |
+| 原生 OCI / 宿主网络与 cgroup / guest 镜像与快照恢复 / Haven 生命周期 | 各自真实边界全部保留，新宿主实际执行 launcher 与接管 | `scripts/README.md` 及现有 runners |
 
 执行新增测试前先确认发现结果：
 
@@ -540,7 +540,7 @@ with-env {GOWORK: 'off'} { go test -tags=integration ./integration -list '^Test(
 - [ ] 第 10 节全部行为在新树有对应测试与结果；物理证明及费用/引用规则不因重构变弱。
 - [x] 同库责任交接拒写/零行更新、崩溃重启、迟到实例及回收 fence 的测试通过。
 - [x] 根 Makefile、CI、CLI smoke 和实际 Rust fixture 使用新目录及唯一服务，本地门槛通过；GitHub CI 未运行。
-- [ ] native、capture/kernel-isolation、KVM 与 production 绑定新源码和材料重新验收；缺条件则整体交付保持 PARTIAL/BLOCKED，不能声称生产完成。
+- [ ] 原生镜像、跨 UID capture、宿主策略、guest 镜像和 Haven 生命周期绑定新源码和材料重新验证；缺条件则整体交付保持 PARTIAL/BLOCKED，不能声称生产完成。
 - [x] 旧库明确拒绝、不被覆盖；无默认自动合库/目录发现接管；备份和恢复门禁覆盖完整控制状态。
 - [x] 当前契约、部署与计划状态同步；历史材料不被改写成新树证据。
 
@@ -566,5 +566,5 @@ with-env {GOWORK: 'off'} { go test -tags=integration ./integration -list '^Test(
 ## 12. 本轮设计验证记录
 
 - 已静态核对当前架构、资源与业务契约、宿主/业务入口、journal/完成事务、文件/launcher、GC、相关测试位置及构建/runner/CI 入口。
-- 未运行 Go/Rust 测试、build、native、KVM、kernel-isolation 或 production；上文是实施时的门槛，不是本轮通过记录。
+- 未运行 Go/Rust 测试、build、原生镜像、guest 镜像、宿主策略或 Haven 生命周期测试；上文是实施时的门槛，不是本轮通过记录。
 - 本轮仅新增本设计并更新未完成计划索引；不更改当前架构文档，避免把目标设计写成已实现事实。

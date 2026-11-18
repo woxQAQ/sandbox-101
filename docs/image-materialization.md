@@ -90,7 +90,7 @@ Native fsck checks/extracts the resulting self-contained filesystem in a separat
 
 Compatibility handles arbitrary supported root attributes, inherited directories without repeated parent headers, cross-layer regular and symlink hardlinks to existing targets, root/nonroot opaque markers, whiteouts and same-layer replacement in either order, duplicate path replacement and PAX metadata. It retains the 1..16 OCI layer input bound. All source layer blobs are required for a new compatibility publication; only the layered path offers cache-only fsmeta rebuild. No conversion between these immutable layouts occurs.
 
-True forward hardlinks whose target does not yet exist remain an explicit native-tool limitation: umoci 0.6.0 fails with `unpack entry: ...: link: no such file or directory` and no image is published. A hardlink to an existing lower inode followed by replacement of its target name correctly retains the earlier inode. Directory hardlinks are refused by native Linux extraction. Special files, zstd, unknown PAX attributes, unsupported xattr namespaces, negative/out-of-range metadata and Linux symlink modes other than 0777 remain refused. These are incomplete semantics where required by broader acceptance, not evidence of complete arbitrary-OCI support.
+True forward hardlinks whose target does not yet exist remain an explicit native-tool limitation: umoci 0.6.0 fails with `unpack entry: ...: link: no such file or directory` and no image is published. A hardlink to an existing lower inode followed by replacement of its target name correctly retains the earlier inode. Directory hardlinks are refused by native Linux extraction. Special files, zstd, unknown PAX attributes, unsupported xattr namespaces, negative/out-of-range metadata and Linux symlink modes other than 0777 remain refused.
 
 ## Runtime integration contract
 
@@ -108,7 +108,7 @@ Initramfs must resolve devices by serial and mount the fsmeta block device with 
 
 `Verify` rejects wrong layout/format/platform/builder, missing/extra/reordered artifact entries, wrong paths/serials/device IDs, file and receipt hash mismatches, missing or writable artifacts, symlink files or cache directories, incorrect device-table tags/block maps, unsupported format features, and empty/non-EROFS metadata images. It reads artifact bytes without invoking external tools. Full native inode/content validation happens before publication. Local private state and SQLite/catalog integrity remain the trust boundary; hashes are integrity checks, not signatures against a host administrator who rewrites the catalog and every artifact.
 
-Cloud Hypervisor disk wiring, launcher mount bindings, saved-layout validation and the guest mount path use this manifest contract. The standalone KVM test attaches the full ordered set and boots the actual guest for both layouts.
+Cloud Hypervisor disk wiring, launcher mount bindings, saved-layout validation and the guest mount path use this manifest contract. The standalone guest image test attaches the full ordered set and boots the actual guest for both layouts.
 
 ## OCI namespace semantics and limits
 
@@ -145,7 +145,7 @@ pass events for `TestActualLayeredEROFSImportAndExtraction`,
 It rejects non-JSON output and skipped native tests (`TestHavenActual*`, `TestActual*`,
 `TestGCActual*`, `TestLayerValidation*`, `TestLegacyNativeLayered*`,
 `TestSharedCached*`, `TestMergedOCI*`), with no ownership skip exception. Other skips,
-including package skips for packages without tests and unrelated KVM/capture
+including package skips for packages without tests and unrelated guest image or capture
 tests, are recorded separately in `skips.json` and do not supply native coverage.
 
 Prepare Go with race/C compiler support, just, git, Python >=3.11, coreutils,
@@ -159,7 +159,7 @@ python3 scripts/check-native-gate.py --negative
 python3 scripts/check-native-gate.py
 ```
 
-Use a newly created private temporary root for acceptance state. Unix listeners
+Use a newly created private temporary root for test state. Unix listeners
 and guest transports support long runtime directories through anchored parent
 FDs; filesystem ownership and explicit inode cleanup remain verified. A short
 private tmpfs is convenient for large SQLite/resource fixtures, independently of
@@ -178,7 +178,7 @@ python3 scripts/check-native-gate.py --preflight
 ```
 
 Preflight checks effective UID, versions and actual executable paths, then runs
-`TestActualMergedOCIExplicitSelectionAndVerification` through the production
+`TestActualMergedOCIExplicitSelectionAndVerification` through the Loom
 host-tool helper. Full shared/merged coverage still comes from the complete gate.
 Preflight never switches identity or changes host policy.
 
@@ -202,14 +202,13 @@ Each invocation retains separate stdout/stderr/exit-code files, source
 revision, entrypoint hashes and its verdict in a fresh, gitignored
 `build/native-gate/run.*` directory. The CI artifact allowlist includes only
 diagnostic files, not private runtime HOME, PATH views, databases, tokens or
-the full environment. This job proves native host materialization and GC,
-not guest RPC, KVM, kernel isolation or production acceptance. Committed
+the full environment. Its results cover native host materialization and GC. Committed
 workflow configuration is not evidence that GitHub has executed it.
 
 `python3 -I scripts/test_native_gate.py` exercises the public gate CLI in private
 workspaces with a closed fixture PATH, without Nushell or privileges. It checks
 raw logs/statuses, exact pass/skip/failure rules, negative PATH cleanup and a
-clean runtime HOME. It does not replace actual native or root acceptance.
+clean runtime HOME.
 
 Actual shared tool tests import gzip/uncompressed OCI fixtures, read the final external-device filesystem with native fsck, inspect chunk layout and UID/GID using native dump, and verify file contents, reversed layer order, boot extraction, repeated layers and the 16-device boundary. Broader namespace regressions cover root ownership/mode/xattrs/nanosecond time, inherited directories, implicit parents, cross-layer and symlink inode identity, forward chains, old inode retention through duplicate replacement, overwritten pending links, ancestor replacement, root/nonroot opaque, whiteout/replacement in either order, setuid/setgid, native v2/v3 capabilities and named-user ACLs. Cache-only rebuild repeats forward-link content checks after deleting original tar blobs. Independent imports compare complete output hashes for determinism. A legacy-native fixture is built with the frozen old profile, verified and reimported from its existing catalog unchanged.
 
@@ -217,4 +216,4 @@ Integrity tests cover cache corruption/missing receipts, manifest order/hash/pro
 
 Additional actual umoci tests exercise its separate merged layout, including root attributes, cross-layer links, capabilities/ACLs, whiteout and duplicate ordering, symlink confinement, boot symlink refusal, digest/descriptor/resource limits, invalid ownership, immutable manifests and layout conflicts. Its forward-hardlink refusal checks that no catalog entry is published.
 
-Host extraction tests are complemented by `just KVM_MATERIALS_DIR=... KVM_ROOTFS_DIR=... KVM_ARTIFACTS_DIR=... kvm-e2e`. The standalone harness uses the pinned CH revision, matching built-in-driver kernel, packaged static guest and caller-supplied complete userspace to check serial-based EROFS device mounting, initramfs-to-systemd boot, file metadata/link/xattr/ACL/capability values, readonly lower and raw-backend write rejection, and the same device layout after COW clone and COW resnapshot restoration. It also exercises real guest-agent directory transfer and retained private RAM identity before resume. The historical shared-profile KVM run passed root metadata, ACL/capability values, forward and cross-layer hardlinks, directory-tree transfer, COW clone, source deletion, resnapshot and grandchild restoration. The recorded complete run passed both the shared profile and explicit merged compatibility; earlier runs also passed the frozen native profile. The separate production suite has passed launcher/adoption, full lifecycle, golden/warm provisioning and guest/TAP TCP through both daemons. See [the acceptance record](acceptance.md) for exact source-bound outcomes and boundaries; those runs do not validate later harness changes.
+`just guest-image-e2e` boots both layouts with the pinned VMM, matching kernel and packaged guest. It checks serial-based EROFS mounts, initramfs handoff to systemd, file metadata, links, xattrs, ACLs, capabilities and rejection of writes through readonly devices. Guest-agent tree transfer, retained private RAM and a second snapshot restore exercise the running guest across generations. See [runner inputs](../scripts/README.md#vm-test-inputs) and [historical test results](verification-history.md).

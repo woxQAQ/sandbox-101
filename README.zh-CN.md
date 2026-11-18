@@ -77,20 +77,29 @@ guest 构建需要 Rust musl target、SQLite 构建依赖、readelf 与 GNU cpio
 
 默认 `layered-erofs-v1` 共享不可变 layer payload；显式 `merged-oci-erofs-v1` 走隔离的 umoci 物化。已发布 digest/materialization 身份固定，非法数据不自动回退到另一 profile。
 
-## Runtime 验证
+## 验证入口
 
-native、跨 UID 或 VM 验证前，先阅读[测试输入与 runner 边界](scripts/README.md)。KVM 需要固定版本的静态 VMM、配套 kernel、完整 systemd guest userspace、封装后的 guest、可用 `/dev/kvm` 与 namespace/mapping。artifact 存储必须让 stat 和 `/proc/PID/maps` 报告相同 device identity。
+描述早期记录中的 `product` 时，可按调用方写成「Sandbox API」，按行为写成「申请 sandbox」「从 checkpoint 分支」或「恢复租约中的实例」。描述 `acceptance` 时写明哪项检查在什么源码、材料与宿主上通过。目标宿主的设备权限、网络和资源预算另见[部署说明](deploy/host/README.md)。
+
+native、跨 UID 或 VM 验证前，先阅读[测试输入与 runner 边界](scripts/README.md)。guest 镜像测试需要固定版本的静态 VMM、配套 kernel、完整 systemd guest userspace、封装后的 guest、可用 `/dev/kvm` 与 namespace/mapping。artifact 存储必须让 stat 和 `/proc/PID/maps` 报告相同 device identity。
 
 ```nu
 bash scripts/prepare-vm-materials.sh /absolute/path/to/materials
-just KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path/to/rootfs KVM_ARTIFACTS_DIR=/dev/shm/haven-kvm kvm-e2e
-just kernel-isolation-e2e
+just VM_MATERIALS_DIR=/absolute/path/to/materials GUEST_ROOTFS_DIR=/absolute/path/to/rootfs GUEST_IMAGE_ARTIFACTS_DIR=/dev/shm/haven-guest-image guest-image-e2e
+just host-policy-e2e
 with-env {SANDBOX_RUNTIME_IO_MAX: $env.HAVEN_IO_MAX} {
-    just KVM_MATERIALS_DIR=/absolute/path/to/materials RUNTIME_OCI_LAYOUT=/absolute/path/to/oci RUNTIME_ARTIFACTS_DIR=/private/new-runtime runtime-e2e
+    just VM_MATERIALS_DIR=/absolute/path/to/materials RUNTIME_OCI_LAYOUT=/absolute/path/to/oci RUNTIME_ARTIFACTS_DIR=/private/new-runtime runtime-e2e
 }
 ```
 
-kernel 验证还需要 TUN、网络工具和委派了 controller 的 user systemd manager。production 生命周期另需 bindfs、`/dev/fuse`、subordinate UID/GID mapping 及显式块设备 I/O 预算。`just privileged-e2e` 用 `SANDBOX_E2E_*` 指向显式配置的私有部署。缺少必需材料会失败；组件或 fixture 通过不能证明 KVM、kernel isolation 或 production 通过。当前缺口见[计划 024](plans/024-haven-loom-single-control-design.md)，[历史验收](docs/acceptance.md)仅对应其记录的源码。既有部署和旧数据库不会自动切换。
+| 入口 | 实际运行的场景 |
+|---|---|
+| `guest-image-e2e` | 用 Cloud Hypervisor 启动两种 OCI 布局，检查 guest 看到的文件、元数据和快照恢复后的写时复制。KVM 是 VMM 使用的 Linux 虚拟化接口。 |
+| `host-policy-e2e` | 在宿主 namespace 内发送 TCP 流量、给 cgroup 内的进程施加负载，观察网络策略与资源限额是否生效。需要 TUN、网络工具和委派了 controller 的 user systemd manager。 |
+| `runtime-e2e` | 启动私有 Haven，验证 VM 供给、daemon 重启后接管存活 VM，以及 guest 经 TAP 的 TCP 通信。另需 bindfs、`/dev/fuse`、subordinate UID/GID mapping 和显式块设备 I/O 预算。 |
+| `privileged-e2e` | 通过 `SANDBOX_E2E_*` 连接已配置的私有 Haven 部署，运行 sandbox 生命周期场景。 |
+
+缺少必需输入会使对应测试失败。当前缺项见[计划 024](plans/024-haven-loom-single-control-design.md)，已运行的命令、源码和材料见[历史验证记录](docs/verification-history.md)。
 
 ## 持久与当前边界
 

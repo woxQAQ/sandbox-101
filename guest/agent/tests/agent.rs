@@ -476,9 +476,8 @@ async fn filesystem_fifo_rejection_releases_rpc_slots() {
         )
         .await,
     ));
-    // Recovery for a blocking implementation: a rescue writer FD owned by this
-    // test unblocks open() calls stuck on the writer-less FIFO. This exists
-    // only to finish RED runs cleanly and is not part of the product fix.
+    // A writer owned by the test releases any blocked open() so a failing run
+    // can report the timeout and clean up the child.
     let rescue = unsafe { libc::open(fifo_c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK) };
     assert!(
         rescue >= 0,

@@ -2,7 +2,7 @@
 
 Haven 将 VM/快照资源编排为租户独占、可认领、休眠、分支和释放的环境。业务与资源事实共享唯一 SQLite；Loom 只执行明确宿主效果。当前入口见 [Haven control](haven-control.md)，HTTP/SDK 与配额矩阵见 [Sandbox 契约](../haven/sandbox/api.md)，资源持久协议见 [集成契约](engine-integration.md)。
 
-当前范围为单宿主。Cold、Golden、Warm 表示供给路径，不承诺未实测的毫秒延迟；gossip、跨节点恢复、远端快照归档未实现。历史 [验收记录](acceptance.md) 不证明后续 Haven 树。
+当前范围为单宿主。Cold、Golden、Warm 表示供给路径，不承诺未实测的毫秒延迟；gossip、跨节点恢复、远端快照归档未实现。历史运行的源码与材料见[历史验证记录](verification-history.md)。
 
 ## 身份与授权
 

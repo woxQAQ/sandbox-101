@@ -1,158 +1,83 @@
 # Integration tests
 
-The normal build, transport integration and daemon smoke commands are described
-in the [project README](../README.md#build-and-local-verification). The additional
-tools and inputs below are needed only by the relevant integration tests, not by
-every build or deployment. Runners use prepared tools and artifacts; they do not
-install a toolchain or build Cloud Hypervisor or a kernel.
+Choose a runner by the behavior it exercises. KVM is the Linux virtualization interface used by Cloud Hypervisor. A Haven deployment may use the same interface as a standalone guest image test.
 
-`just integration` builds the real Rust Unix fixture and runs `haven/integration/`
-with the explicit `integration` build tag. The fixture supplies only owned host,
-System and Admin effects; all control intents, witnesses and accounting use Haven's
-real SQLite store. Missing `SANDBOX_AGENT_FIXTURE` is a failure in that tagged
-entrypoint. `just smoke` starts one real Haven and both protocol CLIs, including
-writer exclusion, dry-run, restart and unified offline backup. Neither boots a VM.
-The VM/production runners below use the Haven workspace module and explicit Loom
-packages; historical outcomes do not establish current Haven production acceptance.
+| Command | What runs | What the test observes |
+|---|---|---|
+| `just integration` | Haven/SQLite and the Rust Unix fixture | Guest RPC through Haven HTTP and the sandbox relay |
+| `just smoke` | One daemon, `havenctl` and `loomctl` in private state | Writer exclusion, daemon restart, GC and offline backup |
+| `just guest-image-e2e` | A standalone Cloud Hypervisor VM booted with each OCI layout | Guest file metadata, guest RPC and independent disk and RAM state across clone and restore |
+| `just host-policy-e2e` | TCP peers and cgroup workers in private Linux namespaces, without a VM | Network allow/deny and flow limits, CPU throttling, PID exhaustion, memory limits and block I/O throttling |
+| `just runtime-e2e` | A new private Haven daemon launches VMs | Provisioning, adoption of a live VM after daemon restart, sandbox lifecycle and guest TCP over TAP |
+| `just privileged-e2e` | A caller-provisioned private Haven deployment | Sandbox lifecycle through the business API, with read-only VM observations |
 
-`haven/internal/testfixture` supplies private store/runtime materials and must not
-depend on application. `haven/internal/testapp` separately composes full App fixtures;
-production packages may import neither package. Owner external test packages exercise
-single-capability Service/SQLite behavior. `haven/tests/component` retains App,
-cross-capability, restart and shutdown scenarios; `haven/tests/native` owns real image-tool
-cases and the separately tagged KVM suite. Both suites import `haven/tests/fixtures`
-for runtime doubles, private input builders, observations, waits and shared assertions;
-scenario directories contain only `Test...` entrypoints. Fixture files are ordinary Go
-sources so they can be imported; Linux helpers retain the `_linux.go` suffix and KVM
-helpers retain the `linux && kvm` build tag. Only symbols needed by scenarios are exported.
-Production packages must not import test fixtures. Public APIs are called through their owning
-packages, without local aliases or forwarding wrappers. Tests exercise Haven behavior
-rather than individual Loom validation/decoding helpers.
-Go test entrypoints use `-p=1` across packages,
-retain four lifecycle slots and preserve the ordinary 120s/race 10m/native 300s budgets.
-Moving tests does not establish a performance fix. These are behavior tests rather than
-isolated helper function unit tests.
+Deployment qualification applies to a particular host, including its storage budget, firewall and delegated controllers. Historical run records identify the source, inputs and outcome for each execution. See [host deployment](../deploy/host/README.md) and [historical test results](../docs/verification-history.md).
 
-The native gate captures the Go JSON stream from `just test-native` and requires
-explicit pass events for its native test inventory. It must not use `just --quiet`,
-which suppresses that stream. Missing tools or runner capabilities remain failures;
-the negative gate only proves that a deliberately missing tool is rejected.
+## Component and native tests
+
+`just integration` builds the Rust fixture and selects `haven/integration/` with the `integration` build tag. The fixture supplies owned host, System and Admin effects. Haven persists control intents, witnesses and accounting in SQLite. Missing `SANDBOX_AGENT_FIXTURE` fails the tagged run.
+
+Single-capability Service/SQLite scenarios live in the owner's external test package. `haven/internal/testfixture` supplies private store/runtime materials independently of application. `haven/internal/testapp` composes full App fixtures. `haven/tests/component` covers cross-capability, restart and shutdown behavior. `haven/tests/native` covers real image tools and the separately tagged `guest_image` scenarios. Both suites share helpers from `haven/tests/fixtures`. Scenario directories contain `Test...` entrypoints and call public APIs through their owning packages. Only tests import fixture packages. Go test recipes use `-p=1`, four lifecycle slots and the ordinary 120s, race 10m and native 300s budgets.
+
+The native gate captures the Go JSON stream from `just test-native` and requires explicit pass events for its native test inventory. `just --quiet` suppresses that stream. Missing tools or runner capabilities fail a required run. The negative gate checks that deliberately removing a required tool produces the expected diagnostic. See [build and local verification](../README.md#build-and-local-verification).
 
 ## VM test inputs
 
-`haven/tests/native/kvm_integration_test.go` covers the actual VMM/guest and COW behavior,
-not the privileged launcher or daemon lifecycle. The separate `kernel_isolation`
-tests under `loom/host/` cover real host networking and cgroup enforcement without a VM; production
-checks exercise the launcher and single Haven daemon. These are distinct evidence
-boundaries, not interchangeable levels of a test. Runner names describe their
-checked behavior; artifact roots default to `build/kvm`,
-`build/kernel-isolation` and `build/runtime`.
-
-The standalone KVM test currently requires x86_64 Linux. Supply a dedicated,
-writable `KVM_MATERIALS_DIR` with these files:
+The VM runners consume prepared tools and artifacts. On x86_64 Linux, supply a dedicated writable `VM_MATERIALS_DIR` with the following files.
 
 | File | Required input |
 |---|---|
 | `cloud-hypervisor` | Static x86_64 ELF matching the [deployment revision](../deploy/host/cloud-hypervisor-revision), built with `kvm,io_uring` and compiled-in seccomp |
 | `bzImage` | The x86_64 Linux boot image from the chosen guest kernel build |
-| `vmlinux` | That same kernel's uncompressed static ELF, retaining symbols |
+| `vmlinux` | That kernel's uncompressed static ELF, retaining symbols |
 | `kernel.config` | That build's config, satisfying [the built-in driver requirements](../image/kernel.config) |
 | `kernel-source.json` | Source identity with nonempty `version` and `source_hash` strings |
 
-Keep each kernel build's files and source provenance together. The existing
-input checker verifies architecture/static linkage, the CH version pin, kernel
-config and symbols, and the Linux boot header. It records artifact hashes in
-`materials.json` and writes the `cloud-hypervisor.json` receipt:
+Keep each build's files and provenance together. The following command verifies architecture, static linkage, the CH version pin, kernel config, symbols and boot header. It records hashes in `materials.json` and writes `cloud-hypervisor.json`. Building the artifacts, verifying their origin and booting the guest are separate steps.
 
 ```nu
 bash scripts/prepare-vm-materials.sh /absolute/path/to/materials
 ```
 
-This checks the supplied artifacts, not their source-to-binary provenance or
-ability to boot. It neither downloads nor builds them. Production provisioning
-is documented separately in [host deployment](../deploy/host/README.md).
+### Guest image and snapshot restore
 
-### Guest userspace fixture
+`GUEST_ROOTFS_DIR` must contain a complete guest userspace, including genuine systemd at `/usr/lib/systemd/systemd`, vendor units, `/bin/sh`, `/bin/{cat,stat,id,readlink,sync,dd,getfattr,getfacl}` and all required interpreters, libraries and symlink targets. Absolute symlinks resolve inside this tree. Supply a dedicated guest root. The fixture copies it with root ownership and normalized timestamps, then overlays its kernel, static agent/initramfs, accounts and systemd units. Keep `/boot`, `/etc` and `/usr/local/libexec` as real directories when present. Exclude devices, sockets, credentials and live runtime state.
 
-`KVM_ROOTFS_DIR` is a complete guest userspace directory, not the host root or a
-list of package prefixes. It must contain genuine systemd at
-`/usr/lib/systemd/systemd`, vendor units, `/bin/sh`, and
-`/bin/{cat,stat,id,readlink,sync,dd,getfattr,getfacl}`, with all interpreters,
-libraries, helper files and symlink targets needed at their guest-visible paths.
-Absolute symlinks refer to this guest root, never to the host.
-
-The test copies the tree with root ownership and normalized timestamps, then
-overlays its kernel, static agent/initramfs, accounts and systemd units. Leave
-`/boot`, `/etc` and `/usr/local/libexec` as real directories when present. Do not
-include devices, sockets, credentials or live runtime state.
-
-The optional [userspace fixture Dockerfile](fixtures/kvm-rootfs.Dockerfile) can
-prepare this input in a container build. It is not the production guest image:
+The optional [fixture Dockerfile](fixtures/guest-rootfs.Dockerfile) prepares this userspace. The runner reads packaged guest binaries from `GUEST_DIR` (default `build/guest`) and writes artifacts to `GUEST_IMAGE_ARTIFACTS_DIR` (default `build/guest-image`).
 
 ```nu
-docker buildx build --output type=local,dest=build/kvm-rootfs -f scripts/fixtures/kvm-rootfs.Dockerfile .
+docker buildx build --output type=local,dest=build/guest-rootfs -f scripts/fixtures/guest-rootfs.Dockerfile .
 just guest
-just KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path/to/rootfs KVM_ARTIFACTS_DIR=/dev/shm/haven-kvm kvm-e2e
+just VM_MATERIALS_DIR=/absolute/path/to/materials GUEST_ROOTFS_DIR=build/guest-rootfs GUEST_IMAGE_ARTIFACTS_DIR=/dev/shm/haven-guest-image guest-image-e2e
 ```
 
-## Host capabilities
+The invoking user needs access to `/dev/kvm`, namespaces/mappings, e2fsprogs and the [native image tools](../docs/image-materialization.md#validation) on an administrator-controlled PATH. Artifact storage must report the same device identity through `stat` and `/proc/PID/maps`. The test uses the Haven importer and boots the VMM directly. The combined run currently uses one identity for both steps. VM launch requires a nonroot caller, while the merged OCI importer requires effective UID 0 to preserve ownership. This blocks the merged boot scenario for an ordinary caller. The rootfs regression below exercises import and extraction independently.
 
-Native image tests need the tools and ownership/xattr privileges described in
-[image materialization](../docs/image-materialization.md#validation), plus
-e2fsprogs for KVM tests. Use an administrator-controlled PATH; image tools run
-directly from their host installation.
+### Host network policy and cgroup limits
 
-KVM tests need user-authorized `/dev/kvm`, usable namespaces/mappings and storage
-with matching `stat` and `/proc/PID/maps` device identity. Kernel/production tests
-additionally need TUN, systemd/systemctl/systemd-run, iproute2, nftables,
-util-linux (including sysctl), procps, tar and gzip. Production tests also need
-bindfs, subordinate UID/GID mappings, `/dev/fuse`, a user systemd manager
-delegating cpu/memory/io/pids, and the explicit block-device I/O budget described
-in host deployment. Use `just runtime-e2e` with `RUNTIME_OCI_LAYOUT`,
-`RUNTIME_ARTIFACTS_DIR` and `SANDBOX_RUNTIME_IO_MAX` for the full daemon lifecycle.
-The runner resolves and forwards PATH before masking `/run`.
+`just host-policy-e2e` needs TUN, iproute2, nftables, util-linux and a user systemd manager delegating cpu/memory/io/pids. Set `HOST_POLICY_ARTIFACTS_DIR` (default `build/host-policy`) to block-backed storage so the I/O probe can observe device accounting. The runner creates and cleans up its own transient service and namespaces.
 
-Missing prerequisites fail in required runs. Logs and hashes identify the source
-and inputs used for each result; [historical results](../docs/acceptance.md) do
-not validate later changes.
+### Haven daemon and VM lifecycle
 
-## Isolated provisioned-host lifecycle
+`just runtime-e2e` takes `VM_MATERIALS_DIR`, a bootable `RUNTIME_OCI_LAYOUT` and `RUNTIME_ARTIFACTS_DIR` (default `build/runtime`). Supply `SANDBOX_RUNTIME_IO_MAX` with the verified block-device budget. This runner also needs usable KVM/TUN and network tools, bindfs, `/dev/fuse`, subordinate UID/GID mappings, delegated cgroup controllers, procps, tar and gzip. It resolves PATH before masking `/run`, starts one Haven, imports through the management UDS, compares management and business store IDs, kills and restarts the daemon, and checks the live VMM and guest state.
 
-`just privileged-e2e` runs the same real lifecycle against an explicitly prepared
-private Haven deployment. Supply `SANDBOX_E2E_ENDPOINT`, `SANDBOX_E2E_TOKEN_FILE`,
-`SANDBOX_E2E_IMAGE_DIGEST` and `SANDBOX_E2E_STATE_DIR`. Read-only VM observations
-use that store plus the real inspector; also supply the exact
-`SANDBOX_E2E_HYPERVISOR`, `SANDBOX_E2E_BUILD_RECEIPT`,
-`SANDBOX_E2E_CGROUP_ROOT`, `SANDBOX_E2E_IO_MAX`, `SANDBOX_E2E_VMM_UID` and
-`SANDBOX_E2E_VMM_GID`. `SANDBOX_E2E_TENANT` selects the owner for root HTTP
-requests. No second control socket or control store is opened.
+### Caller-provisioned private deployment
 
-The KVM test remains in `haven/` to reuse the native OCI fixtures and
-exercise the real durable importer without exporting test-only control hooks.
-Its `kvm` tag and all guest/COW assertions remain intact. Privileged production
-scenarios live in `haven/integration/`; their inventory helper is read-only and
-has no lifecycle or admission methods. The production runner starts one Haven,
-imports through management UDS, compares management/business store IDs, kills
-and restarts that daemon, and verifies the exact live VMM plus guest state.
+`just privileged-e2e` takes `SANDBOX_E2E_ENDPOINT`, `SANDBOX_E2E_TOKEN_FILE`, `SANDBOX_E2E_IMAGE_DIGEST` and `SANDBOX_E2E_STATE_DIR`. Supply the exact `SANDBOX_E2E_HYPERVISOR`, `SANDBOX_E2E_BUILD_RECEIPT`, `SANDBOX_E2E_CGROUP_ROOT`, `SANDBOX_E2E_IO_MAX`, `SANDBOX_E2E_VMM_UID` and `SANDBOX_E2E_VMM_GID` for read-only VM inspection. `SANDBOX_E2E_TENANT` selects the owner for root HTTP requests. Lifecycle operations use the running daemon.
 
 ## Runner regressions without VMs
 
-These entrypoint tests use a closed PATH without a package manager, synthetic
-ELFs checked by real binutils, and recorded Go/service invocations. They do not
-start systemd services or VMs. Native gate regressions also use the installed
-`just` binary with a private recipe to verify that Go JSON reaches the gate:
+These entrypoint tests use a closed PATH without a package manager, synthetic ELFs checked by real binutils and recorded Go/service invocations. The native gate regression also checks that the installed `just` forwards Go JSON through a private recipe.
 
 ```nu
 python3 -I scripts/test_runner_environment.py
 python3 -I scripts/test_native_gate.py
 ```
 
-The rootfs regression imports and extracts the generated OCI layer through both
-actual materializers, including absolute guest symlinks and boot overlays. It
-needs native image tools and namespaces/mappings, but no VM:
+The rootfs regression imports and extracts the generated OCI layer through both materializers, including absolute guest symlinks and boot overlays. It needs native image tools and ownership support.
 
 ```nu
 with-env {GOWORK: "off", SANDBOX_REQUIRE_EROFS_TESTS: "1"} {
-    go -C haven test -tags=kvm ./tests/native -run '^TestKVMRootfsOCI$' -count=1
+    go -C haven test -tags=guest_image ./tests/native -run '^TestGuestRootfsOCI$' -count=1
 }
 ```

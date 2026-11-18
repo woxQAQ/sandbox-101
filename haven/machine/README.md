@@ -53,4 +53,4 @@ network policy 更新仍只更新原 instance/operation/body 三列。历史退�
 
 ## 验证边界
 
-现有 Service/SQLite 场景覆盖历史 owner 改写、缺失记录、ABORT/IGNORE 原子交接、backing 最后退责和 direct binding。迁移证据见 [027 实施清单](../../plans/evidence/027-capability-map.md)。这些组件证据不代表真实 KVM、kernel isolation 或 production 验收。
+现有 Service/SQLite 场景覆盖历史 owner 改写、缺失记录、ABORT/IGNORE 原子交接、backing 最后退责和 direct binding。迁移证据见 [027 实施清单](../../plans/evidence/027-capability-map.md)。guest 镜像启动、宿主策略与 Haven 生命周期各有独立的[测试入口](../../scripts/README.md)。

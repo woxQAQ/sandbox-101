@@ -134,4 +134,4 @@ configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 s
 
 数据 setup、最终 downstream Hijack 和上下游连接均参与配置 guard、revocation registry 与 shutdown。Preview 绑定 tenant/sandbox/epoch/port/expiry，期限不超 lease；移除 Authorization/Cookie，强制 no-referrer。当前没有每 sandbox 浏览器 origin。
 
-当前 schema 见 [Haven control](../../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。组件/Rust/native/capture/kernel/KVM/production 证据分列，历史 [验收](../../docs/acceptance.md) 不证明当前树。
+当前 schema 见 [Haven control](../../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。各运行场景的输入见[测试入口](../../scripts/README.md)，历史源码与材料见[验证记录](../../docs/verification-history.md)。

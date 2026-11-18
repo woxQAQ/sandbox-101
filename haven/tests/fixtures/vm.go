@@ -152,7 +152,7 @@ func ColdResponsibility(t *testing.T, service *application.App, acceptedOperatio
 }
 
 // Persistent fixture effects survive the controller child. This proves SQLite
-// crash recovery and stable resource identity, not VMM/guest/KVM behavior.
+// crash recovery and stable resource identity with injected host effects.
 type PersistentColdRuntime struct {
 	*testfixture.ColdRuntime
 

@@ -16,7 +16,7 @@ import (
 )
 
 // The runtime fixture supplies a complete static RAM topology and sparse file.
-// Actual private mapping and CH behavior remain separate native/KVM boundaries.
+// The guest image test observes writable-private mappings across VM restore.
 type RestorableRuntime struct {
 	*testfixture.ColdRuntime
 }

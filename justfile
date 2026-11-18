@@ -6,11 +6,11 @@ packages := "./haven/... ./loom/... ./sdk/... ./types/... ./common/... ./tools/.
 GUEST_TARGET := env_var_or_default("GUEST_TARGET", "x86_64-unknown-linux-musl")
 GUEST_ARTIFACT_DIR := env_var_or_default("GUEST_ARTIFACT_DIR", "")
 IMAGE_TAG := env_var_or_default("IMAGE_TAG", "sandbox-guest:local")
-KVM_MATERIALS_DIR := env_var_or_default("KVM_MATERIALS_DIR", "")
-KVM_GUEST_DIR := env_var_or_default("KVM_GUEST_DIR", root / "build/guest")
-KVM_ARTIFACTS_DIR := env_var_or_default("KVM_ARTIFACTS_DIR", root / "build/kvm")
-KVM_ROOTFS_DIR := env_var_or_default("KVM_ROOTFS_DIR", "")
-KERNEL_ARTIFACTS_DIR := env_var_or_default("KERNEL_ARTIFACTS_DIR", root / "build/kernel-isolation")
+VM_MATERIALS_DIR := env_var_or_default("VM_MATERIALS_DIR", "")
+GUEST_DIR := env_var_or_default("GUEST_DIR", root / "build/guest")
+GUEST_IMAGE_ARTIFACTS_DIR := env_var_or_default("GUEST_IMAGE_ARTIFACTS_DIR", root / "build/guest-image")
+GUEST_ROOTFS_DIR := env_var_or_default("GUEST_ROOTFS_DIR", "")
+HOST_POLICY_ARTIFACTS_DIR := env_var_or_default("HOST_POLICY_ARTIFACTS_DIR", root / "build/host-policy")
 RUNTIME_OCI_LAYOUT := env_var_or_default("RUNTIME_OCI_LAYOUT", "")
 RUNTIME_ARTIFACTS_DIR := env_var_or_default("RUNTIME_ARTIFACTS_DIR", root / "build/runtime")
 
@@ -79,14 +79,17 @@ integration:
 smoke: build
     python3 -I scripts/smoke.py '{{root}}'
 
+# Exercise a sandbox lifecycle against a configured private Haven deployment.
 privileged-e2e:
     GOWORK=off go -C haven test -tags=privileged ./integration -run TestMicroVM -count=1 -timeout=10m
 
-kvm-e2e:
-    KVM_ROOTFS_DIR='{{KVM_ROOTFS_DIR}}' bash scripts/run-kvm.sh '{{KVM_MATERIALS_DIR}}' '{{KVM_GUEST_DIR}}' '{{KVM_ARTIFACTS_DIR}}'
+# Boot both OCI layouts and check guest file metadata and snapshot COW.
+guest-image-e2e:
+    GUEST_ROOTFS_DIR='{{GUEST_ROOTFS_DIR}}' bash scripts/run-guest-image.sh '{{VM_MATERIALS_DIR}}' '{{GUEST_DIR}}' '{{GUEST_IMAGE_ARTIFACTS_DIR}}'
 
-kernel-isolation-e2e:
-    bash scripts/run-kernel-isolation.sh '{{KERNEL_ARTIFACTS_DIR}}'
+# Exercise Linux network policy and cgroup limits in delegated namespaces.
+host-policy-e2e:
+    bash scripts/run-host-policy.sh '{{HOST_POLICY_ARTIFACTS_DIR}}'
 
 guest-fs-isolation-e2e:
     bash scripts/run-guest-fs-isolation.sh
@@ -94,5 +97,6 @@ guest-fs-isolation-e2e:
 capture-isolation-e2e:
     bash scripts/run-capture-isolation.sh
 
+# Start a private Haven daemon and exercise VM provisioning, adoption and guest networking.
 runtime-e2e:
-    bash scripts/run-runtime.sh '{{KVM_MATERIALS_DIR}}' '{{RUNTIME_OCI_LAYOUT}}' '{{RUNTIME_ARTIFACTS_DIR}}'
+    bash scripts/run-runtime.sh '{{VM_MATERIALS_DIR}}' '{{RUNTIME_OCI_LAYOUT}}' '{{RUNTIME_ARTIFACTS_DIR}}'

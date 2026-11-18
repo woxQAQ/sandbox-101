@@ -29,7 +29,6 @@ jobs:
       - run: python3 -I scripts/test_native_gate.py
       - run: just check-sql
       - run: python3 -I scripts/test_sql_generation.py
-      - run: GOWORK=off go -C haven test -tags=kvm . -run '^TestKVMRootfsOCI$' -count=1
       - run: just test check test-race integration smoke
   native-image:
     runs-on: ubuntu-24.04
@@ -106,6 +105,12 @@ jobs:
           echo "NATIVE_PATH=$prefix/bin:$(dirname "$(command -v golangci-lint)"):$(dirname "$(command -v go)"):$(dirname "$(command -v just)"):/usr/bin:/bin" >> "$GITHUB_ENV"
       - name: Verify native tools and ownership
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --preflight
+      - name: Import and extract the guest rootfs with both OCI layouts
+        run: |
+          GOWORK=off go -C haven test -tags=guest_image -c -o "$RUNNER_TEMP/guest-rootfs.test" ./tests/native
+          cd haven/tests/native
+          sudo env -i PATH="$NATIVE_PATH" SANDBOX_REQUIRE_EROFS_TESTS=1 \
+            "$RUNNER_TEMP/guest-rootfs.test" -test.v -test.run='^TestGuestRootfsOCI$'
       - name: Verify missing-mkfs failure
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --negative
       - name: Require actual native coverage

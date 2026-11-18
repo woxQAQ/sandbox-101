@@ -1,4 +1,4 @@
-//go:build linux && kernel_isolation
+//go:build linux && host_policy
 
 package host
 
@@ -14,10 +14,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const rootlessChildEnv = "SANDBOX_KERNEL_ISOLATION_CHILD"
+const rootlessChildEnv = "SANDBOX_HOST_POLICY_CHILD"
 
-// Shared harness for TestKernelIsolationRootlessNetwork and
-// TestKernelIsolationRootlessCgroup: real nft/NAT/TCP policy enforcement and
+// Shared harness for TestHostPolicyRootlessNetwork and
+// TestHostPolicyRootlessCgroup: real nft/NAT/TCP policy enforcement and
 // cgroup v2 PID/CPU/memory/I/O limits, without a VM or the privileged launcher.
 // These kernel integration tests require unprivileged namespaces and cgroup v2
 // delegation. They fail, rather than skip, when either prerequisite is missing.
@@ -27,7 +27,7 @@ func rootlessRun(t *testing.T, mode string) bool {
 	t.Helper()
 	if child := os.Getenv(rootlessChildEnv); child != "" {
 		if child != mode {
-			t.Skip("another kernel-isolation subprocess")
+			t.Skip("another host policy subprocess")
 		}
 		rootlessRequireNamespaces(t)
 		return true
@@ -46,7 +46,7 @@ func rootlessRun(t *testing.T, mode string) bool {
 		if err != nil {
 			t.Fatal(err)
 		}
-		env = append(env, "SANDBOX_KERNEL_PARENT_"+strings.ToUpper(ns)+"="+id)
+		env = append(env, "SANDBOX_HOST_POLICY_PARENT_"+strings.ToUpper(ns)+"="+id)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
@@ -85,7 +85,7 @@ func rootlessRequireNamespaces(t *testing.T) {
 		"net",
 		"mnt",
 	} {
-		parent := os.Getenv("SANDBOX_KERNEL_PARENT_" + strings.ToUpper(ns))
+		parent := os.Getenv("SANDBOX_HOST_POLICY_PARENT_" + strings.ToUpper(ns))
 		current, err := os.Readlink("/proc/self/ns/" + ns)
 		if err != nil || parent == "" || current == parent {
 			t.Fatalf(
@@ -159,12 +159,12 @@ func rootlessRead(t *testing.T, path string) string {
 
 func rootlessArtifact(t *testing.T, name string, data []byte) {
 	t.Helper()
-	dir := os.Getenv("SANDBOX_KERNEL_ISOLATION_ARTIFACTS")
+	dir := os.Getenv("SANDBOX_HOST_POLICY_ARTIFACTS")
 	if dir == "" {
 		return
 	}
 	if !filepath.IsAbs(dir) {
-		t.Fatal("kernel-isolation artifact directory must be absolute")
+		t.Fatal("host policy artifact directory must be absolute")
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 		t.Fatal(err)

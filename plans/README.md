@@ -8,11 +8,11 @@
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |
 | [021：只读恢复诊断设计](021-readonly-recovery-diagnostics-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为诊断 API 已上线 |
-| [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | STAGE_F_PARTIAL / VM_ACCEPTANCE_BLOCKED | 旧边界清除和测试/runner/部署迁移完成；当前 KVM/production 缺显式私有材料和预算，整体尚未完成 |
+| [024：Haven / Loom 单控制面重设计](024-haven-loom-single-control-design.md) | STAGE_F_PARTIAL / VM_TESTS_BLOCKED | 旧边界清除和测试/runner/部署迁移完成；当前 guest 镜像和 Haven 生命周期测试缺显式私有材料和预算，整体尚未完成 |
 
 027 已完成声明/SQL/测试逐项归属、publication/恢复边界与全部业务能力迁移。最终 Haven race **673 pass、0 fail、35 skip**，生成/架构、真实 Rust fixture、八组 smoke 与静态检查通过；原普通/native 缺项继续保留。最终源身份与完整结果见 [027 证据](evidence/027-capability-map.md)。017/020/021 不因此恢复。
 
-024 的历史 F 树组件、完整 race、六项 Rust integration、六组 smoke、静态检查及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**。capture/kernel 实际检查通过；这些结果不验证后续 025/026 源码。命名整理及定向验证见 [阶段 F](evidence/024-stage-f-retirement.md)，历史来源见 [E](evidence/024-stage-e-entrypoints.md)、[D](evidence/024-stage-d-control-matrix.md) 与 [迁移记录](evidence/024-migration-map.md)。既有部署未切换；恢复暂停工作前须映射当前 Haven store/step/观测与诊断边界。
+024 的历史 F 树组件、完整 race、六项 Rust integration、六组 smoke、静态检查及 required-native 均通过：`run.9exdrqy5` 为 **677 pass、0 fail/skip**，Haven **278.938s**。跨 UID capture 与宿主策略检查通过；这些结果不验证后续 025/026 源码。命名整理及定向验证见 [阶段 F](evidence/024-stage-f-retirement.md)，历史来源见 [E](evidence/024-stage-e-entrypoints.md)、[D](evidence/024-stage-d-control-matrix.md) 与 [迁移记录](evidence/024-migration-map.md)。既有部署未切换；恢复暂停工作前须映射当前 Haven store/step/观测与诊断边界。
 
 ## 待完成验收
 
@@ -23,7 +23,7 @@
 | 普通组件 120 秒入口 | 027 最终 `just test`：component **120.014s timeout**；同树 Haven race **673 pass、0 fail、35 skip**，component **276.088s** | 在原预算内完成普通入口；保持断言、timeout、生命周期并发槽和生产资源限制 |
 | 完整原生镜像验收 | 027 preflight `run.sa0aku_r` 明确拒绝当前非 root；全套未运行。026 的 **73 pass、15 fail、0 skip** 与 `security.capability` 缺失仅作历史证据 | 在具备真实 ownership/xattr 权限的 runner 上通过现行 required-native 门禁；不自动提权、不将 required 失败改成 skip |
 
-026 已删除镜像 bwrap/unshare 包装；025 的缺 bwrap/namespace 条件仅是历史记录，不是当前待办。详细命令、源码身份与原始失败见 [026 证据](../.agents/archive/evidence/026-direct-image-tools-and-tests.md)；025 分批交付与原树验证见 [025 证据](../.agents/archive/evidence/025-services-sqlc.md)。KVM/kernel-isolation/production 不由组件或原生镜像通过替代，024 的 VM 缺项继续由原计划跟踪。
+026 已删除镜像 bwrap/unshare 包装；025 的缺 bwrap/namespace 条件仅是历史记录，不是当前待办。详细命令、源码身份与原始失败见 [026 证据](../.agents/archive/evidence/026-direct-image-tools-and-tests.md)；025 分批交付与原树验证见 [025 证据](../.agents/archive/evidence/025-services-sqlc.md)。024 继续跟踪 guest 镜像启动与 Haven 生命周期所需的 VM 材料和宿主预算。
 
 ## 当前源码入口
 

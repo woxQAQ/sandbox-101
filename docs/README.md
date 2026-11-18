@@ -25,7 +25,7 @@
 | Haven 宿主部署、资源预算、密钥与恢复 | [Host](../deploy/host/README.md) |
 | 测试工具、输入材料与各 runner 范围 | [Scripts](../scripts/README.md) |
 | Kubernetes operator 集成 | [Operator](../operator/README.md) |
-| 已运行验收、材料与限制 | [验收记录](acceptance.md) |
+| 历史测试使用的源码、材料和运行结果 | [历史验证记录](verification-history.md) |
 
 ## 计划与历史
 
@@ -45,4 +45,4 @@
 - 架构只保留职责、关键协议、理由和不变量；具体 API/格式/状态矩阵维护在对应专项契约，通过链接引用。
 - 组件 README 与部署材料就近维护操作说明；文档索引只负责导航，不复制正文。上游依赖 provenance 和参考仓库说明留在其来源旁。
 - `plans/` 保存未完成意图；完成后将计划、复核和对应证据一起归档，更新本页入口及入链。历史收据保留原 source/path/hash，Markdown 导航随移动修正。
-- 验收记录区分已实现、设计目标、实测证据和宿主待验证项；历史 run 不验证后续源码或 harness 变更。
+- 测试入口按实际行为命名，结果记录源码、输入材料、运行命令和观察值。部署验证还需写明目标宿主与资源预算。

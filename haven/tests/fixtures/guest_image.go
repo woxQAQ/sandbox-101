@@ -1,4 +1,4 @@
-//go:build linux && kvm
+//go:build linux && guest_image
 
 package fixtures
 
@@ -35,7 +35,7 @@ import (
 
 // Linux can reject readonly block opens with EACCES or writes with EPERM. Prove
 // root identity, writable node permissions and raw reads before checking writes.
-const kvmRawWriteChecks = `set -eux
+const guestRawWriteChecks = `set -eux
 export PATH=/bin LC_ALL=C
 umask 022
 [ "$(id -u)" = 0 ]
@@ -68,7 +68,7 @@ done
 printf 'guest-root-raw-write-protection-ok\n' >> /run/fixture-raw-proof
 `
 
-const KVMFileViewChecks = `set -eux
+const GuestFileViewChecks = `set -eux
 export PATH=/bin
 [ "$(id -u)" = 1000 ]
 [ "$(stat -c '%u:%g:%a' /)" = '0:0:755' ]
@@ -106,7 +106,7 @@ printf writable > /workspace/file-view-check
 printf 'guest-file-view-ok\n'
 `
 
-func KVMRequired(t *testing.T, name string) string {
+func RequiredGuestInput(t *testing.T, name string) string {
 	t.Helper()
 	value := os.Getenv(name)
 	if value == "" || !filepath.IsAbs(value) {
@@ -115,7 +115,7 @@ func KVMRequired(t *testing.T, name string) string {
 	return value
 }
 
-func KVMTool(t *testing.T, tool string, args ...string) []byte {
+func RunImageTool(t *testing.T, tool string, args ...string) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -126,13 +126,13 @@ func KVMTool(t *testing.T, tool string, args ...string) []byte {
 	return out
 }
 
-type KVMGuestMaterials struct {
+type GuestMaterials struct {
 	Kernel         string
 	GuestDirectory string
 	RootFS         string
 }
 
-func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) OCILayerFixture {
+func GuestRuntimeLayer(t *testing.T, layout string, materials GuestMaterials) OCILayerFixture {
 	kernel, guest, rootfs := materials.Kernel, materials.GuestDirectory, materials.RootFS
 	t.Helper()
 	var err error
@@ -142,7 +142,7 @@ func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) O
 	}
 	rootfs, err = filepath.Abs(rootfs)
 	if err != nil || rootfs == "/" {
-		t.Fatalf("KVM integration requires a dedicated rootfs, not the host root: %v", err)
+		t.Fatalf("guest image test requires a dedicated rootfs, not the host root: %v", err)
 	}
 	root, err := os.Open(rootfs)
 	if err != nil {
@@ -168,7 +168,7 @@ func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) O
 			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
 		})
 		if err != nil {
-			t.Fatalf("incomplete KVM rootfs (%s): %v", name, err)
+			t.Fatalf("incomplete guest rootfs (%s): %v", name, err)
 		}
 		file := os.NewFile(uintptr(fd), name)
 		info, err := file.Stat()
@@ -177,7 +177,7 @@ func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) O
 			t.Fatal(err)
 		}
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-			t.Fatalf("KVM rootfs requires an executable at %s", name)
+			t.Fatalf("guest rootfs requires an executable at %s", name)
 		}
 	}
 	archive, err := os.CreateTemp(filepath.Dir(layout), "runtime-layer-*.tar")
@@ -352,12 +352,12 @@ func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) O
 	text("etc/group", "root:x:0:\nsandbox:x:1000:\n", 0o644)
 	text("etc/machine-id", "", 0o644)
 	text("etc/resolv.conf", "", 0o644)
-	unit, err := os.ReadFile(filepath.Join("..", "guest", "systemd", "sandbox-agent.service"))
+	unit, err := os.ReadFile(filepath.Join("..", "..", "..", "guest", "systemd", "sandbox-agent.service"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text("etc/systemd/system/sandbox-agent.service", string(unit), 0o644)
-	text("usr/local/libexec/fixture-raw-protection", kvmRawWriteChecks, 0o644)
+	text("usr/local/libexec/fixture-raw-protection", guestRawWriteChecks, 0o644)
 	text(
 		"etc/systemd/system/sandbox-agent.service.d/console.conf",
 		"[Service]\nExecStartPre=/bin/sh /usr/local/libexec/fixture-raw-protection\nStandardOutput=tty\nStandardError=tty\nTTYPath=/dev/ttyS0\n",
@@ -405,7 +405,7 @@ func KVMRuntimeLayer(t *testing.T, layout string, materials KVMGuestMaterials) O
 }
 
 //nolint:staticcheck // Preserve binary capability and ACL bytes in the actual OCI fixture.
-func KVMMetadataLayers(t *testing.T, layout string) []OCILayerFixture {
+func GuestMetadataLayers(t *testing.T, layout string) []OCILayerFixture {
 	t.Helper()
 	entry := func(name, value string) TarEntry {
 		e := FileEntry(name, value)
@@ -541,7 +541,7 @@ func KVMMetadataLayers(t *testing.T, layout string) []OCILayerFixture {
 	}
 }
 
-type kvmMachine struct {
+type guestVM struct {
 	Dir     string
 	socket  string
 	Vsock   string
@@ -550,18 +550,18 @@ type kvmMachine struct {
 	stopped bool
 }
 
-func KVMStart(t *testing.T, hypervisor, dir string) *kvmMachine {
+func StartGuestVM(t *testing.T, hypervisor, dir string) *guestVM {
 	t.Helper()
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// Unix socket names are kept below Linux's 108-byte limit even when the
 	// persistent artifact directory has a long pathname.
-	sockets, err := os.MkdirTemp("", "sandbox-kvm-")
+	sockets, err := os.MkdirTemp("", "sandbox-vm-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := &kvmMachine{
+	vm := &guestVM{
 		Dir:    dir,
 		socket: filepath.Join(sockets, "api"),
 		Vsock:  filepath.Join(sockets, "vsock"),
@@ -601,7 +601,7 @@ func KVMStart(t *testing.T, hypervisor, dir string) *kvmMachine {
 	return vm
 }
 
-func (vm *kvmMachine) Stop() {
+func (vm *guestVM) Stop() {
 	if !vm.stopped {
 		vm.stopped = true
 		vm.client.CloseIdleConnections()
@@ -610,7 +610,7 @@ func (vm *kvmMachine) Stop() {
 	}
 }
 
-func (vm *kvmMachine) Api(t *testing.T, endpoint string, body any) {
+func (vm *guestVM) Api(t *testing.T, endpoint string, body any) {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -636,21 +636,21 @@ func (vm *kvmMachine) Api(t *testing.T, endpoint string, body any) {
 	}
 }
 
-func (vm *kvmMachine) Ready(t *testing.T, ctx context.Context, restored bool) {
+func (vm *guestVM) Ready(t *testing.T, ctx context.Context, restored bool) {
 	t.Helper()
-	if err := loom.SystemAgent(ctx, vm.Vsock, "kvm-fixture", restored); err != nil {
+	if err := loom.SystemAgent(ctx, vm.Vsock, "guest-image-fixture", restored); err != nil {
 		t.Fatalf("real guest readiness: %v; inspect %s", err, vm.Dir)
 	}
 }
 
-type KVMGuestRequest struct {
+type GuestRequest struct {
 	Port   int
 	Method string
 	Params map[string]any
 	Data   []byte
 }
 
-func (vm *kvmMachine) Rpc(t *testing.T, request KVMGuestRequest) (map[string]any, string) {
+func (vm *guestVM) Rpc(t *testing.T, request GuestRequest) (map[string]any, string) {
 	port, method, params, data := request.Port, request.Method, request.Params, request.Data
 	t.Helper()
 	conn, err := net.DialTimeout("unix", vm.Vsock, 5*time.Second)
@@ -715,7 +715,7 @@ func (vm *kvmMachine) Rpc(t *testing.T, request KVMGuestRequest) (map[string]any
 	}
 }
 
-func (vm *kvmMachine) TreeRoundtrip(t *testing.T) {
+func (vm *guestVM) TreeRoundtrip(t *testing.T) {
 	t.Helper()
 	content := bytes.Repeat([]byte("binary\x00data\n"), 16384)
 	xattr := []byte("binary\x00attribute\n\xff")
@@ -769,7 +769,7 @@ func (vm *kvmMachine) TreeRoundtrip(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	vm.Rpc(t, KVMGuestRequest{
+	vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "tree_push",
 		Params: map[string]any{
@@ -777,7 +777,7 @@ func (vm *kvmMachine) TreeRoundtrip(t *testing.T) {
 		},
 		Data: archive.Bytes(),
 	})
-	_, pulled := vm.Rpc(t, KVMGuestRequest{
+	_, pulled := vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "tree_pull",
 		Params: map[string]any{
@@ -807,7 +807,7 @@ func (vm *kvmMachine) TreeRoundtrip(t *testing.T) {
 	if !found {
 		t.Fatal("actual guest pull omitted regular file")
 	}
-	vm.Rpc(t, KVMGuestRequest{
+	vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "tree_push",
 		Params: map[string]any{
@@ -827,7 +827,7 @@ for tree in /workspace/tree-original /workspace/tree-copy; do
 done
 printf 'guest-tree-roundtrip-ok\n'
 `)
-	_, copied := vm.Rpc(t, KVMGuestRequest{
+	_, copied := vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "fs_read",
 		Params: map[string]any{
@@ -837,7 +837,7 @@ printf 'guest-tree-roundtrip-ok\n'
 	if !bytes.Equal([]byte(copied), content) {
 		t.Fatal("binary file changed during guest tree roundtrip")
 	}
-	_, raw := vm.Rpc(t, KVMGuestRequest{
+	_, raw := vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "fs_read",
 		Params: map[string]any{
@@ -849,9 +849,9 @@ printf 'guest-tree-roundtrip-ok\n'
 	}
 }
 
-func (vm *kvmMachine) Exec(t *testing.T, command string) {
+func (vm *guestVM) Exec(t *testing.T, command string) {
 	t.Helper()
-	params, out := vm.Rpc(t, KVMGuestRequest{
+	params, out := vm.Rpc(t, GuestRequest{
 		Port:   2048,
 		Method: "exec",
 		Params: map[string]any{
@@ -864,7 +864,7 @@ func (vm *kvmMachine) Exec(t *testing.T, command string) {
 	t.Log(strings.TrimSpace(out))
 }
 
-func (vm *kvmMachine) Capture(t *testing.T, upper, name string) string {
+func (vm *guestVM) Capture(t *testing.T, upper, name string) string {
 	t.Helper()
 	capture := filepath.Join(vm.Dir, name)
 	if err := os.Mkdir(capture, 0o700); err != nil {
@@ -884,9 +884,9 @@ func (vm *kvmMachine) Capture(t *testing.T, upper, name string) string {
 	return capture
 }
 
-func KVMRestore(t *testing.T, hypervisor, dir, capture string) *kvmMachine {
+func RestoreGuestVM(t *testing.T, hypervisor, dir, capture string) *guestVM {
 	t.Helper()
-	vm := KVMStart(t, hypervisor, dir)
+	vm := StartGuestVM(t, hypervisor, dir)
 	restore := filepath.Join(dir, "restore")
 	if err := os.Mkdir(restore, 0o700); err != nil {
 		t.Fatal(err)

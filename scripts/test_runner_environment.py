@@ -41,8 +41,8 @@ class RunnerEntrypoints(unittest.TestCase):
             "HOME": str(self.root),
             "RECORD_DIR": str(self.root),
         }
-        self.env.pop("KVM_ROOTFS_DIR", None)
-        self.env.pop("SANDBOX_KVM_ROOTFS", None)
+        self.env.pop("GUEST_ROOTFS_DIR", None)
+        self.env.pop("SANDBOX_GUEST_ROOTFS", None)
         self.materials = self.root / "materials"
         self.materials.mkdir()
         shutil.copyfile(PROJECT / "image/kernel.config", self.materials / "kernel.config")
@@ -61,7 +61,7 @@ class RunnerEntrypoints(unittest.TestCase):
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result
 
-    def test_kvm_just_recipe_uses_only_supplied_environment(self):
+    def test_guest_image_just_recipe_uses_only_supplied_environment(self):
         guest = self.root / "guest"
         rootfs = self.root / "rootfs"
         guest.mkdir()
@@ -69,34 +69,34 @@ class RunnerEntrypoints(unittest.TestCase):
         self.executable("go", """
 import json, os, sys
 from pathlib import Path
-keys = ["SANDBOX_KVM_ROOTFS", "SANDBOX_KVM_HYPERVISOR", "SANDBOX_KVM_KERNEL",
-        "SANDBOX_KVM_GUEST_DIR", "SANDBOX_KVM_ARTIFACTS",
+keys = ["SANDBOX_GUEST_ROOTFS", "SANDBOX_GUEST_HYPERVISOR", "SANDBOX_GUEST_KERNEL",
+        "SANDBOX_GUEST_DIR", "SANDBOX_GUEST_IMAGE_ARTIFACTS",
         "SANDBOX_REQUIRE_EROFS_TESTS"]
 Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
     "args": sys.argv[1:], "environment": {key: os.environ[key] for key in keys},
 }))
 """)
         self.run_command(
-            "just", "--quiet", f"KVM_MATERIALS_DIR={self.materials}",
-            f"KVM_GUEST_DIR={guest}", f"KVM_ROOTFS_DIR={rootfs}",
-            f"KVM_ARTIFACTS_DIR={self.root / 'kvm artifacts'}", "kvm-e2e",
+            "just", "--quiet", f"VM_MATERIALS_DIR={self.materials}",
+            f"GUEST_DIR={guest}", f"GUEST_ROOTFS_DIR={rootfs}",
+            f"GUEST_IMAGE_ARTIFACTS_DIR={self.root / 'guest image artifacts'}", "guest-image-e2e",
         )
         record = json.loads((self.root / "go.json").read_text())
-        self.assertIn("-tags=kvm", record["args"])
+        self.assertIn("-tags=guest_image", record["args"])
         self.assertEqual(record["args"][:2], ["-C", str(PROJECT / "haven")])
         self.assertIn("./tests/native", record["args"])
-        self.assertIn("^TestKVMOCIFileViewAndCOW$", record["args"])
-        self.assertEqual(record["environment"]["SANDBOX_KVM_ROOTFS"], str(rootfs))
-        self.assertEqual(record["environment"]["SANDBOX_KVM_GUEST_DIR"], str(guest))
+        self.assertIn("^TestGuestOCIFileViewAndCOW$", record["args"])
+        self.assertEqual(record["environment"]["SANDBOX_GUEST_ROOTFS"], str(rootfs))
+        self.assertEqual(record["environment"]["SANDBOX_GUEST_DIR"], str(guest))
         self.assertEqual(record["environment"]["SANDBOX_REQUIRE_EROFS_TESTS"], "1")
 
-    def test_kvm_rejects_missing_or_host_rootfs_before_launch(self):
-        script = str(PROJECT / "scripts/run-kvm.sh")
+    def test_guest_image_rejects_missing_or_host_rootfs_before_launch(self):
+        script = str(PROJECT / "scripts/run-guest-image.sh")
         result = self.run_command("bash", script, str(self.materials), expected=1)
-        self.assertIn("KVM_ROOTFS_DIR", result.stderr)
+        self.assertIn("GUEST_ROOTFS_DIR", result.stderr)
         result = self.run_command(
             "bash", script, str(self.materials), str(self.root), expected=1,
-            KVM_ROOTFS_DIR="/",
+            GUEST_ROOTFS_DIR="/",
         )
         self.assertIn("not the host root", result.stderr)
 
@@ -116,7 +116,7 @@ Path(os.environ["RECORD_DIR"], "service.json").write_text(json.dumps(sys.argv[1:
 """)
         self.executable("systemctl", "import sys\nsys.exit(0)\n")
         self.run_command(
-            "just", "--quiet", f"KVM_MATERIALS_DIR={self.materials}",
+            "just", "--quiet", f"VM_MATERIALS_DIR={self.materials}",
             f"RUNTIME_OCI_LAYOUT={oci}",
             f"RUNTIME_ARTIFACTS_DIR={self.root / 'runtime artifacts'}", "runtime-e2e",
             SANDBOX_RUNTIME_IO_MAX="8:0 wbps=1048576",

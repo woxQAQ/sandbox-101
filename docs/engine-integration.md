@@ -86,4 +86,4 @@ writer lock、schema/identity、不可变 request/terminal/publication、完整�
 
 ## Runtime 与验证范围
 
-真实 entrypoint 始终构造 Cloud Hypervisor。Loom 检查二进制 receipt、设备、namespace/cgroup、进程身份、COW 和网络，保留原生产资源限制。替身只经测试显式注入；组件通过不证明 KVM、kernel 或 production。当前源码的完整命令、pass/FAIL/BLOCKED、材料与实际边界按 [计划 024](../plans/024-haven-loom-single-control-design.md) 记录，历史 [验收](acceptance.md) 不覆盖新树。
+真实 entrypoint 始终构造 Cloud Hypervisor。Loom 检查二进制 receipt、设备、namespace/cgroup、进程身份、COW 和网络，保留原生产资源限制。替身只经测试显式注入。guest 镜像、宿主网络与 cgroup 策略、Haven 生命周期的输入见[测试入口](../scripts/README.md)。缺项见[计划 024](../plans/024-haven-loom-single-control-design.md)，旧源码的运行结果见[历史验证记录](verification-history.md)。

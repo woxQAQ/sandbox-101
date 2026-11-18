@@ -69,7 +69,7 @@ rg -n 'func .*metrics|ProvisionSource|func .*claim|func .*activate|func .*mainta
 
 ### 1. 建立计时和事件口径表
 
-只读打开上述源码及 sandbox-architecture/ACCEPTANCE，设计文档逐个列出 metric 对应符号、开始/结束事件、失败和取消处理。说明 warm→fallback、admission 拒绝、幂等重查、client timeout 不取消接受的工作、daemon restart 的分类。标记基准数字 unavailable，不借旧 suite 总耗时推导 claim latency。
+只读打开上述源码、[Sandbox 架构](../docs/sandbox-architecture.md)和[历史运行记录](../docs/verification-history.md)，设计文档逐个列出 metric 对应符号、开始/结束事件、失败和取消处理。说明 warm→fallback、admission 拒绝、幂等重查、client timeout 不取消接受的工作、daemon restart 的分类。标记基准数字 unavailable，不借旧 suite 总耗时推导 claim latency。
 
 **Verify**：`rg -n 'admission|provision|activate|idempot|restart|fallback|unavailable' plans/designs/020-provisioning-observability.md` 必须列出全部主题；文档无未核实的实测 SLO。
 

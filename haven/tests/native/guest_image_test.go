@@ -1,4 +1,4 @@
-//go:build linux && kvm
+//go:build linux && guest_image
 
 package native
 
@@ -19,34 +19,34 @@ import (
 	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
-// This KVM integration test runs the actual pinned VMM and guest, independently
+// This guest image test runs the actual pinned VMM and guest, independently
 // of Loom's privileged cgroup/network launcher and the Haven daemon. It proves
 // guest file views, RPC and COW restore, not daemon lifecycle or isolation.
 // It requires working KVM and native image tools; prerequisites never silently skip.
 //
 //nolint:staticcheck // Binary OCI xattrs intentionally use archive/tar's retained encoding.
-func TestKVMOCIFileViewAndCOW(t *testing.T) {
+func TestGuestOCIFileViewAndCOW(t *testing.T) {
 	if os.Getuid() == 0 {
-		t.Fatal("run this standalone KVM integration test as an unprivileged device-authorized user")
+		t.Fatal("run this standalone guest image test as an unprivileged device-authorized user")
 	}
-	hypervisor := fixtures.KVMRequired(t, "SANDBOX_KVM_HYPERVISOR")
-	kernel := fixtures.KVMRequired(t, "SANDBOX_KVM_KERNEL")
-	guest := fixtures.KVMRequired(t, "SANDBOX_KVM_GUEST_DIR")
-	rootfs := fixtures.KVMRequired(t, "SANDBOX_KVM_ROOTFS")
-	artifacts := fixtures.KVMRequired(t, "SANDBOX_KVM_ARTIFACTS")
+	hypervisor := fixtures.RequiredGuestInput(t, "SANDBOX_GUEST_HYPERVISOR")
+	kernel := fixtures.RequiredGuestInput(t, "SANDBOX_GUEST_KERNEL")
+	guest := fixtures.RequiredGuestInput(t, "SANDBOX_GUEST_DIR")
+	rootfs := fixtures.RequiredGuestInput(t, "SANDBOX_GUEST_ROOTFS")
+	artifacts := fixtures.RequiredGuestInput(t, "SANDBOX_GUEST_IMAGE_ARTIFACTS")
 	if err := os.MkdirAll(artifacts, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	run, err := os.MkdirTemp(artifacts, "kvm-integration-")
+	run, err := os.MkdirTemp(artifacts, "guest-image-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("persistent KVM integration artifacts: %s", run)
+	t.Logf("persistent guest image test artifacts: %s", run)
 	version, err := exec.Command(hypervisor, "--version").CombinedOutput()
 	if err != nil || !strings.Contains(string(version), host.CloudHypervisorCommit) {
 		t.Fatalf("wrong pinned hypervisor: %s: %v", version, err)
 	}
-	fixtures.KVMTool(t, "readelf", "-l", hypervisor)
+	fixtures.RunImageTool(t, "readelf", "-l", hypervisor)
 	for _, executable := range []string{
 		hypervisor,
 		filepath.Join(guest, "sandbox-agent"),
@@ -56,9 +56,9 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			{"-l", executable},
 			{"-d", executable},
 		} {
-			out := fixtures.KVMTool(t, "readelf", args...)
+			out := fixtures.RunImageTool(t, "readelf", args...)
 			if bytes.Contains(out, []byte("INTERP")) || bytes.Contains(out, []byte("NEEDED")) {
-				t.Fatalf("KVM fixture executable is not static: %s", executable)
+				t.Fatalf("guest image fixture executable is not static: %s", executable)
 			}
 		}
 	}
@@ -66,12 +66,12 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 	if err := os.Mkdir(layout, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := fixtures.KVMRuntimeLayer(t, layout, fixtures.KVMGuestMaterials{
+	base := fixtures.GuestRuntimeLayer(t, layout, fixtures.GuestMaterials{
 		Kernel:         kernel,
 		GuestDirectory: guest,
 		RootFS:         rootfs,
 	})
-	meta := fixtures.KVMMetadataLayers(t, layout)
+	meta := fixtures.GuestMetadataLayers(t, layout)
 	cross := fixtures.HardEntry("fixture/cross-layer-hard", "fixture/regular")
 	cross.Header.Mode = 0o644
 	root := fixtures.DirEntry(".")
@@ -130,7 +130,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				image = fixtures.PutOCIManifest(
 					t,
 					layout,
-					"actual-systemd-forward-kvm",
+					"actual-systemd-forward",
 					append(append([]fixtures.OCILayerFixture{}, layers...), forward),
 				)
 			} else {
@@ -148,7 +148,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				image = fixtures.PutOCIManifest(
 					t,
 					layout,
-					"actual-systemd-compat-parents-kvm",
+					"actual-systemd-compat-parents",
 					append(append([]fixtures.OCILayerFixture{}, layers...), readable),
 				)
 			}
@@ -179,8 +179,8 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 				t.Fatal(err)
 			}
 			file.Close()
-			fixtures.KVMTool(t, "mkfs.ext4", "-q", "-F", upper)
-			vm := fixtures.KVMStart(t, hypervisor, filepath.Join(dir, "source"))
+			fixtures.RunImageTool(t, "mkfs.ext4", "-q", "-F", upper)
+			vm := fixtures.StartGuestVM(t, hypervisor, filepath.Join(dir, "source"))
 			data, err := manifest.DataKernelParameter()
 			if err != nil {
 				t.Fatal(err)
@@ -244,7 +244,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			})
 			vm.Api(t, "vm.boot", nil)
 			vm.Ready(t, ctx, false)
-			vm.Rpc(t, fixtures.KVMGuestRequest{
+			vm.Rpc(t, fixtures.GuestRequest{
 				Port:   2046,
 				Method: "activate",
 				Params: map[string]any{
@@ -255,7 +255,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 					"hostname":       "fixture",
 				},
 			})
-			fileViewChecks := fixtures.KVMFileViewChecks
+			fileViewChecks := fixtures.GuestFileViewChecks
 			if materialization == host.LayeredEROFSLayout {
 				fileViewChecks += `
 [ "$(cat /fixture/forward-a)" = forward ]
@@ -267,7 +267,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			vm.TreeRoundtrip(t)
 			vm.Exec(t, "printf 'original' > /workspace/branch; sync")
 			capture := vm.Capture(t, upper, "first")
-			clone := fixtures.KVMRestore(t, hypervisor, filepath.Join(dir, "clone"), capture)
+			clone := fixtures.RestoreGuestVM(t, hypervisor, filepath.Join(dir, "clone"), capture)
 			clone.Ready(t, ctx, true)
 			if err := os.RemoveAll(capture); err != nil {
 				t.Fatal(err)
@@ -277,7 +277,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 			second := clone.Capture(t, filepath.Join(clone.Dir, "upper.raw"), "second")
 			clone.Stop()
 			vm.Stop()
-			grandchild := fixtures.KVMRestore(t, hypervisor, filepath.Join(dir, "grandchild"), second)
+			grandchild := fixtures.RestoreGuestVM(t, hypervisor, filepath.Join(dir, "grandchild"), second)
 			grandchild.Ready(t, ctx, true)
 			grandchild.Exec(t, "test \"$(cat /workspace/branch)\" = clone")
 			grandchild.Exec(t, fileViewChecks)
@@ -290,7 +290,7 @@ func TestKVMOCIFileViewAndCOW(t *testing.T) {
 
 // This exercises the userspace handoff through actual OCI materialization,
 // without booting a VM or consulting a package database.
-func TestKVMRootfsOCI(t *testing.T) {
+func TestGuestRootfsOCI(t *testing.T) {
 	fixtures.RequireEROFS(t)
 	for _, materialization := range []string{
 		host.LayeredEROFSLayout,
@@ -339,7 +339,7 @@ func TestKVMRootfsOCI(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			layer := fixtures.KVMRuntimeLayer(t, layout, fixtures.KVMGuestMaterials{
+			layer := fixtures.GuestRuntimeLayer(t, layout, fixtures.GuestMaterials{
 				Kernel:         filepath.Join(guest, "kernel"),
 				GuestDirectory: guest,
 				RootFS:         rootfs,

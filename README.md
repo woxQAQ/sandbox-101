@@ -81,18 +81,18 @@ Default `layered-erofs-v1` shares immutable layer payloads. Explicit `merged-oci
 
 ## Runtime integration checks
 
-Read [runner inputs and boundaries](scripts/README.md) before native, cross-UID or VM runs. KVM needs the pinned static VMM, matching kernel, complete guest systemd userspace, packaged guest, usable `/dev/kvm` and namespaces/mappings. Artifact storage must expose matching stat and `/proc/PID/maps` device identities.
+Read [runner inputs and boundaries](scripts/README.md) before native, cross-UID or VM runs. Guest image tests need the pinned static VMM, matching kernel, complete guest systemd userspace, packaged guest, usable `/dev/kvm` and namespaces/mappings. Artifact storage must expose matching stat and `/proc/PID/maps` device identities.
 
 ```nu
 bash scripts/prepare-vm-materials.sh /absolute/path/to/materials
-just KVM_MATERIALS_DIR=/absolute/path/to/materials KVM_ROOTFS_DIR=/absolute/path/to/rootfs KVM_ARTIFACTS_DIR=/dev/shm/haven-kvm kvm-e2e
-just kernel-isolation-e2e
+just VM_MATERIALS_DIR=/absolute/path/to/materials GUEST_ROOTFS_DIR=/absolute/path/to/rootfs GUEST_IMAGE_ARTIFACTS_DIR=/dev/shm/haven-guest-image guest-image-e2e
+just host-policy-e2e
 with-env {SANDBOX_RUNTIME_IO_MAX: $env.HAVEN_IO_MAX} {
-    just KVM_MATERIALS_DIR=/absolute/path/to/materials RUNTIME_OCI_LAYOUT=/absolute/path/to/oci RUNTIME_ARTIFACTS_DIR=/private/new-runtime runtime-e2e
+    just VM_MATERIALS_DIR=/absolute/path/to/materials RUNTIME_OCI_LAYOUT=/absolute/path/to/oci RUNTIME_ARTIFACTS_DIR=/private/new-runtime runtime-e2e
 }
 ```
 
-Kernel checks need TUN, networking tools and a delegated user systemd manager. Production lifecycle checks also need bindfs, `/dev/fuse`, subordinate UID/GID mappings and an explicit block-device I/O budget. `just privileged-e2e` targets an explicitly configured private deployment through `SANDBOX_E2E_*` inputs. Missing required materials fail; component/fixture success does not prove KVM, kernel isolation or production acceptance. Current gaps are tracked in [Plan 024](plans/024-haven-loom-single-control-design.md); [historical acceptance](docs/acceptance.md) applies only to its recorded sources. Existing deployments and old databases are never switched automatically.
+`guest-image-e2e` boots both OCI layouts and checks guest file metadata and snapshot recovery. `host-policy-e2e` checks Linux network policy and cgroup limits using TUN, networking tools and a delegated user systemd manager. `runtime-e2e` starts a private Haven daemon and exercises VM provisioning, restart adoption and guest TCP. It also needs bindfs, `/dev/fuse`, subordinate UID/GID mappings and an explicit block-device I/O budget. `just privileged-e2e` exercises the sandbox lifecycle on a private deployment selected through `SANDBOX_E2E_*`. Missing required inputs fail the run. See [outstanding checks](plans/024-haven-loom-single-control-design.md) and [historical test results](docs/verification-history.md).
 
 ## Persistence and current boundaries
 

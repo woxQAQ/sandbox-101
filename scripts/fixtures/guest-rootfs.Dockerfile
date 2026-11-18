@@ -1,4 +1,4 @@
-# Userspace for the standalone KVM test, separate from the deployed guest image.
+# Userspace for the standalone guest image test, separate from the deployed guest image.
 # The test overlays its own boot artifacts, accounts and systemd units.
 ARG BASE_IMAGE=debian:bookworm-slim
 FROM ${BASE_IMAGE} AS userspace

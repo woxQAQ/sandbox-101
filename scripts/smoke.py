@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Exercise one real Haven daemon and both protocol CLIs in private state.
 
-This proves entrypoint, writer, persistence and offline metadata wiring. It does
-not boot a VM or establish guest, kernel isolation or daemon lifecycle proof.
+It checks writer exclusion, restart, GC and offline metadata backup without booting a VM.
 """
 import argparse
 import hashlib

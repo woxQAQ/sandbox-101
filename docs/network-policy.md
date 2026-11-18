@@ -48,6 +48,6 @@ Host root and tools are trusted. There is no continuous kernel watcher that inst
 
 ## Validation boundary
 
-`just kernel-isolation-e2e` exercises real nft/NAT/TCP in fresh user/network/mount/PID namespaces: public allow/deny, mandatory private/metadata denial under `/0`, revocation, stale instance and tampered-rule shutdown. A two-flow budget holds connections to two public targets and rejects a third handshake. The fixture proves target reachability and substitutes a veth for packet injection after real TAP preparation; it does not prove production privileged VMM launch.
+`just host-policy-e2e` exercises real nft/NAT/TCP in fresh user/network/mount/PID namespaces: public allow/deny, mandatory private/metadata denial under `/0`, revocation, stale instance and tampered-rule shutdown. A two-flow budget holds connections to two public targets and rejects a third handshake. The fixture proves target reachability and substitutes a veth for packet injection after real TAP preparation.
 
-Production separately retains real guest virtio/TAP plus policy/SNAT probes for source, fork and resume. Current command outcomes and missing prerequisites are recorded in [Plan 024](../plans/024-haven-loom-single-control-design.md); historical [acceptance](acceptance.md) does not validate the new Haven tree. Host bandwidth/conntrack/storage qualification remains per deployment.
+`just runtime-e2e` sends traffic from the guest over virtio/TAP and checks policy and SNAT for the source, fork and resumed VM. Bandwidth, conntrack and storage budgets require verification on each deployment. See [Plan 024](../plans/024-haven-loom-single-control-design.md) for outstanding inputs and [historical test results](verification-history.md) for earlier runs.

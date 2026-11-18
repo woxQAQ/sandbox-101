@@ -476,7 +476,7 @@ func (store *runningHaven) putOwnerBudget(t *testing.T, ctx context.Context, slo
 	}
 }
 
-// runtimeScenario keeps a single provisioned-host acceptance target and its
+// runtimeScenario keeps a single provisioned-host lifecycle target and its
 // owned observations together. Each operation retains its own context budget.
 type runtimeScenario struct {
 	Client    *sdk.Client

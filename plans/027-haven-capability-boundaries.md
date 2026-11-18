@@ -272,7 +272,7 @@ sqlc 配置按能力组织：machine 合并现有 vm/snapshot 查询，supply �
 
 data 依赖 sandbox，sandbox 撤权走共享 access.Registry；node/collection/maintenance 只组合能力，不复制业务资格判断。所有 owner 的 GC 根查询绑定同一 read transaction，不能每个模块各开 snapshot 导致混合时刻的“无引用”。
 
-单能力的 Service/SQLite 测试迁至 owner 包的外部测试包；需要完整 App、跨能力事务、重启/备份/关闭的场景留在 tests/component。真实镜像/KVM/transport 保持独立入口。共享 fixture 分离“基础 store/runtime 材料”与“完整 App 组装”，基础 fixture 不反向依赖 application。
+单能力的 Service/SQLite 测试迁至 owner 包的外部测试包；需要完整 App、跨能力事务、重启/备份/关闭的场景留在 tests/component。原生镜像物化、guest 启动与 Rust RPC 保持独立入口。共享 fixture 分离“基础 store/runtime 材料”与“完整 App 组装”，基础 fixture 不反向依赖 application。
 
 分散测试前保持全局调度预算：Haven 多包执行可显式使用 `-p=1`，各生命周期 suite 最多四个活跃场景；禁止多个包各开四个并发从而暗增资源上限。记录新旧测试名映射；包级 timeout 粒度改变不能宣称旧 120 秒问题已优化。
 
@@ -293,7 +293,7 @@ machine 与 sandbox 的接缝已分成只读历史证明、原事务写参与者
 | 每批 | `python3 -I scripts/check-architecture.py` | 编译 import 图与 SQL/边界门禁通过 |
 | 门禁变更 | `python3 -I scripts/test_architecture.py` | 真实临时 workspace 正负例通过，新增循环/越权案例确实被拒绝 |
 | 查询迁移 | `just check-sql` 与 `python3 -I scripts/test_sql_generation.py` | 当前所有生成文件一致；不硬编码旧 30 文件数量 |
-| 编译 | `with-env {GOWORK: "off"} { go -C haven test -tags=integration,kvm,privileged ./... -run '^$' }` | 全部 tag 编译，不冒充运行 |
+| 编译 | `with-env {GOWORK: "off"} { go -C haven test -tags=integration,guest_image,privileged ./... -run '^$' }` | 全部 tag 编译，不冒充运行 |
 | 组件 | `with-env {GOWORK: "off"} { go -C haven test ./... -p=1 -count=1 -timeout=120s }` | 无新增失败；原超时若未解决明确记录，不能称全部验收完成 |
 | Race | `with-env {GOWORK: "off"} { go -C haven test -json -race ./... -p=1 -count=1 -timeout=10m }` | 全部既有行为场景保留，race 无失败，逐项记录 skip |
 | 跨语言/daemon | `just integration`、`just smoke` | 真实 Rust fixture 与全部 smoke 通过 |
@@ -316,7 +316,7 @@ machine 与 sandbox 的接缝已分成只读历史证明、原事务写参与者
 - [x] `haven/services` 不再包含 Go 文件，生产、测试、文档无过时服务包入口；最终不存在旧 repo facade/兼容 alias。
 - [x] 所有声明、SQL 查询、步骤行族、测试均在迁移清单中有最终去向；删除的通用包装列出 owner 私有查询及消费者，原 namespace/SQL predicates/fault point 有可核对映射。
 - [x] 各能力自己消费 `internal/dbgen`，无仅为类型隐藏而复制整行的 wrapper；跨包 API 表达语义而非通用表 CRUD。
-- [x] import gate 检查上面的有向依赖；禁止 owner 导入组合层/transport/别人的 dbgen，禁止 production 导入 testfixture/testapp。
+- [x] import gate 检查上面的有向依赖；禁止 owner 导入组合层/transport/别人的 dbgen，禁止非测试包导入 testfixture/testapp。
 - [x] SQL gate 允许所有者内部生成代码；对 business operation_steps/cleanup 行族增加类型感知的静态约束正负例，不使用整目录 raw SQL 豁免。
 - [x] publication 在原事务中完整冻结后提交；恢复 validator、route 顺序与 reviewed 分支不变。
 - [x] writer/key/HEAD、goose、唯一 DB、shared guards/lifetime/workers/registry 没有复制；业务 SQL 不经第二连接提交。
@@ -342,4 +342,4 @@ machine 与 sandbox 的接缝已分成只读历史证明、原事务写参与者
 - 否决抽出大 common/model/proof 包消除编译环：会重新形成共享业务 authority。
 - 否决用消息总线或 saga 替代现有单库原子交接：增加未知状态并改变已验证责任协议。
 
-实施已完成声明级清单，并以原始 SQL、冻结布局和实际行为验证核对高风险边界。Loom 的 kernel/KVM、guest 和生产部署机制仍不在本次重构的重新验收范围内。
+实施已完成声明级清单，并以原始 SQL、冻结布局和实际行为验证核对高风险边界。宿主网络与 cgroup 策略、guest 镜像启动和部署验证仍不在本次重构的重新验收范围内。

@@ -14,7 +14,7 @@ template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services �
 | 目录 | 验证边界 |
 |---|---|
 | `tests/component/` | 真实 App、SQLite、私有文件系统与注入的宿主/guest 效果；验证责任交接、恢复、幂等、关闭与 HTTP 行为 |
-| `tests/native/` | 实际 OCI/EROFS 工具、缓存、元数据、发布与 GC；KVM 用例另受 `kvm` build tag 控制 |
+| `tests/native/` | 实际 OCI/EROFS 工具、缓存、元数据、发布与 GC；guest 镜像启动与快照恢复使用 `guest_image` build tag |
 | `integration/` | `integration` tag 的真实 Rust Unix fixture；`privileged` tag 的显式私有部署验收 |
 | `store/`、`guest/`、`egress/` | 各自的 SQLite/跨 UID、RPC 或代理行为边界 |
 | `authorization/`、`image/`、`machine/` | 单能力 Service/SQLite 与缺少能力端口时的留责边界，不构造完整 App |

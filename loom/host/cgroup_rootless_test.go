@@ -1,4 +1,4 @@
-//go:build linux && kernel_isolation
+//go:build linux && host_policy
 
 package host
 
@@ -28,12 +28,12 @@ import (
 // root launcher, pivot_root, privilege dropping, CH, or daemon adoption. The
 // memory/PID/CPU/I/O enforcement probes tighten only this test's new owned scope;
 // runtime limits are first read back unchanged. No existing cgroup is edited.
-func TestKernelIsolationRootlessCgroup(t *testing.T) {
+func TestHostPolicyRootlessCgroup(t *testing.T) {
 	if !rootlessRun(t, "cgroup") {
 		return
 	}
 	base := rootlessDelegatedCgroup(t)
-	root, err := os.MkdirTemp(base, "sandbox-kernel-")
+	root, err := os.MkdirTemp(base, "sandbox-host-policy-")
 	if err != nil {
 		t.Fatalf("new subgroup in delegated cgroup: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 			t.Errorf("remove owned cgroup %s: %v", root, err)
 		}
 	})
-	if os.Getenv("SANDBOX_KERNEL_ISOLATION_USER_UNIT") != "" {
+	if os.Getenv("SANDBOX_HOST_POLICY_USER_UNIT") != "" {
 		// This service root was created by this isolated run, rather than
 		// inherited from the host/session. All owned harness processes are in
 		// its runner subgroup, leaving the new delegation root empty.
@@ -79,7 +79,7 @@ func TestKernelIsolationRootlessCgroup(t *testing.T) {
 	rootlessWrite(t, filepath.Join(root, "cgroup.subtree_control"), "+cpu +memory +pids +io")
 	r := Resource{
 		VMID:     "bounded",
-		Instance: "kernel-isolation",
+		Instance: "host-policy",
 		Config: api.Config{
 			Shape: api.Shape{
 				VCPUs:     1,
@@ -234,7 +234,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 	}
 	// Artifact storage must have an actual block backing. A tmpfs path cannot
 	// establish I/O throttling and will fail the accounting check below.
-	dir, err := os.MkdirTemp(os.Getenv("SANDBOX_KERNEL_ISOLATION_ARTIFACTS"), "io-load-")
+	dir, err := os.MkdirTemp(os.Getenv("SANDBOX_HOST_POLICY_ARTIFACTS"), "io-load-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func rootlessCgroupIO(t *testing.T, b *CloudHypervisor, r Resource) {
 		}
 	})
 	run := func(name string) (time.Duration, map[string]uint64) {
-		worker := rootlessCgroupProcess(t, scope, "io", "SANDBOX_KERNEL_IO_FILE="+filepath.Join(dir, name))
+		worker := rootlessCgroupProcess(t, scope, "io", "SANDBOX_HOST_POLICY_IO_FILE="+filepath.Join(dir, name))
 		before := rootlessIOStats(t, scope)
 		start := time.Now()
 		worker.release(t)
@@ -352,8 +352,8 @@ func rootlessDelegatedCgroup(t *testing.T) string {
 	base := filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(relative, "/"))
 	// The runner may request one new transient user service with an owned runner
 	// subgroup. Its empty delegated service root is then the allocation parent.
-	if unit := os.Getenv("SANDBOX_KERNEL_ISOLATION_USER_UNIT"); unit != "" {
-		if !strings.HasPrefix(unit, "sandbox-kernel-") || !strings.HasSuffix(unit, ".service") ||
+	if unit := os.Getenv("SANDBOX_HOST_POLICY_USER_UNIT"); unit != "" {
+		if !strings.HasPrefix(unit, "sandbox-host-policy-") || !strings.HasSuffix(unit, ".service") ||
 			strings.ContainsAny(unit, "/\\") ||
 			filepath.Base(base) != "runner" ||
 			filepath.Base(filepath.Dir(base)) != unit {
@@ -403,11 +403,11 @@ func rootlessCgroupProcess(t *testing.T, scope, mode string, env ...string) *roo
 	}
 	defer fd.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 11*time.Second)
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestKernelIsolationRootlessCgroupWorker$", "-test.timeout=10s")
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestHostPolicyRootlessCgroupWorker$", "-test.timeout=10s")
 	cmd.Env = append(
 		os.Environ(),
 		rootlessChildEnv+"=cgroup-worker",
-		"SANDBOX_KERNEL_CGROUP_WORK="+mode,
+		"SANDBOX_HOST_POLICY_CGROUP_WORK="+mode,
 		"GOMAXPROCS=1",
 	)
 	cmd.Env = append(cmd.Env, env...)
@@ -471,7 +471,7 @@ func (p *rootlessOwnedProcess) wait() ([]byte, error) {
 	return out, errors.Join(err, readErr)
 }
 
-func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
+func TestHostPolicyRootlessCgroupWorker(t *testing.T) {
 	if os.Getenv(rootlessChildEnv) != "cgroup-worker" {
 		t.Skip("bounded cgroup subprocess only")
 	}
@@ -480,7 +480,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
-	switch mode := os.Getenv("SANDBOX_KERNEL_CGROUP_WORK"); mode {
+	switch mode := os.Getenv("SANDBOX_HOST_POLICY_CGROUP_WORK"); mode {
 	case "hold":
 		return
 	case "cpu":
@@ -506,7 +506,7 @@ func TestKernelIsolationRootlessCgroupWorker(t *testing.T) {
 			}
 		}
 	case "io":
-		path := os.Getenv("SANDBOX_KERNEL_IO_FILE")
+		path := os.Getenv("SANDBOX_HOST_POLICY_IO_FILE")
 		if !filepath.IsAbs(path) {
 			t.Fatal("bounded I/O fixture requires an absolute private file path")
 		}

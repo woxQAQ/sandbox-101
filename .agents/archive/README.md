@@ -43,4 +43,4 @@
 | 022 的结构重组与独立验证 | [结果](022-RESULT.md)、[最终接受收据](evidence/022-final-acceptance.json) |
 | 原计划索引与阶段状态 | [PLAN-HISTORY](PLAN-HISTORY.md) |
 
-各计划的 Markdown 合同与机器可读收据共置于 [evidence/](evidence/)。旧 47f5 的 VM/production/Rust 成绩、33a3 的重组验证及后续宿主验收分别绑定各自源码，不互相挪用。面向运行的验收记录维护在 [docs/acceptance.md](../../docs/acceptance.md)。
+各计划的 Markdown 合同与机器可读收据共置于 [evidence/](evidence/)。旧 47f5 的 VM/production/Rust 成绩、33a3 的重组验证及后续宿主验收分别绑定各自源码，不互相挪用。面向运行的验收记录维护在 [历史验证记录](../../docs/verification-history.md)。
