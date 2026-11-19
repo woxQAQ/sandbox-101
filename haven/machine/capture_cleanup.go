@@ -526,11 +526,7 @@ func (cc *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error {
 	if err = loom.CheckLocalReaders(paths); err != nil {
 		return err
 	}
-	identities := make([]loom.FileIdentity, 0, len(intent.Nodes))
-	for _, identity := range intent.Nodes {
-		identities = append(identities, identity)
-	}
-	if err = loom.CheckLocalReaderIdentities(identities); err != nil {
+	if err = loom.CheckLocalReaderIdentities(intent); err != nil {
 		return err
 	}
 	if err = cc.checkCaptureRaw(step); err != nil {
@@ -547,7 +543,7 @@ func (cc *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error {
 	if err = loom.RemoveDeletionDirectories(cc.ctx, cc.store.Directory, intent); err != nil {
 		return err
 	}
-	if err = loom.CheckLocalReaderIdentities(identities); err != nil {
+	if err = loom.CheckLocalReaderIdentities(intent); err != nil {
 		return err
 	}
 	if err = cc.fault("capture_cleanup_files_removed"); err != nil {

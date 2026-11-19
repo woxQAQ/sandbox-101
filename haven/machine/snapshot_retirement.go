@@ -106,11 +106,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err = loom.VerifySnapshotDeletion(intent, publication.Dir, source.Publication); err != nil {
 		return err
 	}
-	var identities []loom.FileIdentity
-	for _, identity := range intent.Nodes {
-		identities = append(identities, identity)
-	}
-	if err = loom.CheckLocalReaderIdentities(identities); err != nil {
+	if err = loom.CheckLocalReaderIdentities(intent); err != nil {
 		return err
 	}
 	count, err := dbgen.New(tx).CountCheckpoint(ctx, publication.ID)

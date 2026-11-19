@@ -188,14 +188,10 @@ func (i *Images) runImageCleanup(step imageCleanupStep) error {
 		return err
 	}
 	if step.State.Phase == "prepared" {
-		var identities []loom.FileIdentity
 		for _, intent := range step.State.Intents {
-			for _, identity := range intent.Nodes {
-				identities = append(identities, identity)
+			if err := loom.CheckLocalReaderIdentities(intent); err != nil {
+				return err
 			}
-		}
-		if err := loom.CheckLocalReaderIdentities(identities); err != nil {
-			return err
 		}
 		for _, intent := range step.State.Intents {
 			files, err := loom.ResumeDeletion(i.ctx, i.directory, intent)

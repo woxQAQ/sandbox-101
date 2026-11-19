@@ -168,46 +168,44 @@ func CheckLocalReaders(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	inodes := map[string]bool{}
+	readers := map[string]string{}
+	watched := map[string]bool{}
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
 		stat := info.Sys().(*syscall.Stat_t)
-		inodes[fmt.Sprintf("%x:%x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)] = true
+		key := fmt.Sprintf("%x:%x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)
+		// Live paths pin their inode identity, so any descriptor reaching the
+		// same inode is a reader even when it arrived through another name.
+		readers[key] = ""
+		watched[strings.ReplaceAll(path, "\n", `\012`)] = true
 	}
-	return checkLocalReaderIdentities(inodes, paths)
+	return scanLocalReaders(readers, watched)
 }
 
-// CheckLocalReaderIdentities also checks unlinked files against a persisted inode
-// receipt. Physical names disappearing never proves that an open reader exited.
-func CheckLocalReaderIdentities(identities []FileIdentity) error {
-	inodes := map[string]bool{}
-	for _, identity := range identities {
-		inodes[fmt.Sprintf("%x:%x:%d", unix.Major(identity.Device), unix.Minor(identity.Device), identity.Inode)] = true
-	}
-	if len(inodes) == 0 {
-		return nil
-	}
-	return checkLocalReaderIdentities(inodes, nil)
-}
-
-func checkLocalReaderIdentities(inodes map[string]bool, paths []string) error {
+// scanLocalReaders walks the engine process memory maps and open descriptors.
+// An identity match counts as a reader when the receipt carries no path (a
+// live artifact accepts any name reaching its inode) or when the current path
+// still matches the receipt. A path match alone stays authoritative because a
+// mapping can outlive its recorded device identity (overlayfs).
+func scanLocalReaders(readers map[string]string, paths map[string]bool) error {
 	maps, err := os.ReadFile("/proc/self/maps")
 	if err != nil {
 		return err
 	}
 	for line := range strings.SplitSeq(string(maps), "\n") {
-		for _, path := range paths {
-			escaped := strings.ReplaceAll(path, "\n", `\012`)
-			if strings.HasSuffix(line, " "+escaped) || strings.HasSuffix(line, " "+escaped+" (deleted)") {
-				return fmt.Errorf("artifact still mapped by engine process")
-			}
-		}
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			continue
+		}
+		mapped := ""
+		if len(fields) > 5 {
+			mapped = strings.TrimSuffix(strings.Join(fields[5:], " "), " (deleted)")
+		}
+		if paths[mapped] {
+			return fmt.Errorf("artifact still mapped by engine process")
 		}
 		device := strings.Split(fields[3], ":")
 		if len(device) != 2 {
@@ -218,7 +216,7 @@ func checkLocalReaderIdentities(inodes map[string]bool, paths []string) error {
 		if majorErr != nil || minorErr != nil {
 			return fmt.Errorf("unrecognized mapping device")
 		}
-		if inodes[fmt.Sprintf("%x:%x:%s", major, minor, fields[4])] {
+		if path, watched := readers[fmt.Sprintf("%x:%x:%s", major, minor, fields[4])]; watched && (path == "" || path == mapped) {
 			return fmt.Errorf("artifact still mapped by engine process")
 		}
 	}
@@ -227,7 +225,8 @@ func checkLocalReaderIdentities(inodes map[string]bool, paths []string) error {
 		return err
 	}
 	for _, fd := range fds {
-		info, err := os.Stat(filepath.Join("/proc/self/fd", fd.Name()))
+		name := filepath.Join("/proc/self/fd", fd.Name())
+		info, err := os.Stat(name)
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -235,11 +234,45 @@ func checkLocalReaderIdentities(inodes map[string]bool, paths []string) error {
 			return err
 		}
 		stat := info.Sys().(*syscall.Stat_t)
-		if inodes[fmt.Sprintf("%x:%x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)] {
-			return fmt.Errorf("artifact still open by engine process")
+		path, watched := readers[fmt.Sprintf("%x:%x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)]
+		if !watched {
+			continue
 		}
+		if path != "" {
+			target, err := os.Readlink(name)
+			if err != nil {
+				// The descriptor raced closed between listing and resolution.
+				continue
+			}
+			if strings.TrimSuffix(target, " (deleted)") != path {
+				// The receipt inode was recycled by an unrelated open file.
+				continue
+			}
+		}
+		return fmt.Errorf("artifact still open by engine process")
 	}
 	return nil
+}
+
+// CheckLocalReaderIdentities also checks unlinked files against a persisted
+// inode receipt. Physical names disappearing never proves that an open reader
+// exited. Once a name is gone, though, the bare inode identity is ambiguous:
+// the filesystem is free to recycle it for an unrelated file. A descriptor or
+// mapping therefore only counts as a reader while its current path still
+// matches the receipt.
+func CheckLocalReaderIdentities(intent DeletionIntent) error {
+	readers := map[string]string{}
+	paths := map[string]bool{}
+	for relative, identity := range intent.Nodes {
+		key := fmt.Sprintf("%x:%x:%d", unix.Major(identity.Device), unix.Minor(identity.Device), identity.Inode)
+		path := filepath.Join(intent.Path, relative)
+		readers[key] = path
+		paths[path] = true
+	}
+	if len(readers) == 0 {
+		return nil
+	}
+	return scanLocalReaders(readers, paths)
 }
 
 func InspectDeletion(ctx context.Context, path string, files []string, directory bool) (DeletionIntent, error) {
