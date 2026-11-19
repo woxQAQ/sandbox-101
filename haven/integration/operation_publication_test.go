@@ -60,7 +60,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if view.Error == nil || view.Error.Code != types.ErrInternal || view.Error.Message != "internal service error" {
+	if view.Error == nil || view.Error.Code != types.CodeInternal || view.Error.Message != "internal service error" {
 		t.Fatal("HTTP failure was not formatted at the boundary", view)
 	}
 	internal, err := service.Delivery.PublicOperation(ctx, principal, accepted.ID)

@@ -9,13 +9,13 @@ type ApiError struct {
 
 // Error codes are stable wire values shared by HTTP clients and operation views.
 const (
-	ErrNotFound       = "not_found"
-	ErrForbidden      = "forbidden"
-	ErrConflict       = "conflict"
-	ErrInvalid        = "invalid"
-	ErrExhausted      = "resource_exhausted"
-	ErrIncompatible   = "incompatible"
-	ErrUnknown        = "result_unknown"
-	ErrManualRecovery = "manual_recovery_required"
-	ErrInternal       = "internal"
+	CodeNotFound       = "not_found"
+	CodeForbidden      = "forbidden"
+	CodeConflict       = "conflict"
+	CodeInvalid        = "invalid"
+	CodeExhausted      = "resource_exhausted"
+	CodeIncompatible   = "incompatible"
+	CodeUnknown        = "result_unknown"
+	CodeManualRecovery = "manual_recovery_required"
+	CodeInternal       = "internal"
 )

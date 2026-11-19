@@ -26,14 +26,14 @@ import (
 func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
 		httpwire.JSON(w, 426, &types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
 		})
 		return
 	}
 	if r.ProtoMajor != 1 {
 		httpwire.Failure(w, types.ApiError{
-			Code:    types.ErrIncompatible,
+			Code:    types.CodeIncompatible,
 			Message: "HTTP/1.1 Upgrade required",
 		})
 		return
@@ -41,7 +41,7 @@ func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, princip
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		httpwire.Failure(w, types.ApiError{
-			Code:    types.ErrIncompatible,
+			Code:    types.CodeIncompatible,
 			Message: "HTTP/1.1 Upgrade required",
 		})
 		return
@@ -148,7 +148,7 @@ func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 	body, signature, ok := strings.Cut(capability, ".")
 	if !ok {
 		httpwire.Failure(w, types.ApiError{
-			Code:    types.ErrNotFound,
+			Code:    types.CodeNotFound,
 			Message: "not found",
 		})
 		return
@@ -189,7 +189,7 @@ func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			httpwire.JSON(w, 502, &types.ApiError{
-				Code:    types.ErrInternal,
+				Code:    types.CodeInternal,
 				Message: "preview upstream unavailable",
 			})
 		},

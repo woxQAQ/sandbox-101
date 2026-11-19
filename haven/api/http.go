@@ -72,7 +72,7 @@ func New(services Services) http.Handler {
 			}
 		}
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrNotFound,
+			Code:    types.CodeNotFound,
 			Message: "not found",
 		})
 	})
@@ -84,7 +84,7 @@ func New(services Services) http.Handler {
 			}
 		}
 		httpwire.JSON(c.Writer, 405, &types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "method not allowed",
 		})
 	})
@@ -134,7 +134,7 @@ func (h *handler) authenticate(c *gin.Context) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrNotFound,
+			Code:    types.CodeNotFound,
 			Message: "not found",
 		})
 		c.Abort()
@@ -166,21 +166,21 @@ func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Comma
 	}
 	if command.Action != "" && command.Action != action {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "request action disagrees with the route",
 		})
 		return command, false
 	}
 	if sandboxID != "" && command.SandboxID != "" && command.SandboxID != sandboxID {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "request sandbox id disagrees with the route",
 		})
 		return command, false
 	}
 	if checkpointID != "" && command.CheckpointID != "" && command.CheckpointID != checkpointID {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "request checkpoint id disagrees with the route",
 		})
 		return command, false
@@ -220,7 +220,7 @@ func (h *handler) sandboxAction(action string) gin.HandlerFunc {
 		}
 		if action == "fork" && command.CheckpointID != "" {
 			httpwire.Failure(c.Writer, types.ApiError{
-				Code:    types.ErrInvalid,
+				Code:    types.CodeInvalid,
 				Message: "sandbox fork source is the route sandbox",
 			})
 			return
@@ -244,7 +244,7 @@ func (h *handler) buildTemplate(c *gin.Context) {
 	}
 	if command.Template == nil {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "template field is required",
 		})
 		return
@@ -254,7 +254,7 @@ func (h *handler) buildTemplate(c *gin.Context) {
 	}
 	if command.Template.ID != c.Param("id") {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "request template id disagrees with the route",
 		})
 		return
@@ -279,7 +279,7 @@ func (h *handler) forkCheckpoint(c *gin.Context) {
 	}
 	if command.SandboxID != "" {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "checkpoint fork source is the route checkpoint",
 		})
 		return
@@ -295,7 +295,7 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 	key := request.Header.Get("Idempotency-Key")
 	if len(key) < 1 || len(key) > 256 {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "Idempotency-Key required (max 256 bytes)",
 		})
 		return
@@ -351,7 +351,7 @@ func operationView(view types.Operation) types.Operation {
 	view.Error = nil
 	if view.Status == "failed" {
 		view.Error = &types.ApiError{
-			Code:    types.ErrInternal,
+			Code:    types.CodeInternal,
 			Message: "internal service error",
 		}
 	}
@@ -391,7 +391,7 @@ func (h *handler) status(c *gin.Context) {
 func (h *handler) drainNode(c *gin.Context) {
 	if !principal(c).Root {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrForbidden,
+			Code:    types.CodeForbidden,
 			Message: "root access required",
 		})
 		return
@@ -406,7 +406,7 @@ func (h *handler) putTenant(c *gin.Context) {
 	owner := principal(c)
 	if !owner.Root {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrForbidden,
+			Code:    types.CodeForbidden,
 			Message: "root access required",
 		})
 		return
@@ -418,7 +418,7 @@ func (h *handler) putTenant(c *gin.Context) {
 	}
 	if value.ID == "" || value.MaxSandboxes < 1 || value.MaxStorageMiB < 1 {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: "tenant id and positive quotas required",
 		})
 		return
@@ -442,7 +442,7 @@ func (h *handler) putTenant(c *gin.Context) {
 func (h *handler) metrics(c *gin.Context) {
 	if !principal(c).Root {
 		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.ErrForbidden,
+			Code:    types.CodeForbidden,
 			Message: "root access required",
 		})
 		return

@@ -33,14 +33,14 @@ func PublicError(err error) *types.ApiError {
 		reason error
 		code   string
 	}{
-		{errs.ErrNotFound, types.ErrNotFound},
-		{errs.ErrForbidden, types.ErrForbidden},
-		{errs.ErrConflict, types.ErrConflict},
-		{errs.ErrInvalid, types.ErrInvalid},
-		{errs.ErrExhausted, types.ErrExhausted},
-		{errs.ErrIncompatible, types.ErrIncompatible},
-		{errs.ErrUnknown, types.ErrUnknown},
-		{errs.ErrManualRecovery, types.ErrManualRecovery},
+		{errs.ErrNotFound, types.CodeNotFound},
+		{errs.ErrForbidden, types.CodeForbidden},
+		{errs.ErrConflict, types.CodeConflict},
+		{errs.ErrInvalid, types.CodeInvalid},
+		{errs.ErrExhausted, types.CodeExhausted},
+		{errs.ErrIncompatible, types.CodeIncompatible},
+		{errs.ErrUnknown, types.CodeUnknown},
+		{errs.ErrManualRecovery, types.CodeManualRecovery},
 	} {
 		if errors.Is(err, failure.reason) {
 			return &types.ApiError{
@@ -51,36 +51,36 @@ func PublicError(err error) *types.ApiError {
 	}
 	if errors.Is(err, errInvalidJSON) {
 		return &types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: errInvalidJSON.Error(),
 		}
 	}
 	if errors.Is(err, errExtraJSON) {
 		return &types.ApiError{
-			Code:    types.ErrInvalid,
+			Code:    types.CodeInvalid,
 			Message: errExtraJSON.Error(),
 		}
 	}
 	if errors.Is(err, errs.ErrInterrupted) {
 		return &types.ApiError{
-			Code:    types.ErrUnknown,
+			Code:    types.CodeUnknown,
 			Message: "accepted operation retained for recovery",
 		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return &types.ApiError{
-			Code:    types.ErrNotFound,
+			Code:    types.CodeNotFound,
 			Message: "not found",
 		}
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return &types.ApiError{
-			Code:    types.ErrUnknown,
+			Code:    types.CodeUnknown,
 			Message: "operation wait ended",
 		}
 	}
 	return &types.ApiError{
-		Code:    types.ErrInternal,
+		Code:    types.CodeInternal,
 		Message: "internal service error",
 	}
 }
@@ -93,19 +93,19 @@ func Error(w http.ResponseWriter, err error) {
 func Failure(w http.ResponseWriter, failure types.ApiError) {
 	status := http.StatusInternalServerError
 	switch failure.Code {
-	case types.ErrNotFound:
+	case types.CodeNotFound:
 		status = http.StatusNotFound
-	case types.ErrForbidden:
+	case types.CodeForbidden:
 		status = http.StatusForbidden
-	case types.ErrInvalid:
+	case types.CodeInvalid:
 		status = http.StatusBadRequest
-	case types.ErrConflict:
+	case types.CodeConflict:
 		status = http.StatusConflict
-	case types.ErrExhausted:
+	case types.CodeExhausted:
 		status = http.StatusTooManyRequests
-	case types.ErrIncompatible:
+	case types.CodeIncompatible:
 		status = http.StatusUnprocessableEntity
-	case types.ErrUnknown, types.ErrManualRecovery:
+	case types.CodeUnknown, types.CodeManualRecovery:
 		status = http.StatusServiceUnavailable
 	}
 	JSON(w, status, failure)

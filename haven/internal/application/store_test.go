@@ -47,7 +47,7 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 				view.Key = "changed-request-identity"
 			case "http_error":
 				view.Error = &types.ApiError{
-					Code:    types.ErrInternal,
+					Code:    types.CodeInternal,
 					Message: "transport data must not be stored",
 				}
 			}
