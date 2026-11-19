@@ -15,17 +15,18 @@ import (
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
-	service, backend := fixtures.ColdService(t, faults.Check)
+	service, backend := testapp.ColdService(t, faults.Check)
 	ids := make(chan string, 16)
 	var workers sync.WaitGroup
 	for range 16 {
@@ -56,7 +57,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	if first == "" {
 		t.Fatal("no operation admitted")
 	}
-	if step := fixtures.AwaitColdWorker(t, service, first); step.Status != "succeeded" || backend.Count("launch") != 1 {
+	if step := testutil.AwaitColdWorker(t, service, first); step.Status != "succeeded" || backend.Count("launch") != 1 {
 		t.Fatal("concurrent replay duplicated effects", step.State)
 	}
 
@@ -78,13 +79,13 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	if ctx.Err() == nil {
 		t.Fatal("caller was not canceled after admission")
 	}
-	if step := fixtures.AwaitColdWorker(t, service, operation.ID); step.Status != "succeeded" {
+	if step := testutil.AwaitColdWorker(t, service, operation.ID); step.Status != "succeeded" {
 		t.Fatal("caller cancellation canceled accepted work", step.State)
 	}
 }
 
 func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, scenario := range []string{
 		"quota-boundary",
 		"missing-owner",
@@ -92,7 +93,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 		"catalog-manifest-mismatch",
 	} {
 		t.Run(scenario, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, nil)
+			service, backend := testapp.ColdService(t, nil)
 			switch scenario {
 			case "quota-boundary":
 				_, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", testfixture.Encode(authorization.Limits{
@@ -145,15 +146,15 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 }
 
 func TestHavenInstanceRejectsReplacedPreparedDisk(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, func(point string) error {
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, func(point string) error {
 		if point == "step_agent_ready" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	operation := fixtures.ColdClaim(t, service, "disk-proof")
-	before := fixtures.AwaitColdWorker(t, service, operation.ID)
+	operation := testfixture.ColdClaim(t, service, "disk-proof")
+	before := testutil.AwaitColdWorker(t, service, operation.ID)
 	if before.State.DiskIdentity == nil {
 		t.Fatal("prepared inode was not durably recorded")
 	}
@@ -168,8 +169,8 @@ func TestHavenInstanceRejectsReplacedPreparedDisk(t *testing.T) {
 	if err = errors.Join(truncateErr, file.Close()); err != nil {
 		t.Fatal(err)
 	}
-	service = fixtures.ResumeColdService(t, service, backend)
-	after := fixtures.AwaitColdWorker(t, service, operation.ID)
+	service = testapp.ReopenCloneService(t, service, backend)
+	after := testutil.AwaitColdWorker(t, service, operation.ID)
 	if after.Status == "succeeded" || after.State.Witness != "" || backend.Count("launch") != 1 {
 		t.Fatal("replacement was recertified into a ready generation")
 	}
@@ -180,7 +181,7 @@ func TestHavenInstanceRejectsReplacedPreparedDisk(t *testing.T) {
 }
 
 func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -200,9 +201,9 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
-				service, backend := fixtures.ColdService(t, nil)
-				claim := fixtures.ColdClaim(t, service, "claim")
-				if step := fixtures.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
+				service, backend := testapp.ColdService(t, nil)
+				claim := testfixture.ColdClaim(t, service, "claim")
+				if step := testutil.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
 					t.Fatal(step.State)
 				}
 				statement := fmt.Sprintf("CREATE TRIGGER reject_retirement BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
@@ -217,7 +218,7 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				step := fixtures.AwaitColdWorker(t, service, release.ID)
+				step := testutil.AwaitColdWorker(t, service, release.ID)
 				if step.Status != "running" || step.State.Phase != "files_removed" {
 					t.Fatalf("failed retirement fixed a terminal result: %+v", step.State)
 				}
@@ -231,8 +232,8 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 				if _, err = service.State.Database().Exec("DROP TRIGGER reject_retirement"); err != nil {
 					t.Fatal(err)
 				}
-				service = fixtures.ResumeColdService(t, service, backend)
-				if step = fixtures.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
+				service = testapp.ReopenCloneService(t, service, backend)
+				if step = testutil.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
 					t.Fatal("retirement did not resume original proof", step.State)
 				}
 				if backend.Count("launch") != 1 {
@@ -244,15 +245,15 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 }
 
 func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, func(point string) error {
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, func(point string) error {
 		if point == "release_admitted" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	claim := fixtures.ColdClaim(t, service, "claim")
-	if step := fixtures.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
+	claim := testfixture.ColdClaim(t, service, "claim")
+	if step := testutil.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
 	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
@@ -266,8 +267,8 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 	if _, err = service.State.Database().Exec("INSERT INTO resource_refs VALUES('vm',?,'reader','foreign-reader')", claim.Result.VMID); err != nil {
 		t.Fatal(err)
 	}
-	service = fixtures.ResumeColdService(t, service, backend)
-	step := fixtures.AwaitColdWorker(t, service, release.ID)
+	service = testapp.ReopenCloneService(t, service, backend)
+	step := testutil.AwaitColdWorker(t, service, release.ID)
 	if step.Status == "succeeded" || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 		t.Fatal("foreign reference did not fence host deletion")
 	}
@@ -278,8 +279,8 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 }
 
 func TestHavenStepShutdownKeepsWriterUntilWorkersExit(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, nil)
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, nil)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -292,14 +293,14 @@ func TestHavenStepShutdownKeepsWriterUntilWorkersExit(t *testing.T) {
 		}
 		return nil
 	}
-	operation := fixtures.ColdClaim(t, service, "shutdown")
+	operation := testfixture.ColdClaim(t, service, "shutdown")
 	<-entered
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := service.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("close did not respect deadline", err)
 	}
-	if other, err := fixtures.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
+	if other, err := testapp.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
 		if other != nil {
 			_ = other.Close()
 		}
@@ -319,7 +320,7 @@ func TestHavenStepShutdownKeepsWriterUntilWorkersExit(t *testing.T) {
 	t.Cleanup(func() {
 		_ = resumed.Close(context.Background())
 	})
-	if step := fixtures.AwaitColdWorker(t, resumed, operation.ID); step.Status != "succeeded" {
+	if step := testutil.AwaitColdWorker(t, resumed, operation.ID); step.Status != "succeeded" {
 		t.Fatal("shutdown invented an unexecuted terminal failure", step.State)
 	}
 }

@@ -11,19 +11,19 @@ import (
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, guest, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	acceptedRecord := (fixtures.SandboxClaims{
+	acceptedRecord := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "public-claim", nil, egress.Policy{
 		Mode: "none",
@@ -119,14 +119,14 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 }
 
 func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, proxy := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	acceptedRecord := (fixtures.SandboxClaims{
+	acceptedRecord := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim-before-publication-fault", nil, egress.Policy{
 		Mode: "proxy",
@@ -157,7 +157,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 		t.Fatal("new proxy survived rejected public completion")
 	}
 	var status string
-	if err = service.State.Database().QueryRow("SELECT status FROM operations WHERE id=?", configure.ID).Scan(&status); err != nil || fixtures.Terminal(status) {
+	if err = service.State.Database().QueryRow("SELECT status FROM operations WHERE id=?", configure.ID).Scan(&status); err != nil || testutil.Terminal(status) {
 		t.Fatal("terminal result committed without public delivery", status, err)
 	}
 	if _, err = service.State.Database().Exec("DROP TRIGGER reject_public_delivery"); err != nil {

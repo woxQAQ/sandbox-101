@@ -9,11 +9,12 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/tests/fixtures"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 )
 
 func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, tracked := range []bool{
 		false,
 		true,
@@ -23,7 +24,7 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 			true:  "tracked",
 		}[tracked], func(t *testing.T) {
 			service, _, guest, manager := testapp.SandboxFixture(t)
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
@@ -87,9 +88,9 @@ func TestHavenNoneMaintenancePreservesWorkloadConnections(t *testing.T) {
 }
 
 func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, manager := testapp.SandboxFixture(t)
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "binding-diagnostic", nil, egress.Policy{
 		Mode: "none",
@@ -123,12 +124,12 @@ func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *tes
 }
 
 func TestHavenRestartRebindDoesNotRenewLease(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, _, manager := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "proxy",

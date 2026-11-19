@@ -15,15 +15,15 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, manager := directFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
@@ -34,10 +34,10 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, direct)
-	fixtures.WaitFixtureWorker(t, service, claim.ID)
+	testutil.WaitFixtureWorker(t, service, claim.ID)
 	runtime.PolicyMu.Lock()
 	events := append([]string(nil), runtime.Events...)
 	runtime.PolicyMu.Unlock()
@@ -105,12 +105,12 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 }
 
 func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, _ := directFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
@@ -118,7 +118,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	})
-	fixtures.WaitFixtureWorker(t, service, claim.ID)
+	testutil.WaitFixtureWorker(t, service, claim.ID)
 	runtime.PolicyMu.Lock()
 	runtime.RejectClear = true
 	runtime.PolicyMu.Unlock()
@@ -184,7 +184,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 }
 
 func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, _ := directFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
@@ -195,10 +195,10 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, policy)
-	fixtures.WaitFixtureWorker(t, service, claim.ID)
+	testutil.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	before, err := service.Catalog.Get(ctx, principal, claim.Result.SandboxID)
@@ -264,7 +264,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 }
 
 func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, manager := directFixtureWithFault(t, func(point string) error {
 		if point == "direct_retirement_effect" {
 			return errs.ErrInterrupted
@@ -274,7 +274,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
@@ -282,7 +282,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	})
-	fixtures.WaitFixtureWorker(t, service, claim.ID)
+	testutil.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
@@ -337,7 +337,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 }
 
 func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"hostname",
 		"host_credential",
@@ -389,12 +389,12 @@ func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 }
 
 func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, manager := directFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "direct",
@@ -402,7 +402,7 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 			"8.8.8.8/32",
 		},
 	})
-	fixtures.WaitFixtureWorker(t, service, claim.ID)
+	testutil.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	before, err := service.Catalog.Get(ctx, principal, claim.Result.SandboxID)
@@ -446,7 +446,7 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 }
 
 func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private direct failure'",
 		"IGNORE",
@@ -456,7 +456,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "direct",
@@ -464,7 +464,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 					"8.8.8.8/32",
 				},
 			})
-			fixtures.WaitFixtureWorker(t, service, claim.ID)
+			testutil.WaitFixtureWorker(t, service, claim.ID)
 			if _, err := service.State.Database().Exec("CREATE TRIGGER deny_direct_completion BEFORE UPDATE ON operation_steps WHEN OLD.step_key='direct_retirement' AND NEW.status='succeeded' BEGIN SELECT RAISE(" + rejection + "); END"); err != nil {
 				t.Fatal(err)
 			}
@@ -504,7 +504,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			if err = service.Reconcile.ResumePending(); err != nil {
 				t.Fatal(err)
 			}
-			fixtures.WaitFixtureWorker(t, service, claim.ID)
+			testutil.WaitFixtureWorker(t, service, claim.ID)
 			done, err := machine.LoadDirectRetirement(ctx, service.State.Database(), claim.ID)
 			if err != nil || done.Status != "succeeded" || done.Hash != retirement.Hash || !reflect.DeepEqual(done.Input, retirement.Input) {
 				t.Fatal("retirement recovery changed original proof", done, err)
@@ -527,7 +527,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 }
 
 type directRuntime struct {
-	*fixtures.RestorableRuntime
+	*testfixture.RestorableRuntime
 
 	PolicyMu    sync.Mutex
 	Policy      map[string]*loom.NetworkPolicy
@@ -645,14 +645,16 @@ func directFixtureWithFault(t *testing.T, fault func(string) error) (*applicatio
 		Cleanups: map[string]func() error{},
 	}
 	service, _ := testapp.ColdServiceWithOptions(t, application.Options{
-		Fault:     fault,
-		Guest:     guest,
-		Egress:    manager,
+		Fault:      fault,
+		Guest:      guest,
+		Egress:     manager,
 		AdminToken: "fixture-root-token",
 	}, func(backend *testfixture.ColdRuntime) loom.Backend {
 		return &directRuntime{
-			RestorableRuntime: &fixtures.RestorableRuntime{ColdRuntime: backend},
-			Policy:            map[string]*loom.NetworkPolicy{},
+			RestorableRuntime: &testfixture.RestorableRuntime{
+				ColdRuntime: backend,
+			},
+			Policy: map[string]*loom.NetworkPolicy{},
 		}
 	})
 	runtime := service.Options.Backend.(*directRuntime)

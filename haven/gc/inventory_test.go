@@ -11,8 +11,8 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -23,7 +23,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 	} {
 		t.Run(condition, func(t *testing.T) {
 			var interrupt atomic.Bool
-			service, _ := fixtures.FailedCachedImport(t, func(point string) error {
+			service, _ := testapp.FailedCachedImport(t, func(point string) error {
 				if interrupt.Load() && point == "image_cleanup_prepared" {
 					return errs.ErrInterrupted
 				}

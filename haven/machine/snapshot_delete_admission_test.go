@@ -10,12 +10,12 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -55,7 +55,7 @@ func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteFence(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 0)
 	service := fixture.Service
 	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
@@ -94,7 +94,7 @@ func TestHavenSnapshotDeleteFence(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 1)
 	service := fixture.Service
 	fixture.Faults.Set(func(point string) error {
@@ -103,7 +103,7 @@ func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
 		}
 		return nil
 	})
-	leased := fixtures.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "leased-clone")
+	leased := testfixture.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "leased-clone")
 	var leases int
 	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM source_leases WHERE operation_id=?", leased.ID).Scan(&leases); err != nil || leases != 1 {
 		t.Fatal("fixture did not retain source lease", leases, err)
@@ -119,7 +119,7 @@ func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteConflictDoesNotDispatch(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 0)
 	fixture.Faults.Set(func(point string) error {
 		if point == "snapshot_delete_admitted" {

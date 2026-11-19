@@ -31,11 +31,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	_ "modernc.org/sqlite"
 
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/guest"
-	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
@@ -726,7 +726,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		Initialize:   true,
 		Backend:      backend,
 		Guest:        guest,
-		AdminToken:    "integration-root-token",
+		AdminToken:   "integration-root-token",
 		MaxMemoryMiB: 8192,
 		MaxVCPUs:     64,
 		SafetyBytes:  1,

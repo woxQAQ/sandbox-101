@@ -12,14 +12,14 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	ctx := context.Background()
 	principal := authorization.Principal{
@@ -63,10 +63,10 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 }
 
 func TestHavenStepShutdownBackendDeadline(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	release := make(chan struct{})
 	var closer *blockingCloseRuntime
-	service, _ := fixtures.ColdServiceWithBackend(t, nil, func(backend *testfixture.ColdRuntime) loom.Backend {
+	service, _ := testapp.ColdServiceWithBackend(t, nil, func(backend *testfixture.ColdRuntime) loom.Backend {
 		closer = &blockingCloseRuntime{
 			ColdRuntime: backend,
 			Entered:     make(chan struct{}),
@@ -99,7 +99,7 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("backend finalization did not start")
 	}
-	if other, err := fixtures.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
+	if other, err := testapp.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
 		if other != nil {
 			_ = other.Close()
 		}
@@ -111,7 +111,7 @@ func TestHavenStepShutdownBackendDeadline(t *testing.T) {
 	if err := service.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	state, err := fixtures.OpenStore(service.State.Directory(), false)
+	state, err := testapp.OpenStore(service.State.Directory(), false)
 	if err != nil {
 		t.Fatal("completed finalization did not release the writer", err)
 	}

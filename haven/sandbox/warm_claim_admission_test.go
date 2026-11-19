@@ -9,12 +9,13 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, scenario := range []struct {
 		name      string
 		rejection string
@@ -23,7 +24,7 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 		{"abort", "ABORT,'pool-write-refused'"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+			service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			principal := authorization.Principal{

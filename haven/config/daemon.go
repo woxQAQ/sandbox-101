@@ -10,7 +10,7 @@ type Daemon struct {
 	Listen              string        `mapstructure:"listen"`
 	Init                bool          `mapstructure:"init"`
 	Mode                string        `mapstructure:"mode"`
-	AdminTokenFile       string        `mapstructure:"root-token-file"`
+	AdminTokenFile      string        `mapstructure:"root-token-file"`
 	TLSCert             string        `mapstructure:"tls-cert"`
 	TLSKey              string        `mapstructure:"tls-key"`
 	Backup              string        `mapstructure:"backup"`

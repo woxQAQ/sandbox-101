@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCaptureDiscardAdmissionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -52,7 +52,7 @@ func TestHavenCaptureDiscardAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenCaptureDiscardAuthorization(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"tenant",
 		"instance",

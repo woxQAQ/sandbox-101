@@ -11,24 +11,25 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private activation handoff refusal'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
@@ -66,7 +67,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("activation succeeded without its final handoff", failed, err)
 			}
-			fixtures.WaitFixtureWorker(t, service, failed.ID)
+			testutil.WaitFixtureWorker(t, service, failed.ID)
 			checkResponsibility(1)
 			retained, err := service.Catalog.Get(ctx, principal, before.ID)
 			if err != nil || retained.State != "paused" || retained.SnapshotID != before.SnapshotID {
@@ -100,7 +101,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 }
 
 func TestHavenSecretRestart(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, guest, manager := testapp.SandboxFixture(t)
 	secretFlag := false
 	const secret = "fixture-host-value-never-a-real-credential"
@@ -117,7 +118,7 @@ func TestHavenSecretRestart(t *testing.T) {
 			},
 		},
 	}
-	acceptedOperation := (fixtures.SandboxClaims{
+	acceptedOperation := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "secret-claim", env, egress.Policy{
 		Mode: "proxy",

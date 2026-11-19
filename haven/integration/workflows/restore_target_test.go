@@ -11,14 +11,14 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"restore_candidate_copied",
 		"restore_resources_ready",
@@ -26,7 +26,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			faults := &testfixture.SnapshotFaults{}
-			service, backend, request, prior := fixtures.TargetSetupWithFault(t, faults.Check)
+			service, backend, request, prior := testapp.TargetSetupWithFault(t, faults.Check)
 			faults.Set(func(candidate string) error {
 				if point == "restore_candidate_copied" && candidate == point {
 					return errs.ErrInterrupted
@@ -43,10 +43,10 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			failed := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+			failed := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			if point == "restore_candidate_copied" {
 				service = testapp.ReopenCloneService(t, service, backend)
-				failed = fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+				failed = testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			}
 			backend.Before = nil
 			if failed.Status != "failed" || failed.State.Witness != "" {
@@ -67,7 +67,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			deleted := fixtures.AwaitDiscard(t, service, discard.ID)
+			deleted := testutil.AwaitDiscard(t, service, discard.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(discard.ID).Err
 				t.Fatal("multi-version discard failed", deleted.State, reason)
@@ -84,7 +84,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"restore_admitted",
 		"restore_prepare_intent",
@@ -103,7 +103,7 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			faults := &testfixture.SnapshotFaults{}
-			service, backend, request, prior := fixtures.TargetSetupWithFault(t, faults.Check)
+			service, backend, request, prior := testapp.TargetSetupWithFault(t, faults.Check)
 			faults.Set(func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
@@ -115,10 +115,10 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "restore_admitted" {
-				fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+				testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+			step := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			incomplete := point == "restore_candidate_prepared" || point == "restore_candidate_copied" || point == "restore_candidate_renamed" || point == "restore_candidate_synced"
 			if incomplete && (step.Status != "failed" || !step.State.RestoreBlocked) || !incomplete && step.Status != "succeeded" {
 				t.Fatal("target recovery state", step.State)
@@ -143,7 +143,7 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, acceptedOperation, first := targetFixture(t)
 	if first.Status != "succeeded" {
 		t.Fatal(first.State)
@@ -157,7 +157,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof := fixtures.AwaitStop(t, service, stop.ID); proof.Status != "succeeded" {
+	if proof := testutil.AwaitStop(t, service, stop.ID); proof.Status != "succeeded" {
 		t.Fatal("second stop failed", proof)
 	}
 	second, err := service.Provisioning.AdmitRestore(context.Background(), machine.RestoreRequest{
@@ -171,7 +171,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored := fixtures.AwaitColdWorker(t, service, second.ID)
+	restored := testutil.AwaitColdWorker(t, service, second.ID)
 	if restored.Status != "succeeded" || len(restored.Input.Ancestors) != 2 {
 		reason := service.Workers.State(second.ID).Err
 		t.Fatal(restored.State, reason)
@@ -188,7 +188,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof := fixtures.AwaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
+	if proof := testutil.AwaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
 		reason := service.Workers.State(release.ID).Err
 		t.Fatal(proof.State, reason)
 	}
@@ -198,7 +198,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -214,7 +214,7 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+mode, func(t *testing.T) {
-				service, _, request, prior := fixtures.TargetSetup(t)
+				service, _, request, prior := testapp.TargetSetup(t)
 				statement := fmt.Sprintf("CREATE TRIGGER deny_target_admission BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
@@ -232,7 +232,7 @@ func TestHavenRestoreStoppedTargetAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'fixture generation retirement rejection'",
 		"IGNORE",
@@ -255,8 +255,8 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pending := fixtures.AwaitColdWorker(t, service, release.ID)
-			if fixtures.Terminal(pending.Status) {
+			pending := testutil.AwaitColdWorker(t, service, release.ID)
+			if testutil.Terminal(pending.Status) {
 				t.Fatal("retirement denial committed", pending.State)
 			}
 			var instances, versions, cost int
@@ -267,7 +267,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 				t.Fatal(err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			done := fixtures.AwaitColdWorker(t, service, release.ID)
+			done := testutil.AwaitColdWorker(t, service, release.ID)
 			if done.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
@@ -277,7 +277,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, acceptedOperation, step := targetFixture(t)
 	if step.Status != "succeeded" {
 		t.Fatal(step.State)
@@ -290,7 +290,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted := fixtures.AwaitColdWorker(t, service, release.ID)
+	deleted := testutil.AwaitColdWorker(t, service, release.ID)
 	if deleted.Status != "succeeded" {
 		reason := service.Workers.State(release.ID).Err
 		t.Fatal("multi-version release failed", deleted.State, reason)
@@ -305,7 +305,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 }
 
 func TestHavenRestoreStoppedTarget(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, acceptedOperation, step := targetFixture(t)
 	if step.Status != "succeeded" {
 		reason := service.Workers.State(acceptedOperation.ID).Err
@@ -323,13 +323,13 @@ func TestHavenRestoreStoppedTarget(t *testing.T) {
 	}
 }
 
-func targetFixture(t *testing.T) (*application.App, *fixtures.GenerationRuntime, operation.Record, machine.ResourceStep) {
+func targetFixture(t *testing.T) (*application.App, *testfixture.GenerationRuntime, operation.Record, machine.ResourceStep) {
 	t.Helper()
-	service, backend, request, _ := fixtures.TargetSetup(t)
+	service, backend, request, _ := testapp.TargetSetup(t)
 	restored, err := service.Provisioning.AdmitRestore(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := fixtures.AwaitColdWorker(t, service, restored.ID)
+	step := testutil.AwaitColdWorker(t, service, restored.ID)
 	return service, backend, restored, step
 }

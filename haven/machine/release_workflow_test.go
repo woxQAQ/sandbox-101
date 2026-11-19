@@ -8,15 +8,16 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"release_admitted",
 		"release_unlinked",
@@ -24,15 +25,15 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 		"none",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(candidate string) error {
+			service, backend := testapp.ColdService(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			capture, request := fixtures.CaptureReady(t, service, "checkpoint")
-			historical := fixtures.AwaitCapture(t, service, capture.ID)
-			fixtures.CapturePublished(t, service, historical, true)
+			capture, request := testfixture.CaptureReady(t, service, "checkpoint")
+			historical := testutil.AwaitCapture(t, service, capture.ID)
+			testutil.CapturePublished(t, service, historical, true)
 			historyBytes := testfixture.Encode(historical)
 			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  request.TenantID,
@@ -43,10 +44,10 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "release_admitted" {
-				fixtures.AwaitColdWorker(t, service, release.ID)
+				testutil.AwaitColdWorker(t, service, release.ID)
 			}
-			service = fixtures.ResumeColdService(t, service, backend)
-			deleted := fixtures.AwaitColdWorker(t, service, release.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			deleted := testutil.AwaitColdWorker(t, service, release.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal("capture cleanup did not follow VM release", deleted.State, reason)
@@ -83,11 +84,11 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 }
 
 func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, nil)
-	operation, request := fixtures.CaptureReady(t, service, "handoff")
-	historical := fixtures.AwaitCapture(t, service, operation.ID)
-	fixtures.CapturePublished(t, service, historical, true)
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, nil)
+	operation, request := testfixture.CaptureReady(t, service, "handoff")
+	historical := testutil.AwaitCapture(t, service, operation.ID)
+	testutil.CapturePublished(t, service, historical, true)
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_capture_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
 }
 
 func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"version-owner",
 		"instance-owner",
@@ -120,14 +121,14 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 		"missing-instance",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(point string) error {
+			service, backend := testapp.ColdService(t, func(point string) error {
 				if point == "release_admitted" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			claim := fixtures.ColdClaim(t, service, "claim")
-			history := fixtures.AwaitColdWorker(t, service, claim.ID)
+			claim := testfixture.ColdClaim(t, service, "claim")
+			history := testutil.AwaitColdWorker(t, service, claim.ID)
 			if history.Status != "succeeded" {
 				t.Fatal(history.State)
 			}
@@ -147,19 +148,19 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			}
 			switch damage {
 			case "version-owner":
-				err = fixtures.RequireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE id=?", release.ID, claim.ID))
+				err = testutil.RequireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE id=?", release.ID, claim.ID))
 			case "instance-owner":
-				err = fixtures.RequireWrite(service.State.Database().Exec("UPDATE instances SET operation_id=? WHERE vm_id=?", release.ID, claim.Result.VMID))
+				err = testutil.RequireWrite(service.State.Database().Exec("UPDATE instances SET operation_id=? WHERE vm_id=?", release.ID, claim.Result.VMID))
 			case "missing-version":
-				err = fixtures.RequireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE id=?", claim.ID))
+				err = testutil.RequireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE id=?", claim.ID))
 			case "missing-instance":
-				err = fixtures.RequireWrite(service.State.Database().Exec("DELETE FROM instances WHERE vm_id=?", claim.Result.VMID))
+				err = testutil.RequireWrite(service.State.Database().Exec("DELETE FROM instances WHERE vm_id=?", claim.Result.VMID))
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			service.Reconcile.Dispatch(release.ID)
-			step := fixtures.AwaitColdWorker(t, service, release.ID)
+			step := testutil.AwaitColdWorker(t, service, release.ID)
 			if step.Status == "succeeded" || service.Workers.State(release.ID).Err == nil || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 				t.Fatal("current ownership replaced the original generation proof", step.State)
 			}

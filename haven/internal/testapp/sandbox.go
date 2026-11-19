@@ -26,9 +26,9 @@ func SandboxFixtureWithBackend(t *testing.T, fault func(string) error, factory f
 		Binds: map[string]map[string]egress.Secret{},
 	}
 	service, runtime := ColdServiceWithOptions(t, application.Options{
-		Fault:     fault,
-		Guest:     guest,
-		Egress:    proxy,
+		Fault:      fault,
+		Guest:      guest,
+		Egress:     proxy,
 		AdminToken: "fixture-root-token",
 	}, factory)
 	t.Cleanup(guest.Close)

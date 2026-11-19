@@ -1,4 +1,4 @@
-package fixtures
+package testutil
 
 import (
 	"crypto/sha256"
@@ -7,14 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-
-	"github.com/woxQAQ/haven/internal/recovery"
-	"github.com/woxQAQ/haven/store"
 )
-
-func OpenStore(directory string, initialize bool) (*store.State, error) {
-	return store.Open(directory, initialize, recovery.NewRecovery().Validation())
-}
 
 type storeFileSnapshot struct {
 	Mode  fs.FileMode

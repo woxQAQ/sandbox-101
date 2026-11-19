@@ -18,12 +18,11 @@ import (
 	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 	t.Parallel()
-	e, layout, m := importMergedFixture(t, fixtures.BootLayerEntries())
+	e, layout, m := importMergedFixture(t, testfixture.BootLayerEntries())
 	_, err := e.ImportOCI(context.Background(), imageimport.ImageImportOptions{
 		Layout: layout,
 		Digest: m.Digest,
@@ -41,8 +40,8 @@ func TestActualMergedOCIMaterializationConflict(t *testing.T) {
 	); err != nil || again.Builder != m.Builder {
 		t.Fatalf("same layout reimport: %v", err)
 	}
-	layer := fixtures.PutOCILayer(t, layout, fixtures.BootLayerEntries(), false)
-	image := fixtures.PutOCIManifest(t, layout, "layered-first", []fixtures.OCILayerFixture{
+	layer := testfixture.PutOCILayer(t, layout, testfixture.BootLayerEntries(), false)
+	image := testfixture.PutOCIManifest(t, layout, "layered-first", []testfixture.OCILayerFixture{
 		layer,
 	})
 	opts := imageimport.ImageImportOptions{

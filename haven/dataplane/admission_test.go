@@ -15,16 +15,16 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -104,12 +104,12 @@ func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
 }
 
 func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	acceptedRecord := (fixtures.SandboxClaims{
+	acceptedRecord := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "handoff", nil, egress.Policy{
 		Mode: "none",
@@ -154,7 +154,7 @@ func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
 }
 
 func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, change := range []string{
 		"configuration",
 		"configuration_provenance",
@@ -167,12 +167,12 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			fixtures.WaitFixtureWorker(t, service, claim.ID)
+			testutil.WaitFixtureWorker(t, service, claim.ID)
 			entered, release := make(chan struct{}), make(chan struct{})
 			guest.Before = func(name string, _ loom.Resource) error {
 				if name == "connect" {
@@ -252,7 +252,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 				shutdownCtx, stop := context.WithTimeout(ctx, 5*time.Millisecond)
 				defer stop()
 				_ = service.Close(shutdownCtx)
-				if unexpected, err := fixtures.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
+				if unexpected, err := testapp.OpenStore(service.State.Directory(), false); !errors.Is(err, store.ErrConflict) {
 					if unexpected != nil {
 						_ = unexpected.Close()
 					}

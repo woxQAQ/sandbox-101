@@ -8,18 +8,19 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",

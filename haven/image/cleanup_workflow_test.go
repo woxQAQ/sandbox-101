@@ -10,7 +10,7 @@ import (
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/tests/fixtures"
+	"github.com/woxQAQ/haven/internal/testutil"
 )
 
 func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
@@ -20,7 +20,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 		"image_cleanup_completion_before_commit",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			service, original := fixtures.FailedCachedImport(t, func(point string) error {
+			service, original := testapp.FailedCachedImport(t, func(point string) error {
 				if point == boundary {
 					return errs.ErrInterrupted
 				}
@@ -38,7 +38,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fixtures.WaitImportInterruption(t, service, collector.ID)
+			testutil.WaitImportInterruption(t, service, collector.ID)
 			var imports int
 			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner=?", "import:"+original.ID).Scan(&imports); err != nil || imports != 1 {
 				t.Fatal("unconfirmed collection retired import charge", imports, err)

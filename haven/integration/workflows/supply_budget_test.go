@@ -6,16 +6,17 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/image"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/supply"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSupplySlotBudgets(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, budget := range []quota.SlotBudget{
 		{
 			Kind:  "sandbox_slot",
@@ -31,7 +32,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 		},
 	} {
 		t.Run(fmt.Sprintf("%s-%d", budget.Kind, budget.Units), func(t *testing.T) {
-			service, _ := fixtures.ColdService(t, nil)
+			service, _ := testapp.ColdService(t, nil)
 			ctx := context.Background()
 			template, err := supply.NewTemplateCatalog(service.State.Database()).Fresh(ctx, "tenant", "cold")
 			if err != nil {
@@ -65,7 +66,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			source := fixtures.AwaitColdWorker(t, service, operation.ID)
+			source := testutil.AwaitColdWorker(t, service, operation.ID)
 			if source.Status != "succeeded" || source.Input.SlotBudget != budget {
 				t.Fatal(source)
 			}
@@ -81,7 +82,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			released := fixtures.AwaitColdWorker(t, service, release.ID)
+			released := testutil.AwaitColdWorker(t, service, release.ID)
 			if released.Status != "succeeded" {
 				t.Fatal(released)
 			}

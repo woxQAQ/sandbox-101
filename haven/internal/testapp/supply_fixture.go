@@ -1,4 +1,4 @@
-package fixtures
+package testapp
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/application"
-	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/operation"
 )
@@ -19,7 +18,7 @@ func GoldenSupplyFixture(t *testing.T, target int) (*application.App, *testfixtu
 
 func GoldenSupplyFixtureWithFault(t *testing.T, target int, fault func(string) error) (*application.App, *testfixture.ColdRuntime, *testfixture.WorkloadFixture) {
 	t.Helper()
-	service, runtime, guest, _ := testapp.SandboxFixtureWithBackend(t, fault, RestorableBackend)
+	service, runtime, guest, _ := SandboxFixtureWithBackend(t, fault, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}

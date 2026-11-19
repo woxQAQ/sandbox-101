@@ -21,9 +21,9 @@ template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services �
 | `integration/workflows/` | 跨服务行为，如从 checkpoint 分支、删除原 checkpoint 后验证分支，或备份后恢复整个 App。随普通 `go test ./...` 执行 |
 | `integration/` | `integration` 标签运行 Rust RPC fixture，`guest_image` 运行 guest 镜像场景，`privileged` 运行带 VM 的 Haven 生命周期测试 |
 
-基础 store/runtime 材料在 `internal/testfixture/`，完整 App 组装在 `internal/testapp/`。`tests/fixtures/` 提供多个测试包直接或间接共用的类型与操作。仅在一个包使用的夹具就近放在该包的用例之后。只有测试导入这些夹具。
+跨包共享的测试数据与 runtime 替身在 `internal/testfixture/`，私有 App 的启动、恢复和关闭在 `internal/testapp/`，多个测试包共用的等待、断言与并发辅助在 `internal/testutil/`。依赖方向固定为 testutil ← testfixture ← testapp。仅在一个包使用的夹具就近放在该包的用例之后。只有测试导入这些夹具。
 
-`fixtures.ParallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
+`testutil.ParallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
 包调度或测试归属变化不构成旧 120 秒超时的性能修复证据。
 测试使用自建状态，不接管现有 daemon、未知资源或真实旧库。
 

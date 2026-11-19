@@ -8,19 +8,20 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenWarmClaimAndFallback(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, fallback := range []bool{
 		false,
 		true,
 	} {
 		t.Run(fmt.Sprint(fallback), func(t *testing.T) {
-			service, runtime, guest := fixtures.GoldenSupplyFixture(t, 1)
+			service, runtime, guest := testapp.GoldenSupplyFixture(t, 1)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}

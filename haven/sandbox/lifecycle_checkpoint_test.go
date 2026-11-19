@@ -10,12 +10,13 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"running",
 		"paused",
@@ -26,11 +27,11 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 			"ABORT",
 		} {
 			t.Run(mode+"/"+rejection, func(t *testing.T) {
-				service, backend, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+				service, backend, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 				principal := authorization.Principal{
 					TenantID: "tenant",
 				}
-				claim := (fixtures.SandboxClaims{
+				claim := (testfixture.SandboxClaims{
 					App: service,
 				}).Claim(t, "claim", nil, egress.Policy{
 					Mode: "none",

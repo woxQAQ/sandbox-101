@@ -8,14 +8,14 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, _, _ := testapp.SandboxFixture(t)
 	tenant := authorization.Principal{
 		TenantID: "tenant",

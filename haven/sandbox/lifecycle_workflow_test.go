@@ -11,20 +11,21 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'denied'",
 		"IGNORE",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			service, backend, _, _ := testapp.SandboxFixture(t)
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
@@ -43,7 +44,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fixtures.WaitFixtureWorker(t, service, accepted.ID)
+			testutil.WaitFixtureWorker(t, service, accepted.ID)
 			if worker := service.Workers.State(accepted.ID); !worker.Completed || worker.Err == nil {
 				t.Fatal("denied dependency completion was accepted", worker)
 			}

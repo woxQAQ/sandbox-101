@@ -12,27 +12,27 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"release_admitted",
 		"release_unlinked",
 		"release_completion_before_commit",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend, source := fixtures.CloneFixtureWithFault(t, func(candidate string) error {
+			service, backend, source := testapp.CloneFixtureWithFault(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-			historical := fixtures.AwaitColdWorker(t, service, clone.ID)
+			clone := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+			historical := testutil.AwaitColdWorker(t, service, clone.ID)
 			cloneLiability(t, service, historical, true)
 			frozen := testfixture.Encode(historical)
 			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
@@ -44,10 +44,10 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "release_admitted" {
-				fixtures.AwaitColdWorker(t, service, release.ID)
+				testutil.AwaitColdWorker(t, service, release.ID)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			deleted := fixtures.AwaitColdWorker(t, service, release.ID)
+			deleted := testutil.AwaitColdWorker(t, service, release.ID)
 			if deleted.Status != "succeeded" {
 				reason := service.Workers.State(release.ID).Err
 				t.Fatal("clone cleanup did not converge", deleted.State, reason)
@@ -72,17 +72,17 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 }
 
 func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	t.Run("source-lease-fk", func(t *testing.T) {
 		faults := &testfixture.SnapshotFaults{}
-		service, backend, source := fixtures.CloneFixtureWithFault(t, faults.Check)
+		service, backend, source := testapp.CloneFixtureWithFault(t, faults.Check)
 		faults.Set(func(point string) error {
 			if point == "admission_committed" {
 				return errs.ErrInterrupted
 			}
 			return nil
 		})
-		clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+		clone := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
 		if _, err := service.State.Database().Exec("DELETE FROM snapshots WHERE id=?", source.Result.SnapshotID); err == nil {
 			t.Fatal("source catalog retired while leased")
 		}
@@ -90,7 +90,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 			t.Fatal("unexecuted clone already launched")
 		}
 		service = testapp.ReopenCloneService(t, service, backend)
-		cloneLiability(t, service, fixtures.AwaitColdWorker(t, service, clone.ID), true)
+		cloneLiability(t, service, testutil.AwaitColdWorker(t, service, clone.ID), true)
 	})
 	for _, damage := range []string{
 		"disk",
@@ -98,14 +98,14 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 		"missing-proof",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend, source := fixtures.CloneFixtureWithFault(t, func(point string) error {
+			service, backend, source := testapp.CloneFixtureWithFault(t, func(point string) error {
 				if point == "restore_resources_ready" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-			before := fixtures.AwaitColdWorker(t, service, clone.ID)
+			clone := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+			before := testutil.AwaitColdWorker(t, service, clone.ID)
 			switch damage {
 			case "disk":
 				if err := os.Truncate(before.Input.Resource.Disk, 0); err != nil {
@@ -132,7 +132,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 				}
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			after := fixtures.AwaitColdWorker(t, service, clone.ID)
+			after := testutil.AwaitColdWorker(t, service, clone.ID)
 			if after.Status == "succeeded" || after.State.Witness != "" || backend.Count("launch") != 1 {
 				t.Fatal("damaged handoff became a runtime witness", after.State)
 			}
@@ -148,10 +148,10 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 }
 
 func TestHavenRestoreCloneCanBeCaptured(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, source := cloneFixture(t)
-	clone := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-	ready := fixtures.AwaitColdWorker(t, service, clone.ID)
+	clone := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+	ready := testutil.AwaitColdWorker(t, service, clone.ID)
 	cloneLiability(t, service, ready, true)
 	capture, err := service.Captures.AdmitCapture(context.Background(), machine.CaptureRequest{
 		TenantID:         "tenant",
@@ -162,15 +162,15 @@ func TestHavenRestoreCloneCanBeCaptured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := fixtures.AwaitCapture(t, service, capture.ID)
-	fixtures.CapturePublished(t, service, proof, true)
+	proof := testutil.AwaitCapture(t, service, capture.ID)
+	testutil.CapturePublished(t, service, proof, true)
 	if backend.Count("launch") != 2 || backend.Count("capture") != 2 {
 		t.Fatal("resnapshot unexpectedly restarted a clone")
 	}
 }
 
 func TestHavenRestoreHandoffRequiresRunningStep(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, source := cloneFixture(t)
 	// Change the step inside the attempted handoff, after its original proof was
 	// loaded. The conditional write must roll back backing, lease and costs.
@@ -181,8 +181,8 @@ AFTER INSERT ON backing BEGIN
 END`); err != nil {
 		t.Fatal(err)
 	}
-	accepted := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "running-fence")
-	step := fixtures.AwaitColdWorker(t, service, accepted.ID)
+	accepted := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "running-fence")
+	step := testutil.AwaitColdWorker(t, service, accepted.ID)
 	if step.Status != "running" || step.State.BackingReady || step.State.Phase != "restore_materials_complete" {
 		t.Fatalf("handoff crossed running fence or failed to roll back: status=%s state=%+v", step.Status, step.State)
 	}
@@ -194,16 +194,16 @@ END`); err != nil {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	step = fixtures.AwaitColdWorker(t, service, accepted.ID)
+	step = testutil.AwaitColdWorker(t, service, accepted.ID)
 	cloneLiability(t, service, step, true)
 	if backend.Count("launch") != 2 {
 		t.Fatal("handoff retry repeated a launch")
 	}
 }
 
-func cloneFixture(t *testing.T) (*application.App, *fixtures.RestorableRuntime, operation.Record) {
+func cloneFixture(t *testing.T) (*application.App, *testfixture.RestorableRuntime, operation.Record) {
 	t.Helper()
-	return fixtures.CloneFixtureWithFault(t, nil)
+	return testapp.CloneFixtureWithFault(t, nil)
 }
 
 func cloneLiability(t *testing.T, service *application.App, step machine.ResourceStep, ready bool) {

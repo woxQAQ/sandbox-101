@@ -14,14 +14,14 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenBackupRecoveryFence(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
 	service, _, _, _ := testapp.SandboxFixtureWithFault(t, faults.Check)
 	principal := authorization.Principal{
@@ -31,7 +31,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 		Root:     true,
 		TenantID: "root",
 	}
-	running := (fixtures.SandboxClaims{
+	running := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "running", nil, egress.Policy{
 		Mode: "none",

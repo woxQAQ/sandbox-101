@@ -5,26 +5,27 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
-	"github.com/woxQAQ/haven/tests/fixtures"
+	"github.com/woxQAQ/haven/internal/testutil"
 )
 
 func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, change := range []string{
 		"vm-owner",
 		"current-instance",
 		"resource-version",
 	} {
 		t.Run(change, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(point string) error {
+			service, backend := testapp.ColdService(t, func(point string) error {
 				if point == "step_agent_ready" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			operation := fixtures.ColdClaim(t, service, "late")
-			before := fixtures.AwaitColdWorker(t, service, operation.ID)
+			operation := testfixture.ColdClaim(t, service, "late")
+			before := testutil.AwaitColdWorker(t, service, operation.ID)
 			var other string
 			if err := service.State.Database().QueryRow("SELECT operation_id FROM template_intents WHERE template_id='cold'").Scan(&other); err != nil {
 				t.Fatal(err)
@@ -44,8 +45,8 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 				}
 			}
 			agents := backend.Count("agent")
-			service = fixtures.ResumeColdService(t, service, backend)
-			after := fixtures.AwaitColdWorker(t, service, operation.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			after := testutil.AwaitColdWorker(t, service, operation.ID)
 			if after.Status == "succeeded" || after.State.Witness != "" || after.Input.Resource.Instance != before.Input.Resource.Instance {
 				t.Fatal("late worker completed another owner/instance", after.State)
 			}

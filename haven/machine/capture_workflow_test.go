@@ -14,14 +14,15 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"extra-file",
 		"symlink",
@@ -34,7 +35,7 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 			var sourcePath string
 			var setupErr error
 			var backend *testfixture.ColdRuntime
-			service, backend = fixtures.ColdService(t, func(phase string) error {
+			service, backend = testapp.ColdService(t, func(phase string) error {
 				if modified {
 					return nil
 				}
@@ -74,12 +75,12 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 				}
 				return setupErr
 			})
-			operation, _ := fixtures.CaptureReady(t, service, "writer")
-			step := fixtures.AwaitCapture(t, service, operation.ID)
+			operation, _ := testfixture.CaptureReady(t, service, "writer")
+			step := testutil.AwaitCapture(t, service, operation.ID)
 			if setupErr != nil || !modified {
 				t.Fatal("writer fixture did not execute", setupErr)
 			}
-			fixtures.CapturePublished(t, service, step, damage == "writer-after-copy")
+			testutil.CapturePublished(t, service, step, damage == "writer-after-copy")
 			observation, err := backend.Inspect(context.Background(), step.Input.Source.Input.Resource)
 			if err != nil || observation.Paused || !observation.Alive {
 				t.Fatal("untrusted capture stranded the source", err)
@@ -106,8 +107,8 @@ func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
 }
 
 func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, nil)
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, nil)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	t.Cleanup(func() {
@@ -122,7 +123,7 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 		}
 		return nil
 	}
-	operation, _ := fixtures.CaptureReady(t, service, "shutdown")
+	operation, _ := testfixture.CaptureReady(t, service, "shutdown")
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -157,27 +158,27 @@ func TestHavenSnapshotShutdownResumesSource(t *testing.T) {
 	t.Cleanup(func() {
 		_ = resumed.Close(context.Background())
 	})
-	step := fixtures.AwaitCapture(t, resumed, operation.ID)
+	step := testutil.AwaitCapture(t, resumed, operation.ID)
 	if step.Status != "failed" || backend.Count("capture") != 1 || backend.Count("launch") != 1 {
 		t.Fatal("shutdown recaptured unproved bytes or restarted source", step.State)
 	}
-	fixtures.CapturePublished(t, resumed, step, false)
+	testutil.CapturePublished(t, resumed, step, false)
 }
 
 func TestHavenSnapshotOwnerIsPermanent(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, _ := fixtures.ColdService(t, nil)
-	operation, _ := fixtures.CaptureReady(t, service, "owner")
-	step := fixtures.AwaitCapture(t, service, operation.ID)
-	fixtures.CapturePublished(t, service, step, true)
+	testutil.ParallelLifecycle(t)
+	service, _ := testapp.ColdService(t, nil)
+	operation, _ := testfixture.CaptureReady(t, service, "owner")
+	step := testutil.AwaitCapture(t, service, operation.ID)
+	testutil.CapturePublished(t, service, step, true)
 	if _, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "other", step.Input.Snapshot.ID); err == nil {
 		t.Fatal("foreign tenant could read capture")
 	}
 }
 
 func TestHavenSnapshotCompletionRequiresRunningStep(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, nil)
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, nil)
 	// The private trigger changes the step after proof loading, inside the
 	// publication transaction. Completion must still require a running step.
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER change_capture_status
@@ -187,12 +188,12 @@ AFTER UPDATE OF published ON snapshots WHEN NEW.published=1 BEGIN
 END`); err != nil {
 		t.Fatal(err)
 	}
-	accepted, _ := fixtures.CaptureReady(t, service, "running-fence")
-	step := fixtures.AwaitCapture(t, service, accepted.ID)
+	accepted, _ := testfixture.CaptureReady(t, service, "running-fence")
+	step := testutil.AwaitCapture(t, service, accepted.ID)
 	if step.Status != "running" || step.State.Phase != "publish_intent" {
 		t.Fatalf("completion crossed running fence or failed to roll back: status=%s phase=%s", step.Status, step.State.Phase)
 	}
-	fixtures.CapturePublished(t, service, step, false)
+	testutil.CapturePublished(t, service, step, false)
 	var checkpoints int
 	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM checkpoints").Scan(&checkpoints); err != nil || checkpoints != 0 {
 		t.Fatal("checkpoint escaped rejected completion", checkpoints, err)
@@ -200,16 +201,16 @@ END`); err != nil {
 	if _, err := service.State.Database().Exec("DROP TRIGGER change_capture_status"); err != nil {
 		t.Fatal(err)
 	}
-	service = fixtures.ResumeColdService(t, service, backend)
-	step = fixtures.AwaitCapture(t, service, accepted.ID)
-	fixtures.CapturePublished(t, service, step, true)
+	service = testapp.ReopenCloneService(t, service, backend)
+	step = testutil.AwaitCapture(t, service, accepted.ID)
+	testutil.CapturePublished(t, service, step, true)
 	if backend.Count("capture") != 1 || backend.Count("launch") != 1 {
 		t.Fatal("completion retry repeated a host effect")
 	}
 }
 
 func TestHavenSnapshotDurability(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"capture_admitted",
 		"capture_prepared",
@@ -225,13 +226,13 @@ func TestHavenSnapshotDurability(t *testing.T) {
 		"capture_completed",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(candidate string) error {
+			service, backend := testapp.ColdService(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			acceptedOperation, request := fixtures.CaptureReady(t, service, "capture")
+			acceptedOperation, request := testfixture.CaptureReady(t, service, "capture")
 			var before machine.CaptureStep
 			var err error
 			if point == "capture_admitted" {
@@ -240,12 +241,12 @@ func TestHavenSnapshotDurability(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				before = fixtures.AwaitCapture(t, service, acceptedOperation.ID)
+				before = testutil.AwaitCapture(t, service, acceptedOperation.ID)
 			}
-			service = fixtures.ResumeColdService(t, service, backend)
-			after := fixtures.AwaitCapture(t, service, acceptedOperation.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			after := testutil.AwaitCapture(t, service, acceptedOperation.ID)
 			proved := point == "capture_admitted" || point == "capture_prepared" || point == "capture_materialized" || point == "artifacts_synced" || point == "publish_intent" || point == "capture_completion_before_commit" || point == "capture_completed"
-			fixtures.CapturePublished(t, service, after, proved)
+			testutil.CapturePublished(t, service, after, proved)
 			if after.Input.Snapshot.ID != before.Input.Snapshot.ID || after.Input.Request != request || backend.Count("launch") != 1 || backend.Count("capture") > 1 {
 				t.Fatal("capture recovery changed candidate or repeated capture")
 			}
@@ -262,7 +263,7 @@ func TestHavenSnapshotDurability(t *testing.T) {
 }
 
 func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"truncate-disk",
 		"zero-memory",
@@ -272,14 +273,14 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 		"missing-boundary",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(point string) error {
+			service, backend := testapp.ColdService(t, func(point string) error {
 				if point == "capture_materialized" {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			acceptedOperation, _ := fixtures.CaptureReady(t, service, "damage")
-			step := fixtures.AwaitCapture(t, service, acceptedOperation.ID)
+			acceptedOperation, _ := testfixture.CaptureReady(t, service, "damage")
+			step := testutil.AwaitCapture(t, service, acceptedOperation.ID)
 			stage := filepath.Join(step.State.Boundary.Path, "publication")
 			switch damage {
 			case "truncate-disk":
@@ -314,12 +315,12 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			service = fixtures.ResumeColdService(t, service, backend)
-			after := fixtures.AwaitCapture(t, service, acceptedOperation.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			after := testutil.AwaitCapture(t, service, acceptedOperation.ID)
 			if after.Status != "failed" {
 				t.Fatal("altered or unproved capture did not fail", after.State)
 			}
-			fixtures.CapturePublished(t, service, after, false)
+			testutil.CapturePublished(t, service, after, false)
 			if backend.Count("capture") != 1 || backend.Count("launch") != 1 {
 				t.Fatal("recovery rebuilt lost capture bytes")
 			}
@@ -331,7 +332,7 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 }
 
 func TestHavenSnapshotAtomicPublication(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -350,9 +351,9 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.table+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
-				service, backend := fixtures.ColdService(t, nil)
-				claim := fixtures.ColdClaim(t, service, "source")
-				source := fixtures.AwaitColdWorker(t, service, claim.ID)
+				service, backend := testapp.ColdService(t, nil)
+				claim := testfixture.ColdClaim(t, service, "source")
+				source := testutil.AwaitColdWorker(t, service, claim.ID)
 				if source.Status != "succeeded" {
 					t.Fatal(source.State)
 				}
@@ -369,11 +370,11 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				step := fixtures.AwaitCapture(t, service, acceptedOperation.ID)
-				if step.State.Phase != "publish_intent" || fixtures.Terminal(step.Status) {
+				step := testutil.AwaitCapture(t, service, acceptedOperation.ID)
+				if step.State.Phase != "publish_intent" || testutil.Terminal(step.Status) {
 					t.Fatal("rejected publication fixed a terminal result", step.State)
 				}
-				fixtures.CapturePublished(t, service, step, false)
+				testutil.CapturePublished(t, service, step, false)
 				var checkpoints int
 				if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM checkpoints").Scan(&checkpoints); err != nil || checkpoints != 0 {
 					t.Fatal("checkpoint leaked outside publication transaction", err)
@@ -381,9 +382,9 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 				if _, err = service.State.Database().Exec("DROP TRIGGER deny_snapshot"); err != nil {
 					t.Fatal(err)
 				}
-				service = fixtures.ResumeColdService(t, service, backend)
-				step = fixtures.AwaitCapture(t, service, acceptedOperation.ID)
-				fixtures.CapturePublished(t, service, step, true)
+				service = testapp.ReopenCloneService(t, service, backend)
+				step = testutil.AwaitCapture(t, service, acceptedOperation.ID)
+				testutil.CapturePublished(t, service, step, true)
 				if backend.Count("capture") != 1 || backend.Count("launch") != 1 {
 					t.Fatal("publication retry repeated a host capture")
 				}
@@ -393,11 +394,11 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 }
 
 func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	t.Run("peak-quota-before-pause", func(t *testing.T) {
-		service, backend := fixtures.ColdService(t, nil)
-		claim := fixtures.ColdClaim(t, service, "source")
-		source := fixtures.AwaitColdWorker(t, service, claim.ID)
+		service, backend := testapp.ColdService(t, nil)
+		claim := testfixture.ColdClaim(t, service, "source")
+		source := testutil.AwaitColdWorker(t, service, claim.ID)
 		if _, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", testfixture.Encode(authorization.Limits{
 			MaxSandboxes:  10,
 			MaxStorageMiB: 255,
@@ -417,9 +418,9 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 		}
 	})
 	t.Run("admission-ignore", func(t *testing.T) {
-		service, backend := fixtures.ColdService(t, nil)
-		claim := fixtures.ColdClaim(t, service, "source")
-		source := fixtures.AwaitColdWorker(t, service, claim.ID)
+		service, backend := testapp.ColdService(t, nil)
+		claim := testfixture.ColdClaim(t, service, "source")
+		source := testutil.AwaitColdWorker(t, service, claim.ID)
 		if _, err := service.State.Database().Exec("CREATE TRIGGER deny_capture_owner BEFORE INSERT ON snapshot_owners BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 			t.Fatal(err)
 		}

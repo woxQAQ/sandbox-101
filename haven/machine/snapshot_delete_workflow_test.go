@@ -14,14 +14,14 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -49,7 +49,7 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 				}
 				operation := admitSnapshotDeleteFixture(t, fixture)
 				step := awaitSnapshotDelete(t, service, operation.ID)
-				if fixtures.Terminal(step.Status) || step.Phase != "files_removed" {
+				if testutil.Terminal(step.Status) || step.Phase != "files_removed" {
 					t.Fatal("snapshot retirement denial committed", step.Phase)
 				}
 				snapshotDeleteCost(t, fixture, 192)
@@ -71,7 +71,7 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'fixture backing fee rejection'",
 		"IGNORE",
@@ -95,8 +95,8 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			step := fixtures.AwaitColdWorker(t, service, release.ID)
-			if fixtures.Terminal(step.Status) || step.State.Phase != "files_removed" {
+			step := testutil.AwaitColdWorker(t, service, release.ID)
+			if testutil.Terminal(step.Status) || step.State.Phase != "files_removed" {
 				t.Fatal("backing fee denial partially retired VM", step.State)
 			}
 			snapshotDeleteCost(t, fixture, 192)
@@ -108,7 +108,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
-			if done := fixtures.AwaitColdWorker(t, fixture.Service, release.ID); done.Status != "succeeded" {
+			if done := testutil.AwaitColdWorker(t, fixture.Service, release.ID); done.Status != "succeeded" {
 				reason := fixture.Service.Workers.State(release.ID).Err
 				t.Fatal(done.State, reason)
 			}
@@ -118,7 +118,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"unknown",
 		"replaced",
@@ -180,7 +180,7 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 				}
 			}
 			operation := admitSnapshotDeleteFixture(t, fixture)
-			if step := awaitSnapshotDelete(t, service, operation.ID); fixtures.Terminal(step.Status) {
+			if step := awaitSnapshotDelete(t, service, operation.ID); testutil.Terminal(step.Status) {
 				t.Fatal("uncertain snapshot retired", step.Phase)
 			}
 			snapshotDeleteCost(t, fixture, 192)
@@ -194,12 +194,12 @@ func TestHavenSnapshotDeleteRetainsUncertainObjects(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 1)
 	service := fixture.Service
 	fixture.Runtime.FailBoot = true
-	failedOperation := fixtures.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "failed-retained-clone")
-	failed := fixtures.AwaitColdWorker(t, service, failedOperation.ID)
+	failedOperation := testfixture.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "failed-retained-clone")
+	failed := testutil.AwaitColdWorker(t, service, failedOperation.ID)
 	fixture.Runtime.FailBoot = false
 	if failed.Status != "failed" || !failed.State.BackingReady {
 		t.Fatal("fixture did not retain failed backing", failed.State)
@@ -217,7 +217,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step := fixtures.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
+	if step := testutil.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
 	snapshotDeleteCost(t, fixture, 192)
@@ -231,7 +231,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step := fixtures.AwaitDiscard(t, service, discard.ID); step.Status != "succeeded" {
+	if step := testutil.AwaitDiscard(t, service, discard.ID); step.Status != "succeeded" {
 		reason := service.Workers.State(discard.ID).Err
 		t.Fatal(step.State, reason)
 	}
@@ -239,7 +239,7 @@ func TestHavenSnapshotDeleteFailedBacking(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	fixture := snapshotDeleteFixture(t, 0)
 	service := fixture.Service
 	fixture.Faults.Set(func(point string) error {
@@ -266,7 +266,7 @@ func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.Service = testapp.ReopenCloneService(t, service, fixture.Backend)
-	if pending := awaitSnapshotDelete(t, fixture.Service, operation.ID); fixtures.Terminal(pending.Status) {
+	if pending := awaitSnapshotDelete(t, fixture.Service, operation.ID); testutil.Terminal(pending.Status) {
 		t.Fatal("unlinked reader was treated as reclaimed")
 	}
 	snapshotDeleteCost(t, fixture, 192)
@@ -281,7 +281,7 @@ func TestHavenSnapshotDeleteUnlinkedReader(t *testing.T) {
 }
 
 func TestHavenSnapshotDelete(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, clones := range []int{
 		0,
 		2,
@@ -335,7 +335,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if proof := fixtures.AwaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
+				if proof := testutil.AwaitColdWorker(t, service, release.ID); proof.Status != "succeeded" {
 					reason := service.Workers.State(release.ID).Err
 					t.Fatal("backing release failed", proof.State, reason)
 				}
@@ -362,7 +362,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 }
 
 func TestHavenSnapshotDeleteRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"snapshot_delete_admitted",
 		"snapshot_delete_receipt",
@@ -408,12 +408,12 @@ func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 	faults := &testfixture.SnapshotFaults{}
 	var factory func(*testfixture.ColdRuntime) loom.Backend
 	if clones > 0 {
-		factory = fixtures.RestorableBackend
+		factory = testfixture.RestorableBackend
 	}
-	service, runtime := fixtures.ColdServiceWithBackend(t, faults.Check, factory)
+	service, runtime := testapp.ColdServiceWithBackend(t, faults.Check, factory)
 	backend := service.Options.Backend
-	capture, _ := fixtures.CaptureReady(t, service, "delete-source")
-	if step := fixtures.AwaitCapture(t, service, capture.ID); step.Status != "succeeded" {
+	capture, _ := testfixture.CaptureReady(t, service, "delete-source")
+	if step := testutil.AwaitCapture(t, service, capture.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
 	fixture := &snapshotDeletionFixture{
@@ -424,8 +424,8 @@ func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 		Capture: capture,
 	}
 	for index := range clones {
-		acceptedOperation := fixtures.AdmitCloneFixture(t, service, capture.Result.SnapshotID, fmt.Sprintf("delete-clone-%d", index))
-		if step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID); step.Status != "succeeded" {
+		acceptedOperation := testfixture.AdmitCloneFixture(t, service, capture.Result.SnapshotID, fmt.Sprintf("delete-clone-%d", index))
+		if step := testutil.AwaitColdWorker(t, service, acceptedOperation.ID); step.Status != "succeeded" {
 			t.Fatal(step.State)
 		}
 		fixture.Clones = append(fixture.Clones, acceptedOperation)
@@ -442,7 +442,7 @@ func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step := fixtures.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
+	if step := testutil.AwaitColdWorker(t, service, release.ID); step.Status != "succeeded" {
 		t.Fatal(step.State)
 	}
 	return fixture
@@ -458,7 +458,7 @@ func awaitSnapshotDelete(t *testing.T, service *application.App, id string) mach
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !active && (seen || fixtures.Terminal(step.Status)) {
+		if !active && (seen || testutil.Terminal(step.Status)) {
 			return step
 		}
 		if time.Now().After(deadline) {

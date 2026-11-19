@@ -1,4 +1,4 @@
-package fixtures
+package testfixture
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/application"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/store"
@@ -62,7 +61,7 @@ func ExtractMergedManifest(t *testing.T, e *NativeImageFixture, m host.ImageMani
 type NativeImageFixture struct {
 	Service *application.App
 	DB      *store.Database
-	Faults  *testfixture.SnapshotFaults
+	Faults  *SnapshotFaults
 	Opts    struct {
 		StateDir string
 	}
@@ -75,12 +74,12 @@ func NewNativeImageFixture(t *testing.T) *NativeImageFixture {
 
 func NativeImageFixtureAt(t *testing.T, directory string) *NativeImageFixture {
 	t.Helper()
-	faults := &testfixture.SnapshotFaults{}
+	faults := &SnapshotFaults{}
 	service, err := application.Open(application.Options{
 		Fault:        faults.Check,
 		StateDir:     directory,
 		Initialize:   true,
-		Backend:      testfixture.NewColdRuntime(),
+		Backend:      NewColdRuntime(),
 		MaxMemoryMiB: 8192,
 		MaxVCPUs:     64,
 		SafetyBytes:  1,
@@ -114,7 +113,7 @@ func (fixture *NativeImageFixture) ImportOCI(ctx context.Context, options imagei
 		Root:     true,
 		TenantID: "root",
 	}
-	operation, err := fixture.Service.Images.AdmitImport(ctx, root, "native-"+testfixture.Digest(testfixture.Encode(options)), options)
+	operation, err := fixture.Service.Images.AdmitImport(ctx, root, "native-"+Digest(Encode(options)), options)
 	if err != nil {
 		return host.ImageManifest{}, err
 	}

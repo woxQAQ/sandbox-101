@@ -11,14 +11,15 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRefillConservesPoolOccupation(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
@@ -62,8 +63,8 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 }
 
 func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 	runtime.Mu.Lock()
 	runtime.FailBoot = true
 	runtime.Mu.Unlock()
@@ -85,13 +86,13 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 }
 
 func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixtureWithBackend(t, func(point string) error {
 		if point == "build_warmup_intent" {
 			return errs.ErrInterrupted
 		}
 		return nil
-	}, fixtures.RestorableBackend)
+	}, testfixture.RestorableBackend)
 	var executions atomic.Int64
 	guest.Before = func(name string, _ loom.Resource) error {
 		if name == "exec" {
@@ -148,8 +149,8 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 }
 
 func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+	testutil.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
@@ -198,7 +199,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 }
 
 func TestHavenTemplatePutOwnerAndReplay(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",

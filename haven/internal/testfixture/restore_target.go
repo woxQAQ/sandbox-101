@@ -1,16 +1,11 @@
-package fixtures
+package testfixture
 
 import (
 	"context"
 	"fmt"
 	"sync"
-	"testing"
-	"time"
 
-	"github.com/woxQAQ/haven/internal/application"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/machine"
 )
 
 type GenerationRuntime struct {
@@ -22,7 +17,7 @@ type GenerationRuntime struct {
 	unknownSibling bool
 }
 
-func GenerationBackend(runtime *testfixture.ColdRuntime) loom.Backend {
+func GenerationBackend(runtime *ColdRuntime) loom.Backend {
 	return &GenerationRuntime{
 		RestorableRuntime: &RestorableRuntime{runtime},
 		known:             map[string]loom.Resource{},
@@ -142,79 +137,4 @@ func (backend *GenerationRuntime) Resume(ctx context.Context, r loom.Resource) e
 	observation.Paused = false
 	backend.states[r.Instance] = observation
 	return nil
-}
-
-func TargetSetup(t *testing.T) (*application.App, *GenerationRuntime, machine.RestoreRequest, machine.ResourceStep) {
-	t.Helper()
-	return TargetSetupWithFault(t, nil)
-}
-
-func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.App, *GenerationRuntime, machine.RestoreRequest, machine.ResourceStep) {
-	t.Helper()
-	service, _ := ColdServiceWithBackend(t, fault, GenerationBackend)
-	backend := service.Options.Backend.(*GenerationRuntime)
-	capture, _ := CaptureReady(t, service, "target-source")
-	if proof := AwaitCapture(t, service, capture.ID); proof.Status != "succeeded" {
-		t.Fatal(proof.State)
-	}
-	target := ColdClaim(t, service, "target")
-	ready := AwaitColdWorker(t, service, target.ID)
-	if ready.Status != "succeeded" {
-		t.Fatal(ready.State)
-	}
-	stop, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
-		TenantID:         "tenant",
-		Key:              "target-stop",
-		SandboxID:        target.Result.SandboxID,
-		ExpectedInstance: ready.State.Witness,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		worker := service.Workers.State(stop.ID)
-		active, seen := worker.Active, worker.Completed
-		if !active && seen {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("stop did not finish")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	result, err := service.Operations.GetOperation(context.Background(), "tenant", stop.ID)
-	if err != nil || result.Status != "succeeded" {
-		reason := service.Workers.State(stop.ID).Err
-		t.Fatal("stop did not succeed", result, reason, err)
-	}
-	request := machine.RestoreRequest{
-		TenantID:         "tenant",
-		Key:              "restore",
-		SandboxID:        target.Result.SandboxID,
-		SnapshotID:       capture.Result.SnapshotID,
-		ExpectedInstance: ready.State.Witness,
-		StopOperationID:  stop.ID,
-	}
-	return service, backend, request, ready
-}
-
-func AwaitStop(t *testing.T, service *application.App, id string) machine.StopStep {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		worker := service.Workers.State(id)
-		active, seen := worker.Active, worker.Completed
-		if !active && seen {
-			step, err := machine.LoadStop(context.Background(), service.State.Database(), id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return step
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("stop worker timed out")
-		}
-		time.Sleep(time.Millisecond)
-	}
 }

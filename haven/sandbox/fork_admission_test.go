@@ -9,18 +9,19 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (fixtures.SandboxClaims{
+	source := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",

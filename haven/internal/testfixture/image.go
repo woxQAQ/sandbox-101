@@ -1,28 +1,21 @@
-package fixtures
+package testfixture
 
 import (
 	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	ocidigest "github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/woxQAQ/haven/authorization"
-	"github.com/woxQAQ/haven/internal/application"
-	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
-	"github.com/woxQAQ/haven/operation"
 )
 
 func PrivateOCIImport(t *testing.T) imageimport.ImageImportOptions {
@@ -131,56 +124,5 @@ func PrivateOCIImport(t *testing.T) imageimport.ImageImportOptions {
 		Digest:   descriptor.Digest.String(),
 		MaxBytes: 1 << 20,
 		MaxFiles: 128,
-	}
-}
-
-func FailedCachedImport(t *testing.T, fault func(string) error) (*application.App, operation.Record) {
-	t.Helper()
-	options := PrivateOCIImport(t)
-	var abort atomic.Bool
-	abort.Store(true)
-	service, _, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
-		if abort.Load() && point == "image_import_layer_saved" {
-			return errors.New("known fixture abort after cache responsibility persisted")
-		}
-		if fault != nil {
-			return fault(point)
-		}
-		return nil
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	acceptedOperation, err := service.Images.AdmitImport(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "root",
-	}, "import", options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := service.Operations.WaitManagement(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "root",
-	}, acceptedOperation.ID)
-	if err == nil || result.Status != "failed" {
-		t.Fatal(result, err)
-	}
-	WaitImportInterruption(t, service, acceptedOperation.ID)
-	abort.Store(false)
-	return service, result
-}
-
-func WaitImportInterruption(t *testing.T, service *application.App, id string) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		worker := service.Workers.State(id)
-		active, last := worker.Active, worker.Err
-		if !active && last != nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("image effect interruption missing")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }

@@ -14,12 +14,12 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, mode := range []string{
 		"ABORT,'denied'",
 		"IGNORE",
@@ -59,7 +59,7 @@ func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
 }
 
 func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, capture, request := rawCleanupFixture(t, nil)
 	backend.Mu.Lock()
 	backend.InspectError = errors.New("private fixture observation unavailable")
@@ -83,14 +83,14 @@ func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
 	if err != nil || replay.ID != accepted.ID {
 		t.Fatal("replay changed raw cleanup identity", replay, err)
 	}
-	fixtures.WaitFixtureWorker(t, service, accepted.ID)
+	testutil.WaitFixtureWorker(t, service, accepted.ID)
 	if done := awaitRawCleanup(t, service, accepted.ID); done.Status != "succeeded" {
 		t.Fatal(done)
 	}
 }
 
 func TestHavenPublishedRawCleanup(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, capture, request := rawCleanupFixture(t, nil)
 	operation, err := service.CaptureCleanup.Admit(context.Background(), request, nil)
 	if err != nil {
@@ -117,7 +117,7 @@ func TestHavenPublishedRawCleanup(t *testing.T) {
 }
 
 func TestHavenPublishedRawCleanupRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, boundary := range []string{
 		"capture_cleanup_receipt",
 		"capture_cleanup_unlinked",
@@ -149,7 +149,7 @@ func TestHavenPublishedRawCleanupRecovery(t *testing.T) {
 }
 
 func TestHavenPublishedRawCleanupRejectsUnknown(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, capture, request := rawCleanupFixture(t, nil)
 	unknown := filepath.Join(capture.State.Boundary.Path, "unowned")
 	if err := os.WriteFile(unknown, []byte("unowned private fixture"), 0o600); err != nil {
@@ -179,13 +179,13 @@ func TestHavenPublishedRawCleanupRejectsUnknown(t *testing.T) {
 
 func rawCleanupFixture(t *testing.T, fault func(string) error) (*application.App, *testfixture.ColdRuntime, machine.CaptureStep, machine.CaptureCleanupRequest) {
 	t.Helper()
-	service, backend := fixtures.ColdService(t, fault)
-	_, request := fixtures.CaptureReady(t, service, "source")
+	service, backend := testapp.ColdService(t, fault)
+	_, request := testfixture.CaptureReady(t, service, "source")
 	operation, err := service.Captures.AdmitCapture(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capture := fixtures.AwaitCapture(t, service, operation.ID)
+	capture := testutil.AwaitCapture(t, service, operation.ID)
 	stopped, err := service.Stops.AdmitStop(context.Background(), machine.StopRequest{
 		TenantID:         "tenant",
 		Key:              "stop",
@@ -195,7 +195,7 @@ func rawCleanupFixture(t *testing.T, fault func(string) error) (*application.App
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixtures.AwaitStop(t, service, stopped.ID)
+	testutil.AwaitStop(t, service, stopped.ID)
 	return service, backend, capture, machine.CaptureCleanupRequest{
 		TenantID:           "tenant",
 		Key:                "raw",
@@ -212,7 +212,7 @@ func awaitRawCleanup(t *testing.T, service *application.App, id string) machine.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if fixtures.Terminal(step.Status) {
+		if testutil.Terminal(step.Status) {
 			return step
 		}
 		reason := service.Workers.State(id).Err

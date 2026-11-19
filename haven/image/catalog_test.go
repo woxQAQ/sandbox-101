@@ -14,12 +14,11 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestActualLayeredManifestVerification(t *testing.T) {
 	t.Parallel()
-	e, _, _, original := fixtures.ImportFixture(t)
+	e, _, _, original := testfixture.ImportFixture(t)
 	dir := filepath.Join(e.Opts.StateDir, "images", original.Digest[7:])
 	for name, mutate := range map[string]func(*host.ImageManifest){
 		"format": func(m *host.ImageManifest) {
@@ -91,7 +90,7 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 
 func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 	t.Parallel()
-	e, layout, layers, m := fixtures.ImportFixture(t)
+	e, layout, layers, m := testfixture.ImportFixture(t)
 	dir := filepath.Join(e.Opts.StateDir, "images", m.Digest[7:])
 	for _, rel := range []string{
 		m.Artifacts[0].Path,
@@ -136,7 +135,7 @@ func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 	if err := os.Remove(filepath.Join(cacheDir, "layer.json")); err != nil {
 		t.Fatal(err)
 	}
-	image := fixtures.PutOCIManifest(t, layout, "missing receipt", layers)
+	image := testfixture.PutOCIManifest(t, layout, "missing receipt", layers)
 	if _, err := e.ImportOCI(
 		context.Background(),
 		imageimport.ImageImportOptions{
@@ -152,7 +151,7 @@ func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 
 func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	t.Parallel()
-	fixtures.RequireEROFS(t)
+	testfixture.RequireEROFS(t)
 	ctx := context.Background()
 	tools, err := host.ImageTools(ctx)
 	if err != nil {
@@ -161,11 +160,11 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	delete(tools, "go-erofs")
 	builder := host.ImageBuilder(tools)
 	layout := t.TempDir()
-	layer := fixtures.PutOCILayer(t, layout, fixtures.BootLayerEntries(), false)
-	image := fixtures.PutOCIManifest(t, layout, "legacy-native", []fixtures.OCILayerFixture{
+	layer := testfixture.PutOCILayer(t, layout, testfixture.BootLayerEntries(), false)
+	image := testfixture.PutOCIManifest(t, layout, "legacy-native", []testfixture.OCILayerFixture{
 		layer,
 	})
-	e := fixtures.NewNativeImageFixture(t)
+	e := testfixture.NewNativeImageFixture(t)
 	defer e.Close()
 	input := filepath.Join(layout, "blobs", "sha256", layer.Descriptor.Digest.Encoded())
 	n, count, err := host.ValidateLayer(host.LayerInput{
@@ -258,7 +257,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(m, reimported) {
 		t.Fatalf("old catalog identity changed: %v", err)
 	}
-	root := fixtures.ExtractManifest(t, e, reimported)
+	root := testfixture.ExtractManifest(t, e, reimported)
 	if got, err := os.ReadFile(filepath.Join(root, "boot/vmlinux")); err != nil || string(got) != "kernel-fixture" {
 		t.Fatalf("old catalog lost native contents: %v", err)
 	}

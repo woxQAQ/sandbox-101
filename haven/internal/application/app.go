@@ -39,7 +39,7 @@ type Options struct {
 	Egress       Egress
 	// EgressFactory binds callbacks before startup reconciliation can use portals.
 	EgressFactory func(EgressCallbacks) (Egress, string, error)
-	AdminToken     string
+	AdminToken    string
 	CAPEM         string
 	MaxTTL        time.Duration
 	PausedTTL     time.Duration

@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDiscardAdmissionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, source := failedColdFixture(t)
 	if _, err := service.State.Database().Exec("CREATE TRIGGER deny_discard_handoff BEFORE UPDATE ON cleanup_intents WHEN NEW.status='transferred' BEGIN SELECT RAISE(IGNORE); END"); err != nil {
 		t.Fatal(err)

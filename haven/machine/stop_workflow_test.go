@@ -5,21 +5,22 @@ import (
 	"context"
 	"testing"
 
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStopCompletionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private stop failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, nil)
-			claim := fixtures.ColdClaim(t, service, "source")
-			source := fixtures.AwaitColdWorker(t, service, claim.ID)
+			service, backend := testapp.ColdService(t, nil)
+			claim := testfixture.ColdClaim(t, service, "source")
+			source := testutil.AwaitColdWorker(t, service, claim.ID)
 			if source.Status != "succeeded" {
 				t.Fatal(source.State)
 			}
@@ -36,7 +37,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			step := fixtures.AwaitStop(t, service, accepted.ID)
+			step := testutil.AwaitStop(t, service, accepted.ID)
 			if step.Status != "running" || step.Phase != "stop_intent" || service.Workers.State(accepted.ID).Err == nil {
 				t.Fatal("failed stop completion lost retryable intent", step)
 			}
@@ -59,7 +60,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 			if err != nil || replay.ID != accepted.ID {
 				t.Fatal("stop replay changed immutable operation", replay, err)
 			}
-			done := fixtures.AwaitStop(t, service, accepted.ID)
+			done := testutil.AwaitStop(t, service, accepted.ID)
 			if done.Status != "succeeded" || done.Phase != "complete" || done.Hash != step.Hash || done.Input != step.Input {
 				t.Fatal("stop replay did not complete original proof", done)
 			}
@@ -72,18 +73,18 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 }
 
 func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"source",
 		"amount",
 		"holder",
 	} {
 		t.Run(damage, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, nil)
-			claim := fixtures.ColdClaim(t, service, "source")
-			history := fixtures.AwaitColdWorker(t, service, claim.ID)
-			other := fixtures.ColdClaim(t, service, "other")
-			if history.Status != "succeeded" || fixtures.AwaitColdWorker(t, service, other.ID).Status != "succeeded" {
+			service, backend := testapp.ColdService(t, nil)
+			claim := testfixture.ColdClaim(t, service, "source")
+			history := testutil.AwaitColdWorker(t, service, claim.ID)
+			other := testfixture.ColdClaim(t, service, "other")
+			if history.Status != "succeeded" || testutil.AwaitColdWorker(t, service, other.ID).Status != "succeeded" {
 				t.Fatal("fixture resources did not complete")
 			}
 			var before []byte
@@ -103,7 +104,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				query = "UPDATE quota_refs SET holder_id=? WHERE tenant_id='tenant' AND kind='vm_disk' AND resource_key=? AND holder_kind='active_use'"
 				changed, original = "sandbox:"+other.Result.SandboxID, "sandbox:"+claim.Result.SandboxID
 			}
-			if err := fixtures.RequireWrite(service.State.Database().Exec(query, changed, history.Input.DiskKey)); err != nil {
+			if err := testutil.RequireWrite(service.State.Database().Exec(query, changed, history.Input.DiskKey)); err != nil {
 				t.Fatal(err)
 			}
 			var charged int64
@@ -132,14 +133,14 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 			if err != nil || !bytes.Equal(testfixture.Encode(frozen), testfixture.Encode(history)) {
 				t.Fatal("rejected stop rewrote original witness", err)
 			}
-			if err = fixtures.RequireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {
+			if err = testutil.RequireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {
 				t.Fatal(err)
 			}
 			accepted, err = service.Stops.AdmitStop(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stopped := fixtures.AwaitStop(t, service, accepted.ID); stopped.Status != "succeeded" || backend.Count("stop") != 1 {
+			if stopped := testutil.AwaitStop(t, service, accepted.ID); stopped.Status != "succeeded" || backend.Count("stop") != 1 {
 				t.Fatal("restored original proof did not permit exactly one stop", stopped)
 			}
 		})

@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
 	faults.Set(func(point string) error {
 		if point == "capture_admitted" {
@@ -21,8 +22,8 @@ func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
 		}
 		return nil
 	})
-	service, backend := fixtures.ColdService(t, faults.Check)
-	accepted, request := fixtures.CaptureReady(t, service, "capture")
+	service, backend := testapp.ColdService(t, faults.Check)
+	accepted, request := testfixture.CaptureReady(t, service, "capture")
 	original, err := machine.LoadCapture(context.Background(), service.State.Database(), accepted.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -43,9 +44,9 @@ func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
 	if err != nil || replay.ID != accepted.ID {
 		t.Fatal("matching capture replay changed operation", replay, err)
 	}
-	done := fixtures.AwaitCapture(t, service, accepted.ID)
+	done := testutil.AwaitCapture(t, service, accepted.ID)
 	if done.Status != "succeeded" || done.Hash != original.Hash || !reflect.DeepEqual(done.Input, original.Input) || backend.Count("capture") != 1 {
 		t.Fatal("matching replay did not use original capture proof", done)
 	}
-	fixtures.CapturePublished(t, service, done, true)
+	testutil.CapturePublished(t, service, done, true)
 }

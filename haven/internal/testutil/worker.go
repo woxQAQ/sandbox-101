@@ -1,4 +1,7 @@
-package fixtures
+// Package testutil holds generic wait, assertion and concurrency helpers
+// shared by several Haven test packages. Single-package helpers live next to
+// their own tests instead.
+package testutil
 
 import (
 	"testing"

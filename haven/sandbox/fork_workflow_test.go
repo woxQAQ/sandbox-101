@@ -15,19 +15,19 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (fixtures.SandboxClaims{
+	source := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "source", map[string]operation.EnvVar{
 		"SOURCE_ONLY": {
@@ -128,14 +128,14 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 }
 
 func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	source := (fixtures.SandboxClaims{
+	source := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
@@ -172,13 +172,13 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 }
 
 func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
-	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, faults.Check, fixtures.RestorableBackend)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, faults.Check, testfixture.RestorableBackend)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	source := (fixtures.SandboxClaims{
+	source := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
@@ -281,17 +281,17 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 }
 
 func TestHavenForkCompletionRejectsSQL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, fixtures.RestorableBackend)
+			service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			source := (fixtures.SandboxClaims{
+			source := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "source", nil, egress.Policy{
 				Mode: "none",
@@ -328,7 +328,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 				t.Fatal("rejected group completion reported success")
 			}
 			group, err := sandbox.LoadFork(ctx, service.State.Database(), accepted.ID)
-			if err != nil || fixtures.Terminal(group.Status) || group.State.Phase != "allocated" || len(group.State.Children) != 2 {
+			if err != nil || testutil.Terminal(group.Status) || group.State.Phase != "allocated" || len(group.State.Children) != 2 {
 				t.Fatal("failed completion lost committed branch progress", group, err)
 			}
 			var leases, publications int

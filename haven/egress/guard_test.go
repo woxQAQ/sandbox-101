@@ -167,7 +167,9 @@ func TestPrivateCIDROptInRequiresExplicitAllowance(t *testing.T) {
 		},
 	}
 	resolve := func(_ context.Context, _, host string) ([]netip.Addr, error) {
-		return []netip.Addr{netip.MustParseAddr(host)}, nil
+		return []netip.Addr{
+			netip.MustParseAddr(host),
+		}, nil
 	}
 	for _, enabled := range []bool{
 		false,

@@ -97,3 +97,17 @@ func ColdServiceWithOptions(t *testing.T, options application.Options, factory f
 	}
 	return service, backend
 }
+
+// ColdService starts a private App on the cold runtime fixture.
+func ColdService(t *testing.T, fault func(string) error) (*application.App, *testfixture.ColdRuntime) {
+	t.Helper()
+	return ColdServiceWithBackend(t, fault, nil)
+}
+
+// ColdServiceWithBackend starts a private App with an optional backend wrapper.
+func ColdServiceWithBackend(t *testing.T, fault func(string) error, factory func(*testfixture.ColdRuntime) loom.Backend) (*application.App, *testfixture.ColdRuntime) {
+	t.Helper()
+	return ColdServiceWithOptions(t, application.Options{
+		Fault: fault,
+	}, factory)
+}

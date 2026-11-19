@@ -7,16 +7,18 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenCapabilityReadersBorrowReadOnlySnapshot(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, _ := fixtures.ColdService(t, nil)
-	accepted := fixtures.ColdClaim(t, service, "readonly-proof")
-	source := fixtures.AwaitColdWorker(t, service, accepted.ID)
+	testutil.ParallelLifecycle(t)
+	service, _ := testapp.ColdService(t, nil)
+	accepted := testfixture.ColdClaim(t, service, "readonly-proof")
+	source := testutil.AwaitColdWorker(t, service, accepted.ID)
 	if source.Status != "succeeded" {
 		t.Fatal(source)
 	}

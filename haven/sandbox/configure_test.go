@@ -10,13 +10,14 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenConfigureFailureMatrix(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, stage := range []string{
 		"inspect",
 		"network_off",
@@ -42,7 +43,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					"old.invalid",
 				},
 			}
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", map[string]operation.EnvVar{
 				"REVISION": {
@@ -60,7 +61,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			defer func() {
 				_ = connection.Close()
 			}()
-			fixtures.WaitFixtureWorker(t, service, claim.ID)
+			testutil.WaitFixtureWorker(t, service, claim.ID)
 			var statement string
 			switch stage {
 			case "inspect":
@@ -129,7 +130,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("failure changed accepted goal", failed, err)
 			}
-			fixtures.WaitFixtureWorker(t, service, failed.ID)
+			testutil.WaitFixtureWorker(t, service, failed.ID)
 			var fence string
 			if err = service.State.Database().QueryRow("SELECT operation_id FROM configuration_fences WHERE sandbox_id=?", before.ID).Scan(&fence); err != nil || fence != failed.ID {
 				t.Fatal("failure lost durable fence", fence, failed, err)
@@ -182,9 +183,9 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 }
 
 func TestHavenConfigureAdmission(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := (fixtures.SandboxClaims{
+	acceptedOperation := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",

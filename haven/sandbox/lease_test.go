@@ -11,13 +11,13 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, state := range []string{
 		"running",
 		"paused",
@@ -31,7 +31,7 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				principal := authorization.Principal{
 					TenantID: "tenant",
 				}
-				claim := (fixtures.SandboxClaims{
+				claim := (testfixture.SandboxClaims{
 					App: service,
 				}).Claim(t, "claim", nil, egress.Policy{
 					Mode: "none",
@@ -99,12 +99,12 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 }
 
 func TestHavenRenewPreservesConfiguration(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	claim := (fixtures.SandboxClaims{
+	claim := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", nil, egress.Policy{
 		Mode: "none",
@@ -161,7 +161,7 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 }
 
 func TestHavenLeaseReaper(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, state := range []string{
 		"kill",
 		"pause",
@@ -172,7 +172,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			claim := (fixtures.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
@@ -199,7 +199,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 				settings.Deadline = deadline
 				settings.OnExpire = state
 			}
-			if err = fixtures.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), id)); err != nil {
+			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), id)); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Command{

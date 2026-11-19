@@ -1,4 +1,4 @@
-package fixtures
+package testfixture
 
 import (
 	"archive/tar"

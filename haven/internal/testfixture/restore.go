@@ -1,4 +1,4 @@
-package fixtures
+package testfixture
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
@@ -18,13 +17,12 @@ import (
 // The runtime fixture supplies a complete static RAM topology and sparse file.
 // The guest image test observes writable-private mappings across VM restore.
 type RestorableRuntime struct {
-	*testfixture.ColdRuntime
+	*ColdRuntime
 }
 
-func RestorableBackend(runtime *testfixture.ColdRuntime) loom.Backend {
+func RestorableBackend(runtime *ColdRuntime) loom.Backend {
 	return &RestorableRuntime{runtime}
 }
-
 func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, directory string) error {
 	if err := backend.ColdRuntime.Capture(ctx, r, directory); err != nil {
 		return err
@@ -55,12 +53,12 @@ func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, 
 		"snapshots": map[string]any{
 			"memory-manager": map[string]any{
 				"snapshot_data": map[string]any{
-					"state": string(testfixture.Encode(manager)),
+					"state": string(Encode(manager)),
 				},
 			},
 		},
 	}
-	if err := os.WriteFile(filepath.Join(directory, "state.json"), testfixture.Encode(state), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), Encode(state), 0o600); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(filepath.Join(directory, "memory-ranges"), os.O_RDWR, 0)
@@ -70,17 +68,6 @@ func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, 
 	truncateErr := file.Truncate(size)
 	return errors.Join(truncateErr, file.Close())
 }
-
-func CloneFixtureWithFault(t *testing.T, fault func(string) error) (*application.App, *RestorableRuntime, operation.Record) {
-	t.Helper()
-	service, _ := ColdServiceWithBackend(t, fault, RestorableBackend)
-	backend := service.Options.Backend.(*RestorableRuntime)
-	capture, _ := CaptureReady(t, service, "clone-source")
-	step := AwaitCapture(t, service, capture.ID)
-	CapturePublished(t, service, step, true)
-	return service, backend, capture
-}
-
 func AdmitCloneFixture(t *testing.T, service *application.App, snapshot, key string) operation.Record {
 	t.Helper()
 	acceptedOperation, err := service.Provisioning.AdmitClone(context.Background(), machine.CloneRequest{

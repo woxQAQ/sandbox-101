@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+	testutil.ParallelLifecycle(t)
+	service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 	runtime.Mu.Lock()
 	runtime.FailBoot = true
 	runtime.Mu.Unlock()
@@ -72,8 +73,8 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 }
 
 func TestHavenGCBatchAndCancellation(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, _, _ := fixtures.GoldenSupplyFixture(t, 2)
+	testutil.ParallelLifecycle(t)
+	service, _, _ := testapp.GoldenSupplyFixture(t, 2)
 	tenant := authorization.Principal{
 		TenantID: "tenant",
 	}

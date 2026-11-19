@@ -12,16 +12,17 @@ import (
 
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStepAdmissionAtomicity(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, failure := range []string{
 		"abort-quota",
 		"ignore-version",
@@ -37,7 +38,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 					return nil
 				}
 			}
-			service, backend := fixtures.ColdService(t, fault)
+			service, backend := testapp.ColdService(t, fault)
 			switch failure {
 			case "abort-quota":
 				_, err := service.State.Database().Exec("CREATE TRIGGER deny_quota BEFORE INSERT ON quota_resources BEGIN SELECT RAISE(ABORT,'fixture quota rejection'); END")
@@ -92,7 +93,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 		})
 	}
 	t.Run("committed-before-effects", func(t *testing.T) {
-		service, backend := fixtures.ColdService(t, nil)
+		service, backend := testapp.ColdService(t, nil)
 		backend.Before = func(_ string, resource loom.Resource) error {
 			if !service.Admission.TryLock() {
 				return fmt.Errorf("effect held the global admission lock")
@@ -107,8 +108,8 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 			}
 			return nil
 		}
-		operation := fixtures.ColdClaim(t, service, "committed")
-		step := fixtures.AwaitColdWorker(t, service, operation.ID)
+		operation := testfixture.ColdClaim(t, service, "committed")
+		step := testutil.AwaitColdWorker(t, service, operation.ID)
 		if step.Status != "succeeded" {
 			t.Fatal("cold step did not complete", step.State)
 		}
@@ -132,7 +133,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 }
 
 func TestHavenStepCrashRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"admission_committed",
 		"step_prepare_intent",
@@ -146,15 +147,15 @@ func TestHavenStepCrashRecovery(t *testing.T) {
 		"step_completed",
 	} {
 		t.Run(point, func(t *testing.T) {
-			service, backend := fixtures.ColdService(t, func(candidate string) error {
+			service, backend := testapp.ColdService(t, func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			operation := fixtures.ColdClaim(t, service, "recover")
+			operation := testfixture.ColdClaim(t, service, "recover")
 			if point != "admission_committed" {
-				fixtures.AwaitColdWorker(t, service, operation.ID)
+				testutil.AwaitColdWorker(t, service, operation.ID)
 			}
 			before, err := machine.LoadResourceStep(context.Background(), service.State.Database(), operation.ID)
 			if err != nil {
@@ -170,8 +171,8 @@ func TestHavenStepCrashRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			service = fixtures.ResumeColdService(t, service, backend)
-			after := fixtures.AwaitColdWorker(t, service, operation.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			after := testutil.AwaitColdWorker(t, service, operation.ID)
 			if after.Status != "succeeded" || after.State.Witness != before.Input.Resource.Instance || after.Input.Resource.VMID != before.Input.Resource.VMID || backend.Count("launch") != 1 {
 				t.Fatalf("recovery allocated another candidate: before=%+v after=%+v launches=%d", before.Input.Resource, after.State, backend.Count("launch"))
 			}
@@ -193,7 +194,7 @@ func TestHavenStepCrashRecovery(t *testing.T) {
 }
 
 func TestHavenInstanceAtomicCompletion(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		name      string
 		event     string
@@ -215,13 +216,13 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 			"IGNORE",
 		} {
 			t.Run(write.name+"/"+strings.Split(mode, ",")[0], func(t *testing.T) {
-				service, backend := fixtures.ColdService(t, nil)
+				service, backend := testapp.ColdService(t, nil)
 				statement := fmt.Sprintf("CREATE TRIGGER reject_completion BEFORE %s ON %s WHEN %s BEGIN SELECT RAISE(%s); END", write.event, write.table, write.condition, mode)
 				if _, err := service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				operation := fixtures.ColdClaim(t, service, "completion")
-				step := fixtures.AwaitColdWorker(t, service, operation.ID)
+				operation := testfixture.ColdClaim(t, service, "completion")
+				step := testutil.AwaitColdWorker(t, service, operation.ID)
 				if step.Status != "running" || step.State.Phase != "agent_ready" || step.State.Witness != "" {
 					t.Fatalf("rejected SQL published a terminal witness: %+v", step.State)
 				}
@@ -236,8 +237,8 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 				if _, err := service.State.Database().Exec("DROP TRIGGER reject_completion"); err != nil {
 					t.Fatal(err)
 				}
-				service = fixtures.ResumeColdService(t, service, backend)
-				step = fixtures.AwaitColdWorker(t, service, operation.ID)
+				service = testapp.ReopenCloneService(t, service, backend)
+				step = testutil.AwaitColdWorker(t, service, operation.ID)
 				if step.Status != "succeeded" || backend.Count("launch") != 1 {
 					t.Fatal("result commit retry relaunched the VM", step.State)
 				}
@@ -248,11 +249,11 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 }
 
 func TestHavenTerminalResultImmutable(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, nil)
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, nil)
 	backend.FailBoot = true
-	failed := fixtures.ColdClaim(t, service, "failed")
-	step := fixtures.AwaitColdWorker(t, service, failed.ID)
+	failed := testfixture.ColdClaim(t, service, "failed")
+	step := testutil.AwaitColdWorker(t, service, failed.ID)
 	if step.Status != "failed" || step.State.Witness != "" {
 		t.Fatal("failure fabricated a witness")
 	}
@@ -264,7 +265,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	backend.Mu.Lock()
 	backend.FailBoot = false
 	backend.Mu.Unlock()
-	service = fixtures.ResumeColdService(t, service, backend)
+	service = testapp.ReopenCloneService(t, service, backend)
 	replayed, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",
 		Key:        "failed",
@@ -281,8 +282,8 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		t.Fatal("failed candidate supplied deletion authority")
 	}
 	coldResponsibility(t, service, failed, false)
-	current := fixtures.ColdClaim(t, service, "new-generation")
-	good := fixtures.AwaitColdWorker(t, service, current.ID)
+	current := testfixture.ColdClaim(t, service, "new-generation")
+	good := testutil.AwaitColdWorker(t, service, current.ID)
 	if good.Status != "succeeded" {
 		t.Fatal("new request did not complete", good.State)
 	}
@@ -290,7 +291,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessBefore); err != nil {
 		t.Fatal(err)
 	}
-	service = fixtures.ResumeColdServiceWithFault(t, service, backend, func(point string) error {
+	service = testapp.ReopenCloneServiceWithFault(t, service, backend, func(point string) error {
 		if point == "release_admitted" {
 			return errs.ErrInterrupted
 		}
@@ -309,8 +310,8 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		t.Fatal("released parent was not fixed before cleanup", err)
 	}
 	parentFailureBytes := testfixture.Encode(parentFailure)
-	service = fixtures.ResumeColdService(t, service, backend)
-	deleted := fixtures.AwaitColdWorker(t, service, release.ID)
+	service = testapp.ReopenCloneService(t, service, backend)
+	deleted := testutil.AwaitColdWorker(t, service, release.ID)
 	if deleted.Status != "succeeded" {
 		t.Fatal("release did not retire its own responsibility", deleted.State)
 	}
@@ -341,7 +342,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 }
 
 func TestHavenStepReleaseRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"release_admitted",
 		"effect_stopped",
@@ -353,14 +354,14 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			var armed bool
-			service, backend := fixtures.ColdService(t, func(candidate string) error {
+			service, backend := testapp.ColdService(t, func(candidate string) error {
 				if armed && candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			claim := fixtures.ColdClaim(t, service, "claim")
-			if step := fixtures.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
+			claim := testfixture.ColdClaim(t, service, "claim")
+			if step := testutil.AwaitColdWorker(t, service, claim.ID); step.Status != "succeeded" {
 				t.Fatal(step.State)
 			}
 			armed = true
@@ -373,14 +374,14 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "release_admitted" {
-				fixtures.AwaitColdWorker(t, service, release.ID)
+				testutil.AwaitColdWorker(t, service, release.ID)
 			}
 			var storage int64
 			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE tenant_id='tenant'").Scan(&storage); err != nil || storage != 64 {
 				t.Fatal("incomplete deletion refunded charge", storage, err)
 			}
-			service = fixtures.ResumeColdService(t, service, backend)
-			step := fixtures.AwaitColdWorker(t, service, release.ID)
+			service = testapp.ReopenCloneService(t, service, backend)
+			step := testutil.AwaitColdWorker(t, service, release.ID)
 			if step.Status != "succeeded" {
 				t.Fatal("release did not resume original cleanup", step.State)
 			}
@@ -396,15 +397,15 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 }
 
 func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend := fixtures.ColdService(t, func(point string) error {
+	testutil.ParallelLifecycle(t)
+	service, backend := testapp.ColdService(t, func(point string) error {
 		if point == "release_admitted" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	claim := fixtures.ColdClaim(t, service, "claim")
-	cold := fixtures.AwaitColdWorker(t, service, claim.ID)
+	claim := testfixture.ColdClaim(t, service, "claim")
+	cold := testutil.AwaitColdWorker(t, service, claim.ID)
 	if cold.Status != "succeeded" {
 		t.Fatal(cold.State)
 	}
@@ -423,8 +424,8 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 	if err = os.WriteFile(disk, []byte("unknown replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service = fixtures.ResumeColdService(t, service, backend)
-	step := fixtures.AwaitColdWorker(t, service, release.ID)
+	service = testapp.ReopenCloneService(t, service, backend)
+	step := testutil.AwaitColdWorker(t, service, release.ID)
 	if step.Status == "succeeded" {
 		t.Fatal("unproved replacement was reclaimed")
 	}

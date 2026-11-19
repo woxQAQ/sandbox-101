@@ -11,13 +11,14 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/application"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom/imageimport"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, condition := range []string{
 		"ignored_step",
 		"changed_charge",
@@ -110,7 +111,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 // no EROFS materialization, namespace or VM behavior is represented by this fixture.
 func pendingImageRecovery(t *testing.T) (*application.App, string, imageimport.ImageImportOptions) {
 	t.Helper()
-	service, _ := fixtures.ColdService(t, nil)
+	service, _ := testapp.ColdService(t, nil)
 	id, options := testfixture.SeedPendingImageImport(t, service.State)
 	return service, id, options
 }

@@ -13,14 +13,16 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/gc"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
-	service, original := fixtures.FailedCachedImport(t, nil)
+	service, original := testapp.FailedCachedImport(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	root := authorization.Principal{
@@ -59,15 +61,15 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 // an unregistered directory remains unknown regardless of its age or contents.
 func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	t.Parallel()
-	fixture, layout, layers, published := fixtures.ImportFixture(t)
+	fixture, layout, layers, published := testfixture.ImportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	root := authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}
-	orphan := fixtures.PutOCILayer(t, layout, append(fixtures.BootLayerEntries(), fixtures.FileEntry("orphan", "data")), false)
-	orphanImage := fixtures.PutOCIManifest(t, layout, "failed-cache-owner", []fixtures.OCILayerFixture{
+	orphan := testfixture.PutOCILayer(t, layout, append(testfixture.BootLayerEntries(), testfixture.FileEntry("orphan", "data")), false)
+	orphanImage := testfixture.PutOCIManifest(t, layout, "failed-cache-owner", []testfixture.OCILayerFixture{
 		orphan,
 	})
 	fixture.Faults.Set(func(point string) error {
@@ -139,7 +141,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	if err := published.Verify(filepath.Join(fixture.Opts.StateDir, "images", published.Digest[7:]), published.Digest); err != nil {
 		t.Fatal("GC broke published layer cache", err)
 	}
-	second := fixtures.PutOCIManifest(t, layout, "gc-concurrent", layers)
+	second := testfixture.PutOCIManifest(t, layout, "gc-concurrent", layers)
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Go(func() {
@@ -166,13 +168,13 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 }
 
 func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private GC completion failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+			service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			runtime.Mu.Lock()

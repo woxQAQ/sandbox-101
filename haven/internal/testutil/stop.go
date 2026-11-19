@@ -1,4 +1,4 @@
-package fixtures
+package testutil
 
 import (
 	"context"
@@ -9,21 +9,21 @@ import (
 	"github.com/woxQAQ/haven/machine"
 )
 
-func AwaitDiscard(t *testing.T, service *application.App, id string) machine.DiscardStep {
+func AwaitStop(t *testing.T, service *application.App, id string) machine.StopStep {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		worker := service.Workers.State(id)
 		active, seen := worker.Active, worker.Completed
-		step, err := machine.LoadDiscard(context.Background(), service.State.Database(), id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !active && (seen || Terminal(step.Status)) {
+		if !active && seen {
+			step, err := machine.LoadStop(context.Background(), service.State.Database(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return step
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("discard worker did not finish", step.State)
+			t.Fatal("stop worker timed out")
 		}
 		time.Sleep(time.Millisecond)
 	}

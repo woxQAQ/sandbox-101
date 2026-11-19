@@ -13,13 +13,13 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, backend, source := failedColdFixture(t)
 	backend.Mu.Lock()
 	backend.InspectError = errors.New("fixture unknown sibling")
@@ -29,7 +29,7 @@ func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := fixtures.AwaitDiscard(t, service, discard.ID)
+	result := testutil.AwaitDiscard(t, service, discard.ID)
 	if result.Status == "succeeded" || backend.Count("stop") != 1 || backend.Count("network") != networks || backend.Count("remove") != 0 {
 		t.Fatal("unknown full inventory authorized a device mutation")
 	}
@@ -40,15 +40,15 @@ func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
 }
 
 func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend, snapshot := fixtures.CloneFixtureWithFault(t, func(point string) error {
+	testutil.ParallelLifecycle(t)
+	service, backend, snapshot := testapp.CloneFixtureWithFault(t, func(point string) error {
 		if point == "restore_prepare_intent" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	operation := fixtures.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
-	pending := fixtures.AwaitColdWorker(t, service, operation.ID)
+	operation := testfixture.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
+	pending := testutil.AwaitColdWorker(t, service, operation.ID)
 	if err := os.MkdirAll(pending.Input.Resource.RestoreDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	source := fixtures.AwaitColdWorker(t, service, operation.ID)
+	source := testutil.AwaitColdWorker(t, service, operation.ID)
 	if source.Status != "failed" || source.State.Materials != nil {
 		t.Fatal("fixture unexpectedly established restore boundary", source.State)
 	}
@@ -65,7 +65,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := fixtures.AwaitDiscard(t, service, discard.ID)
+	result := testutil.AwaitDiscard(t, service, discard.ID)
 	if result.Status == "succeeded" {
 		t.Fatal("current pathname created missing historical directory proof")
 	}
@@ -80,7 +80,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 }
 
 func TestHavenDiscardFailedCandidate(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, kind := range []string{
 		"cold",
 		"clone-partial",
@@ -95,7 +95,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				service, b, source = failedColdFixture(t)
 				backend = b
 			} else {
-				var b *fixtures.RestorableRuntime
+				var b *testfixture.RestorableRuntime
 				service, b, source = failedCloneFixture(t, kind == "clone-transferred")
 				backend = b
 			}
@@ -108,7 +108,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := fixtures.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, operation.ID)
 			discardSucceeded(t, service, result, discardExpectation{
 				Source:   source,
 				Original: testfixture.Encode(original),
@@ -133,7 +133,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 }
 
 func TestHavenDiscardCrashRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"discard_admitted",
 		"discard_stop_intent",
@@ -160,14 +160,14 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if point != "discard_admitted" {
-				fixtures.AwaitDiscard(t, service, operation.ID)
+				testutil.AwaitDiscard(t, service, operation.ID)
 			}
 			var held int
 			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 				t.Fatal("incomplete discard retired cost", held, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			result := fixtures.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, operation.ID)
 			discardSucceeded(t, service, result, discardExpectation{
 				Source:   source,
 				Original: testfixture.Encode(original),
@@ -180,7 +180,7 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 }
 
 func TestHavenDiscardAtomicRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -210,7 +210,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				result := fixtures.AwaitDiscard(t, service, operation.ID)
+				result := testutil.AwaitDiscard(t, service, operation.ID)
 				if result.Status != "running" || result.State.Phase != "files_removed" {
 					t.Fatal("rejected SQL published discard success", result.State)
 				}
@@ -222,7 +222,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 					t.Fatal(err)
 				}
 				service = testapp.ReopenCloneService(t, service, backend)
-				discardSucceeded(t, service, fixtures.AwaitDiscard(t, service, operation.ID), discardExpectation{
+				discardSucceeded(t, service, testutil.AwaitDiscard(t, service, operation.ID), discardExpectation{
 					Source:   source,
 					Original: testfixture.Encode(original),
 				})
@@ -232,7 +232,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 }
 
 func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, damage := range []string{
 		"foreign-ref",
 		"unknown-file",
@@ -254,7 +254,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				t.Fatal(err)
 			}
 			if damage == "replaced-after-receipt" {
-				fixtures.AwaitDiscard(t, service, operation.ID)
+				testutil.AwaitDiscard(t, service, operation.ID)
 			}
 			var path string
 			switch damage {
@@ -277,7 +277,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				}
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			result := fixtures.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, operation.ID)
 			if result.Status == "succeeded" {
 				t.Fatal("unproved object was reclaimed")
 			}
@@ -302,10 +302,10 @@ func failedColdFixture(t *testing.T) (*application.App, *testfixture.ColdRuntime
 
 func failedColdFixtureWithFault(t *testing.T, fault func(string) error) (*application.App, *testfixture.ColdRuntime, machine.ResourceStep) {
 	t.Helper()
-	service, backend := fixtures.ColdService(t, fault)
+	service, backend := testapp.ColdService(t, fault)
 	backend.FailBoot = true
-	operation := fixtures.ColdClaim(t, service, "failed-cold")
-	source := fixtures.AwaitColdWorker(t, service, operation.ID)
+	operation := testfixture.ColdClaim(t, service, "failed-cold")
+	source := testutil.AwaitColdWorker(t, service, operation.ID)
 	if source.Status != "failed" || source.State.Witness != "" {
 		t.Fatal("cold fixture did not fail", source.State)
 	}
@@ -315,9 +315,9 @@ func failedColdFixtureWithFault(t *testing.T, fault func(string) error) (*applic
 	return service, backend, source
 }
 
-func failedCloneFixture(t *testing.T, transferred bool) (*application.App, *fixtures.RestorableRuntime, machine.ResourceStep) {
+func failedCloneFixture(t *testing.T, transferred bool) (*application.App, *testfixture.RestorableRuntime, machine.ResourceStep) {
 	t.Helper()
-	service, backend, snapshot := fixtures.CloneFixtureWithFault(t, func(point string) error {
+	service, backend, snapshot := testapp.CloneFixtureWithFault(t, func(point string) error {
 		if !transferred && point == "restore_candidate_copied" {
 			return errs.ErrInterrupted
 		}
@@ -328,12 +328,12 @@ func failedCloneFixture(t *testing.T, transferred bool) (*application.App, *fixt
 		backend.FailBoot = true
 		backend.Mu.Unlock()
 	}
-	clone := fixtures.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "failed-clone")
-	fixtures.AwaitColdWorker(t, service, clone.ID)
+	clone := testfixture.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "failed-clone")
+	testutil.AwaitColdWorker(t, service, clone.ID)
 	if !transferred {
 		service = testapp.ReopenCloneService(t, service, backend)
 	}
-	source := fixtures.AwaitColdWorker(t, service, clone.ID)
+	source := testutil.AwaitColdWorker(t, service, clone.ID)
 	if source.Status != "failed" || !source.State.RestoreBlocked || source.State.BackingReady != transferred {
 		t.Fatal("clone fixture did not fix expected failure", source.State)
 	}

@@ -11,21 +11,21 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/supply"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, rejection := range []string{
 		"ABORT,'private collector completion failure'",
 		"IGNORE",
 	} {
 		t.Run(rejection, func(t *testing.T) {
-			service, _, _ := fixtures.GoldenSupplyFixture(t, 1)
+			service, _, _ := testapp.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			original, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
@@ -107,7 +107,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 }
 
 func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, failed := range []bool{
 		false,
 		true,
@@ -116,7 +116,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			false: "ready",
 			true:  "failed",
 		}[failed], func(t *testing.T) {
-			service, runtime, _ := fixtures.GoldenSupplyFixture(t, 1)
+			service, runtime, _ := testapp.GoldenSupplyFixture(t, 1)
 			if failed {
 				runtime.Mu.Lock()
 				runtime.FailBoot = true
@@ -168,13 +168,13 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 }
 
 func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, boundary := range []string{
 		"supply_cleanup_admitted",
 		"supply_cleanup_completion_before_commit",
 	} {
 		t.Run(boundary, func(t *testing.T) {
-			service, _, _ := fixtures.GoldenSupplyFixtureWithFault(t, 1, func(point string) error {
+			service, _, _ := testapp.GoldenSupplyFixtureWithFault(t, 1, func(point string) error {
 				if point == boundary {
 					return errs.ErrInterrupted
 				}

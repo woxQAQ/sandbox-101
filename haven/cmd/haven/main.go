@@ -19,12 +19,12 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/common/logging"
 	"github.com/woxQAQ/haven/config"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/guest"
-	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/localuds"
 	"github.com/woxQAQ/haven/loom/host"
@@ -141,7 +141,7 @@ func run(args []string) (result error) {
 		Initialize:   cfg.Init,
 		Backend:      backend,
 		Guest:        guest.Client{},
-		AdminToken:    token,
+		AdminToken:   token,
 		MaxMemoryMiB: cfg.MaxMemoryMiB,
 		MaxVCPUs:     cfg.MaxVCPUs,
 		SafetyBytes:  cfg.StorageMarginBytes,

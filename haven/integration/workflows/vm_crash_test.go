@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/internal/application"
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStepAbruptSQLiteRecovery(t *testing.T) {
@@ -69,7 +70,7 @@ func TestHavenStepAbruptSQLiteRecovery(t *testing.T) {
 			if err = service.State.Database().QueryRow("SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id='tenant' AND idem_key='abrupt'").Scan(&operation); err != nil {
 				t.Fatal(err)
 			}
-			step := fixtures.AwaitColdWorker(t, service, operation)
+			step := testutil.AwaitColdWorker(t, service, operation)
 			if step.Status != "succeeded" || step.State.Witness != step.Input.Resource.Instance {
 				t.Fatal("abrupt restart did not adopt the frozen instance", step.State)
 			}
@@ -168,7 +169,7 @@ func runAbruptExitChild(t *testing.T) {
 		return
 	}
 	point := os.Getenv("HAVEN_TEST_ABRUPT_POINT")
-	service, _ := fixtures.ColdServiceWithBackend(t, func(candidate string) error {
+	service, _ := testapp.ColdServiceWithBackend(t, func(candidate string) error {
 		if candidate == point {
 			os.Exit(86)
 		}
@@ -184,7 +185,7 @@ func runAbruptExitChild(t *testing.T) {
 	}{service.State.Directory()}); err != nil {
 		t.Fatal(err)
 	}
-	operation := fixtures.ColdClaim(t, service, "abrupt")
-	fixtures.AwaitColdWorker(t, service, operation.ID)
+	operation := testfixture.ColdClaim(t, service, "abrupt")
+	testutil.AwaitColdWorker(t, service, operation.ID)
 	t.Fatal("abrupt checkpoint was not reached")
 }

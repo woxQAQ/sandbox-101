@@ -10,15 +10,15 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 // The published network vocabulary is none/proxy/direct. AdmitClaim rejects the
 // retired "relay" spelling rather than aliasing it, and an omitted mode settles
 // on proxy so callers that never chose a mode keep the host-proxied path.
 func TestHavenClaimNetworkModeVocabulary(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	principal := authorization.Principal{
 		TenantID: "tenant",

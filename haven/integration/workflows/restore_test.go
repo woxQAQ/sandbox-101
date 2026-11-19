@@ -9,12 +9,12 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenRestoreResponsibility(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, point := range []string{
 		"admission_committed",
 		"restore_prepare_intent",
@@ -33,19 +33,19 @@ func TestHavenRestoreResponsibility(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			faults := &testfixture.SnapshotFaults{}
-			service, backend, source := fixtures.CloneFixtureWithFault(t, faults.Check)
+			service, backend, source := testapp.CloneFixtureWithFault(t, faults.Check)
 			faults.Set(func(candidate string) error {
 				if candidate == point {
 					return errs.ErrInterrupted
 				}
 				return nil
 			})
-			acceptedOperation := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+			acceptedOperation := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
 			if point != "admission_committed" {
-				fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+				testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+			step := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 			incomplete := point == "restore_candidate_prepared" || point == "restore_candidate_copied" || point == "restore_candidate_renamed" || point == "restore_candidate_synced"
 			cloneLiability(t, service, step, !incomplete)
 			if incomplete && (step.Status != "failed" || !step.State.RestoreBlocked || step.State.Witness != "") {
@@ -63,15 +63,15 @@ func TestHavenRestoreResponsibility(t *testing.T) {
 }
 
 func TestHavenRestoreSourceDeletionAfterHandoff(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
-	service, backend, source := fixtures.CloneFixtureWithFault(t, func(point string) error {
+	testutil.ParallelLifecycle(t)
+	service, backend, source := testapp.CloneFixtureWithFault(t, func(point string) error {
 		if point == "restore_resources_ready" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	acceptedOperation := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-	step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+	acceptedOperation := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+	step := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 	if !step.State.BackingReady {
 		t.Fatal("fixture did not transfer source lease")
 	}
@@ -100,7 +100,7 @@ func TestHavenRestoreSourceDeletionAfterHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	step = fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+	step = testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 	cloneLiability(t, service, step, true)
 	if err = loom.VerifyRestoreMaterials(step.State.Materials, step.Input.Resource, snapshot.Manifest.Files, false); err != nil {
 		t.Fatal("retained backing proof depended on deleted source", err)
@@ -111,17 +111,17 @@ func TestHavenRestoreSourceDeletionAfterHandoff(t *testing.T) {
 }
 
 func TestHavenRestoreKeepsRunningWrites(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	faults := &testfixture.SnapshotFaults{}
-	service, backend, source := fixtures.CloneFixtureWithFault(t, faults.Check)
+	service, backend, source := testapp.CloneFixtureWithFault(t, faults.Check)
 	faults.Set(func(point string) error {
 		if point == "effect_launched" {
 			return errs.ErrInterrupted
 		}
 		return nil
 	})
-	acceptedOperation := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-	before := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+	acceptedOperation := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+	before := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 	file, err := os.OpenFile(before.Input.Resource.Disk, os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestHavenRestoreKeepsRunningWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	after := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+	after := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 	cloneLiability(t, service, after, true)
 	file, err = os.Open(after.Input.Resource.Disk)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestHavenRestoreKeepsRunningWrites(t *testing.T) {
 }
 
 func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, write := range []struct {
 		event     string
 		table     string
@@ -169,9 +169,9 @@ func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 				if _, err := service.State.Database().Exec(sql); err != nil {
 					t.Fatal(err)
 				}
-				acceptedOperation := fixtures.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
-				step := fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
-				if step.State.BackingReady || fixtures.Terminal(step.Status) || step.State.Phase != "restore_materials_complete" {
+				acceptedOperation := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
+				step := testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
+				if step.State.BackingReady || testutil.Terminal(step.Status) || step.State.Phase != "restore_materials_complete" {
 					t.Fatal("rejected handoff became visible", step.State)
 				}
 				cloneLiability(t, service, step, false)
@@ -182,7 +182,7 @@ func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 					t.Fatal(err)
 				}
 				service = testapp.ReopenCloneService(t, service, backend)
-				step = fixtures.AwaitColdWorker(t, service, acceptedOperation.ID)
+				step = testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
 				cloneLiability(t, service, step, true)
 			})
 		}

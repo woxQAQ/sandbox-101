@@ -8,14 +8,15 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenClaimDelivery(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	service, runtime, guest, _ := testapp.SandboxFixture(t)
-	acceptedOperation := (fixtures.SandboxClaims{
+	acceptedOperation := (testfixture.SandboxClaims{
 		App: service,
 	}).Claim(t, "claim", map[string]operation.EnvVar{
 		"VISIBLE": {

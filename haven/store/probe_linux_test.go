@@ -10,21 +10,22 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/store"
-	"github.com/woxQAQ/haven/tests/fixtures"
 )
 
 func TestHavenStoreExclusiveOwner(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	directory := filepath.Join(t.TempDir(), "state")
-	first, err := fixtures.OpenStore(directory, true)
+	first, err := testapp.OpenStore(directory, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = first.Close()
 	})
-	if second, err := fixtures.OpenStore(directory, false); !errors.Is(err, store.ErrConflict) {
+	if second, err := testapp.OpenStore(directory, false); !errors.Is(err, store.ErrConflict) {
 		if second != nil {
 			_ = second.Close()
 		}
@@ -63,7 +64,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := fixtures.OpenStore(directory, false)
+	reopened, err := testapp.OpenStore(directory, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 }
 
 func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	for _, initialize := range []bool{
 		false,
 		true,
@@ -100,14 +101,14 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 					t.Fatal(err)
 				}
 				storeTestSQL(t, filepath.Join(directory, legacy.name), legacy.schema)
-				before := fixtures.StoreSnapshot(t, directory)
-				if state, err := fixtures.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
+				before := testutil.StoreSnapshot(t, directory)
+				if state, err := testapp.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
 					if state != nil {
 						_ = state.Close()
 					}
 					t.Fatalf("legacy state accepted: %v", err)
 				}
-				if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+				if after := testutil.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 					t.Fatal("legacy state changed during rejection")
 				}
 			})
@@ -128,7 +129,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := filepath.Join(t.TempDir(), "state")
-			state, err := fixtures.OpenStore(directory, true)
+			state, err := testapp.OpenStore(directory, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,14 +164,14 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := fixtures.StoreSnapshot(t, directory)
-			if state, err := fixtures.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
+			before := testutil.StoreSnapshot(t, directory)
+			if state, err := testapp.OpenStore(directory, initialize); !errors.Is(err, store.ErrRecovery) {
 				if state != nil {
 					_ = state.Close()
 				}
 				t.Fatalf("unsupported state accepted: %v", err)
 			}
-			if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+			if after := testutil.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 				t.Fatal("rejection modified files, identities, modes or directory entries")
 			}
 		})
@@ -178,7 +179,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 	t.Run("symlink-state", func(t *testing.T) {
 		parent := t.TempDir()
 		directory := filepath.Join(parent, "state")
-		state, err := fixtures.OpenStore(directory, true)
+		state, err := testapp.OpenStore(directory, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,24 +190,24 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 		if err = os.Symlink(directory, alias); err != nil {
 			t.Fatal(err)
 		}
-		before := fixtures.StoreSnapshot(t, parent)
-		if state, err := fixtures.OpenStore(alias, false); !errors.Is(err, store.ErrRecovery) {
+		before := testutil.StoreSnapshot(t, parent)
+		if state, err := testapp.OpenStore(alias, false); !errors.Is(err, store.ErrRecovery) {
 			if state != nil {
 				_ = state.Close()
 			}
 			t.Fatalf("symlink state accepted: %v", err)
 		}
-		if after := fixtures.StoreSnapshot(t, parent); !reflect.DeepEqual(before, after) {
+		if after := testutil.StoreSnapshot(t, parent); !reflect.DeepEqual(before, after) {
 			t.Fatal("symlink rejection modified the original state")
 		}
 	})
 }
 
 func TestHavenStoreRejectsRollbackBehindHead(t *testing.T) {
-	fixtures.ParallelLifecycle(t)
+	testutil.ParallelLifecycle(t)
 	parent := t.TempDir()
 	directory := filepath.Join(parent, "state")
-	state, err := fixtures.OpenStore(directory, true)
+	state, err := testapp.OpenStore(directory, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,14 +228,14 @@ func TestHavenStoreRejectsRollbackBehindHead(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(directory, "haven.db"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := fixtures.StoreSnapshot(t, directory)
-	if reopened, err := fixtures.OpenStore(directory, false); !errors.Is(err, store.ErrRecovery) {
+	before := testutil.StoreSnapshot(t, directory)
+	if reopened, err := testapp.OpenStore(directory, false); !errors.Is(err, store.ErrRecovery) {
 		if reopened != nil {
 			_ = reopened.Close()
 		}
 		t.Fatalf("metadata behind durable HEAD accepted: %v", err)
 	}
-	if after := fixtures.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
+	if after := testutil.StoreSnapshot(t, directory); !reflect.DeepEqual(before, after) {
 		t.Fatal("rollback rejection modified the retained point")
 	}
 }

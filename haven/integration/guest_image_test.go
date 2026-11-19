@@ -32,7 +32,6 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
-	"github.com/woxQAQ/haven/tests/fixtures"
 	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
@@ -89,28 +88,28 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 		RootFS:         rootfs,
 	})
 	meta := guestMetadataLayers(t, layout)
-	cross := fixtures.HardEntry("fixture/cross-layer-hard", "fixture/regular")
+	cross := testfixture.HardEntry("fixture/cross-layer-hard", "fixture/regular")
 	cross.Header.Mode = 0o644
-	root := fixtures.DirEntry(".")
+	root := testfixture.DirEntry(".")
 	root.Header.Uid, root.Header.Gid, root.Header.Mode = 0, 0, 0o755
 	root.Header.ModTime = time.Unix(1700000001, 123456789)
 	root.Header.Xattrs = map[string]string{
 		"user.shared-root": "retained",
 	}
-	broaderEntries := []fixtures.TarEntry{
+	broaderEntries := []testfixture.TarEntry{
 		root,
 		cross,
-		fixtures.FileEntry("fixture/implicit/deep/value", "implicit"),
-		fixtures.FileEntry("fixture/duplicate", "old"),
-		fixtures.FileEntry("fixture/duplicate", "last"),
+		testfixture.FileEntry("fixture/implicit/deep/value", "implicit"),
+		testfixture.FileEntry("fixture/duplicate", "old"),
+		testfixture.FileEntry("fixture/duplicate", "last"),
 	}
 	for i := range broaderEntries {
 		if broaderEntries[i].Header.Typeflag == tar.TypeReg {
 			broaderEntries[i].Header.Mode = 0o644
 		}
 	}
-	broader := fixtures.PutOCILayer(t, layout, broaderEntries, false)
-	layers := append(append([]fixtures.OCILayerFixture{
+	broader := testfixture.PutOCILayer(t, layout, broaderEntries, false)
+	layers := append(append([]testfixture.OCILayerFixture{
 		base,
 	}, meta...), broader)
 	for _, materialization := range []string{
@@ -127,7 +126,7 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 			if err := os.Mkdir(store, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			e := fixtures.NativeImageFixtureAt(t, store)
+			e := testfixture.NativeImageFixtureAt(t, store)
 			defer e.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
@@ -135,38 +134,38 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 			if materialization == host.LayeredEROFSLayout {
 				// The shared metadata composer also resolves true forward chains,
 				// which the explicit umoci compatibility path does not accept.
-				forwardEntries := []fixtures.TarEntry{
-					fixtures.HardEntry("fixture/forward-a", "fixture/forward-b"),
-					fixtures.HardEntry("fixture/forward-b", "fixture/forward-target"),
-					fixtures.FileEntry("fixture/forward-target", "forward"),
+				forwardEntries := []testfixture.TarEntry{
+					testfixture.HardEntry("fixture/forward-a", "fixture/forward-b"),
+					testfixture.HardEntry("fixture/forward-b", "fixture/forward-target"),
+					testfixture.FileEntry("fixture/forward-target", "forward"),
 				}
 				for i := range forwardEntries {
 					forwardEntries[i].Header.Mode = 0o644
 				}
-				forward := fixtures.PutOCILayer(t, layout, forwardEntries, false)
-				image = fixtures.PutOCIManifest(
+				forward := testfixture.PutOCILayer(t, layout, forwardEntries, false)
+				image = testfixture.PutOCIManifest(
 					t,
 					layout,
 					"actual-systemd-forward",
-					append(append([]fixtures.OCILayerFixture{}, layers...), forward),
+					append(append([]testfixture.OCILayerFixture{}, layers...), forward),
 				)
 			} else {
 				// Compatibility pins umask 077, so its implicit parents are
 				// private. Explicit headers make this path workload-readable;
 				// the shared path above retains its implicit-parent checks.
-				directories := []fixtures.TarEntry{
-					fixtures.DirEntry("fixture/implicit"),
-					fixtures.DirEntry("fixture/implicit/deep"),
+				directories := []testfixture.TarEntry{
+					testfixture.DirEntry("fixture/implicit"),
+					testfixture.DirEntry("fixture/implicit/deep"),
 				}
 				for i := range directories {
 					directories[i].Header.Mode = 0o755
 				}
-				readable := fixtures.PutOCILayer(t, layout, directories, false)
-				image = fixtures.PutOCIManifest(
+				readable := testfixture.PutOCILayer(t, layout, directories, false)
+				image = testfixture.PutOCIManifest(
 					t,
 					layout,
 					"actual-systemd-compat-parents",
-					append(append([]fixtures.OCILayerFixture{}, layers...), readable),
+					append(append([]testfixture.OCILayerFixture{}, layers...), readable),
 				)
 			}
 			manifest, err := e.ImportOCI(
@@ -308,14 +307,14 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 // This exercises the userspace handoff through actual OCI materialization,
 // without booting a VM or consulting a package database.
 func TestGuestRootfsOCI(t *testing.T) {
-	fixtures.RequireEROFS(t)
+	testfixture.RequireEROFS(t)
 	for _, materialization := range []string{
 		host.LayeredEROFSLayout,
 		host.MergedOCIEROFSLayout,
 	} {
 		t.Run(materialization, func(t *testing.T) {
 			if materialization == host.MergedOCIEROFSLayout {
-				fixtures.RequireMergedOCI(t)
+				testfixture.RequireMergedOCI(t)
 			}
 			rootfs, guest, layout := t.TempDir(), t.TempDir(), t.TempDir()
 			payload := "self-contained-runtime"
@@ -361,10 +360,10 @@ func TestGuestRootfsOCI(t *testing.T) {
 				GuestDirectory: guest,
 				RootFS:         rootfs,
 			})
-			image := fixtures.PutOCIManifest(t, layout, "provider-independent-runtime", []fixtures.OCILayerFixture{
+			image := testfixture.PutOCIManifest(t, layout, "provider-independent-runtime", []testfixture.OCILayerFixture{
 				layer,
 			})
-			e := fixtures.NewNativeImageFixture(t)
+			e := testfixture.NewNativeImageFixture(t)
 			t.Cleanup(func() {
 				e.Close()
 			})
@@ -380,9 +379,9 @@ func TestGuestRootfsOCI(t *testing.T) {
 			}
 			var tree string
 			if materialization == host.MergedOCIEROFSLayout {
-				tree = fixtures.ExtractMergedManifest(t, e, m)
+				tree = testfixture.ExtractMergedManifest(t, e, m)
 			} else {
-				tree = fixtures.ExtractManifest(t, e, m)
+				tree = testfixture.ExtractManifest(t, e, m)
 			}
 			for name, expected := range map[string]string{
 				target:                            payload,
@@ -503,7 +502,7 @@ type guestMaterials struct {
 	RootFS         string
 }
 
-func guestRuntimeLayer(t *testing.T, layout string, materials guestMaterials) fixtures.OCILayerFixture {
+func guestRuntimeLayer(t *testing.T, layout string, materials guestMaterials) testfixture.OCILayerFixture {
 	kernel, guest, rootfs := materials.Kernel, materials.GuestDirectory, materials.RootFS
 	t.Helper()
 	var err error
@@ -765,7 +764,7 @@ func guestRuntimeLayer(t *testing.T, layout string, materials guestMaterials) fi
 	if err := os.Rename(archive.Name(), filepath.Join(blobDir, d.Encoded())); err != nil {
 		t.Fatal(err)
 	}
-	return fixtures.OCILayerFixture{
+	return testfixture.OCILayerFixture{
 		Descriptor: v1.Descriptor{
 			MediaType: v1.MediaTypeImageLayer,
 			Digest:    d,
@@ -776,15 +775,15 @@ func guestRuntimeLayer(t *testing.T, layout string, materials guestMaterials) fi
 }
 
 //nolint:staticcheck // Preserve binary capability and ACL bytes in the actual OCI fixture.
-func guestMetadataLayers(t *testing.T, layout string) []fixtures.OCILayerFixture {
+func guestMetadataLayers(t *testing.T, layout string) []testfixture.OCILayerFixture {
 	t.Helper()
-	entry := func(name, value string) fixtures.TarEntry {
-		e := fixtures.FileEntry(name, value)
+	entry := func(name, value string) testfixture.TarEntry {
+		e := testfixture.FileEntry(name, value)
 		e.Header.Mode = 0o644
 		return e
 	}
-	dir := func(name string) fixtures.TarEntry {
-		e := fixtures.DirEntry(name)
+	dir := func(name string) testfixture.TarEntry {
+		e := testfixture.DirEntry(name)
 		e.Header.Mode = 0o755
 		return e
 	}
@@ -873,12 +872,12 @@ func guestMetadataLayers(t *testing.T, layout string) []fixtures.OCILayerFixture
 	}
 	link := entry("fixture/symbolic", "")
 	link.Header.Typeflag, link.Header.Linkname, link.Header.Mode = tar.TypeSymlink, "regular", 0o777
-	hard := fixtures.HardEntry("fixture/hard", "fixture/regular")
+	hard := testfixture.HardEntry("fixture/hard", "fixture/regular")
 	hard.Header.Mode = 0o644
-	base := fixtures.PutOCILayer(
+	base := testfixture.PutOCILayer(
 		t,
 		layout,
-		[]fixtures.TarEntry{
+		[]testfixture.TarEntry{
 			dir("fixture"),
 			regular,
 			hard,
@@ -893,10 +892,10 @@ func guestMetadataLayers(t *testing.T, layout string) []fixtures.OCILayerFixture
 		},
 		true,
 	)
-	top := fixtures.PutOCILayer(
+	top := testfixture.PutOCILayer(
 		t,
 		layout,
-		[]fixtures.TarEntry{
+		[]testfixture.TarEntry{
 			dir("fixture"),
 			entry("fixture/.wh.removed", ""),
 			entry("fixture/replaced", "top"),
@@ -906,7 +905,7 @@ func guestMetadataLayers(t *testing.T, layout string) []fixtures.OCILayerFixture
 		},
 		false,
 	)
-	return []fixtures.OCILayerFixture{
+	return []testfixture.OCILayerFixture{
 		base,
 		top,
 	}
