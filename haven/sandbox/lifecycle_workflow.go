@@ -276,7 +276,6 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 		Shape:      capture.Input.Source.Input.Resource.Config.Shape,
 		CreatedAt:  time.Now().UTC(),
 	}
-	operations := operation.New(tx)
 
 	references := quota.New(tx)
 	if err = bindCheckpoint(l.ctx, tx, cp, step.OperationID); err != nil {
@@ -316,13 +315,16 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
-		return err
-	}
 	if err = l.fault("checkpoint_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, operation.Completion{
+		ID:          step.OperationID,
+		AdoptResult: true,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return l.store.Checkpoint()
@@ -368,7 +370,8 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	default:
 		return fmt.Errorf("unsupported release child kind")
 	}
-	if err = l.retireSupersededLifecycle(tx, step); err != nil {
+	superseded, err := l.retireSupersededLifecycle(tx, step)
+	if err != nil {
 		return err
 	}
 	tombstone, err := LoadSandbox(l.ctx, tx, step.Input.Sandbox.ID, step.Input.OwnerTenantID)
@@ -407,7 +410,6 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(l.ctx, dbgen.CompleteLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "lifecycle",
@@ -418,10 +420,13 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
+	if err = l.committer.Complete(tx, append(superseded, operation.Completion{
+		ID:          step.OperationID,
+		AdoptResult: true,
+	})...); err != nil {
 		return err
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	l.registry.RetireCredentials(step.Input.Sandbox.ID, step.OperationID)
@@ -640,17 +645,23 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "sandbox workflow failed; resource responsibility retained"
-		if err = operations.FailResult(l.ctx, step.OperationID, operation.Encode(result)); err != nil {
-			return err
-		}
+		completed = append(completed, operation.Completion{
+			ID:     step.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, completed...); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return l.store.Checkpoint()

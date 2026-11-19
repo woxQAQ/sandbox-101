@@ -233,7 +233,14 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	if err = l.fault("paused_release_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, operation.Completion{
+		ID:     parent.ID,
+		Result: parent.Result,
+		Frozen: true,
+	}); err != nil {
+		return empty, err
+	}
+	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
 	l.registry.DropSandboxSecrets(current.ID)
@@ -241,23 +248,23 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	return parent, l.store.Checkpoint()
 }
 
-func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) error {
+func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([]operation.Completion, error) {
 	id := step.Input.PriorFence
 	if id == "" {
-		return nil
+		return nil, nil
 	}
 	prior, err := LoadLifecycle(l.ctx, tx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return l.warmClaims.RetireSupersededIn(tx, step)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if prior.Input.Sandbox.ID != step.Input.Sandbox.ID || prior.Input.OwnerTenantID != step.Input.OwnerTenantID {
-		return fmt.Errorf("release superseded lifecycle scope changed")
+		return nil, fmt.Errorf("release superseded lifecycle scope changed")
 	}
 	if prior.Status == "succeeded" {
-		return fmt.Errorf("%w: release fence referred to completed lifecycle", errs.ErrManualRecovery)
+		return nil, fmt.Errorf("%w: release fence referred to completed lifecycle", errs.ErrManualRecovery)
 	}
 	sleepSnapshot := ""
 	if prior.Input.Command.Action == "resume" {
@@ -269,7 +276,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) er
 	if sleepSnapshot != "" {
 		source, err := l.proofs.Snapshots().SnapshotPublication(l.ctx, tx, step.Input.OwnerTenantID, sleepSnapshot)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err = quota.New(tx).RemoveResourceReference(l.ctx, quota.ResourceReference{
 			Kind:       "snapshot",
@@ -277,7 +284,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) er
 			HolderKind: "sleep",
 			HolderID:   step.Input.Sandbox.ID,
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		if err = quota.New(tx).RemoveCostReference(l.ctx, quota.CostReference{
 			TenantID:   step.Input.OwnerTenantID,
@@ -286,7 +293,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) er
 			HolderKind: "active_use",
 			HolderID:   "sleep:" + step.Input.Sandbox.ID,
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(l.ctx, dbgen.InsertCleanupIntentParams{
 			ID:           "sleep:" + step.OperationID,
@@ -295,12 +302,12 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) er
 			ResourceID:   sleepSnapshot,
 			Body:         operation.Encode(source),
 		})); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if prior.Input.Rollback != nil {
 		if err = RetireRollbackLease(l.ctx, tx, prior); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if !operation.Terminal(prior.Status) {
@@ -312,24 +319,28 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) er
 				Phase: "superseded",
 			}),
 		})); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	status, body, err := operations.ResultState(l.ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
-			return err
+			return nil, err
 		}
 		result.Error = "sandbox operation superseded by release"
-		if err = operations.FailResult(l.ctx, id, operation.Encode(result)); err != nil {
-			return err
-		}
+		return []operation.Completion{
+			{
+				ID:     id,
+				Result: result,
+				Failed: true,
+			},
+		}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func (l *Lifecycle) runReleaseCaptures(step LifecycleStep) error {

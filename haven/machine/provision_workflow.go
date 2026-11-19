@@ -302,11 +302,14 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	if err = json.Unmarshal(body, &result); err != nil {
 		return errors.Join(cause, err)
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(status) {
 		result.Error = next.Error
-		if err = operation.New(tx).FailResult(p.ctx, step.OperationID, operation.Encode(result)); err != nil {
-			return errors.Join(cause, err)
-		}
+		completed = append(completed, operation.Completion{
+			ID:     step.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertBlockedCleanup(p.ctx, dbgen.InsertBlockedCleanupParams{
 		ID:           "blocked:" + step.OperationID,
@@ -317,7 +320,10 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	})); err != nil {
 		return errors.Join(cause, err)
 	}
-	if err = p.committer.Commit(tx); err != nil {
+	if err = p.committer.Complete(tx, completed...); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err = tx.Commit(); err != nil {
 		return errors.Join(cause, err)
 	}
 	return errors.Join(cause, p.store.Checkpoint())

@@ -191,7 +191,14 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	if err = l.fault("renew_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, operation.Completion{
+		ID:     accepted.ID,
+		Result: accepted.Result,
+		Frozen: true,
+	}); err != nil {
+		return empty, err
+	}
+	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
 	return accepted, l.store.Checkpoint()

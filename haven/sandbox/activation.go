@@ -260,13 +260,16 @@ func (a *Activations) completeActivation(step ActivationStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operation.New(tx).Complete(a.ctx, step.OperationID); err != nil {
-		return err
-	}
 	if err = a.fault("activation_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = a.committer.Commit(tx); err != nil {
+	if err = a.committer.Complete(tx, operation.Completion{
+		ID:          step.OperationID,
+		AdoptResult: true,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	a.registry.DropOperationSecrets(step.OperationID)

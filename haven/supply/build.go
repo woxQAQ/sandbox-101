@@ -220,13 +220,20 @@ func (s *Supply) runBuild(step SupplyStep) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = s.publishTemplate(s.ctx, tx, step, capture.Input.Snapshot.ID); err != nil {
+	result, err := s.publishTemplate(s.ctx, tx, step, capture.Input.Snapshot.ID)
+	if err != nil {
 		return err
 	}
 	if err = s.fault("template_publication_before_commit"); err != nil {
 		return err
 	}
-	if err = s.committer.Commit(tx); err != nil {
+	if err = s.committer.Complete(tx, operation.Completion{
+		ID:     step.OperationID,
+		Result: result,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return s.store.Checkpoint()
@@ -299,9 +306,6 @@ func (s *Supply) failSupply(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.FailResult(s.ctx, step.OperationID, operation.Encode(result)); err != nil {
-		return err
-	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(s.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "supply:" + step.OperationID,
 		OperationID:  step.OperationID,
@@ -316,7 +320,14 @@ func (s *Supply) failSupply(step SupplyStep) error {
 			return err
 		}
 	}
-	if err = s.committer.Commit(tx); err != nil {
+	if err = s.committer.Complete(tx, operation.Completion{
+		ID:     step.OperationID,
+		Result: result,
+		Failed: true,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return s.store.Checkpoint()

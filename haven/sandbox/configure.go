@@ -222,6 +222,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		return empty, noResource, false, err
 	}
 	paused := current.State == "paused"
+	var completed []operation.Completion
 	if paused {
 		if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
 			SandboxID:    current.ID,
@@ -249,10 +250,11 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		})); err != nil {
 			return empty, noResource, false, err
 		}
-		if err = operations.CompletePending(ctx, accepted.ID); err != nil {
-			return empty, noResource, false, err
-		}
 		accepted.Status = "succeeded"
+		completed = append(completed, operation.Completion{
+			ID:          accepted.ID,
+			AdoptResult: true,
+		})
 	} else {
 		if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
 			OperationID:         accepted.ID,
@@ -271,7 +273,10 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	if err = sb.fault("configure_admission_before_commit"); err != nil {
 		return empty, noResource, false, err
 	}
-	if err = sb.committer.Commit(tx); err != nil {
+	if err = sb.committer.Complete(tx, completed...); err != nil {
+		return empty, noResource, false, err
+	}
+	if err = tx.Commit(); err != nil {
 		return empty, noResource, false, err
 	}
 	if err = sb.store.Checkpoint(); err != nil {

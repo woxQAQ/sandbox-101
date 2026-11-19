@@ -228,15 +228,18 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(status) && !step.Input.AllowFallback {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return errors.Join(cleanupErr, err)
 		}
 		result.Error = "sandbox activation could not establish delivery"
-		if err = operation.New(tx).FailResult(ctx, step.OperationID, operation.Encode(result)); err != nil {
-			return errors.Join(cleanupErr, err)
-		}
+		completed = append(completed, operation.Completion{
+			ID:     step.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
 	if queryErr == nil && fence == step.OperationID {
 		record, err := LoadSandbox(ctx, tx, step.Input.SandboxID, step.Input.TenantID)
@@ -254,7 +257,10 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 			}
 		}
 	}
-	if err = a.committer.Commit(tx); err != nil {
+	if err = a.committer.Complete(tx, completed...); err != nil {
+		return errors.Join(cleanupErr, err)
+	}
+	if err = tx.Commit(); err != nil {
 		return errors.Join(cleanupErr, err)
 	}
 	return errors.Join(cleanupErr, a.store.Checkpoint())

@@ -489,6 +489,17 @@ func (q *Queries) GetTenantScope(ctx context.Context, id string) (string, error)
 	return scope_id, err
 }
 
+const hasActivateStep = `-- name: HasActivateStep :one
+SELECT EXISTS(SELECT 1 FROM operation_steps WHERE operation_id=? AND action='activate') AS has_activate
+`
+
+func (q *Queries) HasActivateStep(ctx context.Context, operationID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasActivateStep, operationID)
+	var has_activate int64
+	err := row.Scan(&has_activate)
+	return has_activate, err
+}
+
 const insertCredential = `-- name: InsertCredential :execrows
 INSERT INTO operation_credentials(operation_id,request_mac) VALUES(?,?)
 `
@@ -696,38 +707,6 @@ func (q *Queries) ListUnfinishedOperations(ctx context.Context) ([]string, error
 			return nil, err
 		}
 		items = append(items, operation_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUnpublishedTerminals = `-- name: ListUnpublishedTerminals :many
-SELECT o.id FROM operations o
-LEFT JOIN operation_publications p ON p.operation_id=o.id
-WHERE o.status IN ('succeeded','failed') AND p.operation_id IS NULL
-AND (EXISTS(SELECT 1 FROM operation_credentials c WHERE c.operation_id=o.id)
-  OR EXISTS(SELECT 1 FROM operation_steps s WHERE s.operation_id=o.id AND s.action='activate'))
-ORDER BY o.rowid
-`
-
-func (q *Queries) ListUnpublishedTerminals(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listUnpublishedTerminals)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

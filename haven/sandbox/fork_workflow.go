@@ -379,7 +379,6 @@ func (f *Forks) completeFork(step ForkStep) error {
 		status = "failed"
 		state.Phase = "failed"
 	}
-	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).FinishLiveStep(f.ctx, dbgen.FinishLiveStepParams{
 		OperationID: step.OperationID,
 		StepKey:     "fork_group",
@@ -389,13 +388,17 @@ func (f *Forks) completeFork(step ForkStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Finish(f.ctx, step.OperationID, status, operation.Encode(result)); err != nil {
+	if err = f.committer.Complete(tx, operation.Completion{
+		ID:     step.OperationID,
+		Result: result,
+		Failed: failed,
+	}); err != nil {
 		return err
 	}
 	if err = f.fault("fork_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = f.committer.Commit(tx); err != nil {
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	f.registry.DropOperationSecrets(append([]string{

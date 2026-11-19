@@ -197,7 +197,6 @@ func (l *Lifecycle) completePause(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(l.ctx, dbgen.CompleteRunningStepParams{
 		OperationID:  step.OperationID,
 		StepKey:      "lifecycle",
@@ -207,13 +206,16 @@ func (l *Lifecycle) completePause(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.Complete(l.ctx, step.OperationID); err != nil {
-		return err
-	}
 	if err = l.fault("pause_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, operation.Completion{
+		ID:          step.OperationID,
+		AdoptResult: true,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return l.store.Checkpoint()

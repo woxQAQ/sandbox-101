@@ -387,15 +387,18 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 	})); err != nil {
 		return err
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "warm claim fallback failed; resource responsibility retained"
-		if err = operations.FailResult(wc.ctx, step.OperationID, operation.Encode(result)); err != nil {
-			return err
-		}
+		completed = append(completed, operation.Completion{
+			ID:     step.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(wc.ctx, dbgen.InsertCleanupIntentParams{
 		ID:           "warm_claim:" + step.OperationID,
@@ -406,7 +409,10 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = wc.committer.Commit(tx); err != nil {
+	if err = wc.committer.Complete(tx, completed...); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return wc.store.Checkpoint()
@@ -414,33 +420,33 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 
 // RetireSupersededIn joins warm pool/lease retirement to the release transaction.
 // The caller retains transaction, publication and checkpoint ownership.
-func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) error {
+func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]operation.Completion, error) {
 	parent, err := LoadWarmClaim(wc.ctx, tx, release.Input.PriorFence)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if parent.Input.Pool.SandboxID != release.Input.Sandbox.ID || parent.Input.Pool.Template.TenantID != release.Input.OwnerTenantID {
-		return fmt.Errorf("release superseded warm claim scope changed")
+		return nil, fmt.Errorf("release superseded warm claim scope changed")
 	}
 	if parent.Status == "succeeded" {
-		return fmt.Errorf("completed warm claim retained a configuration fence")
+		return nil, fmt.Errorf("completed warm claim retained a configuration fence")
 	}
 	reservation, status, err := supply.LoadPoolReservation(wc.ctx, tx, parent.Input.PoolID)
 	if err == nil {
 		if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) || release.Input.Sandbox.VMID != reservation.VMID {
-			return fmt.Errorf("release superseded pool responsibility changed")
+			return nil, fmt.Errorf("release superseded pool responsibility changed")
 		}
 		if err = supply.RetireSelectedReservation(wc.ctx, tx, parent.Input.PoolID, operation.Encode(reservation)); err != nil {
-			return err
+			return nil, err
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return nil, err
 	}
 	if err = RetireWarmClaimLease(wc.ctx, tx, parent); err != nil {
-		return err
+		return nil, err
 	}
 	operations := operation.New(tx)
 	if !operation.Terminal(parent.Status) {
@@ -452,26 +458,32 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) erro
 				Phase: "superseded",
 			}),
 		})); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	state, body, err := operations.ResultState(wc.ctx, parent.OperationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(state) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
-			return err
+			return nil, err
 		}
 		result.Error = "warm claim superseded by release"
-		if err = operations.FailResult(wc.ctx, parent.OperationID, operation.Encode(result)); err != nil {
-			return err
-		}
+		completed = append(completed, operation.Completion{
+			ID:     parent.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
-	return dbgen.New(tx).CompletePendingCleanupIfPresent(wc.ctx, dbgen.CompletePendingCleanupIfPresentParams{
+	if err = dbgen.New(tx).CompletePendingCleanupIfPresent(wc.ctx, dbgen.CompletePendingCleanupIfPresentParams{
 		ID:           "warm_claim:" + parent.OperationID,
 		OperationID:  parent.OperationID,
 		ResourceKind: "warm_claim",
-	})
+	}); err != nil {
+		return nil, err
+	}
+	return completed, nil
 }

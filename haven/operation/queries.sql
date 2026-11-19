@@ -99,13 +99,8 @@ WHERE o.id=? AND o.scope_kind='tenant';
 -- name: GetPublication :one
 SELECT body FROM operation_publications WHERE operation_id=?;
 
--- name: ListUnpublishedTerminals :many
-SELECT o.id FROM operations o
-LEFT JOIN operation_publications p ON p.operation_id=o.id
-WHERE o.status IN ('succeeded','failed') AND p.operation_id IS NULL
-AND (EXISTS(SELECT 1 FROM operation_credentials c WHERE c.operation_id=o.id)
-  OR EXISTS(SELECT 1 FROM operation_steps s WHERE s.operation_id=o.id AND s.action='activate'))
-ORDER BY o.rowid;
+-- name: HasActivateStep :one
+SELECT EXISTS(SELECT 1 FROM operation_steps WHERE operation_id=? AND action='activate') AS has_activate;
 
 -- name: InsertPublication :execrows
 INSERT INTO operation_publications (operation_id, body) VALUES (?,?);

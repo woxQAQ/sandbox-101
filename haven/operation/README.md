@@ -6,6 +6,6 @@ operation 保存 operation 的公共身份、幂等、终态、通用链接头�
 
 `AcceptedCommand` 与 `LoadPublication` 保留原冻结结果读取。`Operations` 提供通用状态与等待；sandbox 的凭据核验和 public operation 投递由 `sandbox.OperationDelivery` 承担。
 
-`Committer` 接收显式 Projector，在调用方事务中枚举全部 UnpublishedTerminals，依次投影、Publish，最后 Commit。实际业务投影位于 internal/publication；没有提交后补发或新的数据库/runner。
+`Committer` 接收显式 Projector。工作流在自己的 SQLite 事务中核验业务结果后，用 `Complete(tx, ...Completion)` 显式指定本次完成的 operation ID 和结果：Committer 统一写终态与完成时间，并为携带 credential 或 activate step 的 operation 在同一事务快照内投影并冻结 publication。一个事务可完成多个 ID；父结果依赖子 publication 时，子结果已由各自事务先行冻结。事务所有者在全部步骤成功后一次提交，任一步失败回滚整个事务；不再在正常提交时扫描全库寻找待发布终态。启动恢复仍核验历史缺失或损坏的 publication 并明确拒绝。实际业务投影位于 internal/publication；没有提交后补发或新的数据库/runner。
 
 Step 只承载 recovery 枚举所需的原始字节和通用头；业务 owner 解码自己的 payload。测试的私有意图植入放在 testfixture，不恢复通用业务写 API。迁移与源码核对见 [能力清单](../../plans/evidence/027-capability-map.md)。

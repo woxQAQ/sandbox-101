@@ -186,10 +186,6 @@ func (r *Repository) Publication(ctx context.Context, id string) ([]byte, error)
 	return r.queries.GetPublication(ctx, id)
 }
 
-func (r *Repository) UnpublishedTerminals(ctx context.Context) ([]string, error) {
-	return r.queries.ListUnpublishedTerminals(ctx)
-}
-
 func (r *Repository) Publish(ctx context.Context, id string, body []byte) error {
 	return store.RequireOne(r.queries.InsertPublication(ctx, dbgen.InsertPublicationParams{
 		OperationID: id,

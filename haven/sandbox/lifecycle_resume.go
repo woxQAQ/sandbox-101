@@ -298,17 +298,23 @@ func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
 	if err != nil {
 		return err
 	}
+	var completed []operation.Completion
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "resume failed; sleep snapshot retained"
-		if err = operations.FailResult(l.ctx, step.OperationID, operation.Encode(result)); err != nil {
-			return err
-		}
+		completed = append(completed, operation.Completion{
+			ID:     step.OperationID,
+			Result: result,
+			Failed: true,
+		})
 	}
-	if err = l.committer.Commit(tx); err != nil {
+	if err = l.committer.Complete(tx, completed...); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return l.store.Checkpoint()

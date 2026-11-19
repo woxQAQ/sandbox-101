@@ -108,9 +108,8 @@ func (s *Supply) runRefill(step SupplyStep) error {
 		FinishedAt: time.Now().UTC(),
 	})
 	previous, next := operation.Encode(original), operation.Encode(reservation)
-	previousState, resultBody := operation.Encode(step.State), operation.Encode(result)
+	previousState := operation.Encode(step.State)
 	references := quota.New(tx)
-	operations := operation.New(tx)
 	if err = store.RequireOne(queries.InsertWarm(s.ctx, dbgen.InsertWarmParams{
 		VmID:       reservation.VMID,
 		TemplateID: reservation.Template.ID,
@@ -151,16 +150,19 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = operations.CompleteResult(s.ctx, step.OperationID, resultBody); err != nil {
-		return err
-	}
 	if _, _, err = VerifyReadyWarm(s.proofs, s.ctx, tx, step.OperationID); err != nil {
 		return err
 	}
 	if err = s.fault("warm_publication_before_commit"); err != nil {
 		return err
 	}
-	if err = s.committer.Commit(tx); err != nil {
+	if err = s.committer.Complete(tx, operation.Completion{
+		ID:     step.OperationID,
+		Result: result,
+	}); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return s.store.Checkpoint()
@@ -334,7 +336,15 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Recor
 	})); err != nil {
 		return operation.Record{}, err
 	}
-	if err = s.committer.Commit(tx); err != nil {
+	if err = s.committer.Complete(tx, operation.Completion{
+		ID:     parent.ID,
+		Result: parent.Result,
+		Failed: true,
+		Frozen: true,
+	}); err != nil {
+		return operation.Record{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return operation.Record{}, err
 	}
 	return parent, s.store.Checkpoint()
