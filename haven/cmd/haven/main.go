@@ -24,7 +24,7 @@ import (
 	"github.com/woxQAQ/haven/config"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/guest"
-	"github.com/woxQAQ/haven/httpapi"
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/localuds"
 	"github.com/woxQAQ/haven/loom/host"
@@ -197,7 +197,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 		_ = business.Close()
 	}()
 	httpServer := &http.Server{
-		Handler: httpapi.New(httpapi.Services{
+		Handler: api.New(api.Services{
 			Authentication: service.Authentication,
 			Catalog:        service.Catalog,
 			Templates:      service.TemplateCatalog,

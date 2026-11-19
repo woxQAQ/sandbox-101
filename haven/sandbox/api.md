@@ -1,6 +1,6 @@
 # Haven Sandbox API 与生命周期
 
-当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module。入口与配置见 [Haven control](../../docs/haven-control.md)，宿主部署见 [Host](../../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/httpapi/`；业务和资源工作流共享 `haven` 的唯一 store。包内职责与事务边界见 [Sandbox 业务责任](README.md)。
+当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module。入口与配置见 [Haven control](../../docs/haven-control.md)，宿主部署见 [Host](../../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/api/`；业务和资源工作流共享 `haven` 的唯一 store。包内职责与事务边界见 [Sandbox 业务责任](README.md)。
 
 ## Tokens、幂等和错误
 
@@ -34,19 +34,20 @@ HTTP 错误及 `Operation.Error` 使用 `types.ApiError` 数据，JSON 为 `{"co
 | GET /metrics | root 状态计数；保留既有 metric wire 名称 |
 | GET /v1/status | root store identity/schema/epoch |
 | POST /v1/tenants | root tenant/quota/token 管理 |
-| GET、POST /v1/templates | 列表、template_put/build |
-| POST /v1/claim | 领取 sandbox |
+| GET、POST /v1/templates | 列表、template_put 登记 |
+| POST /v1/templates/{id}/build | template_build 构建 |
+| POST /v1/sandboxes | 领取 sandbox |
 | GET /v1/sandboxes、/v1/sandboxes/{id} | 可见 inventory |
-| POST /v1/sandboxes/{id}/{action} | renew/configure/pause/resume/checkpoint/fork/rollback/release |
+| POST /v1/sandboxes/{id}/{action} | renew/configure/pause/resume/checkpoint/fork/rollback，每个动作显式注册 |
 | DELETE /v1/sandboxes/{id} | 不唤醒的 release |
 | GET /v1/checkpoints、DELETE /v1/checkpoints/{id} | checkpoint 列表/删除 |
 | POST /v1/checkpoints/{id}/fork | 从 checkpoint 派生 |
 | GET /v1/operations/{id} | 固定 authority 的 operation/history |
 | GET /v1/sandboxes/{id}/connect | HTTP/1.1 Upgrade 到 Workload |
 | POST /v1/sandboxes/{id}/preview?port=8080&ttl_seconds=60 | `{}` body，生成 signed Preview |
-| POST /v1/drain | root 停止新 claim/refill |
+| POST /v1/node/drain | root 停止新 claim/refill |
 
-body 为严格 JSON，上限 1 MiB，未知字段/多余 JSON 拒绝。路由不自动 redirect。错误 method 与非 HTTP/1.1 Upgrade 保持明确拒绝。
+body 为严格 JSON，上限 1 MiB，未知字段/多余 JSON 拒绝。URL 决定命令与目标；body 中重复出现的 action 或 ID 必须与路径一致。路由不自动 redirect。错误 method 与非 HTTP/1.1 Upgrade 保持明确拒绝。
 
 root 创建 tenant：`{"id":"team","max_sandboxes":20,"max_storage_mib":65536}`。使用该 tenant 注册 template：
 

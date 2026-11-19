@@ -26,7 +26,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 	if command.Count == 0 {
 		command.Count = 1
 	}
-	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 || f.opts.Guest == nil {
+	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") || key == "" || len(key) > 256 || f.opts.Guest == nil {
 		return empty, fmt.Errorf("%w: fork requires tenant authority, one source, count 1..32 and key", errs.ErrInvalid)
 	}
 	requestGuard := f.guards.TenantRequest(principal.TenantID, key)
@@ -122,6 +122,12 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 				Config:   source.Input.Resource.Config,
 			}
 		}
+	}
+	// Root authority must select the owning tenant; the check lives at the
+	// business admission boundary so direct service calls cannot fork across
+	// tenants either. Tenant visibility is already enforced by the catalog.
+	if input.OwnerTenantID != principal.TenantID {
+		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	admission, err := f.commands.Prepare(command)
 	if err != nil {

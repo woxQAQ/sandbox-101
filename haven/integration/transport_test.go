@@ -35,7 +35,7 @@ import (
 	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/guest"
-	"github.com/woxQAQ/haven/httpapi"
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
@@ -793,7 +793,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	if err != nil || result.Result.Sandbox == nil {
 		t.Fatal(result, err)
 	}
-	server := httptest.NewServer(httpapi.New(httpapi.Services{
+	server := httptest.NewServer(api.New(api.Services{
 		Authentication: service.Authentication,
 		Catalog:        service.Catalog,
 		Templates:      service.TemplateCatalog,

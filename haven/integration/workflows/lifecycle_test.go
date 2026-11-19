@@ -244,14 +244,14 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, actor := range []authorization.Principal{
+	for index, actor := range []authorization.Principal{
 		principal,
 		{
 			Root:     true,
-			TenantID: "root",
+			TenantID: "tenant",
 		},
 	} {
-		fork, err := service.SandboxRequests.Execute(ctx, actor, "fork", operation.Command{
+		fork, err := service.SandboxRequests.Execute(ctx, actor, fmt.Sprintf("fork-%d", index), operation.Command{
 			Action:       "fork",
 			CheckpointID: checkpoint.Result.CheckpointID,
 			Policy: egress.Policy{
@@ -277,6 +277,18 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		},
 	}); err == nil {
 		t.Fatal("foreign tenant fork accepted")
+	}
+	if _, err = service.Forks.AdmitFork(ctx, authorization.Principal{
+		Root:     true,
+		TenantID: "other",
+	}, "fork", operation.Command{
+		Action:       "fork",
+		CheckpointID: checkpoint.Result.CheckpointID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	}); err == nil {
+		t.Fatal("root fork outside the owning tenant accepted")
 	}
 	var slots int
 	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != 3 {

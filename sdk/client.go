@@ -95,13 +95,20 @@ func call[T any](ctx context.Context, c *Client, message controlRequest) (T, err
 func (c *Client) Claim(ctx context.Context, key string, command types.Command) (types.Result, error) {
 	return call[types.Result](ctx, c, controlRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Key:    key,
 		Body:   command,
 	})
 }
 
 func (c *Client) Change(ctx context.Context, id, key string, command types.Command) (types.Result, error) {
+	if command.Action == "release" {
+		return call[types.Result](ctx, c, controlRequest{
+			Method: "DELETE",
+			Path:   "/v1/sandboxes/" + url.PathEscape(id),
+			Key:    key,
+		})
+	}
 	return call[types.Result](ctx, c, controlRequest{
 		Method: "POST",
 		Path:   "/v1/sandboxes/" + url.PathEscape(id) + "/" + url.PathEscape(command.Action),
@@ -147,18 +154,24 @@ func (c *Client) DeleteCheckpoint(ctx context.Context, id, key string) (types.Re
 }
 
 func (c *Client) PutTemplate(ctx context.Context, key string, template types.Template, build bool) (types.Result, error) {
-	action := "template_put"
-	if build {
-		action = "template_build"
+	command := types.Command{
+		Template: &template,
 	}
+	if build {
+		command.Action = "template_build"
+		return call[types.Result](ctx, c, controlRequest{
+			Method: "POST",
+			Path:   "/v1/templates/" + url.PathEscape(template.ID) + "/build",
+			Key:    key,
+			Body:   command,
+		})
+	}
+	command.Action = "template_put"
 	return call[types.Result](ctx, c, controlRequest{
 		Method: "POST",
 		Path:   "/v1/templates",
 		Key:    key,
-		Body: types.Command{
-			Action:   action,
-			Template: &template,
-		},
+		Body:   command,
 	})
 }
 

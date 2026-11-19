@@ -165,7 +165,7 @@ func AcceptedCommand(request []byte) (types.Command, error) {
 		return command, fmt.Errorf("%w: public operation lacks accepted command", errs.ErrManualRecovery)
 	}
 	// Checkpoint deletion is stored as "checkpoint_delete" and published as
-	// "delete_checkpoint"; the reverse translation lives in httpapi's mutate.
+	// "delete_checkpoint"; the reverse translation lives in the API delete-checkpoint route.
 	if command.Action == "checkpoint_delete" {
 		command.Action = "delete_checkpoint"
 	}

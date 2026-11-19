@@ -57,27 +57,27 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	command := []byte(`{"template_id":"fixture","policy":{"mode":"none"}}`)
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Body:   command,
 	}, 400)
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Key:    "trailing",
 		Body:   []byte(`{} {}`),
 	}, 400)
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Key:    "unknown-field",
 		Body:   []byte(`{"observed_generation":"private"}`),
 	}, 400)
 	payload := controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Key:    "http-claim",
 		Body:   command,
@@ -125,7 +125,7 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	}
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Key:    "http-claim",
 		Body:   []byte(`{"template_id":"fixture","ttl_seconds":301,"policy":{"mode":"none"}}`),

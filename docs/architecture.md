@@ -15,7 +15,7 @@ flowchart LR
     L --> S[System 协作]
 ```
 
-内部职责按业务能力组织，App 只构造组件并管理最终关闭顺序。业务 HTTP 通过 `httpapi.Services` 接收实际用例，管理 UDS 调用 `node.Management`；controller 不接收 App、数据库或宿主效果。
+内部职责按业务能力组织，App 只构造组件并管理最终关闭顺序。业务 HTTP 通过 `api.Services` 接收实际用例，管理 UDS 调用 `node.Management`；controller 不接收 App、数据库或宿主效果。
 
 ```mermaid
 flowchart TD

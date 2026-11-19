@@ -1,4 +1,4 @@
-package httpapi
+package api
 
 import (
 	"bufio"
@@ -12,21 +12,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
+	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/types"
 )
 
-func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
+// connectSandbox handles the client HTTP Upgrade to the guest Workload portal.
+// It delivers a raw duplex stream after the 101 response; bytes already read
+// with the headers belong to the upgraded stream.
+func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		writeJSON(w, 426, &types.ApiError{
+		httpwire.JSON(w, 426, &types.ApiError{
 			Code:    types.ErrInvalid,
 			Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
 		})
 		return
 	}
 	if r.ProtoMajor != 1 {
-		writeFailure(w, types.ApiError{
+		httpwire.Failure(w, types.ApiError{
 			Code:    types.ErrIncompatible,
 			Message: "HTTP/1.1 Upgrade required",
 		})
@@ -34,21 +40,21 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 	}
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		writeFailure(w, types.ApiError{
+		httpwire.Failure(w, types.ApiError{
 			Code:    types.ErrIncompatible,
 			Message: "HTTP/1.1 Upgrade required",
 		})
 		return
 	}
-	if _, err := adapter.plane.Ready(r.Context(), principal, id); err != nil {
-		writeError(w, err)
+	if _, err := h.services.Dataplane.Ready(r.Context(), principal, id); err != nil {
+		httpwire.Error(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	upstream, err := adapter.plane.Connect(ctx, principal, id)
+	upstream, err := h.services.Dataplane.Connect(ctx, principal, id)
 	cancel()
 	if err != nil {
-		writeError(w, err)
+		httpwire.Error(w, err)
 		return
 	}
 	defer func() {
@@ -56,7 +62,7 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := adapter.plane.Attach(r.Context(), principal, dataplane.HandoffRequest{
+	downstream, err := h.services.Dataplane.Attach(r.Context(), principal, dataplane.HandoffRequest{
 		SandboxID: id,
 		Upstream:  upstream,
 		Accept: func() (net.Conn, error) {
@@ -67,7 +73,7 @@ func (adapter *Adapter) relay(w http.ResponseWriter, r *http.Request, principal 
 	})
 	if err != nil {
 		if raw == nil {
-			writeError(w, err)
+			httpwire.Error(w, err)
 		}
 		return
 	}
@@ -115,46 +121,51 @@ func relayBytes(left, right net.Conn) {
 	<-done
 }
 
-func (adapter *Adapter) createPreview(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
-	port, _ := strconv.Atoi(r.URL.Query().Get("port"))
-	ttl, _ := strconv.ParseInt(r.URL.Query().Get("ttl_seconds"), 10, 64)
+// previewSandbox creates a signed preview URL bounded by a lease. It is a
+// dataplane admission, not an accepted operation, so it takes no idempotency key.
+func (h *handler) previewSandbox(c *gin.Context) {
+	if _, ok := decode(c, "preview", c.Param("id"), ""); !ok {
+		return
+	}
+	port, _ := strconv.Atoi(c.Request.URL.Query().Get("port"))
+	ttl, _ := strconv.ParseInt(c.Request.URL.Query().Get("ttl_seconds"), 10, 64)
 	if ttl == 0 {
 		ttl = 300
 	}
-	path, err := adapter.plane.PreviewURL(r.Context(), principal, dataplane.PreviewRequest{
-		SandboxID: id,
+	path, err := h.services.Dataplane.PreviewURL(c.Request.Context(), principal(c), dataplane.PreviewRequest{
+		SandboxID: c.Param("id"),
 		Port:      port,
 		TTL:       time.Duration(ttl) * time.Second,
 	})
-	respond(w, map[string]string{
+	httpwire.Respond(c.Writer, map[string]string{
 		"url": path,
 	}, err)
 }
 
-func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
+func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/preview/")
 	capability, tail, _ := strings.Cut(path, "/")
 	body, signature, ok := strings.Cut(capability, ".")
 	if !ok {
-		writeFailure(w, types.ApiError{
+		httpwire.Failure(w, types.ApiError{
 			Code:    types.ErrNotFound,
 			Message: "not found",
 		})
 		return
 	}
-	target, err := adapter.plane.ResolvePreview(r.Context(), body, signature)
+	target, err := h.services.Dataplane.ResolvePreview(r.Context(), body, signature)
 	if err != nil {
-		writeError(w, err)
+		httpwire.Error(w, err)
 		return
 	}
-	if _, err = adapter.plane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
-		writeError(w, err)
+	if _, err = h.services.Dataplane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
+		httpwire.Error(w, err)
 		return
 	}
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return adapter.plane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
+			return h.services.Dataplane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
 		},
 	}
 	defer transport.CloseIdleConnections()
@@ -177,7 +188,7 @@ func (adapter *Adapter) preview(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			writeJSON(w, 502, &types.ApiError{
+			httpwire.JSON(w, 502, &types.ApiError{
 				Code:    types.ErrInternal,
 				Message: "preview upstream unavailable",
 			})

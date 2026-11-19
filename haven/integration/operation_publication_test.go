@@ -35,7 +35,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	command := []byte(`{"template_id":"fixture","policy":{"mode":"none"}}`)
 	payload := controlHTTP(t, scoped.Endpoint, contractRequest{
 		Method: "POST",
-		Path:   "/v1/claim",
+		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Key:    "failed-delivery",
 		Body:   command,
@@ -71,7 +71,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		payload = controlHTTP(t, scoped.Endpoint, contractRequest{
 			Method: "POST",
-			Path:   "/v1/claim",
+			Path:   "/v1/sandboxes",
 			Token:  "transport-token",
 			Key:    "failed-delivery",
 			Body:   command,

@@ -43,6 +43,11 @@ func NewSandboxRequests(dependencies SandboxRequestDependencies) *SandboxRequest
 }
 
 func (sr *SandboxRequests) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+	// A sandbox capability admits only renewal or release of its own sandbox.
+	// This admission boundary covers direct service calls, not only HTTP.
+	if principal.SandboxID != "" && (command.SandboxID != principal.SandboxID || (command.Action != "renew" && command.Action != "release")) {
+		return operation.Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+	}
 	switch command.Action {
 	case "claim":
 		return sr.sandboxes.AdmitClaim(ctx, principal, key, command)

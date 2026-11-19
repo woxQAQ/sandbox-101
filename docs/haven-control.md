@@ -44,18 +44,19 @@ Haven 先取得 writer lock，再创建管理 listener 或执行恢复。代理 
 
 ## 业务 HTTP 与 SDK
 
-JSON 类型位于 [types](../types/types.go)，错误 payload 为 `types.ApiError`，定义位于 [types/errors.go](../types/errors.go)，只承载 `code/message` 数据，不实现 `error`、不包装 cause。SDK 将失败响应转换为普通 Go error。Go 客户端为 `github.com/woxQAQ/haven/sdk`。HTTP adapter 位于 [haven/httpapi](../haven/httpapi/http.go)，不拥有 catalog 或独立 operation store。
+JSON 类型位于 [types](../types/types.go)，错误 payload 为 `types.ApiError`，定义位于 [types/errors.go](../types/errors.go)，只承载 `code/message` 数据，不实现 `error`、不包装 cause。SDK 将失败响应转换为普通 Go error。Go 客户端为 `github.com/woxQAQ/haven/sdk`。HTTP adapter 位于 [haven/api](../haven/api/http.go)，不拥有 catalog 或独立 operation store。
 
 | 路由 | 用途 |
 |---|---|
 | `GET/HEAD /healthz` | liveness |
 | `GET/HEAD /metrics` | root 指标；保留原指标名 |
 | `GET /v1/status` | root 查询同一 store identity、epoch 与 recovery 状态 |
-| `POST /v1/tenants`、`POST /v1/drain` | root 管理 |
+| `POST /v1/tenants`、`POST /v1/node/drain` | root 管理 |
 | `GET /v1/sandboxes`、`/v1/templates`、`/v1/checkpoints` | 租户列表 |
 | `GET /v1/sandboxes/:id`、`GET /v1/operations/:id` | 对象或操作查询 |
-| `POST /v1/claim`、`POST /v1/templates` | 领取、模板发布或构建 |
-| `POST /v1/sandboxes/:id/:action` | configure、renew、checkpoint、pause、resume、rollback、fork、release 等业务动作 |
+| `POST /v1/sandboxes` | 领取 sandbox |
+| `POST /v1/templates`、`POST /v1/templates/:id/build` | 模板登记、模板构建 |
+| `POST /v1/sandboxes/:id/{configure,renew,checkpoint,pause,resume,rollback,fork}` | 已有对象的生命周期命令，URL 显式决定动作与目标 |
 | `DELETE /v1/sandboxes/:id` | release |
 | `DELETE /v1/checkpoints/:id`、`POST /v1/checkpoints/:id/fork` | 删除 checkpoint binding、从 checkpoint fork |
 | `GET /v1/sandboxes/:id/connect` | HTTP/1.1 `sandbox-v1` Upgrade 字节中继 |
