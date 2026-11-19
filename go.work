@@ -4,7 +4,6 @@ use (
 	./common
 	./haven
 	./loom
-	./operator
 	./protocol/gen
 	./sdk
 	./tools
