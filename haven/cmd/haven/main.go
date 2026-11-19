@@ -98,10 +98,10 @@ func run(args []string) (result error) {
 		}
 		return output(status)
 	}
-	if cfg.RootTokenFile == "" {
+	if cfg.AdminTokenFile == "" {
 		return fmt.Errorf("--root-token-file required")
 	}
-	rawToken, err := os.ReadFile(cfg.RootTokenFile)
+	rawToken, err := os.ReadFile(cfg.AdminTokenFile)
 	if err != nil {
 		return fmt.Errorf("read administrator token: %w", err)
 	}
@@ -123,7 +123,7 @@ func run(args []string) (result error) {
 	if cfg.MaxVCPUs == 0 {
 		cfg.MaxVCPUs = runtime.NumCPU()
 	}
-	backend := host.NewCloudHypervisor(host.CloudOptions{
+	backend := host.NewCloudHypervisor(host.CloudHypervisorOptions{
 		Binary:       cfg.CloudHypervisor,
 		BuildReceipt: cfg.BuildReceipt,
 		CgroupRoot:   cfg.CgroupRoot,
@@ -141,7 +141,7 @@ func run(args []string) (result error) {
 		Initialize:   cfg.Init,
 		Backend:      backend,
 		Guest:        guest.Client{},
-		RootToken:    token,
+		AdminToken:    token,
 		MaxMemoryMiB: cfg.MaxMemoryMiB,
 		MaxVCPUs:     cfg.MaxVCPUs,
 		SafetyBytes:  cfg.StorageMarginBytes,
@@ -283,8 +283,8 @@ func maintain(ctx context.Context, cfg config.Daemon, service *application.App) 
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if err := service.Maintenance.Maintain(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("Haven maintenance deferred", "error", err)
+		if err := service.Reconcile.RunOnce(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("Haven reconciliation deferred", "error", err)
 		}
 		select {
 		case <-ctx.Done():

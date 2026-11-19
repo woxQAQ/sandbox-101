@@ -23,7 +23,7 @@ const (
 	cloudBuildFeatures    = "kvm,io_uring,seccomp"
 )
 
-type CloudOptions struct {
+type CloudHypervisorOptions struct {
 	Binary       string
 	BuildReceipt string
 	CgroupRoot   string
@@ -46,7 +46,7 @@ type HostPolicy struct {
 }
 
 type CloudHypervisor struct {
-	opts    CloudOptions
+	opts    CloudHypervisorOptions
 	mu      sync.Mutex
 	epoll   int
 	watched map[int]int
@@ -57,7 +57,7 @@ type CloudHypervisor struct {
 
 var _ Backend = (*CloudHypervisor)(nil)
 
-func NewCloudHypervisor(opts CloudOptions) *CloudHypervisor {
+func NewCloudHypervisor(opts CloudHypervisorOptions) *CloudHypervisor {
 	if opts.Binary == "" {
 		opts.Binary = "/usr/local/libexec/sandbox/cloud-hypervisor"
 	}

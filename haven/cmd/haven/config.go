@@ -19,7 +19,7 @@ func parseConfig(args []string) (config.Daemon, error) {
 	flags.String("listen", "127.0.0.1:7777", "business HTTP address")
 	flags.Bool("init", false, "explicitly initialize an empty state directory")
 	flags.String("mode", "serve", "serve, backup, restore-backup, recover, or doctor")
-	flags.String("root-token-file", "", "private HTTP administrator token file")
+	flags.String("root-token-file", "", "business HTTP administrator bearer token file; this token creates the first tenant, while the local management socket authenticates by peer UID")
 	flags.String("tls-cert", "", "HTTP TLS certificate")
 	flags.String("tls-key", "", "HTTP TLS private key")
 	flags.String("backup", "", "offline backup input or output directory")

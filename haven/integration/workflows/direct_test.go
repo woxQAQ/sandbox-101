@@ -148,7 +148,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	runtime.PolicyMu.Lock()
 	runtime.RejectClear = false
 	runtime.PolicyMu.Unlock()
-	if err = service.Maintenance.Reconcile(); err != nil {
+	if err = service.Reconcile.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -501,7 +501,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_direct_completion"); err != nil {
 				t.Fatal(err)
 			}
-			if err = service.Maintenance.Reconcile(); err != nil {
+			if err = service.Reconcile.ResumePending(); err != nil {
 				t.Fatal(err)
 			}
 			fixtures.WaitFixtureWorker(t, service, claim.ID)
@@ -648,7 +648,7 @@ func directFixtureWithFault(t *testing.T, fault func(string) error) (*applicatio
 		Fault:     fault,
 		Guest:     guest,
 		Egress:    manager,
-		RootToken: "fixture-root-token",
+		AdminToken: "fixture-root-token",
 	}, func(backend *testfixture.ColdRuntime) loom.Backend {
 		return &directRuntime{
 			RestorableRuntime: &fixtures.RestorableRuntime{ColdRuntime: backend},

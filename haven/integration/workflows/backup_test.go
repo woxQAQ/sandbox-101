@@ -139,7 +139,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	if err != nil || !report.Blocked || len(report.Collected) != 0 {
 		t.Fatal("review granted collection authority", report, err)
 	}
-	if err = reviewed.Maintenance.Reconcile(); err != nil {
+	if err = reviewed.Reconcile.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
 	runtime.Mu.Lock()

@@ -36,7 +36,7 @@ daemon 的 `--log-level` 接受 debug/info/warn/error，`--log-format` 接受 te
 haven --state-dir /private/haven-state --socket /private/haven-run/management.sock --listen 127.0.0.1:7777 --root-token-file /private/root.token --init
 ```
 
-后续启动删除 `--init`。HTTP root token 从私有文件读取，trim 后至少 32 字符；TLS cert/key 必须成对提供。生产启动固定使用真实 `loom/host.CloudHypervisor` 和 `LiveGuest`。`--internal-launch`、`--internal-device-check` 在配置解析和打开数据库之前转入原 launcher/device-check 机制。
+后续启动删除 `--init`。`--root-token-file` 是业务 HTTP 管理员 bearer token 的启动输入：从私有文件读取，trim 后至少 32 字符；该 token 以 root 身份调用业务 API，并通过 `POST /v1/tenants` 创建首个租户。本机管理 socket 不使用该 token，而是按连接 peer UID 鉴权。TLS cert/key 必须成对提供。生产启动固定使用真实 `loom/host.CloudHypervisor` 和 `guest.Client`。`--internal-launch`、`--internal-device-check` 在配置解析和打开数据库之前转入原 launcher/device-check 机制。
 
 默认 state 为 `/var/lib/haven`，管理 socket 为 `/run/haven/management.sock`，HTTP 为 `127.0.0.1:7777`。默认宿主 memory ceiling 为物理 RAM 的 80%，CPU ceiling 为逻辑 CPU 数，存储安全余量为 256 MiB。VMM UID/GID 必须为非零 32 位值；CH receipt、host policy、cgroup 与 I/O 限额继续由真实后端核验。新入口没有降低 VM 或宿主限制。
 

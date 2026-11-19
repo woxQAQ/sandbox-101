@@ -30,7 +30,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 				Root:     true,
 				TenantID: "root",
 			}
-			service.Maintenance.Dispatch(id)
+			service.Reconcile.Dispatch(id)
 			original, err := service.Operations.WaitManagement(ctx, root, id)
 			if err == nil || original.Status != "failed" {
 				t.Fatal(original, err)
@@ -82,7 +82,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = service.Maintenance.Reconcile(); err != nil {
+			if err = service.Reconcile.ResumePending(); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = service.Operations.WaitManagement(ctx, root, collector.ID); err != nil {

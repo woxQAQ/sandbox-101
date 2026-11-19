@@ -41,7 +41,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 		Slot:         2,
 	}
 	b := &CloudHypervisor{
-		opts: CloudOptions{
+		opts: CloudHypervisorOptions{
 			UID:        0,
 			HostPolicy: filepath.Join(dir, "host-policy.json"),
 		},

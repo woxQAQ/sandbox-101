@@ -14,8 +14,8 @@ import (
 	"github.com/woxQAQ/haven/guest"
 	image "github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/errs"
-	"github.com/woxQAQ/haven/internal/maintenance"
 	"github.com/woxQAQ/haven/internal/publication"
+	"github.com/woxQAQ/haven/internal/reconcile"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/node"
@@ -35,11 +35,11 @@ type Options struct {
 	MaxMemoryMiB int64
 	MaxVCPUs     int
 	SafetyBytes  int64
-	Guest        guest.Port
+	Guest        guest.Agent
 	Egress       Egress
 	// EgressFactory binds callbacks before startup reconciliation can use portals.
 	EgressFactory func(EgressCallbacks) (Egress, string, error)
-	RootToken     string
+	AdminToken     string
 	CAPEM         string
 	MaxTTL        time.Duration
 	PausedTTL     time.Duration
@@ -77,7 +77,7 @@ type App struct {
 	ProxySockets     *dataplane.ProxySockets
 	Management       *node.Management
 	SandboxRequests  *sandbox.SandboxRequests
-	Maintenance      *maintenance.Maintenance
+	Reconcile        *reconcile.Coordinator
 
 	WarmClaims     *sandbox.WarmClaims
 	ResourceLinks  *machine.ResourceLinks
@@ -133,7 +133,7 @@ func Open(opts Options) (*App, error) {
 	admissionGate := execution.NewAdmissionGate(guards.Registration(), lifetime, state.Reviewed())
 	snapshotProofs := machine.NewSnapshotProofs(state.Directory(), opts.Backend)
 	resourceProofs := machine.NewResourceProofs(snapshotProofs, sandbox.ActivationHistory{})
-	authentication := authorization.NewAuthentication(opts.RootToken, authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign)
+	authentication := authorization.NewAuthentication(opts.AdminToken, authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign)
 	operations := operation.NewOperations(state.Database(), workers, state.Identity().Identity)
 	registry := ephemeral.New()
 	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.CommandIdentityDependencies{
@@ -446,7 +446,7 @@ func Open(opts Options) (*App, error) {
 	})
 	policies := service.DirectPolicies
 	deletion := service.Deletion
-	service.Maintenance = maintenance.NewMaintenance(state, maintenance.MaintenanceDependencies{
+	service.Reconcile = reconcile.New(state, reconcile.Dependencies{
 		Lifetime:     lifetime,
 		Workers:      workers,
 		Availability: service.Availability,
@@ -454,7 +454,7 @@ func Open(opts Options) (*App, error) {
 		Supply:       service.Supply,
 		Dataplane:    service.Dataplane,
 		Provisioning: service.Provisioning,
-	}, []maintenance.ResumeWorkflow{
+	}, []reconcile.ResumeWorkflow{
 		func(id string) (bool, error) {
 			return policies.Resume(lifetime.Context(), id)
 		},
@@ -474,7 +474,7 @@ func Open(opts Options) (*App, error) {
 		service.Activations.Resume,
 		deletion.ResumeRelease,
 	})
-	if err := service.Maintenance.Reconcile(); err != nil {
+	if err := service.Reconcile.ResumePending(); err != nil {
 		closeCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
 		return nil, errors.Join(err, service.Close(closeCtx))

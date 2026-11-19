@@ -219,7 +219,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		),
 	)
 	backend := engine.NewCloudHypervisor(
-		engine.CloudOptions{
+		engine.CloudHypervisorOptions{
 			Binary:       filepath.Join(materials, "cloud-hypervisor"),
 			BuildReceipt: filepath.Join(materials, "cloud-hypervisor.json"),
 			CgroupRoot:   cgroup,
@@ -1260,7 +1260,7 @@ func newVMInventory(t *testing.T, state string, backends ...*engine.CloudHypervi
 		inventory.backend = backends[0]
 	} else {
 		inventory.ownedBackend = true
-		inventory.backend = engine.NewCloudHypervisor(engine.CloudOptions{
+		inventory.backend = engine.NewCloudHypervisor(engine.CloudHypervisorOptions{
 			Binary:       requireEnv(t, "SANDBOX_E2E_HYPERVISOR"),
 			BuildReceipt: requireEnv(t, "SANDBOX_E2E_BUILD_RECEIPT"),
 			CgroupRoot:   requireEnv(t, "SANDBOX_E2E_CGROUP_ROOT"),

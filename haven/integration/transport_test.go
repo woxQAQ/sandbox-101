@@ -664,7 +664,7 @@ func transportFixture(t *testing.T) (*application.App, *sdk.Client, authorizatio
 	return transportFixtureRoot(t, false, transportGuest{})
 }
 
-func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Port) (*application.App, *sdk.Client, authorization.Principal, string) {
+func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*application.App, *sdk.Client, authorization.Principal, string) {
 	t.Helper()
 	binary := os.Getenv("SANDBOX_AGENT_FIXTURE")
 	if binary == "" {
@@ -726,7 +726,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Port) (*appli
 		Initialize:   true,
 		Backend:      backend,
 		Guest:        guest,
-		RootToken:    "integration-root-token",
+		AdminToken:    "integration-root-token",
 		MaxMemoryMiB: 8192,
 		MaxVCPUs:     64,
 		SafetyBytes:  1,

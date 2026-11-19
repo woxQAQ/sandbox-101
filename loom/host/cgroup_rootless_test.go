@@ -88,7 +88,7 @@ func TestHostPolicyRootlessCgroup(t *testing.T) {
 		},
 	}
 	b := &CloudHypervisor{
-		opts: CloudOptions{
+		opts: CloudHypervisorOptions{
 			CgroupRoot: root,
 		},
 	}

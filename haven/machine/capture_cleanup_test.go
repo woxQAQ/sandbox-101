@@ -137,7 +137,7 @@ func TestHavenPublishedRawCleanupRecovery(t *testing.T) {
 			}
 			awaitRetainedRaw(t, service, operation.ID)
 			service = testapp.ReopenCloneService(t, service, backend)
-			if err = service.Maintenance.Reconcile(); err != nil {
+			if err = service.Reconcile.ResumePending(); err != nil {
 				t.Fatal(err)
 			}
 			awaitRawCleanup(t, service, operation.ID)
@@ -171,7 +171,7 @@ func TestHavenPublishedRawCleanupRejectsUnknown(t *testing.T) {
 	if err = os.Remove(unknown); err != nil {
 		t.Fatal(err)
 	}
-	if err = service.Maintenance.Reconcile(); err != nil {
+	if err = service.Reconcile.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
 	awaitRawCleanup(t, service, operation.ID)

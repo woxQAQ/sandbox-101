@@ -4,6 +4,7 @@
 
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
+| [028：Haven review 实施提示词](028-haven-review-prompt.md) | 待实施 | 身份和 guest 命名、业务 HTTP、错误映射、周期维护与测试支持 |
 | [027：按业务能力重组 Haven](027-haven-capability-boundaries.md) | IMPLEMENTED / VALIDATION_BLOCKED | 能力、私有 SQL、测试与文档实施完成，剩余完整 required-native 门禁 |
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |

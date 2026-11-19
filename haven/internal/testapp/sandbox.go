@@ -29,7 +29,7 @@ func SandboxFixtureWithBackend(t *testing.T, fault func(string) error, factory f
 		Fault:     fault,
 		Guest:     guest,
 		Egress:    proxy,
-		RootToken: "fixture-root-token",
+		AdminToken: "fixture-root-token",
 	}, factory)
 	t.Cleanup(guest.Close)
 	return service, runtime, guest, proxy

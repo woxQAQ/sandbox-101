@@ -158,7 +158,7 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service.Maintenance.Dispatch(release.ID)
+			service.Reconcile.Dispatch(release.ID)
 			step := fixtures.AwaitColdWorker(t, service, release.ID)
 			if step.Status == "succeeded" || service.Workers.State(release.ID).Err == nil || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 				t.Fatal("current ownership replaced the original generation proof", step.State)

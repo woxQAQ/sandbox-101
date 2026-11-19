@@ -177,7 +177,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if err != nil || view.Status != "succeeded" {
 		t.Fatal(view, err)
 	}
-	if err = service.Maintenance.Reconcile(); err != nil {
+	if err = service.Reconcile.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = service.Operations.Wait(ctx, principal, configure.ID); err == nil {

@@ -59,7 +59,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	var callers sync.WaitGroup
 	for range 16 {
 		callers.Go(func() {
-			service.Maintenance.Dispatch(accepted.ID)
+			service.Reconcile.Dispatch(accepted.ID)
 		})
 	}
 	callers.Wait()
@@ -87,7 +87,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	}, accepted.ID); err != nil || result.Status != "succeeded" {
 		t.Fatal("runner diagnostic rewrote committed operation success", result, err)
 	}
-	service.Maintenance.Dispatch(accepted.ID)
+	service.Reconcile.Dispatch(accepted.ID)
 	fixtures.AwaitColdWorker(t, service, accepted.ID)
 	worker = service.Workers.State(accepted.ID)
 	if worker.Active || !worker.Completed || worker.Err != nil || backend.Count("launch") != 1 {

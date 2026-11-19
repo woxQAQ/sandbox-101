@@ -89,7 +89,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if err = reader.Close(); err != nil {
 					t.Fatal(err)
 				}
-				if err = service.Maintenance.Reconcile(); err != nil {
+				if err = service.Reconcile.ResumePending(); err != nil {
 					t.Fatal(err)
 				}
 				if _, err = service.Operations.WaitManagement(ctx, root, collector); err != nil {
@@ -113,7 +113,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 					_ = os.Chmod(cache.Witness.Path, 0o700)
 				})
 				interrupt.Store(false)
-				if err = service.Maintenance.Reconcile(); err != nil {
+				if err = service.Reconcile.ResumePending(); err != nil {
 					t.Fatal(err)
 				}
 				if _, err = service.Operations.WaitManagement(ctx, root, collector); err == nil {
