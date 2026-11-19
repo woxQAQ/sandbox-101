@@ -1,4 +1,6 @@
-// Package authorization owns authenticated identities and tenant credentials.
+// Package authorization resolves bearer tokens into root, tenant, or sandbox
+// principals. It manages tenant credentials and admission budgets. Callers use
+// the authenticated scope when authorizing access to a particular resource.
 package authorization
 
 import (
@@ -11,18 +13,23 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+// Principal identifies the authority established by authentication. Root grants
+// node-wide scope. A tenant principal is scoped to TenantID, and a nonempty
+// SandboxID further restricts that scope to a single sandbox.
 type Principal struct {
 	TenantID  string
 	SandboxID string
 	Root      bool
 }
 
-// Visible checks identity scope only. Lease, settings and resource proofs are
-// evaluated by the business use case before granting ephemeral.
+// Visible reports whether the tenant and sandbox fall within the principal's
+// scope. Data access also requires lease, settings, and resource checks.
 func (p Principal) Visible(tenant, sandbox string) bool {
 	return (p.Root || p.TenantID == tenant) && (p.SandboxID == "" || p.SandboxID == sandbox)
 }
 
+// Repository reads and writes tenant token hashes and admission limits through
+// the database or transaction supplied to New.
 type Repository struct {
 	queries *dbgen.Queries
 }

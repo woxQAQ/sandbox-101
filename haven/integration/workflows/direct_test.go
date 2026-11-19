@@ -361,7 +361,7 @@ func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 					"PRIVATE": {
 						Value: "unused-fixture-value",
 						Guest: &guest,
-						Inject: &authorization.Injection{
+						Inject: &egress.Injection{
 							Hosts: []string{
 								"unused.invalid",
 							},

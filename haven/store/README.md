@@ -37,6 +37,8 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 
 sqlc 生成数据库表结构、查询参数和查询投影，不能从 BLOB 推导其中的 JSON 协议。当前开启 `omit_unused_structs: true`：例如 `templates(id, tenant, body BLOB)` 的查询只读 `body`，生成结果是 `[]byte`，因此其 `models.go` 可以为空；`GetPublisherRow` 等多列投影则生成在 `queries.sql.go`。手写 `template.Record` 负责 JSON 内的 `loom.Config`、字段顺序/tags 与公开视图转换，属于领域/持久协议模型。纯行投影在能力内直接消费生成类型；不为了隐藏 sqlc 而复制整行。BLOB 中的冻结 JSON 仍由手写协议类型表达，不能为填满 `models.go` 生成未使用类型。
 
+以 `tenants` 为例，`id` 和 `token_hash` 是 SQL 可查询的列，`body` 保存两个预算上限的 JSON。`authorization.Repository.Limits` 负责解码，配额调用方直接读取 `Limits` 的字段。冻结的 operation 请求有不同的读法。`operation.Repository.RequestState` 返回原始请求字节，sandbox provision 工作流先核对已保存的摘要和 scope，再按 action 解码对应的请求结构。这里的消费者需要知道该 action 的持久格式。
+
 ```nu
 just generate-sql
 just check-sql

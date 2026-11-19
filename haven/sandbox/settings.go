@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
@@ -14,17 +13,17 @@ import (
 )
 
 type Settings struct {
-	Env         map[string]string                  `json:"env"`
-	Policy      egress.Policy                      `json:"policy"`
-	Secrets     map[string]authorization.Injection `json:"secrets,omitempty"`
-	TTLSeconds  int64                              `json:"ttl_seconds"`
-	OnExpire    string                             `json:"on_expire"`
-	AutoRenew   bool                               `json:"auto_renew"`
-	Deadline    time.Time                          `json:"deadline"`
-	PausedUntil time.Time                          `json:"paused_until"`
-	Generation  string                             `json:"generation"`
-	Instance    string                             `json:"instance"`
-	ActiveEpoch string                             `json:"active_epoch,omitempty"`
+	Env         map[string]string           `json:"env"`
+	Policy      egress.Policy               `json:"policy"`
+	Secrets     map[string]egress.Injection `json:"secrets,omitempty"`
+	TTLSeconds  int64                       `json:"ttl_seconds"`
+	OnExpire    string                      `json:"on_expire"`
+	AutoRenew   bool                        `json:"auto_renew"`
+	Deadline    time.Time                   `json:"deadline"`
+	PausedUntil time.Time                   `json:"paused_until"`
+	Generation  string                      `json:"generation"`
+	Instance    string                      `json:"instance"`
+	ActiveEpoch string                      `json:"active_epoch,omitempty"`
 }
 
 func LoadSandbox(ctx context.Context, query store.DBTX, id, tenant string) (ownership.Sandbox, error) {

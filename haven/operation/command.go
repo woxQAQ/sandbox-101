@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation/internal/dbgen"
@@ -12,9 +11,9 @@ import (
 )
 
 type EnvVar struct {
-	Value  string                   `json:"value"`
-	Guest  *bool                    `json:"guest,omitempty"`
-	Inject *authorization.Injection `json:"inject,omitempty"`
+	Value  string            `json:"value"`
+	Guest  *bool             `json:"guest,omitempty"`
+	Inject *egress.Injection `json:"inject,omitempty"`
 }
 
 func (value EnvVar) IsSecret() bool {

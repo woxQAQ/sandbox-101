@@ -222,28 +222,30 @@ func NewCapabilityLookup(db store.DBTX) *CapabilityLookup {
 	}
 }
 
-// FindCapability includes retired identities only for historical operation
-// authorization. Decoding stops at the matching capability, preserving the
-// original ordered lookup's failure boundary.
-func (r *CapabilityLookup) FindCapability(ctx context.Context, retired bool, matches func(ownership.Sandbox) bool) (ownership.Sandbox, error) {
+// FindSandboxPrincipal returns the identity of the first sandbox whose token
+// matches. A decoding error encountered before the match fails the lookup.
+func (r *CapabilityLookup) FindSandboxPrincipal(ctx context.Context, includeRetired bool, matches func(tenantID, sandboxID string) bool) (authorization.Principal, error) {
 	var bodies [][]byte
 	var err error
-	if retired {
+	if includeRetired {
 		bodies, err = r.queries.ListAllCapabilities(ctx)
 	} else {
 		bodies, err = r.queries.ListActiveCapabilities(ctx)
 	}
 	if err != nil {
-		return ownership.Sandbox{}, err
+		return authorization.Principal{}, err
 	}
 	for _, body := range bodies {
 		var record ownership.Sandbox
 		if err := json.Unmarshal(body, &record); err != nil {
-			return ownership.Sandbox{}, err
+			return authorization.Principal{}, err
 		}
-		if matches(record) {
-			return record, nil
+		if matches(record.TenantID, record.ID) {
+			return authorization.Principal{
+				TenantID:  record.TenantID,
+				SandboxID: record.ID,
+			}, nil
 		}
 	}
-	return ownership.Sandbox{}, sql.ErrNoRows
+	return authorization.Principal{}, sql.ErrNoRows
 }

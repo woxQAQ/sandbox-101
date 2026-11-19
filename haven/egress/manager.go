@@ -32,6 +32,14 @@ type Policy struct {
 	MaxConnections int      `json:"max_connections,omitempty"`
 }
 
+// Injection describes where the proxy may substitute a host-held secret.
+// Sandbox settings persist these fields so credentials can be resupplied after restart.
+type Injection struct {
+	Hosts       []string `json:"hosts"`
+	Header      string   `json:"header"`
+	Placeholder string   `json:"placeholder,omitempty"`
+}
+
 // Secret values are never serialized. Hosts are exact names, without wildcards.
 // Value is the complete replacement, e.g. "Bearer sk-real".
 type Secret struct {

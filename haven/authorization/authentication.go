@@ -8,13 +8,12 @@ import (
 	"fmt"
 
 	"github.com/woxQAQ/haven/internal/errs"
-	"github.com/woxQAQ/haven/ownership"
 )
 
-// CapabilityReader searches sandbox capabilities without exposing settings,
-// admission, workflow dispatch or database ownership to authentication.
+// CapabilityReader resolves a sandbox-scoped principal using the caller's
+// token check. includeRetired extends the search to terminated sandboxes.
 type CapabilityReader interface {
-	FindCapability(context.Context, bool, func(ownership.Sandbox) bool) (ownership.Sandbox, error)
+	FindSandboxPrincipal(ctx context.Context, includeRetired bool, matches func(tenantID, sandboxID string) bool) (Principal, error)
 }
 
 // Authentication resolves an administrator, tenant or sandbox capability. It has
@@ -45,7 +44,7 @@ func (a *Authentication) AuthenticateOperation(ctx context.Context, token string
 	return a.authenticate(ctx, token, true)
 }
 
-func (a *Authentication) authenticate(ctx context.Context, token string, retired bool) (Principal, error) {
+func (a *Authentication) authenticate(ctx context.Context, token string, includeRetired bool) (Principal, error) {
 	if token == "" {
 		return Principal{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
@@ -64,14 +63,11 @@ func (a *Authentication) authenticate(ctx context.Context, token string, retired
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, err
 	}
-	candidate, err := a.sandboxes.FindCapability(ctx, retired, func(candidate ownership.Sandbox) bool {
-		return subtle.ConstantTimeCompare([]byte(token), []byte(a.SandboxToken(candidate.TenantID, candidate.ID))) == 1
+	principal, err := a.sandboxes.FindSandboxPrincipal(ctx, includeRetired, func(tenantID, sandboxID string) bool {
+		return subtle.ConstantTimeCompare([]byte(token), []byte(a.SandboxToken(tenantID, sandboxID))) == 1
 	})
 	if err == nil {
-		return Principal{
-			TenantID:  candidate.TenantID,
-			SandboxID: candidate.ID,
-		}, nil
+		return principal, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, err

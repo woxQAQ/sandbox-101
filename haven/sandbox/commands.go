@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -91,10 +90,10 @@ func (sc *SandboxCommands) CredentialsMissing(id string, settings Settings) bool
 	return false
 }
 
-func SplitEnv(env map[string]operation.EnvVar) (map[string]string, map[string]egress.Secret, map[string]authorization.Injection, error) {
+func SplitEnv(env map[string]operation.EnvVar) (map[string]string, map[string]egress.Secret, map[string]egress.Injection, error) {
 	visible := map[string]string{}
 	secrets := map[string]egress.Secret{}
-	descriptors := map[string]authorization.Injection{}
+	descriptors := map[string]egress.Injection{}
 	for key, value := range env {
 		if key == "" || len(key) > 256 || strings.ContainsAny(key, "=\x00\n") || strings.ContainsRune(value.Value, 0) {
 			return nil, nil, nil, errs.InvalidInput("invalid environment variable")

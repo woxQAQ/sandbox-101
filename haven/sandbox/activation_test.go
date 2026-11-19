@@ -109,7 +109,7 @@ func TestHavenSecretRestart(t *testing.T) {
 		"TOKEN": {
 			Value: secret,
 			Guest: &secretFlag,
-			Inject: &authorization.Injection{
+			Inject: &egress.Injection{
 				Hosts: []string{
 					"api.example.com",
 				},
