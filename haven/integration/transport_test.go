@@ -801,7 +801,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		Tenants:        service.Tenants,
 		Requests:       service.SandboxRequests,
 		Dataplane:      service.Dataplane,
-		Management:     service.Management,
+		Node:           service.Node,
 		Delivery:       service.Delivery,
 	}))
 	t.Cleanup(server.Close)

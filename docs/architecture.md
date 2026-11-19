@@ -15,7 +15,7 @@ flowchart LR
     L --> S[System 协作]
 ```
 
-内部职责按业务能力组织，App 只构造组件并管理最终关闭顺序。业务 HTTP 通过 `api.Services` 接收实际用例，管理 UDS 调用 `node.Management`；controller 不接收 App、数据库或宿主效果。
+内部职责按业务能力组织，App 只构造组件并管理最终关闭顺序。业务 HTTP 通过 `api.Services` 接收用例，管理 UDS 由 `api/management` 分派节点状态、镜像、GC、供给清理和 operation 查询。两类 controller 的依赖均限于所需用例。
 
 ```mermaid
 flowchart TD
@@ -34,7 +34,7 @@ flowchart TD
     Capabilities --> Store[原 DBTX / 唯一 store.State]
 ```
 
-image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。dataplane 保持 live 接纳、连接、lease 与 preview；gc 组合各 owner 的 GC 事实，node 执行管理用例。internal/reconcile 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内为显式完成的 operation 冻结业务视图。
+image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。dataplane 保持 live 接纳、连接、lease 与 preview；gc 组合各 owner 的 GC 事实，node 提供管理员节点状态查询与 drain。internal/reconcile 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内为显式完成的 operation 冻结业务视图。
 
 私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v0 baseline 以整数列保存租户预算。冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
 

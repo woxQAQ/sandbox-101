@@ -75,7 +75,7 @@ type App struct {
 	Dataplane        *dataplane.Plane
 	Audits           *dataplane.Audits
 	ProxySockets     *dataplane.ProxySockets
-	Management       *node.Management
+	Node             *node.Service
 	SandboxRequests  *sandbox.SandboxRequests
 	Reconcile        *reconcile.Coordinator
 
@@ -430,13 +430,7 @@ func Open(opts Options) (*App, error) {
 		Guest:   opts.Guest,
 		Epoch:   registry.Epoch(),
 	})
-	service.Management = node.NewManagement(state, node.ManagementDependencies{
-		Availability:  service.Availability,
-		Operations:    service.Operations,
-		Images:        service.Images,
-		GC:            service.GC,
-		SupplyCleanup: service.SupplyCleanup,
-	})
+	service.Node = node.New(state, service.Availability)
 	service.SandboxRequests = sandbox.NewSandboxRequests(sandbox.SandboxRequestDependencies{
 		Sandboxes:  service.Sandboxes,
 		Lifecycle:  service.Lifecycle,

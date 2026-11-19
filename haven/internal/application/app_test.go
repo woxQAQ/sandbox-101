@@ -37,11 +37,20 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	if err != nil || original.Status != "succeeded" {
 		t.Fatal(original, err)
 	}
-	service.Availability.Drain()
-	status, err := service.Management.Status(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "root",
-	})
+	root := authorization.Principal{Root: true, TenantID: "root"}
+	for _, denied := range []authorization.Principal{principal, {Root: true, SandboxID: original.Result.SandboxID}} {
+		if err := service.Node.Drain(denied); !errors.Is(err, errs.ErrForbidden) {
+			t.Fatal("unauthorized drain", err)
+		}
+	}
+	status, err := service.Node.Status(ctx, root)
+	if err != nil || status.Draining {
+		t.Fatal("rejected drain changed admission", status, err)
+	}
+	if err := service.Node.Drain(root); err != nil {
+		t.Fatal(err)
+	}
+	status, err = service.Node.Status(ctx, root)
 	if err != nil || !status.Draining {
 		t.Fatal("drain decision was not visible to management", status, err)
 	}

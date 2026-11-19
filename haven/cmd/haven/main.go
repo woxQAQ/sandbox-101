@@ -205,7 +205,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 			Tenants:        service.Tenants,
 			Requests:       service.SandboxRequests,
 			Dataplane:      service.Dataplane,
-			Management:     service.Management,
+			Node:           service.Node,
 			Delivery:       service.Delivery,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -216,7 +216,13 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 		},
 	}
 	localServer := &http.Server{
-		Handler:           management.New(service.Management),
+		Handler: management.New(management.Services{
+			Node:          service.Node,
+			Images:        service.Images,
+			GC:            service.GC,
+			SupplyCleanup: service.SupplyCleanup,
+			Operations:    service.Operations,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    32 << 10,

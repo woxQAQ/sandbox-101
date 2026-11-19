@@ -32,7 +32,7 @@ type Services struct {
 	Tenants        *authorization.Tenants
 	Requests       *sandbox.SandboxRequests
 	Dataplane      *dataplane.Plane
-	Management     *node.Management
+	Node           *node.Service
 }
 
 // handler owns exactly the assembled business capabilities. The application
@@ -288,7 +288,7 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 		return
 	}
 	accepted, err = h.services.Operations.Wait(request.Context(), principal(c), accepted.ID)
-	if err != nil && accepted.Status != "failed" {
+	if err != nil && !accepted.SettledFailure(err) {
 		httpwire.Error(c.Writer, err)
 		return
 	}
@@ -342,16 +342,15 @@ func (h *handler) getSandbox(c *gin.Context) {
 }
 
 func (h *handler) status(c *gin.Context) {
-	value, err := h.services.Management.Status(c.Request.Context(), principal(c))
+	value, err := h.services.Node.Status(c.Request.Context(), principal(c))
 	httpwire.Respond(c.Writer, value, err)
 }
 
 func (h *handler) drainNode(c *gin.Context) {
-	if !principal(c).Root {
-		httpwire.AdminRequired().Write(c.Writer)
+	if err := h.services.Node.Drain(principal(c)); err != nil {
+		httpwire.Error(c.Writer, err)
 		return
 	}
-	h.services.Management.Drain()
 	httpwire.JSON(c.Writer, 200, map[string]bool{
 		"draining": true,
 	})

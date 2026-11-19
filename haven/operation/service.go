@@ -14,6 +14,15 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+var errFailed = fmt.Errorf("%w: operation failed", errs.ErrConflict)
+
+// SettledFailure reports whether the wait confirmed this operation's terminal
+// failure after the worker released custody. A child worker can also fail
+// while its parent operation is still pending.
+func (r Record) SettledFailure(waitErr error) bool {
+	return r.Status == "failed" && errors.Is(waitErr, errFailed)
+}
+
 // WorkerReader observes process-local completion without granting dispatch or
 // shutdown authority. Durable status remains owned by the operation repository.
 type WorkerReader interface {
@@ -132,7 +141,7 @@ func (o *Operations) wait(ctx context.Context, scope Scope, id, sandbox string) 
 		// guard and finish the durable HEAD update before follow-up admission.
 		if terminal && !worker.Active {
 			if record.Status == "failed" {
-				return record, fmt.Errorf("%w: sandbox operation failed", errs.ErrConflict)
+				return record, errFailed
 			}
 			return record, nil
 		}
