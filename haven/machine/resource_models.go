@@ -144,6 +144,38 @@ type RestoreRequest struct {
 	StopOperationID  string `json:"stop_operation_id"`
 }
 
+// A request type fixes the action used by every writer and reader.
+type provisionAction interface {
+	provisionAction() string
+}
+
+// The action and field order are part of the hashed operation request. Claim
+// is present only for admissions that also freeze a sanitized sandbox command.
+type provisionRequest[T provisionAction] struct {
+	Action  string
+	Request T
+	Claim   *operation.Command `json:"Claim,omitempty"`
+}
+
+func (FreshRequest) provisionAction() string   { return "claim" }
+func (CloneRequest) provisionAction() string   { return "clone" }
+func (RestoreRequest) provisionAction() string { return "restore" }
+
+func FreezeProvisionRequest[T provisionAction](request T, claim *operation.Command) []byte {
+	return operation.Encode(provisionRequest[T]{Action: request.provisionAction(), Request: request, Claim: claim})
+}
+
+func DecodeProvisionRequest[T provisionAction](body []byte) (T, error) {
+	var frozen provisionRequest[T]
+	if err := json.Unmarshal(body, &frozen); err != nil {
+		return frozen.Request, err
+	}
+	if frozen.Action != frozen.Request.provisionAction() {
+		return frozen.Request, fmt.Errorf("unexpected provision request action %q", frozen.Action)
+	}
+	return frozen.Request, nil
+}
+
 // ResourceAdmission carries one child's frozen identity through the parent
 // transaction. Its fields are required facts, not optional execution modes.
 type ResourceAdmission struct {

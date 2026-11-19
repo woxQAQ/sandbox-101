@@ -139,7 +139,7 @@ def main():
             local = command("loomctl", [*loom_args, "status"],
                             {"LOOMCTL_SOCKET": str(directory / "wrong.sock")})
             assert business == local
-            assert local["format"] == "haven-single-control" and local["version"] >= 9
+            assert local["format"] == "haven-single-control" and local["version"] == 0
             assert command("havenctl", [*haven_args, "list"]) == []
             # Both authenticated listeners use the same strict JSON failure contract.
             for path in ("/v1/tenants", "/v1/manage"):

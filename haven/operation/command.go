@@ -2,6 +2,8 @@ package operation
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/woxQAQ/haven/egress"
@@ -83,25 +85,24 @@ func (r *Repository) Finish(ctx context.Context, id, status string, body []byte)
 	return nil
 }
 
-// RequestState reads the original input and mutable result from the same row.
-type RequestState struct {
-	RequestIdentity
-
-	Body []byte
-}
-
-func (r *Repository) RequestState(ctx context.Context, id string) (RequestState, error) {
+// LiveTenantRequest verifies the persisted bytes, scope and lifecycle before
+// returning the input for action-specific decoding and the current result.
+func (r *Repository) LiveTenantRequest(ctx context.Context, id, tenant string) ([]byte, Result, error) {
+	var result Result
 	row, err := r.queries.GetRequestState(ctx, id)
-	return RequestState{
-		RequestIdentity: RequestIdentity{
-			Hash:      row.RequestHash,
-			Request:   row.Request,
-			ScopeKind: row.ScopeKind,
-			ScopeID:   row.ScopeID,
-			Status:    row.Status,
-		},
-		Body: row.Body,
-	}, err
+	if err != nil {
+		return nil, result, err
+	}
+	if Digest(row.Request) != row.RequestHash {
+		return nil, result, fmt.Errorf("operation request checksum mismatch")
+	}
+	if row.ScopeKind != "tenant" || row.ScopeID != tenant || Terminal(row.Status) {
+		return nil, result, fmt.Errorf("operation tenant or lifecycle changed")
+	}
+	if err := json.Unmarshal(row.Body, &result); err != nil {
+		return nil, result, err
+	}
+	return row.Request, result, nil
 }
 
 func (r *Repository) RunResult(ctx context.Context, id string, body []byte) error {

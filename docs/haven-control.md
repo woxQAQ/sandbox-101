@@ -112,7 +112,7 @@ haven --state-dir /private/new-recovery-state --mode doctor
 
 restore 只写新目录，先建立 `RECOVERY_REQUIRED`。review 验证备份组件未变并记录人工说明；它只解除 metadata 打开 gate，不授予重放、接管、数据面或 GC 权限。`doctor` 在独占锁下核验 metadata，不创建 runtime 或启动工作流；它没有承诺只读文件系统打开或有界恢复扫描。017/020/021 仍暂停。
 
-当前 Haven schema version 为 **9**，以 [store migrations](../haven/store/README.md) 中的 `000009_baseline.up.sql` 建立；sqlc 读取同一 migration 目录。初始化在持有 writer lock 时由 goose Provider 的 Go migration 将 baseline、版本标记、identity、epoch triggers 和 goose 版本记录一起提交，之后继续原 checkpoint/HEAD 协议。正常 reopen 在只读 probe 中要求 goose 历史与 schema version 一致；缺少该历史的旧 v9 库也明确拒绝，不补造迁移记录。正常 reopen 明确拒绝旧 engine/sandboxd 格式及早期 Haven 原型；目前没有早期版本升级脚本或普通启动自动升级旧 state 的路径。
+Haven 发布前的 store schema 版本固定为 **0**，表结构直接维护在同一份 baseline SQL 中。空库在 writer lock 下原子写入 schema、application ID、store identity 和 Goose 的零号记录，随后执行 checkpoint/HEAD 协议。正常 reopen 先在只读阶段核验数据库与节点身份。详见 [store 契约](../haven/store/README.md)。
 
 ## 验证范围
 

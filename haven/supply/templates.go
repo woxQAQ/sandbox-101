@@ -264,10 +264,7 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 		Key:        parent.ID + ":cold",
 		TemplateID: spec.ID,
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.FreshRequest
-	}{"claim", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	child, err := s.provisioning.AdmitBare(ctx, ProvisionRequest{
 		TenantID: spec.TenantID,
 		Key:      request.Key,

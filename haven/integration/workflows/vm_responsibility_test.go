@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -20,7 +19,6 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/store"
 )
 
@@ -85,6 +83,30 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	}
 }
 
+func TestHavenProvisionRejectsChangedFrozenBytes(t *testing.T) {
+	service, backend := testapp.ColdService(t, func(point string) error {
+		if point == "admission_committed" {
+			return errs.ErrInterrupted
+		}
+		return nil
+	})
+	accepted, err := service.Provisioning.AdmitCold(t.Context(), machine.FreshRequest{
+		TenantID: "tenant", Key: "interrupted", TemplateID: "cold",
+	})
+	if !errors.Is(err, errs.ErrInterrupted) || accepted.ID == "" {
+		t.Fatalf("expected a committed admission before dispatch, got %v", err)
+	}
+	if _, err := service.State.Database().Exec("UPDATE operations SET request=CAST(request || ' ' AS BLOB) WHERE id=?", accepted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Provisioning.Continue(accepted.ID); err == nil || !strings.Contains(err.Error(), "request checksum mismatch") {
+		t.Fatalf("expected request digest rejection, got %v", err)
+	}
+	if backend.Count("prepare") != 0 || backend.Count("launch") != 0 {
+		t.Fatal("provisioning acted on changed request bytes")
+	}
+}
+
 func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	for _, scenario := range []string{
@@ -97,10 +119,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 			service, backend := testapp.ColdService(t, nil)
 			switch scenario {
 			case "quota-boundary":
-				_, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", operation.Encode(authorization.Limits{
-					MaxSandboxes:  10,
-					MaxStorageMiB: 63,
-				}))
+				_, err := service.State.Database().Exec("UPDATE tenants SET max_storage_mib=63 WHERE id='tenant'")
 				if err != nil {
 					t.Fatal(err)
 				}

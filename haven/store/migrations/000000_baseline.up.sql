@@ -31,7 +31,12 @@ CREATE TABLE operation_steps (
  body BLOB NOT NULL,
  PRIMARY KEY(operation_id,step_key)
 );
-CREATE TABLE tenants(id TEXT PRIMARY KEY,token_hash TEXT NOT NULL UNIQUE,body BLOB NOT NULL);
+CREATE TABLE tenants (
+ id TEXT PRIMARY KEY,
+ token_hash TEXT NOT NULL UNIQUE,
+ max_sandboxes INTEGER NOT NULL CHECK(typeof(max_sandboxes)='integer' AND max_sandboxes>=0),
+ max_storage_mib INTEGER NOT NULL CHECK(typeof(max_storage_mib)='integer' AND max_storage_mib>=0)
+);
 CREATE TABLE sandboxes(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,state TEXT NOT NULL,body BLOB NOT NULL);
 CREATE TABLE templates(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,body BLOB NOT NULL);
 CREATE TABLE template_intents(template_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,operation_id TEXT NOT NULL REFERENCES operations(id));

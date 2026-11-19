@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -222,28 +221,20 @@ func NewCapabilityLookup(db store.DBTX) *CapabilityLookup {
 	}
 }
 
-// FindSandboxPrincipal returns the identity of the first sandbox whose token
-// matches. A decoding error encountered before the match fails the lookup.
+// FindSandboxPrincipal matches a token against the persisted tenant and sandbox IDs.
 func (r *CapabilityLookup) FindSandboxPrincipal(ctx context.Context, includeRetired bool, matches func(tenantID, sandboxID string) bool) (authorization.Principal, error) {
-	var bodies [][]byte
-	var err error
-	if includeRetired {
-		bodies, err = r.queries.ListAllCapabilities(ctx)
-	} else {
-		bodies, err = r.queries.ListActiveCapabilities(ctx)
-	}
+	subjects, err := r.queries.ListCapabilitySubjects(ctx, includeRetired)
 	if err != nil {
 		return authorization.Principal{}, err
 	}
-	for _, body := range bodies {
-		var record ownership.Sandbox
-		if err := json.Unmarshal(body, &record); err != nil {
-			return authorization.Principal{}, err
+	for _, subject := range subjects {
+		if subject.ID == "" || subject.Tenant == "" {
+			return authorization.Principal{}, fmt.Errorf("%w: incomplete sandbox identity", errs.ErrManualRecovery)
 		}
-		if matches(record.TenantID, record.ID) {
+		if matches(subject.Tenant, subject.ID) {
 			return authorization.Principal{
-				TenantID:  record.TenantID,
-				SandboxID: record.ID,
+				TenantID:  subject.Tenant,
+				SandboxID: subject.ID,
 			}, nil
 		}
 	}

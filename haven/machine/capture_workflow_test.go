@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
@@ -400,10 +399,7 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 		service, backend := testapp.ColdService(t, nil)
 		claim := testfixture.ColdClaim(t, service, "source")
 		source := testutil.AwaitColdWorker(t, service, claim.ID)
-		if _, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", operation.Encode(authorization.Limits{
-			MaxSandboxes:  10,
-			MaxStorageMiB: 255,
-		})); err != nil {
+		if _, err := service.State.Database().Exec("UPDATE tenants SET max_storage_mib=255 WHERE id='tenant'"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := service.Captures.AdmitCapture(context.Background(), machine.CaptureRequest{

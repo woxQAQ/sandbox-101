@@ -4,7 +4,7 @@ Repository 拥有 resource_refs、quota_refs、quota_resources、reservations �
 
 `Reservation` 保存宿主 bytes、memory 与 CPU 容量；`CostIdentity` 固定 tenant、费用类别、resource key 和最初承担费用的 operation，`Cost` 再带 slot/storage 数量。创建和退休均要求恰好一行。跨 tenant 的 CountCost/CountCostHolders 用于检查全部责任，不能改成只看当前租户而隐藏异常重复归属。
 
-`CapacityUsage` 是节点现有 reservation 的 bytes、memory MiB、CPU 汇总，不表示新的 owner 或释放许可。`ReservedCapacity` 与 `Usage` 在 v9 的整数类型约束下汇总；SUM 溢出仍返回查询错误。fork 预测交接先删除精确匹配的 reservation、再移除预测 holder、最后按原 slots/storage/source operation 调用 `RetireMatchingCost`；实际分支责任仍在同一调用者事务中接替。
+`CapacityUsage` 是节点现有 reservation 的 bytes、memory MiB、CPU 汇总，不表示新的 owner 或释放许可。`ReservedCapacity` 与 `Usage` 在 SQLite 的整数类型约束下汇总；SUM 溢出仍返回查询错误。fork 预测交接先删除精确匹配的 reservation、再移除预测 holder、最后按原 slots/storage/source operation 调用 `RetireMatchingCost`；实际分支责任仍在同一调用者事务中接替。
 
 `ChargeWarmSlot` 只把指定出生 operation 的零单位 warm slot 改为一个单位，要求原 storage 为零。`MoveCostReference` 只更新 holder ID，`TransferCostReference` 才更新 kind 与 ID；不扩大 UPDATE OF trigger 的触发列。`RetireMatchingCost`、`RetireCost`、`RetireCostAtKey` 分别保留原调用点的金额加来源、来源、tenant/kind/key 条件；调用者仍先完成各自证明，不把较窄删除的条件推断为其他路径的授权。
 

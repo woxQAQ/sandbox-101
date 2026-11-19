@@ -28,10 +28,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: restore requires scoped snapshot, stopped instance, stop proof and key", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.RestoreRequest
-	}{"restore", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",

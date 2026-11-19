@@ -376,36 +376,27 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 	}
 	switch source.Action {
 	case "restore":
-		var frozen struct {
-			Action  string
-			Request RestoreRequest
-		}
-		if err = json.Unmarshal(originalRequest, &frozen); err != nil {
+		frozen, err := DecodeProvisionRequest[RestoreRequest](originalRequest)
+		if err != nil {
 			return currentMachine, err
 		}
-		if source.Input.Restore == nil || frozen.Action != "restore" || frozen.Request.TenantID != tenant || frozen.Request.SandboxID != source.Input.SandboxID || frozen.Request.SnapshotID != source.Input.Restore.Snapshot.ID || frozen.Request.ExpectedInstance != source.ExpectedInstance {
+		if source.Input.Restore == nil || frozen.TenantID != tenant || frozen.SandboxID != source.Input.SandboxID || frozen.SnapshotID != source.Input.Restore.Snapshot.ID || frozen.ExpectedInstance != source.ExpectedInstance {
 			return currentMachine, fmt.Errorf("discard original restore request changed")
 		}
 	case "clone":
-		var frozen struct {
-			Action  string
-			Request CloneRequest
-		}
-		if err = json.Unmarshal(originalRequest, &frozen); err != nil {
+		frozen, err := DecodeProvisionRequest[CloneRequest](originalRequest)
+		if err != nil {
 			return currentMachine, err
 		}
-		if source.Input.Restore == nil || frozen.Action != "clone" || frozen.Request.TenantID != tenant || frozen.Request.SnapshotID != source.Input.Restore.Snapshot.ID {
+		if source.Input.Restore == nil || frozen.TenantID != tenant || frozen.SnapshotID != source.Input.Restore.Snapshot.ID {
 			return currentMachine, fmt.Errorf("discard original clone request changed")
 		}
 	default:
-		var frozen struct {
-			Action  string
-			Request FreshRequest
-		}
-		if err = json.Unmarshal(originalRequest, &frozen); err != nil {
+		frozen, err := DecodeProvisionRequest[FreshRequest](originalRequest)
+		if err != nil {
 			return currentMachine, err
 		}
-		if frozen.Action != "claim" || frozen.Request.TenantID != tenant || frozen.Request.TemplateID != source.Input.TemplateID {
+		if frozen.TenantID != tenant || frozen.TemplateID != source.Input.TemplateID {
 			return currentMachine, fmt.Errorf("discard original cold request changed")
 		}
 	}

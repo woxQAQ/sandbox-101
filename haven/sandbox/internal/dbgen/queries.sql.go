@@ -256,50 +256,28 @@ func (q *Queries) InsertSandboxSettings(ctx context.Context, arg InsertSandboxSe
 	return result.RowsAffected()
 }
 
-const listActiveCapabilities = `-- name: ListActiveCapabilities :many
-SELECT body FROM sandboxes WHERE state<>'terminated'
+const listCapabilitySubjects = `-- name: ListCapabilitySubjects :many
+SELECT tenant,id FROM sandboxes WHERE state<>'terminated' OR CAST(?1 AS BOOLEAN)
 `
 
-func (q *Queries) ListActiveCapabilities(ctx context.Context) ([][]byte, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveCapabilities)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items [][]byte
-	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			return nil, err
-		}
-		items = append(items, body)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type ListCapabilitySubjectsRow struct {
+	Tenant string
+	ID     string
 }
 
-const listAllCapabilities = `-- name: ListAllCapabilities :many
-SELECT body FROM sandboxes
-`
-
-func (q *Queries) ListAllCapabilities(ctx context.Context) ([][]byte, error) {
-	rows, err := q.db.QueryContext(ctx, listAllCapabilities)
+func (q *Queries) ListCapabilitySubjects(ctx context.Context, includeRetired bool) ([]ListCapabilitySubjectsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCapabilitySubjects, includeRetired)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items [][]byte
+	var items []ListCapabilitySubjectsRow
 	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
+		var i ListCapabilitySubjectsRow
+		if err := rows.Scan(&i.Tenant, &i.ID); err != nil {
 			return nil, err
 		}
-		items = append(items, body)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

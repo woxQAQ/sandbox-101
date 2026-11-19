@@ -73,11 +73,8 @@ SELECT operation_id FROM configuration_fences WHERE sandbox_id=?;
 -- name: ListSandboxIDs :many
 SELECT id,tenant FROM sandboxes ORDER BY id;
 
--- name: ListActiveCapabilities :many
-SELECT body FROM sandboxes WHERE state<>'terminated';
-
--- name: ListAllCapabilities :many
-SELECT body FROM sandboxes;
+-- name: ListCapabilitySubjects :many
+SELECT tenant,id FROM sandboxes WHERE state<>'terminated' OR CAST(sqlc.arg(include_retired) AS BOOLEAN);
 
 -- name: GetCheckpoint :one
 SELECT body FROM checkpoint_bindings WHERE id=?;

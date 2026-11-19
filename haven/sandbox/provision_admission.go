@@ -28,10 +28,7 @@ func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshReque
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.TemplateID == "" {
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.FreshRequest
-	}{"claim", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
@@ -75,10 +72,7 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.CloneRequest
-	}{"clone", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
@@ -324,25 +318,18 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 }
 
 func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, step machine.ResourceStep) (machine.VMRecord, ownership.Sandbox, operation.Result, error) {
-	var result operation.Result
-	request, err := operation.New(tx).RequestState(ctx, step.OperationID)
+	tenant := step.Input.TenantID
+	request, result, err := operation.New(tx).LiveTenantRequest(ctx, step.OperationID, tenant)
 	if err != nil {
 		return machine.VMRecord{}, ownership.Sandbox{}, result, err
 	}
-	tenant := request.ScopeID
-	if operation.Digest(request.Request) != request.Hash || request.ScopeKind != "tenant" || tenant != step.Input.TenantID || operation.Terminal(request.Status) {
-		return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("cold operation identity or lifecycle changed")
-	}
 	switch step.Action {
 	case "restore":
-		var frozen struct {
-			Action  string
-			Request machine.RestoreRequest
-		}
-		if err = json.Unmarshal(request.Request, &frozen); err != nil {
+		frozen, err := machine.DecodeProvisionRequest[machine.RestoreRequest](request)
+		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
-		if step.Input.Restore == nil || frozen.Action != "restore" || frozen.Request.TenantID != tenant || frozen.Request.SandboxID != step.Input.SandboxID || frozen.Request.SnapshotID != step.Input.Restore.Snapshot.ID || frozen.Request.ExpectedInstance != step.ExpectedInstance || frozen.Request.StopOperationID != step.Input.StopOperation {
+		if step.Input.Restore == nil || frozen.TenantID != tenant || frozen.SandboxID != step.Input.SandboxID || frozen.SnapshotID != step.Input.Restore.Snapshot.ID || frozen.ExpectedInstance != step.ExpectedInstance || frozen.StopOperationID != step.Input.StopOperation {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("restore request differs from frozen predecessor")
 		}
 		stop, err := machine.LoadStop(ctx, tx, step.Input.StopOperation)
@@ -353,30 +340,23 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("restore stop history changed")
 		}
 	case "clone":
-		var frozen struct {
-			Action  string
-			Request machine.CloneRequest
-		}
-		if err = json.Unmarshal(request.Request, &frozen); err != nil {
+		frozen, err := machine.DecodeProvisionRequest[machine.CloneRequest](request)
+		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
-		if step.Input.Restore == nil || frozen.Action != "clone" || frozen.Request.TenantID != tenant || frozen.Request.SnapshotID != step.Input.Restore.Snapshot.ID {
+		if step.Input.Restore == nil || frozen.TenantID != tenant || frozen.SnapshotID != step.Input.Restore.Snapshot.ID {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("clone request differs from frozen source")
 		}
-	default:
-		var frozen struct {
-			Action  string
-			Request machine.FreshRequest
-		}
-		if err = json.Unmarshal(request.Request, &frozen); err != nil {
+	case "cold_start":
+		frozen, err := machine.DecodeProvisionRequest[machine.FreshRequest](request)
+		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
-		if step.Action != "cold_start" || frozen.Action != "claim" || frozen.Request.TenantID != tenant || frozen.Request.TemplateID != step.Input.TemplateID {
+		if frozen.TenantID != tenant || frozen.TemplateID != step.Input.TemplateID {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("cold request differs from frozen step")
 		}
-	}
-	if err = json.Unmarshal(request.Body, &result); err != nil {
-		return machine.VMRecord{}, ownership.Sandbox{}, result, err
+	default:
+		return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("unknown provision action %q", step.Action)
 	}
 	if result.SandboxID != step.Input.SandboxID || result.VMID != step.Candidate {
 		return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("cold result destination changed")

@@ -36,7 +36,7 @@ flowchart TD
 
 image 拥有镜像导入与 cleanup；machine 拥有 generation、snapshot、capture、物理 policy 和资源回收；supply 拥有模板、pool、build/refill 与供给 cleanup；sandbox 拥有 claim/configuration、activation、lifecycle、warm claim、fork 和 provisioning coordinator。dataplane 保持 live 接纳、连接、lease 与 preview；gc 组合各 owner 的 GC 事实，node 执行管理用例。internal/reconcile 保留固定恢复次序，internal/recovery 在原只读阶段校验冻结记录，internal/publication 在调用方事务内为显式完成的 operation 冻结业务视图。
 
-私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v9 schema、冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
+私有 sqlc 位于 authorization、operation、quota、image、machine、supply、sandbox 和 store。生成行不越过 owner；semantic loader 保留 JSON 解码与历史证明。GC root reader 借用同一 read transaction；跨能力事务参与者不能提交、checkpoint、派发效果或获取额外 workflow lock。provisioning coordinator 连续持有原 VM guard，调用 `machine.Provisioning.AdvanceLocked` 后继续 activation。v0 baseline 以整数列保存租户预算。冻结 JSON/hash、NULL owner 以及当前/历史身份的区分保持，见 [machine 契约](../haven/machine/README.md) 和 [store 契约](../haven/store/README.md)。
 
 旧 services、template/pool/vm/snapshot 包及迁移期间的持久 facade 已删除。业务能力直接消费私有 dbgen，operation 只保留公共请求、通用链接头与 publication/recovery 协议。step namespace 与 cleanup ID 前缀区分共享物理表的写入责任；实施和环境验收分别记录在 [027 证据](../plans/evidence/027-capability-map.md)。
 

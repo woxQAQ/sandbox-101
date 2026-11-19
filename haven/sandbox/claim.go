@@ -65,25 +65,17 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 			return empty, err
 		}
 		source = &snapshot
-		frozen = operation.Encode(struct {
-			Action  string
-			Request machine.CloneRequest
-			Claim   operation.Command
-		}{"clone", machine.CloneRequest{
+		frozen = machine.FreezeProvisionRequest(machine.CloneRequest{
 			TenantID:   principal.TenantID,
 			Key:        key,
 			SnapshotID: template.SnapshotID,
-		}, admission.Command})
+		}, &admission.Command)
 	} else {
-		frozen = operation.Encode(struct {
-			Action  string
-			Request machine.FreshRequest
-			Claim   operation.Command
-		}{"claim", machine.FreshRequest{
+		frozen = machine.FreezeProvisionRequest(machine.FreshRequest{
 			TenantID:   principal.TenantID,
 			Key:        key,
 			TemplateID: template.ID,
-		}, admission.Command})
+		}, &admission.Command)
 	}
 	if source != nil {
 		if warm, found, err := sb.warmClaims.Admit(ctx, WarmClaimRequest{

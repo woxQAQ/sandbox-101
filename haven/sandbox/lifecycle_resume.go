@@ -113,10 +113,7 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 		Key:        parent.ID + ":clone",
 		SnapshotID: sandboxRecord.SnapshotID,
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.CloneRequest
-	}{"clone", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	child, err := l.provisioning.Admit(ctx, ProvisionAdmission{
 		Request: supply.ProvisionRequest{
 			TenantID: sandboxRecord.TenantID,

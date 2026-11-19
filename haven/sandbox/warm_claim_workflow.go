@@ -186,10 +186,7 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 			Key:        step.OperationID + ":fallback",
 			SnapshotID: template.SnapshotID,
 		}
-		frozen := operation.Encode(struct {
-			Action  string
-			Request machine.CloneRequest
-		}{"clone", request})
+		frozen := machine.FreezeProvisionRequest(request, nil)
 		parent := &WarmClaimAdmission{
 			ParentID: step.OperationID,
 			Input:    step.Input,

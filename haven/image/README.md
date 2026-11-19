@@ -1,6 +1,6 @@
 # 镜像目录、导入与回收责任
 
-`image` 同时拥有导入、不可变发布、缓存与清理的用例和持久化。包内直接使用私有 sqlc 绑定，覆盖 `images`、`image_intents`、`image_caches` 及本能力的 step/cleanup/deletion 行族；没有公开 Repository。事务仍由原用例接纳或完成路径持有，资源效果、RequireOne、提交与 HEAD 的顺序不变。运行时和生成器使用同一份 v9 migration。
+`image` 同时拥有导入、不可变发布、缓存与清理的用例和持久化。包内直接使用私有 sqlc 绑定，覆盖 `images`、`image_intents`、`image_caches` 及本能力的 step/cleanup/deletion 行族；没有公开 Repository。事务仍由原用例接纳或完成路径持有，资源效果、RequireOne、提交与 HEAD 的顺序不变。运行时和生成器读取同一 migration 目录。
 
 `Cache` 保留返回的 cache witness 与原始 `SourceOperation`，字段顺序和 JSON tags 与冻结记录一致。目录行只证明记录存在；原始 import step、返回 witness 和独立物理费用仍须分别核验。查询失败不能解释为没有依赖。按 source operation 查询 cache 时保留 JSON 值的原比较语义，不能把数字 ID 强制转换成字符串后匹配。
 

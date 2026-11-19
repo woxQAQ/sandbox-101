@@ -10,29 +10,40 @@ import (
 )
 
 const getTenantLimits = `-- name: GetTenantLimits :one
-SELECT body FROM tenants WHERE id=?
+SELECT max_sandboxes,max_storage_mib FROM tenants WHERE id=?
 `
 
-func (q *Queries) GetTenantLimits(ctx context.Context, id string) ([]byte, error) {
+type GetTenantLimitsRow struct {
+	MaxSandboxes  int64
+	MaxStorageMib int64
+}
+
+func (q *Queries) GetTenantLimits(ctx context.Context, id string) (GetTenantLimitsRow, error) {
 	row := q.db.QueryRowContext(ctx, getTenantLimits, id)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i GetTenantLimitsRow
+	err := row.Scan(&i.MaxSandboxes, &i.MaxStorageMib)
+	return i, err
 }
 
 const putTenant = `-- name: PutTenant :execrows
-INSERT INTO tenants (id,token_hash,body) VALUES(?,?,?)
-ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash,body=excluded.body
+INSERT INTO tenants (id,token_hash,max_sandboxes,max_storage_mib) VALUES(?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash,max_sandboxes=excluded.max_sandboxes,max_storage_mib=excluded.max_storage_mib
 `
 
 type PutTenantParams struct {
-	ID        string
-	TokenHash string
-	Body      []byte
+	ID            string
+	TokenHash     string
+	MaxSandboxes  int64
+	MaxStorageMib int64
 }
 
 func (q *Queries) PutTenant(ctx context.Context, arg PutTenantParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, putTenant, arg.ID, arg.TokenHash, arg.Body)
+	result, err := q.db.ExecContext(ctx, putTenant,
+		arg.ID,
+		arg.TokenHash,
+		arg.MaxSandboxes,
+		arg.MaxStorageMib,
+	)
 	if err != nil {
 		return 0, err
 	}

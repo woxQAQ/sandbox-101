@@ -250,10 +250,7 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 		Key:        parent.ID + ":clone",
 		SnapshotID: selected.SnapshotID,
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request machine.CloneRequest
-	}{"clone", request})
+	frozen := machine.FreezeProvisionRequest(request, nil)
 	child, err := s.provisioning.AdmitBare(ctx, ProvisionRequest{
 		TenantID: selected.TenantID,
 		Key:      request.Key,

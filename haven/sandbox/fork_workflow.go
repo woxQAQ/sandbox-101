@@ -213,11 +213,7 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 		}
 		command := step.Input.Command
 		command.Action, command.SandboxID, command.CheckpointID, command.Count = "fork_branch", target.ID, "", 0
-		frozen := operation.Encode(struct {
-			Action  string
-			Request machine.CloneRequest
-			Claim   operation.Command
-		}{"clone", request, command})
+		frozen := machine.FreezeProvisionRequest(request, &command)
 		activation := &ClaimAdmission{
 			Command:  step.Input.Command,
 			Settings: step.Input.Settings,

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 
 	"github.com/woxQAQ/haven/authorization/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
@@ -42,29 +41,24 @@ func New(db store.DBTX) *Repository {
 
 // Limits is the persisted tenant admission budget, without bearer credentials.
 type Limits struct {
-	MaxSandboxes  int64 `json:"max_sandboxes"`
-	MaxStorageMiB int64 `json:"max_storage_mib"`
+	MaxSandboxes  int64
+	MaxStorageMiB int64
 }
 
 func (r *Repository) Limits(ctx context.Context, id string) (Limits, error) {
-	body, err := r.queries.GetTenantLimits(ctx, id)
-	if err != nil {
-		return Limits{}, err
-	}
-	var limits Limits
-	err = json.Unmarshal(body, &limits)
-	return limits, err
+	row, err := r.queries.GetTenantLimits(ctx, id)
+	return Limits{
+		MaxSandboxes:  row.MaxSandboxes,
+		MaxStorageMiB: row.MaxStorageMib,
+	}, err
 }
 
 func (r *Repository) PutTenant(ctx context.Context, id, token string, limits Limits) error {
-	body, err := json.Marshal(limits)
-	if err != nil {
-		return err
-	}
 	return store.RequireOne(r.queries.PutTenant(ctx, dbgen.PutTenantParams{
-		ID:        id,
-		TokenHash: tokenHash(token),
-		Body:      body,
+		ID:            id,
+		TokenHash:     tokenHash(token),
+		MaxSandboxes:  limits.MaxSandboxes,
+		MaxStorageMib: limits.MaxStorageMiB,
 	}))
 }
 

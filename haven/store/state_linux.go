@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -36,6 +37,24 @@ type Identity struct {
 	Version       int    `json:"version"`
 	Identity      string `json:"identity"`
 	NodeKeySHA256 string `json:"node_key_sha256"`
+}
+
+// UnmarshalJSON requires an explicit version in store, backup and review files.
+func (identity *Identity) UnmarshalJSON(data []byte) error {
+	type fields Identity
+	var decoded struct {
+		fields
+		Version *int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.Version == nil {
+		return errors.New("store identity is missing its version")
+	}
+	*identity = Identity(decoded.fields)
+	identity.Version = *decoded.Version
+	return nil
 }
 
 type storeHead struct {

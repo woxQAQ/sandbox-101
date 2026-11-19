@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -49,7 +50,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = transaction.Exec("INSERT INTO tenants VALUES('tenant','hash',x'7b7d'); INSERT INTO vms VALUES('vm',1,'','created',NULL,x'7b7d')"); err != nil {
+	if _, err = transaction.Exec("INSERT INTO tenants VALUES('tenant','hash',0,0); INSERT INTO vms VALUES('vm',1,'','created',NULL,x'7b7d')"); err != nil {
 		_ = transaction.Rollback()
 		t.Fatal(err)
 	}
@@ -119,6 +120,8 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 		"missing-db",
 		"corrupt-db",
 		"foreign-application",
+		"previous-version",
+		"missing-identity-version",
 		"future-version",
 		"missing-table",
 		"foreign-trigger",
@@ -146,6 +149,26 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 				err = os.WriteFile(filepath.Join(directory, "haven.db"), []byte("corrupt fixture"), 0o600)
 			case "foreign-application":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA application_id=0; CREATE TABLE engine_marker(value TEXT)")
+			case "missing-identity-version":
+				path := filepath.Join(directory, "store.json")
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var identity map[string]json.RawMessage
+				if err := json.Unmarshal(body, &identity); err != nil {
+					t.Fatal(err)
+				}
+				delete(identity, "version")
+				body, err = json.Marshal(identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "previous-version":
+				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA user_version=9")
 			case "future-version":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA user_version=99")
 			case "missing-table":
@@ -215,7 +238,7 @@ func TestHavenStoreRejectsRollbackBehindHead(t *testing.T) {
 	if _, err := state.Database().Exec("VACUUM INTO ?", backup); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := state.Database().Exec("INSERT INTO tenants VALUES('later','hash',x'7b7d')"); err != nil {
+	if _, err := state.Database().Exec("INSERT INTO tenants VALUES('later','hash',0,0)"); err != nil {
 		t.Fatal(err)
 	}
 	if err = state.Close(); err != nil {

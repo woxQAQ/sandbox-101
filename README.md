@@ -39,7 +39,7 @@ Binaries go to `bin/{haven,havenctl,loomctl}`. Test, vet and race recipes cover 
 
 `just check-funcparams` runs the pinned Go function parameter detector from the tools module. It reports functions with at least five parameters across the workspace, including operator and tests, while excluding generated protobuf and sqlc code. Findings exit with status 1; scan errors exit with status 2. This is an independent check; extra detector flags can be passed as `just check-funcparams -min 8 -output json`.
 
-Haven's versioned SQL migrations are the shared input for runtime initialization and sqlc. After changing domain SQL, run `just generate-sql` and `just check-sql`; generated bindings are checked in, so ordinary builds do not need sqlc. The check generates in a private temporary directory and detects missing, changed and unexpected files. See [store migrations](haven/store/README.md) for version and transaction boundaries.
+Haven's version-zero development baseline is the shared SQL input for runtime initialization and sqlc. After changing domain SQL, run `just generate-sql` and `just check-sql`; generated bindings are checked in, so ordinary builds do not need sqlc. The check generates in a private temporary directory and detects missing, changed and unexpected files. See [store migrations](haven/store/README.md) for version and transaction boundaries.
 
 Quick tests may skip native checks when tools or ownership privileges are unavailable. `just test-native` requires EROFS coverage and emits Go test JSON with the existing race/count=1/300s settings. The native gate additionally requires actual shared/merged materialization and GC pass events:
 
