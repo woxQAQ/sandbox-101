@@ -1,9 +1,13 @@
-# 宿主 Guest 能力
+# Haven 的宿主侧 guest 客户端
 
-`Port` 是业务编排使用的 guest 能力接口；`Client` 实现实际 Admin 2046 与 Workload 2048 通信。这里是宿主 Go adapter，仓库根 `guest/` 是 Rust agent/init。生产 daemon 组装 `Client`，替身通过显式 Port 注入。
+`guest.Agent` 是 Haven 调用 VM 内 Rust agent 的 Go 接口。生产 daemon 将 `guest.Client{}` 传给 `application.Options.Guest`。各调用方只声明自己需要的方法。[接口定义](agent.go) · [客户端实现](client.go) · [daemon 装配](../cmd/haven/main.go)
 
-调用者先核验冻结 resource、当前归属及接纳条件，再交付 resource。`Socket` 只由该 resource 的 RunDir 形成端点路径，不证明身份、运行状态或归属。端口不能由租户请求选择。连接的登记、撤权与关闭仍属于 access 和应用生命周期。
+| 调用方 | 方法 | 成功条件 |
+|---|---|---|
+| `sandbox.ActivationGuest`、`supply.SupplyGuest` | `Info`、`Activate` | `Info` 在 Workload 2048 确认 portal 为 `workload`、协议版本为 1。`Activate` 经 Admin 2046 交付 sandbox 身份、hostname、guest 可见环境、网络模式和 CA，并等待成功回复。 |
+| `supply.SupplyGuest` | `Exec`、`PrepareTemplate` | 模板预热在 Workload 2048 使用显式 exec key，只有 `result_state=completed` 且退出码为 0 才成功。准备捕获时，Admin 2046 必须同时返回 `prepared=true` 和 `quiescent=true`。 |
+| `dataplane.PlaneGuest` | `Connect`、`Forward` | `Connect` 打开 Workload 2048 字节流。`Forward` 在该门户上请求转发到指定的 guest TCP 端口，收到匹配请求 ID 的 `ready=true` 成功回复后将双向字节流交给调用方。 |
 
-RPC correlation ID 与持久 exec key 独立。Exec 必须收到显式 key，只有 guest 的 durable completed 结果才确认完成；不明结果保留原 key，不自动补发或替换。协议错误仅映射既有决策 sentinel，私人 guest 诊断不向宿主控制响应泄漏。Activate 只接收 guest 可见环境，宿主 secret 留在 access。`sandbox.Activations` 通过窄 `ActivationGuest`（Info/Activate）端口协调实际交付；原 VM/configuration guards、worker custody、epoch 和 access registry 仍由应用共享，guest adapter 不接管这些状态。
+调用方负责核验资源归属。`guest.Socket` 从传入的 `loom.Resource.RunDir` 拼出 `io/vsock` 路径。guest 回复只确认本次协作的结果，工作流依据宿主持久记录决定能否发布或回收资源。数据面负责接纳、租约检查与撤权，通过 `ephemeral.Registry` 跟踪连接。[数据面接纳](../dataplane/admission.go)
 
-冻结请求、终态 publication、配额与回收证明不属于此包。guest 回复是协作结果，不授权退休责任。帧、错误和半关闭约束见 [Protocol](../../protocol/README.md)，真实 guest 行为见 [Guest 契约](../../guest/README.md)。
+每次控制 RPC 使用新的帧 ID。模板工作流提供的 exec key 标识同一次预热，即使重新连接也必须保留。缺少持久完成状态或退出码时，`Client.Exec` 返回 `ErrUnknown`。帧格式、错误码和 guest 端执行记录的语义见 [Wire protocol](../../protocol/README.md) 和 [Guest 契约](../../guest/README.md#durable-keyed-exec)。

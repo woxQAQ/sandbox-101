@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/woxQAQ/haven/api"
+	"github.com/woxQAQ/haven/api/management"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/common/logging"
 	"github.com/woxQAQ/haven/config"
@@ -28,7 +29,6 @@ import (
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/localuds"
 	"github.com/woxQAQ/haven/loom/host"
-	"github.com/woxQAQ/haven/management"
 	"github.com/woxQAQ/haven/types"
 )
 

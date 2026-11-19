@@ -18,7 +18,7 @@ flowchart LR
 
 ## 启动与配置
 
-字段和默认值以 [daemon 配置](../haven/config/daemon.go)、[daemon flags](../haven/cmd/haven/config.go)、[业务 CLI](../sdk/cmd/havenctl/config.go) 和 [Loom CLI 配置](../loom/config/cli.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
+字段和默认值以 [daemon 配置](../haven/config/daemon.go)、[daemon flags](../haven/cmd/haven/config.go)、[业务 CLI](../haven/cmd/havenctl/config.go) 和 [Loom CLI 配置](../loom/config/cli.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
 
 | 程序 | 环境前缀 | 文件选择 | 示例 |
 |---|---|---|---|
@@ -85,7 +85,7 @@ havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token ex
 
 管理 socket 所在目录必须由 daemon UID 控制且不可被 group/other 写入，socket 为 `0600`。HTTP header 不能构造管理身份；server 的 `ConnContext` 使用 Linux `SO_PEERCRED`，只接纳同 daemon UID 或 root。已有 listener 可达或身份不明时拒绝替换；死 socket 的恢复和 Close 都检查原 inode，保留被替换的路径。
 
-管理 adapter 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../types/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
+[管理 adapter](../haven/api/management/http.go) 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../types/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
 
 `loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID`、`fork-checkpoint ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
 

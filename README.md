@@ -12,9 +12,9 @@ The repository root contains `go.work`; each component owns its module. Haven's 
 
 | Directory | Responsibility |
 |---|---|
-| `haven/` | Durable control service, HTTP adapters, daemon settings and `cmd/haven` |
+| `haven/` | Durable control service, HTTP adapters, daemon settings, `cmd/haven` and `cmd/havenctl` |
 | `loom/` | Explicit host effects, management-client settings and `cmd/loomctl` |
-| `sdk/` | Business/management clients, guest RPC and `cmd/havenctl` |
+| `sdk/` | Business and management clients, guest RPC |
 | `types/` | Shared wire data, including sanitized error payloads |
 | `common/` | Shared CLI file I/O, configuration loading and logging initialization |
 | `tools/` | Pinned development tools, including structfmt and sqlc |

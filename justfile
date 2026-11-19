@@ -19,7 +19,7 @@ all: build
 build:
     mkdir -p bin
     GOWORK=off go -C haven build -o '{{root}}/bin/haven' ./cmd/haven
-    GOWORK=off go -C sdk build -o '{{root}}/bin/havenctl' ./cmd/havenctl
+    GOWORK=off go -C haven build -o '{{root}}/bin/havenctl' ./cmd/havenctl
     GOWORK=off go -C loom build -o '{{root}}/bin/loomctl' ./cmd/loomctl
     cargo build --locked --workspace
 

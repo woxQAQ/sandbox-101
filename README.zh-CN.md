@@ -12,9 +12,9 @@ Haven 在唯一 SQLite store 中负责租户与资源工作流，包括模板、
 
 | 目录 | 职责 |
 |---|---|
-| `haven/` | 持久控制服务、HTTP adapters、daemon 配置与 `cmd/haven` |
+| `haven/` | 持久控制服务、HTTP adapters、daemon 配置、`cmd/haven` 与 `cmd/havenctl` |
 | `loom/` | 明确宿主效果、管理客户端配置与 `cmd/loomctl` |
-| `sdk/` | 业务/管理客户端、guest RPC 与 `cmd/havenctl` |
+| `sdk/` | 业务与管理客户端、guest RPC |
 | `types/` | 共享 wire 数据，以及经过清理的错误 payload |
 | `common/` | 共享的有界 CLI 文件读写、配置加载与日志初始化 |
 | `tools/` | 固定版本的 structfmt、sqlc 等开发工具 |
