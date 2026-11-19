@@ -2,7 +2,7 @@
 
 Haven 按 image、machine、supply、sandbox、dataplane、gc、node 组织业务用例与私有 sqlc。
 `internal/application` 是 daemon 和测试共用的组装入口；internal/publication、internal/recovery
-和 internal/maintenance 组合跨能力投影、只读验证与固定顺序的恢复。所有组件共用 store、
+和 internal/reconcile 组合跨能力投影、只读验证与固定顺序的恢复。所有组件共用 store、
 execution/ephemeral 及关闭边界，HTTP 与管理 adapter 直接接收所需用例。
 
 template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services 与表仓库包已删除。
