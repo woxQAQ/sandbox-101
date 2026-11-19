@@ -39,7 +39,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	if token == "" {
 		t.Fatal("successful delivery lacks sandbox capability")
 	}
-	frozen := testfixture.Encode(original)
+	frozen := operation.Encode(original)
 	var releaseID string
 	for _, command := range []operation.Command{
 		{
@@ -72,7 +72,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 			releaseID = changed.ID
 		}
 		current, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
-		if err != nil || !bytes.Equal(frozen, testfixture.Encode(current)) {
+		if err != nil || !bytes.Equal(frozen, operation.Encode(current)) {
 			t.Fatal("later workflow changed historical delivery", current, err)
 		}
 	}
@@ -113,8 +113,44 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 		_ = reopened.Close(context.Background())
 	})
 	current, err := reopened.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
-	if err != nil || !bytes.Equal(frozen, testfixture.Encode(current)) {
+	if err != nil || !bytes.Equal(frozen, operation.Encode(current)) {
 		t.Fatal("reopen recomputed terminal result", current, err)
+	}
+}
+
+func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixture(t)
+	ctx := t.Context()
+	principal := authorization.Principal{TenantID: "tenant"}
+	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "claim", nil, egress.Policy{Mode: "none"})
+	id := claim.Result.SandboxID
+	before, err := service.Catalog.Get(ctx, principal, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := service.State.Database()
+	if _, err = db.Exec(`CREATE TRIGGER lose_settings AFTER UPDATE ON sandbox_settings BEGIN DELETE FROM sandbox_settings WHERE sandbox_id=NEW.sandbox_id; END`); err != nil {
+		t.Fatal(err)
+	}
+	command := operation.Command{Action: "renew", SandboxID: id, TTLSeconds: 120}
+	if _, err = service.SandboxRequests.Execute(ctx, principal, "renew", command); err == nil {
+		t.Fatal("renew published success with no settings")
+	}
+	after, err := service.Catalog.Get(ctx, principal, id)
+	if err != nil || !after.Deadline.Equal(before.Deadline) {
+		t.Fatal("failed projection did not roll back the lease", after, err)
+	}
+	if _, err = db.Exec(`DROP TRIGGER lose_settings`); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := service.SandboxRequests.Execute(ctx, principal, "renew", command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := service.Delivery.PublicOperation(ctx, principal, retried.ID)
+	if err != nil || published.Result.Sandbox == nil || published.Result.Sandbox.TTLSeconds != 120 {
+		t.Fatal("retry did not publish the renewed lease", published, err)
 	}
 }
 

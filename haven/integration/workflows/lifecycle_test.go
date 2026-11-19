@@ -2,13 +2,17 @@ package workflows_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
@@ -16,6 +20,8 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/sdk"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenReleaseFailedCapture(t *testing.T) {
@@ -244,25 +250,25 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index, actor := range []authorization.Principal{
-		principal,
-		{
-			Root:     true,
-			TenantID: "tenant",
-		},
-	} {
-		fork, err := service.SandboxRequests.Execute(ctx, actor, fmt.Sprintf("fork-%d", index), operation.Command{
-			Action:       "fork",
-			CheckpointID: checkpoint.Result.CheckpointID,
-			Policy: egress.Policy{
-				Mode: "none",
-			},
-		})
-		if err != nil {
-			reason := service.Workers.State(fork.ID).Err
-			t.Fatal(fork, reason, err)
-		}
-		sandbox, err := service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID)
+	fork, err := service.SandboxRequests.Execute(ctx, principal, "tenant-fork", operation.Command{
+		Action: "fork", CheckpointID: checkpoint.Result.CheckpointID, Policy: egress.Policy{Mode: "none"},
+	})
+	if err != nil {
+		t.Fatal(fork, service.Workers.State(fork.ID).Err, err)
+	}
+	server := httptest.NewServer(api.New(api.Services{
+		Authentication: service.Authentication, Requests: service.SandboxRequests,
+		Operations: service.Operations, Delivery: service.Delivery,
+	}))
+	t.Cleanup(server.Close)
+	admin := sdk.New(server.URL, service.Options.AdminToken)
+	admin.Tenant = principal.TenantID
+	result, err := admin.ForkCheckpoint(ctx, checkpoint.Result.CheckpointID, "admin-fork", types.Command{Policy: types.Policy{Mode: "none"}})
+	if err != nil || len(result.Sandboxes) != 1 {
+		t.Fatal("admin checkpoint fork", result, err)
+	}
+	for _, branch := range []string{fork.Result.SandboxID, result.Sandboxes[0].ID} {
+		sandbox, err := service.Dataplane.Ready(ctx, principal, branch)
 		if err != nil || sandbox.State != "running" || sandbox.ID == claim.Result.SandboxID || sandbox.TenantID != "tenant" || sandbox.TemplateID != "cold" {
 			t.Fatal(sandbox, err)
 		}
@@ -275,20 +281,25 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		Policy: egress.Policy{
 			Mode: "none",
 		},
-	}); err == nil {
-		t.Fatal("foreign tenant fork accepted")
+	}); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatal("foreign tenant fork", err)
 	}
-	if _, err = service.Forks.AdmitFork(ctx, authorization.Principal{
-		Root:     true,
-		TenantID: "other",
-	}, "fork", operation.Command{
-		Action:       "fork",
-		CheckpointID: checkpoint.Result.CheckpointID,
-		Policy: egress.Policy{
-			Mode: "none",
-		},
-	}); err == nil {
-		t.Fatal("root fork outside the owning tenant accepted")
+	// Neither missing settings nor missing restore evidence may reveal a foreign source.
+	db := service.State.Database()
+	if _, err = db.Exec(`DELETE FROM sandbox_settings WHERE sandbox_id=?`, claim.Result.SandboxID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE checkpoint_bindings SET body=json_set(body,'$.snapshot_id','missing') WHERE id=?`, checkpoint.Result.CheckpointID); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []operation.Command{
+		{Action: "fork", CheckpointID: checkpoint.Result.CheckpointID},
+		{Action: "fork", SandboxID: claim.Result.SandboxID},
+	} {
+		_, err = service.Forks.AdmitFork(ctx, authorization.Principal{Root: true, TenantID: "other"}, "wrong-owner", source)
+		if !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("foreign source exposed its state: %v", err)
+		}
 	}
 	var slots int
 	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != 3 {

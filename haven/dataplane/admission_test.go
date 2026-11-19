@@ -223,7 +223,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 					t.Fatal(err)
 				}
 				settings.Env["UNPUBLISHED"] = "private-fixture"
-				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), sandboxView.ID); err != nil {
+				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), sandboxView.ID); err != nil {
 					t.Fatal(err)
 				}
 			case "unverified_instance":
@@ -236,7 +236,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 					t.Fatal(err)
 				}
 				vm.Verified = false
-				if _, err = service.State.Database().Exec("UPDATE vms SET body=? WHERE id=?", testfixture.Encode(vm), sandboxView.VMID); err != nil {
+				if _, err = service.State.Database().Exec("UPDATE vms SET body=? WHERE id=?", operation.Encode(vm), sandboxView.VMID); err != nil {
 					t.Fatal(err)
 				}
 			case "deadline":
@@ -245,7 +245,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 					t.Fatal(err)
 				}
 				settings.Deadline = time.Now().Add(-time.Second)
-				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), sandboxView.ID); err != nil {
+				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), sandboxView.ID); err != nil {
 					t.Fatal(err)
 				}
 			case "shutdown":

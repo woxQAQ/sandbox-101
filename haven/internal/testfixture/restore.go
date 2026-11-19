@@ -53,12 +53,12 @@ func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, 
 		"snapshots": map[string]any{
 			"memory-manager": map[string]any{
 				"snapshot_data": map[string]any{
-					"state": string(Encode(manager)),
+					"state": string(operation.Encode(manager)),
 				},
 			},
 		},
 	}
-	if err := os.WriteFile(filepath.Join(directory, "state.json"), Encode(state), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), operation.Encode(state), 0o600); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(filepath.Join(directory, "memory-ranges"), os.O_RDWR, 0)

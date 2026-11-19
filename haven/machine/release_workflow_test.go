@@ -13,6 +13,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 )
 
@@ -34,7 +35,7 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 			capture, request := testfixture.CaptureReady(t, service, "checkpoint")
 			historical := testutil.AwaitCapture(t, service, capture.ID)
 			testutil.CapturePublished(t, service, historical, true)
-			historyBytes := testfixture.Encode(historical)
+			historyBytes := operation.Encode(historical)
 			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  request.TenantID,
 				Key:       "release",
@@ -69,7 +70,7 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 				t.Fatal("VM cleanup changed independent published bytes", err)
 			}
 			after, err := machine.LoadCapture(context.Background(), service.State.Database(), capture.ID)
-			if err != nil || !bytes.Equal(testfixture.Encode(after), historyBytes) {
+			if err != nil || !bytes.Equal(operation.Encode(after), historyBytes) {
 				t.Fatal("VM cleanup rewrote historical capture", err)
 			}
 			var storage, slots, done int
@@ -173,7 +174,7 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 				t.Fatal("unproved generation lost its storage responsibility", storage, err)
 			}
 			original, err := machine.LoadResourceStep(context.Background(), service.State.Database(), claim.ID)
-			if err != nil || !bytes.Equal(testfixture.Encode(original), testfixture.Encode(history)) {
+			if err != nil || !bytes.Equal(operation.Encode(original), operation.Encode(history)) {
 				t.Fatal("release rewrote the original terminal witness", err)
 			}
 		})

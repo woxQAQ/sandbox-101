@@ -47,7 +47,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				if action == "discard" {
 					request := discardRequest(source)
 					if conflict {
-						request.ExpectedInstance = testfixture.NewID("run-")
+						request.ExpectedInstance = operation.NewID("run-")
 					}
 					return service.Deletion.AdmitDiscard(ctx, request)
 				}
@@ -57,7 +57,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 					SandboxID: source.Input.SandboxID,
 				}
 				if conflict {
-					request.SandboxID = testfixture.NewID("sandbox-")
+					request.SandboxID = operation.NewID("sandbox-")
 				}
 				return service.Deletion.AdmitRelease(ctx, request)
 			}
@@ -102,7 +102,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				t.Fatal("matching replay did not complete frozen cleanup proof", done, service.Workers.State(accepted.ID).Err, err)
 			}
 			history, err := machine.LoadResourceStep(ctx, service.State.Database(), source.OperationID)
-			if err != nil || !bytes.Equal(testfixture.Encode(history), testfixture.Encode(source)) {
+			if err != nil || !bytes.Equal(operation.Encode(history), operation.Encode(source)) {
 				t.Fatal("cleanup rewrote original generation history", history, err)
 			}
 		})

@@ -8,7 +8,7 @@ HTTP 使用 `Authorization: Bearer TOKEN`。root 管理 tenant/metrics/node stat
 
 mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键同参数返回原 operation/冻结 result，包括失败；异参冲突。认证 role/scope 和 secret-safe HMAC 参与请求身份。取消 HTTP 只结束等待。`Prefer: respond-async` 返回 202、operation 与 Location，由同一 authority 查询。sandbox token 只能查询自己的 renew/release operation；终止后仅能读取对应历史，不能进入资源/数据路由。
 
-终态 result 和时间在原工作流事务中冻结，后来 renew/configure/release 不修改原 delivery。result 可能含 sandbox token，应私密保存；令牌不以真值写入 DB。
+终态 result 和时间在原工作流事务中冻结。成功操作缺少应交付的 sandbox、分支、checkpoint 或模板时，事务回滚。启动核验同样检查原 publication 的必需对象。后来 renew/configure/release 不修改原 delivery。result 可能含 sandbox token，应私密保存；令牌不以真值写入 DB。
 
 HTTP 错误及 `Operation.Error` 使用 `types.ApiError` 数据，JSON 为 `{"code":"...","message":"..."}`。该 DTO 不实现 Go error，也不携带 Cause；SDK 将失败响应转换为普通 Go error。wire payload 不作为 Loom absence proof。需要 operator 诊断的资源丢失不变成 tenant 404。
 
@@ -39,9 +39,9 @@ HTTP 错误及 `Operation.Error` 使用 `types.ApiError` 数据，JSON 为 `{"co
 | POST /v1/sandboxes | 领取 sandbox |
 | GET /v1/sandboxes、/v1/sandboxes/{id} | 可见 inventory |
 | POST /v1/sandboxes/{id}/{action} | renew/configure/pause/resume/checkpoint/fork/rollback，每个动作显式注册 |
-| DELETE /v1/sandboxes/{id} | 不唤醒的 release |
+| DELETE /v1/sandboxes/{id} | release 可省略 body。传入非零 `lease_deadline` 时，仅在当前 deadline 与其相等且已到期时释放，否则返回 409 |
 | GET /v1/checkpoints、DELETE /v1/checkpoints/{id} | checkpoint 列表/删除 |
-| POST /v1/checkpoints/{id}/fork | 从 checkpoint 派生 |
+| POST /v1/checkpoints/{id}/fork | 从 checkpoint 派生。SDK 使用 `Client.ForkCheckpoint`，CLI 使用 `havenctl --key KEY --request-file FILE fork-checkpoint ID` |
 | GET /v1/operations/{id} | 固定 authority 的 operation/history |
 | GET /v1/sandboxes/{id}/connect | HTTP/1.1 Upgrade 到 Workload |
 | POST /v1/sandboxes/{id}/preview?port=8080&ttl_seconds=60 | `{}` body，生成 signed Preview |

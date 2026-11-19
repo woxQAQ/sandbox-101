@@ -9,6 +9,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenStopCompletionAtomicity(t *testing.T) {
@@ -130,7 +131,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				t.Fatal("rejected stop retired responsibility", retained, charged, err)
 			}
 			frozen, err := machine.LoadResourceStep(context.Background(), service.State.Database(), claim.ID)
-			if err != nil || !bytes.Equal(testfixture.Encode(frozen), testfixture.Encode(history)) {
+			if err != nil || !bytes.Equal(operation.Encode(frozen), operation.Encode(history)) {
 				t.Fatal("rejected stop rewrote original witness", err)
 			}
 			if err = testutil.RequireWrite(service.State.Database().Exec(query, original, history.Input.DiskKey)); err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
@@ -30,7 +31,7 @@ func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
 	}
 	faults.Set(nil)
 	conflicting := request
-	conflicting.ExpectedInstance = testfixture.NewID("run-")
+	conflicting.ExpectedInstance = operation.NewID("run-")
 	_, err = service.Captures.AdmitCapture(context.Background(), conflicting)
 	worker := service.Workers.State(accepted.ID)
 	if !errors.Is(err, errs.ErrConflict) || worker.Active || worker.Completed || backend.Count("pause") != 0 || backend.Count("capture") != 0 {

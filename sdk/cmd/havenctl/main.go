@@ -33,10 +33,10 @@ func run(arguments []string) error {
 		return err
 	}
 	if len(args) == 0 || cfg.TokenFile == "" {
-		return errors.New("usage: havenctl --token-file FILE [--key KEY] {status|tenant|list|templates|checkpoints|get ID|operation ID|claim|template|change ID|exec ID COMMAND...}; intents require --request-file FILE")
+		return errors.New("usage: havenctl --token-file FILE [--key KEY] {status|tenant|list|templates|checkpoints|get ID|operation ID|claim|template|change ID|fork-checkpoint ID|exec ID COMMAND...}; intents require --request-file FILE")
 	}
-	if cfg.RequestFile != "" && args[0] != "tenant" && args[0] != "claim" && args[0] != "template" && args[0] != "change" {
-		return errors.New("--request-file is only valid for tenant, claim, template or change")
+	if cfg.RequestFile != "" && args[0] != "tenant" && args[0] != "claim" && args[0] != "template" && args[0] != "change" && args[0] != "fork-checkpoint" {
+		return errors.New("--request-file is only valid for tenant, claim, template, change or fork-checkpoint")
 	}
 	token, err := os.ReadFile(cfg.TokenFile)
 	if err != nil {
@@ -80,12 +80,16 @@ func run(arguments []string) error {
 			return err
 		}
 		value, err = client.PutTenant(ctx, tenant)
-	case "claim", "template", "change":
+	case "claim", "template", "change", "fork-checkpoint":
 		if cfg.Key == "" {
 			return errors.New("--key is required; reuse it when retrying this intent")
 		}
-		if (args[0] == "change" && len(args) != 2) || (args[0] != "change" && len(args) != 1) {
-			return errors.New("claim/template require --request-file FILE; change additionally requires a sandbox id")
+		wantArgs := 1
+		if args[0] == "change" || args[0] == "fork-checkpoint" {
+			wantArgs = 2
+		}
+		if len(args) != wantArgs {
+			return fmt.Errorf("%s expects %d positional arguments", args[0], wantArgs-1)
 		}
 		var command types.Command
 		if err = cli.ReadJSONFile(cfg.RequestFile, &command); err != nil {
@@ -99,6 +103,8 @@ func run(arguments []string) error {
 				return errors.New("template field is required")
 			}
 			value, err = client.PutTemplate(ctx, cfg.Key, *command.Template, command.Action == "template_build")
+		case "fork-checkpoint":
+			value, err = client.ForkCheckpoint(ctx, args[1], cfg.Key, command)
 		case "change":
 			value, err = client.Change(ctx, args[1], cfg.Key, command)
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/store"
 )
 
@@ -96,7 +97,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 			service, backend := testapp.ColdService(t, nil)
 			switch scenario {
 			case "quota-boundary":
-				_, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", testfixture.Encode(authorization.Limits{
+				_, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", operation.Encode(authorization.Limits{
 					MaxSandboxes:  10,
 					MaxStorageMiB: 63,
 				}))

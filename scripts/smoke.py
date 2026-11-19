@@ -141,6 +141,24 @@ def main():
             assert business == local
             assert local["format"] == "haven-single-control" and local["version"] >= 9
             assert command("havenctl", [*haven_args, "list"]) == []
+            # Both authenticated listeners use the same strict JSON failure contract.
+            for path in ("/v1/tenants", "/v1/manage"):
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                try:
+                    headers = {"Content-Type": "application/json"}
+                    if path == "/v1/manage":
+                        connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                        connection.sock.settimeout(5)
+                        connection.sock.connect(str(management))
+                    else:
+                        headers["Authorization"] = "Bearer " + token
+                    connection.request("POST", path, body=b"{} {}", headers=headers)
+                    with connection.getresponse() as response:
+                        assert response.status == 400, (path, response.status)
+                        assert json.load(response) == {"code": "invalid", "message": "request must contain one JSON value"}, path
+                finally:
+                    connection.close()
+            print("PASS: TCP and local management return the same public JSON error")
             tenant_file = directory / "tenant.json"
             tenant_file.write_text(json.dumps({
                 "id": "smoke", "max_sandboxes": 2, "max_storage_mib": 256,

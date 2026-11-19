@@ -35,12 +35,11 @@ type Agent interface {
 	// The guest must explicitly confirm both prepared and quiescent state;
 	// without that confirmation the capture must not proceed.
 	PrepareTemplate(ctx context.Context, resource loom.Resource) error
-	// Exec runs one keyed warmup command on the Workload portal. execKey is
-	// the durable guest ledger identity of this execution: retries with the
-	// same key join the original execution instead of starting a new one. A
-	// nil error requires a confirmed durable completion with exit status zero;
-	// a nonzero exit status is an ordinary failure, and any missing or
-	// ambiguous completion proof maps to result-unknown rather than success.
+	// Exec runs one keyed warmup command on the Workload portal. While the
+	// command runs, a duplicate receives exec_in_progress (conflict). Retry
+	// with the same execKey and command to read its recorded exit status.
+	// Exit status zero confirms success. A recorded nonzero status fails the
+	// warmup. Missing completion evidence or exit status yields ErrUnknown.
 	Exec(ctx context.Context, resource loom.Resource, execKey, command string) error
 	// Connect opens a raw stream to the Workload portal of the candidate
 	// resource. On success the caller owns the connection and must close it.

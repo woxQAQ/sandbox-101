@@ -25,25 +25,12 @@ import (
 // with the headers belong to the upgraded stream.
 func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		httpwire.JSON(w, 426, &types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
-		})
-		return
-	}
-	if r.ProtoMajor != 1 {
-		httpwire.Failure(w, types.ApiError{
-			Code:    types.CodeIncompatible,
-			Message: "HTTP/1.1 Upgrade required",
-		})
+		httpwire.NewFailure(http.StatusUpgradeRequired, types.CodeInvalid, "Connection: Upgrade and Upgrade: sandbox-v1 required").Write(w)
 		return
 	}
 	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		httpwire.Failure(w, types.ApiError{
-			Code:    types.CodeIncompatible,
-			Message: "HTTP/1.1 Upgrade required",
-		})
+	if r.ProtoMajor != 1 || !ok {
+		httpwire.NewFailure(http.StatusUnprocessableEntity, types.CodeIncompatible, "HTTP/1.1 Upgrade required").Write(w)
 		return
 	}
 	if _, err := h.services.Dataplane.Ready(r.Context(), principal, id); err != nil {
@@ -147,10 +134,7 @@ func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 	capability, tail, _ := strings.Cut(path, "/")
 	body, signature, ok := strings.Cut(capability, ".")
 	if !ok {
-		httpwire.Failure(w, types.ApiError{
-			Code:    types.CodeNotFound,
-			Message: "not found",
-		})
+		httpwire.NotFound().Write(w)
 		return
 	}
 	target, err := h.services.Dataplane.ResolvePreview(r.Context(), body, signature)
@@ -188,10 +172,7 @@ func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			httpwire.JSON(w, 502, &types.ApiError{
-				Code:    types.CodeInternal,
-				Message: "preview upstream unavailable",
-			})
+			httpwire.NewFailure(http.StatusBadGateway, types.CodeInternal, "preview upstream unavailable").Write(w)
 		},
 	}
 	proxy.ServeHTTP(w, r)

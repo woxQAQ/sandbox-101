@@ -20,11 +20,26 @@
 - **14、15 的验收**　保留 `X-Tenant-ID`、foreign 与 missing 的 404、退休 capability 仅可读取原有授权历史、幂等键与已提交请求身份、同步 Result、异步 202 与 `Location`。旧 operation 的请求内容、对外 action 拼写和冻结结果可继续读取。路径和 HTTP method 的调整不得改变同一有效业务请求的幂等身份。使用公开 DTO 的严格解码，继续拒绝未知字段、多个 JSON 值及内部专用字段。
 - **16、17**　删除仅转调 `httpwire` 的五个 wrapper，让业务和本机管理 handler 直接使用共享 HTTP 编解码。合并只有 `operationResponse` 的文件，把响应格式化放到 operation 响应的调用处附近。保留一处集中处理已接纳 operation 终态失败的逻辑，供同步、异步和 GET 使用。
 
-## 三、收拢错误模型（19）
+## 三、重做错误到 HTTP 响应的转换（19）
 
-从 `haven/internal/errs/errors.go`、`types/errors.go` 和 `haven/httpwire/http.go` 顺着调用方检查。内部 Go 错误继续用 sentinel 和 `errors.Is`；wire code 用明确的 `CodeNotFound` 等命名，JSON 保持现有 `code/message` 与稳定字符串。将每种公开错误的 code、HTTP 状态和公开消息规则集中在 HTTP 边界，两种 listener 共用。按上一节相同的发布依据处理 `types` 中已发布的 Go 标识符。公开消息使用已核准的文本或显式安全的字段；宿主错误可能携带私有路径、诊断或 secret。
+在复查基准 `91fffa9` 上，`587b73f` 仅更名协议常量。旧 `PublicError` 裁剪 `err.Error()`，旧 `Failure` 从 code 反查 HTTP 状态。以下验收针对这两条路径。
 
-验收时区分接纳失败、取消等待、已接纳且待恢复、已完成但失败四种情况。最后一种在同步调用返回 HTTP 错误，在 operation GET 返回带固定 `internal` 失败信息的 operation；异步应答继续遵循 202 契约。检查数据库的冻结结果和重启查询，确保响应格式化只发生在交付时。参考 `haven/integration/operation_publication_test.go` 和 `haven/integration/workflows/plain_error_publication_test.go`。
+1. 在 HTTP 边界定义一次失败的完整表示，包含响应状态和可公开的 `types.ApiError`。业务错误通过 `errors.Is` 选中一个完整响应，writer 直接使用其中的状态与 payload。删除按 DTO 的 `Code` 反推状态的 switch。HTTP 自身的失败也使用同一写出路径：例如普通参数错误和 Upgrade 缺头都使用 wire code `invalid`，前者返回 400，后者返回 426。保留 405 与 Preview 502 的独立语义。业务包继续使用标准 Go error，SDK 继续读取现有 `code/message`。
+2. 将内部诊断和公开消息分开构造。接纳错误只从固定公开消息或产生错误时显式选定的安全字段取得响应文本。梳理依赖现有 message 的 SDK、CLI、契约与用例，保留有意公开的输入纠错信息。移除从包装错误 `Error()` 截取、拼接或直接透传文本的路径；内部 cause 继续支持 `errors.Is/As`。对 `sql.ErrNoRows` 逐个核对边界：只有清楚在查询哪个公开对象的业务入口才能判定对象缺失并返回 404；缺失内部记录按对应业务语义处理。
+3. 迁移业务 HTTP 与本机管理 HTTP 的错误写出处。共用的 404、管理员权限错误和固定 internal 失败各由一处定义。handler 可以选择与路由有关的具体失败。同步操作终态失败和 operation GET 使用同一份固定 internal payload，后者的外层响应仍为 200；异步接纳保留 202。持久化结果继续排除 HTTP DTO 和私有诊断。
+
+**验收证据**
+
+- 先增加一条在 `91fffa9` 会失败的 HTTP 行为回归。通过请求触发接纳阶段的错误，让测试依赖返回一个真正包装已识别 sentinel 的错误，并带上私有测试标记。验证约定的 HTTP status、wire code 和完整公开 message，响应中不能出现标记。现有 `TestHavenHTTPFormatsFrozenOperationFailure` 覆盖的是已接纳操作的终态失败，保留它以验证另一个时点。
+- 通过业务和本机管理 handler 分别请求相同类别的失败，检查状态及 JSON。覆盖相同 wire code 对应不同 HTTP 状态的场景，并验证取消等待、已接纳且待恢复的公开语义。复用现有 HTTP/SQLite 测试入口，报告新增用例在旧实现和新实现上的实际结果。
+- 交付时给出一条真实调用链，从错误产生处追到公开响应，指出安全消息的来源，并列出删除的旧分类、反查和透传路径。同步更新 `docs/haven-control.md` 的错误契约。
+
+## 第 19 条实施记录
+
+- `POST /v1/templates` 经 `sandbox.SandboxRequests.Submit` 进入 `supply.AdmitTemplate`。例如管理员漏填模板 owner 时，校验处用 `errs.InvalidInput` 选择固定提示，`httpwire.classify` 按 `errors.Is` 确认 invalid、按 `errors.As` 取出该提示，`Failure.Write` 写入 HTTP 400 和公开 JSON。HTTP writer 直接使用该次分类的状态，包装诊断仅留在 Go 错误链。
+- 在 `91fffa9` 运行 `go -C haven test ./api -run TestTemplateAdmissionFailures -count=1`，quota 用例返回了私有测试标记，内部缺行用例返回了 404。补做后两项分别返回固定的 429/resource_exhausted 与 500/internal。最终六个子用例均通过，覆盖显式公开提示、普通 invalid、等待取消及已接纳待恢复。
+- `just integration` 验证 400、405、426 使用相同 wire code，缺失 checkpoint 返回 404，以及已接纳失败的同步响应和 GET 视图。`just smoke` 在同一真实 daemon 上验证经过 bearer 和 peer UID 鉴权的两个入口均拒绝多余 JSON，返回相同的状态、code 和消息。
+- 普通套件曾因 shell 缺 `mkfs.erofs` 跳过 35 条测试事件。在默认 dev shell（erofs-utils 1.9.4、umoci 0.6.0）中以映射宿主用户的私有 UID namespace 和独立 tmpfs 作为 `TMPDIR`，运行 `GOWORK=off SANDBOX_REQUIRE_EROFS_TESTS=1 go -C haven test -json -race -p=1 -count=1 -timeout=300s -run '^(TestActual|TestHavenActual|TestGCActual)' ./image ./gc`。按包名和完整测试名与原 SKIP 清单核对，35/35 通过；该次定向复跑共 75 条 pass，0 fail、0 skip。
 
 ## 四、显式完成 operation 并冻结历史结果（22）
 
@@ -38,6 +53,13 @@
 
 - **20、21**　`internal/maintenance` 改为 `internal/reconcile`，使用 `reconcile.Coordinator`、`reconcile.Dependencies`、`reconcile.New`。`ResumePending` 恢复未完成工作并核对数据面绑定；`RunOnce(ctx)` 执行一轮恢复、租约处理以及允许接纳时的 warm refill。注释写明各方法的适用时机。启动继续在对外服务前进行恢复，保留现有 worker 去重、reviewed/draining 限制与关闭顺序。沿用当前 GC 默认值与关闭配置。
 - **23**　梳理 `haven/internal/testfixture`、`haven/internal/testapp`、`haven/tests/fixtures` 的 import 和真实调用方。以 `internal/testapp` 管理私有 App 的启动、恢复和关闭，以 `internal/testfixture` 承载跨包共享的测试数据和 runtime 替身。只在多个测试包确有需要时，把通用断言、等待或并发辅助归 `internal/testutil`；单包 helper 放回对应 `_test.go`。先消除仅转调另一包的入口，再搬调用方并移除腾空的旧包。检查 import cycle 和所有 build tag 下的引用；保留私有状态、并发上限与 fixture 清理语义。
+
+## 后续复查修复记录
+
+- **14、15**　条件 release 通过 SDK、DELETE 路由和业务接纳保留 `lease_deadline`。HTTP 回归覆盖续租后拒绝旧 deadline、空 body 释放、同键重放与异参冲突。checkpoint fork 由 `Client.ForkCheckpoint` 和 `havenctl fork-checkpoint ID` 发往 checkpoint 路由。fork 接纳按所选租户查询两种来源，再读取状态和恢复证明。
+- **22**　SQLite 回归在 renew 事务更新 settings 后移除该行，验证投影失败会回滚租约，同键重试可以完整交付。启动时拒绝已冻结但缺少 sandbox 的成功 claim。模板构建与 refill 的临时资源 ID 仅用于工作流追踪。
+- **2、10、23**　认证服务使用 `adminToken`；guest keyed exec 的重试说明与实际 conflict 和持久退出状态一致。原生镜像测试的 App 在 `testapp` 创建和关闭，OCI 测试数据由 `testfixture` 构造。测试直接使用现有 `operation.Encode`、`Digest`、`NewID`。
+- **验证**　默认 Nix dev shell 中，`just integration`、`just smoke`、`just check` 及上述工作流与启动核验的定向 `-race` 通过。普通 UID 的原生镜像用例遇到 ownership 和 `security.capability` 限制；在映射 UID 的私有 namespace 和 tmpfs 中设置 `SANDBOX_REQUIRE_EROFS_TESTS=1` 后，`just test` 通过，image/GC 原生子集 `-race` 得到 75 条用例通过事件、0 fail/skip。`integration`、`privileged`、`guest_image` 标签编译通过，真实 VM 验收另行跟踪。
 
 ## 验证与交付
 

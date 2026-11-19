@@ -7,7 +7,6 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
@@ -93,7 +92,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	}
 	corrupt := record
 	corrupt.Warmup = "unpublished fixture command"
-	if _, err = service.State.Database().Exec("UPDATE templates SET body=? WHERE id=?", testfixture.Encode(corrupt), spec.ID); err != nil {
+	if _, err = service.State.Database().Exec("UPDATE templates SET body=? WHERE id=?", operation.Encode(corrupt), spec.ID); err != nil {
 		t.Fatal(err)
 	}
 	before := runtime.Count("launch")

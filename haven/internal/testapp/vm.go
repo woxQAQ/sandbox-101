@@ -67,13 +67,13 @@ func ColdServiceWithOptions(t *testing.T, options application.Options, factory f
 	if err = loom.WriteJSON(filepath.Join(imageDir, "image.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.State.Database().Exec("INSERT INTO tenants VALUES(?,?,?)", "tenant", "fixture-hash", testfixture.Encode(authorization.Limits{
+	if _, err = service.State.Database().Exec("INSERT INTO tenants VALUES(?,?,?)", "tenant", "fixture-hash", operation.Encode(authorization.Limits{
 		MaxSandboxes:  10,
 		MaxStorageMiB: 4096,
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", manifest.Digest, testfixture.Encode(manifest)); err != nil {
+	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", manifest.Digest, operation.Encode(manifest)); err != nil {
 		t.Fatal(err)
 	}
 	service.Options.Fault = nil

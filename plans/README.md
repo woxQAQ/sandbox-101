@@ -4,7 +4,7 @@
 
 | 计划 | 当前状态 | 剩余边界 |
 |---|---|---|
-| [028：Haven review 实施提示词](028-haven-review-prompt.md) | 待实施 | 身份和 guest 命名、业务 HTTP、错误映射、周期维护与测试支持 |
+| [028：Haven review 实施提示词](028-haven-review-prompt.md) | IMPLEMENTED | 第 2、10、14、15、22、23 条复查缺口已修复，条件 release、checkpoint fork 和冻结结果完整性已有行为回归。第 19 条补做完成，业务 HTTP 与管理 UDS 统一选择公开错误响应。普通测试中因 `mkfs.erofs` 跳过的 35 条 Go 测试事件，在 dev shell 内用私有 UID namespace、tmpfs 及 required 模式复跑，35/35 逐项通过（image、gc 共 75 条通过事件，0 fail/skip）。普通套件另有 700 条 Go 通过事件，Rust 34 项通过。`just integration`、`just smoke`、`just check` 及变更相关 Haven 包 race 通过。VM 与完整原生验收仍按对应计划跟踪 |
 | [027：按业务能力重组 Haven](027-haven-capability-boundaries.md) | IMPLEMENTED / VALIDATION_BLOCKED | 能力、私有 SQL、测试与文档实施完成，剩余完整 required-native 门禁 |
 | [017：有界恢复](017-bounded-resource-recovery.md) | PAUSED / 未实现 | 持久待核对集合与有界恢复扫描；原 013 依赖已交付，但不自动启动后续工作 |
 | [020：供应观测设计](020-provisioning-observability-design.md) | PAUSED / 来源映射未收尾 | 历史设计稿曾交付；当前目录无最终设计交付物，不能视为指标已上线 |

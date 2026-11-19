@@ -26,7 +26,8 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 	if !operation.Terminal(out.Status) {
 		return out, nil
 	}
-	if out.Command.Action == "fork" && out.Status == "succeeded" {
+	switch {
+	case out.Command.Action == "fork" && out.Status == "succeeded":
 		group, err := sandbox.LoadFork(ctx, q, id)
 		if err != nil {
 			return out, err
@@ -42,7 +43,10 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 			out.Result.Sandboxes = append(out.Result.Sandboxes, *child.Result.Sandbox)
 			out.ChargeTenantID = child.Result.Sandbox.TenantID
 		}
-	} else if out.Command.Action != "checkpoint" && out.Command.Action != "delete_checkpoint" {
+	case out.Command.Action == "checkpoint", out.Command.Action == "delete_checkpoint", out.Command.Action == "template_build", out.Command.Action == "refill":
+		// Scratch and checkpoint source IDs identify resources used by these
+		// workflows. Their public result is the template or checkpoint below.
+	default:
 		for _, sandboxID := range out.IDs {
 			value, err := sandbox.NewCatalog(q).Get(ctx, authorization.Principal{
 				Root: true,
@@ -56,12 +60,12 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 				}
 				out.ChargeTenantID = view.TenantID
 			}
-			if err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, errs.ErrNotFound) {
+			if err != nil && !errors.Is(err, errs.ErrNotFound) {
 				return out, err
 			}
 		}
 	}
-	if result.CheckpointID != "" {
+	if result.CheckpointID != "" && out.Command.Action != "delete_checkpoint" {
 		value, lookup := sandbox.LoadCheckpoint(ctx, q, result.CheckpointID)
 		err = lookup
 		if err == nil {
@@ -83,5 +87,5 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 			return out, err
 		}
 	}
-	return out, nil
+	return out, operation.ValidateDelivery(out)
 }

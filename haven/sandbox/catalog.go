@@ -132,6 +132,9 @@ func (c *Catalog) List(ctx context.Context, principal authorization.Principal) (
 
 func (c *Catalog) GetCheckpoint(ctx context.Context, principal authorization.Principal, id string) (Checkpoint, error) {
 	checkpoint, err := LoadCheckpoint(ctx, c.database, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Checkpoint{}, errs.ErrNotFound
+	}
 	if err != nil {
 		return checkpoint, err
 	}

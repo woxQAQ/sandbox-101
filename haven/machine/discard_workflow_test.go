@@ -16,6 +16,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
@@ -47,8 +48,8 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 		}
 		return nil
 	})
-	operation := testfixture.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
-	pending := testutil.AwaitColdWorker(t, service, operation.ID)
+	accepted := testfixture.AdmitCloneFixture(t, service, snapshot.Result.SnapshotID, "unproved")
+	pending := testutil.AwaitColdWorker(t, service, accepted.ID)
 	if err := os.MkdirAll(pending.Input.Resource.RestoreDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
-	source := testutil.AwaitColdWorker(t, service, operation.ID)
+	source := testutil.AwaitColdWorker(t, service, accepted.ID)
 	if source.Status != "failed" || source.State.Materials != nil {
 		t.Fatal("fixture unexpectedly established restore boundary", source.State)
 	}
@@ -104,22 +105,22 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := discardRequest(source)
-			operation, err := service.Deletion.AdmitDiscard(context.Background(), request)
+			accepted, err := service.Deletion.AdmitDiscard(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := testutil.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, accepted.ID)
 			discardSucceeded(t, service, result, discardExpectation{
 				Source:   source,
-				Original: testfixture.Encode(original),
+				Original: operation.Encode(original),
 			})
 			service = testapp.ReopenCloneService(t, service, backend)
 			cached, err := service.Deletion.AdmitDiscard(context.Background(), request)
-			if err != nil || cached.ID != operation.ID || cached.Status != "succeeded" {
+			if err != nil || cached.ID != accepted.ID || cached.Status != "succeeded" {
 				t.Fatal("completed discard did not replay original result", err)
 			}
 			replay, err := service.Operations.GetOperation(context.Background(), source.Input.TenantID, source.OperationID)
-			if err != nil || !bytes.Equal(testfixture.Encode(replay), testfixture.Encode(original)) {
+			if err != nil || !bytes.Equal(operation.Encode(replay), operation.Encode(original)) {
 				t.Fatal("reopen changed failed operation", err)
 			}
 			if source.Input.Restore != nil {
@@ -155,22 +156,22 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			operation, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
+			accepted, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
 			if err != nil && !errors.Is(err, errs.ErrInterrupted) {
 				t.Fatal(err)
 			}
 			if point != "discard_admitted" {
-				testutil.AwaitDiscard(t, service, operation.ID)
+				testutil.AwaitDiscard(t, service, accepted.ID)
 			}
 			var held int
 			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 				t.Fatal("incomplete discard retired cost", held, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			result := testutil.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, accepted.ID)
 			discardSucceeded(t, service, result, discardExpectation{
 				Source:   source,
-				Original: testfixture.Encode(original),
+				Original: operation.Encode(original),
 			})
 			if backend.Count("launch") != 1 {
 				t.Fatal("discard relaunched candidate")
@@ -206,25 +207,25 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 				if _, err = service.State.Database().Exec(statement); err != nil {
 					t.Fatal(err)
 				}
-				operation, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
+				accepted, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
 				if err != nil {
 					t.Fatal(err)
 				}
-				result := testutil.AwaitDiscard(t, service, operation.ID)
+				result := testutil.AwaitDiscard(t, service, accepted.ID)
 				if result.Status != "running" || result.State.Phase != "files_removed" {
 					t.Fatal("rejected SQL published discard success", result.State)
 				}
 				var held, vm, receipt int
-				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM vms WHERE id=?),(SELECT COUNT(*) FROM deletion_intents WHERE operation_id=?)", source.OperationID, source.Candidate, operation.ID).Scan(&held, &vm, &receipt); err != nil || held != 64 || vm != 1 || receipt != 1 {
+				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM vms WHERE id=?),(SELECT COUNT(*) FROM deletion_intents WHERE operation_id=?)", source.OperationID, source.Candidate, accepted.ID).Scan(&held, &vm, &receipt); err != nil || held != 64 || vm != 1 || receipt != 1 {
 					t.Fatal("partial discard retirement", held, vm, receipt, err)
 				}
 				if _, err = service.State.Database().Exec("DROP TRIGGER deny_discard_retirement"); err != nil {
 					t.Fatal(err)
 				}
 				service = testapp.ReopenCloneService(t, service, backend)
-				discardSucceeded(t, service, testutil.AwaitDiscard(t, service, operation.ID), discardExpectation{
+				discardSucceeded(t, service, testutil.AwaitDiscard(t, service, accepted.ID), discardExpectation{
 					Source:   source,
-					Original: testfixture.Encode(original),
+					Original: operation.Encode(original),
 				})
 			})
 		}
@@ -249,12 +250,12 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				}
 				return nil
 			})
-			operation, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
+			accepted, err := service.Deletion.AdmitDiscard(context.Background(), discardRequest(source))
 			if err != nil && !errors.Is(err, errs.ErrInterrupted) {
 				t.Fatal(err)
 			}
 			if damage == "replaced-after-receipt" {
-				testutil.AwaitDiscard(t, service, operation.ID)
+				testutil.AwaitDiscard(t, service, accepted.ID)
 			}
 			var path string
 			switch damage {
@@ -277,7 +278,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				}
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			result := testutil.AwaitDiscard(t, service, operation.ID)
+			result := testutil.AwaitDiscard(t, service, accepted.ID)
 			if result.Status == "succeeded" {
 				t.Fatal("unproved object was reclaimed")
 			}
@@ -304,8 +305,8 @@ func failedColdFixtureWithFault(t *testing.T, fault func(string) error) (*applic
 	t.Helper()
 	service, backend := testapp.ColdService(t, fault)
 	backend.FailBoot = true
-	operation := testfixture.ColdClaim(t, service, "failed-cold")
-	source := testutil.AwaitColdWorker(t, service, operation.ID)
+	accepted := testfixture.ColdClaim(t, service, "failed-cold")
+	source := testutil.AwaitColdWorker(t, service, accepted.ID)
 	if source.Status != "failed" || source.State.Witness != "" {
 		t.Fatal("cold fixture did not fail", source.State)
 	}
@@ -369,11 +370,11 @@ func discardSucceeded(t *testing.T, service *application.App, discard machine.Di
 		t.Fatal("discard reported success with candidate files retained", err)
 	}
 	after, err := service.Operations.GetOperation(context.Background(), source.Input.TenantID, source.OperationID)
-	if err != nil || !bytes.Equal(testfixture.Encode(after), original) {
+	if err != nil || !bytes.Equal(operation.Encode(after), original) {
 		t.Fatal("discard rewrote original public failure", err)
 	}
 	history, err := machine.LoadResourceStep(context.Background(), service.State.Database(), source.OperationID)
-	if err != nil || !bytes.Equal(testfixture.Encode(history), testfixture.Encode(source)) {
+	if err != nil || !bytes.Equal(operation.Encode(history), operation.Encode(source)) {
 		t.Fatal("discard upgraded or changed failed resource witness", err)
 	}
 	for _, check := range []struct {

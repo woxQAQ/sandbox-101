@@ -27,7 +27,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 		command.Count = 1
 	}
 	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") || key == "" || len(key) > 256 || f.opts.Guest == nil {
-		return empty, fmt.Errorf("%w: fork requires tenant authority, one source, count 1..32 and key", errs.ErrInvalid)
+		return empty, errs.InvalidInput("fork requires tenant authority, one source, count 1..32 and key")
 	}
 	requestGuard := f.guards.TenantRequest(principal.TenantID, key)
 	requestGuard.Lock()
@@ -58,7 +58,10 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 		RequestTenantID: principal.TenantID,
 	}
 	if command.CheckpointID != "" {
-		checkpoint, err := f.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
+		checkpoint, err := LoadOwnedCheckpoint(ctx, f.store.Database, command.CheckpointID, principal.TenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return empty, errs.ErrNotFound
+		}
 		if err != nil {
 			return empty, err
 		}
@@ -75,8 +78,10 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			Config:   source.Snapshot.Manifest.Config,
 		}
 	} else {
-
-		sandbox, err := f.catalog.OwnedRecord(ctx, principal, command.SandboxID)
+		sandbox, err := LoadSandbox(ctx, f.store.Database, command.SandboxID, principal.TenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return empty, errs.ErrNotFound
+		}
 		if err != nil {
 			return empty, err
 		}
@@ -122,12 +127,6 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 				Config:   source.Input.Resource.Config,
 			}
 		}
-	}
-	// Root authority must select the owning tenant; the check lives at the
-	// business admission boundary so direct service calls cannot fork across
-	// tenants either. Tenant visibility is already enforced by the catalog.
-	if input.OwnerTenantID != principal.TenantID {
-		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	admission, err := f.commands.Prepare(command)
 	if err != nil {

@@ -261,7 +261,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err != nil || original.Status != "failed" {
 		t.Fatal("original failure not fixed", err)
 	}
-	originalBytes := testfixture.Encode(original)
+	originalBytes := operation.Encode(original)
 	backend.Mu.Lock()
 	backend.FailBoot = false
 	backend.Mu.Unlock()
@@ -271,7 +271,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		Key:        "failed",
 		TemplateID: "cold",
 	})
-	if err != nil || !bytes.Equal(testfixture.Encode(replayed), originalBytes) || backend.Count("launch") != 1 {
+	if err != nil || !bytes.Equal(operation.Encode(replayed), originalBytes) || backend.Count("launch") != 1 {
 		t.Fatal("failed key was re-executed or enriched", err)
 	}
 	if _, err = service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
@@ -309,14 +309,14 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err != nil || parentFailure.Status != "failed" {
 		t.Fatal("released parent was not fixed before cleanup", err)
 	}
-	parentFailureBytes := testfixture.Encode(parentFailure)
+	parentFailureBytes := operation.Encode(parentFailure)
 	service = testapp.ReopenCloneService(t, service, backend)
 	deleted := testutil.AwaitColdWorker(t, service, release.ID)
 	if deleted.Status != "succeeded" {
 		t.Fatal("release did not retire its own responsibility", deleted.State)
 	}
 	parentAfterCleanup, err := service.Operations.GetOperation(context.Background(), "tenant", current.ID)
-	if err != nil || !bytes.Equal(testfixture.Encode(parentAfterCleanup), parentFailureBytes) {
+	if err != nil || !bytes.Equal(operation.Encode(parentAfterCleanup), parentFailureBytes) {
 		t.Fatal("independent cleanup rewrote its failed parent's public result", err)
 	}
 	var witnessAfter []byte
@@ -324,7 +324,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		t.Fatal("cleanup rewrote historical generation proof", err)
 	}
 	old, err := service.Operations.GetOperation(context.Background(), "tenant", failed.ID)
-	if err != nil || !bytes.Equal(testfixture.Encode(old), originalBytes) {
+	if err != nil || !bytes.Equal(operation.Encode(old), originalBytes) {
 		t.Fatal("another generation/cleanup changed original failure", err)
 	}
 	var held int64

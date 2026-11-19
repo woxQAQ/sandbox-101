@@ -20,18 +20,18 @@ type CapabilityReader interface {
 // Authentication resolves an administrator, tenant or sandbox capability. It has
 // no workflow runner, runtime effects, transaction ownership or secret registry.
 type Authentication struct {
-	rootToken string
-	tenants   *Repository
-	sandboxes CapabilityReader
-	sign      func(...string) string
+	adminToken string
+	tenants    *Repository
+	sandboxes  CapabilityReader
+	sign       func(...string) string
 }
 
-func NewAuthentication(rootToken string, tenants *Repository, sandboxes CapabilityReader, sign func(...string) string) *Authentication {
+func NewAuthentication(adminToken string, tenants *Repository, sandboxes CapabilityReader, sign func(...string) string) *Authentication {
 	return &Authentication{
-		rootToken: rootToken,
-		tenants:   tenants,
-		sandboxes: sandboxes,
-		sign:      sign,
+		adminToken: adminToken,
+		tenants:    tenants,
+		sandboxes:  sandboxes,
+		sign:       sign,
 	}
 }
 
@@ -49,7 +49,7 @@ func (a *Authentication) authenticate(ctx context.Context, token string, retired
 	if token == "" {
 		return Principal{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	if a.rootToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(a.rootToken)) == 1 {
+	if a.adminToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(a.adminToken)) == 1 {
 		return Principal{
 			TenantID: "root",
 			Root:     true,

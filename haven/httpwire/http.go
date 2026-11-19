@@ -3,12 +3,10 @@ package httpwire
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/types"
@@ -21,94 +19,75 @@ func JSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+// Failure pairs an HTTP status with the payload that can also appear in an operation view.
+type Failure struct {
+	status  int
+	Payload types.ApiError
+}
+
+// NewFailure takes a public message chosen by the handler. Dependency diagnostics stay private.
+func NewFailure(status int, code, publicMessage string) Failure {
+	return Failure{status: status, Payload: types.ApiError{Code: code, Message: publicMessage}}
+}
+
+func (f Failure) Write(w http.ResponseWriter) {
+	JSON(w, f.status, f.Payload)
+}
+
+func InvalidRequest(message string) Failure {
+	return NewFailure(http.StatusBadRequest, types.CodeInvalid, message)
+}
+
+func NotFound() Failure {
+	return NewFailure(http.StatusNotFound, types.CodeNotFound, "not found")
+}
+
+func AdminRequired() Failure {
+	return NewFailure(http.StatusForbidden, types.CodeForbidden, "root access required")
+}
+
+func InternalFailure() Failure {
+	return NewFailure(http.StatusInternalServerError, types.CodeInternal, "internal service error")
+}
+
 var (
 	errInvalidJSON = errors.New("invalid JSON request")
 	errExtraJSON   = errors.New("request must contain one JSON value")
 )
 
-// PublicError formats only recognized admission failures. Unclassified host
-// diagnostics remain private and cannot become tenant-resource absence proofs.
-func PublicError(err error) *types.ApiError {
-	for _, failure := range []struct {
-		reason error
-		code   string
-	}{
-		{errs.ErrNotFound, types.CodeNotFound},
-		{errs.ErrForbidden, types.CodeForbidden},
-		{errs.ErrConflict, types.CodeConflict},
-		{errs.ErrInvalid, types.CodeInvalid},
-		{errs.ErrExhausted, types.CodeExhausted},
-		{errs.ErrIncompatible, types.CodeIncompatible},
-		{errs.ErrUnknown, types.CodeUnknown},
-		{errs.ErrManualRecovery, types.CodeManualRecovery},
-	} {
-		if errors.Is(err, failure.reason) {
-			return &types.ApiError{
-				Code:    failure.code,
-				Message: strings.TrimPrefix(err.Error(), failure.reason.Error()+": "),
-			}
-		}
-	}
-	if errors.Is(err, errInvalidJSON) {
-		return &types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: errInvalidJSON.Error(),
-		}
-	}
-	if errors.Is(err, errExtraJSON) {
-		return &types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: errExtraJSON.Error(),
-		}
-	}
-	if errors.Is(err, errs.ErrInterrupted) {
-		return &types.ApiError{
-			Code:    types.CodeUnknown,
-			Message: "accepted operation retained for recovery",
-		}
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return &types.ApiError{
-			Code:    types.CodeNotFound,
-			Message: "not found",
-		}
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return &types.ApiError{
-			Code:    types.CodeUnknown,
-			Message: "operation wait ended",
-		}
-	}
-	return &types.ApiError{
-		Code:    types.CodeInternal,
-		Message: "internal service error",
+func classify(err error) Failure {
+	switch {
+	case errors.Is(err, errs.ErrNotFound):
+		return NotFound()
+	case errors.Is(err, errs.ErrForbidden):
+		return AdminRequired()
+	case errors.Is(err, errs.ErrConflict):
+		return NewFailure(http.StatusConflict, types.CodeConflict, "operation conflicts with current state")
+	case errors.Is(err, errs.ErrInvalid):
+		return InvalidRequest(errs.InvalidInputMessage(err))
+	case errors.Is(err, errs.ErrExhausted):
+		return NewFailure(http.StatusTooManyRequests, types.CodeExhausted, "admission capacity exhausted")
+	case errors.Is(err, errs.ErrIncompatible):
+		return NewFailure(http.StatusUnprocessableEntity, types.CodeIncompatible, "incompatible resource")
+	case errors.Is(err, errs.ErrUnknown):
+		return NewFailure(http.StatusServiceUnavailable, types.CodeUnknown, "effect outcome unknown")
+	case errors.Is(err, errs.ErrManualRecovery):
+		return NewFailure(http.StatusServiceUnavailable, types.CodeManualRecovery, "manual recovery required")
+	case errors.Is(err, errInvalidJSON):
+		return InvalidRequest(errInvalidJSON.Error())
+	case errors.Is(err, errExtraJSON):
+		return InvalidRequest(errExtraJSON.Error())
+	case errors.Is(err, errs.ErrInterrupted):
+		return NewFailure(http.StatusServiceUnavailable, types.CodeUnknown, "accepted operation retained for recovery")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return NewFailure(http.StatusServiceUnavailable, types.CodeUnknown, "operation wait ended")
+	default:
+		return InternalFailure()
 	}
 }
 
 func Error(w http.ResponseWriter, err error) {
-	Failure(w, *PublicError(err))
-}
-
-// Failure writes already sanitized wire data without constructing a Go error.
-func Failure(w http.ResponseWriter, failure types.ApiError) {
-	status := http.StatusInternalServerError
-	switch failure.Code {
-	case types.CodeNotFound:
-		status = http.StatusNotFound
-	case types.CodeForbidden:
-		status = http.StatusForbidden
-	case types.CodeInvalid:
-		status = http.StatusBadRequest
-	case types.CodeConflict:
-		status = http.StatusConflict
-	case types.CodeExhausted:
-		status = http.StatusTooManyRequests
-	case types.CodeIncompatible:
-		status = http.StatusUnprocessableEntity
-	case types.CodeUnknown, types.CodeManualRecovery:
-		status = http.StatusServiceUnavailable
-	}
-	JSON(w, status, failure)
+	classify(err).Write(w)
 }
 
 func ReadJSON(w http.ResponseWriter, r *http.Request, value any) error {

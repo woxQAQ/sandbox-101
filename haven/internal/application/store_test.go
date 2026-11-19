@@ -25,17 +25,18 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 	for _, corruption := range []string{
 		"identity",
 		"http_error",
+		"missing_sandbox",
 	} {
 		t.Run(corruption, func(t *testing.T) {
 			service, runtime, _, _ := testapp.SandboxFixture(t)
-			operation := (testfixture.SandboxClaims{
+			claim := (testfixture.SandboxClaims{
 				App: service,
 			}).Claim(t, "public-corruption", nil, egress.Policy{
 				Mode: "none",
 			})
 			view, err := service.Delivery.PublicOperation(context.Background(), authorization.Principal{
 				TenantID: "tenant",
-			}, operation.ID)
+			}, claim.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,13 +46,15 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 			switch corruption {
 			case "identity":
 				view.Key = "changed-request-identity"
+			case "missing_sandbox":
+				view.Result.Sandbox = nil
 			case "http_error":
 				view.Error = &types.ApiError{
 					Code:    types.CodeInternal,
 					Message: "transport data must not be stored",
 				}
 			}
-			if _, err = service.State.Database().Exec("UPDATE operation_publications SET body=? WHERE operation_id=?", testfixture.Encode(view), operation.ID); err != nil {
+			if _, err = service.State.Database().Exec("UPDATE operation_publications SET body=? WHERE operation_id=?", operation.Encode(view), claim.ID); err != nil {
 				t.Fatal(err)
 			}
 			options := service.Options
@@ -111,7 +114,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	testutil.WaitFixtureWorker(t, service, claim.ID)
-	if _, err = service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='warm_claim'", testfixture.Encode(sandbox.WarmClaimState{
+	if _, err = service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='warm_claim'", operation.Encode(sandbox.WarmClaimState{
 		Phase: "unsupported-stage",
 	}), claim.ID); err != nil {
 		t.Fatal(err)

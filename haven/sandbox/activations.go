@@ -27,8 +27,8 @@ type ActivationBackend interface {
 }
 
 type ActivationGuest interface {
-	Info(context.Context, loom.Resource) error
-	Activate(context.Context, loom.Resource, guest.Activation) error
+	Info(ctx context.Context, resource loom.Resource) error
+	Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error
 }
 
 type EgressBindings interface {

@@ -2,7 +2,9 @@ package machine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -48,6 +50,9 @@ func (proofs SnapshotProofs) LoadRestoreSource(ctx context.Context, query store.
 		return source, fmt.Errorf("%w: snapshot publication/provenance incomplete", errs.ErrManualRecovery)
 	}
 	capture, err := LoadCapture(ctx, query, row.SourceOperationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return source, fmt.Errorf("%w: snapshot publication lacks its capture step", errs.ErrManualRecovery)
+	}
 	if err != nil {
 		return source, err
 	}

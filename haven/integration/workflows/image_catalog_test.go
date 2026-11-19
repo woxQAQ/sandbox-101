@@ -11,6 +11,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
 )
 
@@ -38,7 +39,7 @@ func TestHavenImageCatalogRejectsOrphansAndChangedMaterialization(t *testing.T) 
 		t.Fatal("filesystem-only image granted provisioning authority", err)
 	}
 	// Restore only the original immutable fixture input, never a workflow fact.
-	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", imageManifest.Digest, testfixture.Encode(imageManifest)); err != nil {
+	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", imageManifest.Digest, operation.Encode(imageManifest)); err != nil {
 		t.Fatal(err)
 	}
 	operation := testfixture.ColdClaim(t, service, "published")

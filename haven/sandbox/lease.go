@@ -115,7 +115,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 			ttl = settings.TTLSeconds
 		}
 		if ttl < 1 || ttl > int64(l.opts.MaxTTL.Seconds()) {
-			return empty, fmt.Errorf("%w: renew duration exceeds host bound", errs.ErrInvalid)
+			return empty, errs.InvalidInput("renew duration exceeds host bound")
 		}
 		next.TTLSeconds = ttl
 		next.Deadline = now.Add(time.Duration(ttl) * time.Second)
@@ -128,7 +128,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 			ttl = int64(l.opts.PausedTTL.Seconds())
 		}
 		if ttl < 1 || ttl > int64(l.opts.PausedTTL.Seconds()) {
-			return empty, fmt.Errorf("%w: paused renew duration exceeds host bound", errs.ErrInvalid)
+			return empty, errs.InvalidInput("paused renew duration exceeds host bound")
 		}
 		next.PausedUntil = now.Add(time.Duration(ttl) * time.Second)
 	default:

@@ -44,13 +44,13 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 			},
 		},
 	}
-	id := NewID("op-")
-	request := Encode(struct {
+	id := operation.NewID("op-")
+	request := operation.Encode(struct {
 		Action  string
 		Options imageimport.ImageImportOptions
 	}{"image_import", options})
 	// Intent retirement compares the original bytes, including field order.
-	input := fmt.Appendf(nil, `{"request_tenant_id":"root","options":%s,"plan":%s,"work":%s,"target":%s,"reservation":%d}`, Encode(options), Encode(plan), Encode(filepath.Join(state.Directory(), "imports", id)), Encode(filepath.Join(state.Directory(), "images", options.Digest[7:])), int64(64<<20))
+	input := fmt.Appendf(nil, `{"request_tenant_id":"root","options":%s,"plan":%s,"work":%s,"target":%s,"reservation":%d}`, operation.Encode(options), operation.Encode(plan), operation.Encode(filepath.Join(state.Directory(), "imports", id)), operation.Encode(filepath.Join(state.Directory(), "images", options.Digest[7:])), int64(64<<20))
 	tx, err := state.Database().BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -64,10 +64,10 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 		ScopeKind: "node",
 		ScopeID:   state.Identity().Identity,
 		Key:       "original",
-		Hash:      Digest(request),
+		Hash:      operation.Digest(request),
 		Request:   request,
 		Status:    "pending",
-		Body:      Encode(operation.Result{}),
+		Body:      operation.Encode(operation.Result{}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 		OperationID: id,
 		Key:         "image_import",
 		Action:      "image_import",
-		Hash:        Digest(input),
+		Hash:        operation.Digest(input),
 		Input:       input,
 		Candidate:   options.Digest,
 		Status:      "pending",

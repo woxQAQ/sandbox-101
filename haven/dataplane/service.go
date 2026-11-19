@@ -21,8 +21,8 @@ type PlaneBackend interface {
 }
 
 type PlaneGuest interface {
-	Connect(context.Context, loom.Resource) (net.Conn, error)
-	Forward(context.Context, loom.Resource, int) (net.Conn, error)
+	Connect(ctx context.Context, resource loom.Resource) (net.Conn, error)
+	Forward(ctx context.Context, resource loom.Resource, port int) (net.Conn, error)
 }
 
 type PlaneGuards interface {

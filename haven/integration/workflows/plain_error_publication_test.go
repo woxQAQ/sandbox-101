@@ -14,7 +14,6 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
@@ -54,7 +53,7 @@ func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
 		t.Fatal("private diagnostic lost its original context", diagnostic)
 	}
 	view, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
-	if err != nil || view.Status != "failed" || view.Error != nil || strings.Contains(string(testfixture.Encode(view)), privatePath) {
+	if err != nil || view.Status != "failed" || view.Error != nil || strings.Contains(string(operation.Encode(view)), privatePath) {
 		t.Fatal("private file absence became a public diagnosis", view, err)
 	}
 	if view.Result.Sandbox != nil && view.Result.Sandbox.State == "running" {

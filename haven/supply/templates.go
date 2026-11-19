@@ -94,6 +94,9 @@ func (tc *TemplateCatalog) GetTemplate(ctx context.Context, principal authorizat
 		return operation.TemplateSpec{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	record, err := LoadTemplate(ctx, tc.database, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return operation.TemplateSpec{}, errs.ErrNotFound
+	}
 	if err != nil {
 		return operation.TemplateSpec{}, err
 	}
@@ -152,15 +155,15 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	}
 	spec := *command.Template
 	if spec.ID == "" || len(spec.ID) > 128 || spec.TargetWarm < 0 || spec.TargetWarm > s.opts.MaxWarm {
-		return empty, fmt.Errorf("%w: template owner, identity or warm target invalid", errs.ErrInvalid)
+		return empty, errs.InvalidInput("template owner, identity or warm target invalid")
 	}
 	if principal.Root {
 		if spec.TenantID == "" {
-			return empty, fmt.Errorf("%w: root template administration requires explicit owner", errs.ErrInvalid)
+			return empty, errs.InvalidInput("root template administration requires explicit owner")
 		}
 	} else {
 		if spec.TenantID != "" && spec.TenantID != principal.TenantID {
-			return empty, fmt.Errorf("%w: template owner cannot change", errs.ErrInvalid)
+			return empty, errs.InvalidInput("template owner cannot change")
 		}
 		spec.TenantID = principal.TenantID
 	}
@@ -168,7 +171,7 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 		return empty, fmt.Errorf("%w: template build requires guest effects and a fresh snapshot", errs.ErrInvalid)
 	}
 	if command.Action == "template_put" && spec.SnapshotID == "" && spec.TargetWarm != 0 {
-		return empty, fmt.Errorf("%w: cold template cannot reserve warm instances", errs.ErrInvalid)
+		return empty, errs.InvalidInput("cold template cannot reserve warm instances")
 	}
 	config := loom.Config{
 		Image: spec.Image,
@@ -181,6 +184,9 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, s.store.Database, config.Image)
+	if errors.Is(err, sql.ErrNoRows) {
+		return empty, errs.ErrNotFound
+	}
 	if err != nil {
 		return empty, err
 	}
@@ -190,6 +196,9 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	var source *machine.SnapshotSource
 	if spec.SnapshotID != "" {
 		captured, err := s.proofs.Snapshots().LoadRestoreSource(ctx, s.store.Database, spec.TenantID, spec.SnapshotID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return empty, errs.ErrNotFound
+		}
 		if err != nil {
 			return empty, err
 		}

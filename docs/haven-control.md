@@ -57,7 +57,7 @@ JSON 类型位于 [types](../types/types.go)，错误 payload 为 `types.ApiErro
 | `POST /v1/sandboxes` | 领取 sandbox |
 | `POST /v1/templates`、`POST /v1/templates/:id/build` | 模板登记、模板构建 |
 | `POST /v1/sandboxes/:id/{configure,renew,checkpoint,pause,resume,rollback,fork}` | 已有对象的生命周期命令，URL 显式决定动作与目标 |
-| `DELETE /v1/sandboxes/:id` | release |
+| `DELETE /v1/sandboxes/:id` | release。可省略 body，或用 `lease_deadline` 指定必须匹配且已到期的租约 |
 | `DELETE /v1/checkpoints/:id`、`POST /v1/checkpoints/:id/fork` | 删除 checkpoint binding、从 checkpoint fork |
 | `GET /v1/sandboxes/:id/connect` | HTTP/1.1 `sandbox-v1` Upgrade 字节中继 |
 | `POST /v1/sandboxes/:id/preview`、`/preview/<capability>/...` | 有 lease 上限的签名 Preview 路径 |
@@ -66,13 +66,16 @@ Bearer 鉴权、root 的 `X-Tenant-ID`、未知与 foreign 对象同为 404 的�
 
 mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键异参返回 409；取消只结束等待，已接纳工作仍按服务生命周期推进。`Prefer: respond-async` 返回 202、原 operation JSON 与 `Location`；同步请求返回 Result。状态与冻结结果在同一 SQLite 读 snapshot 中查询，避免完成并发被误判为历史缺失。终态视图与工作流终态在同一事务冻结，后续 configure、续租、release 或重启不重新投影旧结果。冻结记录不包含 HTTP 错误 DTO、诊断或 bearer token；HTTP 错误在响应时生成，token 在已授权查询时派生。包含 transport 字段的旧/损坏记录明确拒绝，不在原数据库中自动改写。
 
-HTTP body 上限 1 MiB，拒绝未知字段和多个 JSON 值。错误使用原 `code/message` JSON：invalid→400、forbidden→403、not_found→404、conflict→409、resource_exhausted→429、incompatible→422、result_unknown/manual_recovery_required→503、internal→500。Upgrade 缺头返回 426；非 HTTP/1.1 不升级。只有 HTTP adapter 负责生成 `ApiError`；已接纳 operation 的终态失败固定输出 `internal/internal service error`，不从持久化诊断文字推导类别。接纳阶段返回的标准 sentinel 仍按上表映射 HTTP 状态。内部统一使用 `errors.New` / `fmt.Errorf`，没有 `loom.Error`、`Code`、`Fail` 或 SDK `RPCError`。需要程序判断的固定条件使用标准 sentinel 与 `errors.Is`；不通过错误文本判断副作用是否发生。未分类宿主失败仅输出固定 internal 消息，底层诊断不穿透 HTTP 边界。
+HTTP body 上限为 1 MiB，解码拒绝未知字段和多余 JSON 值。业务和本机管理 HTTP 共同选择失败响应的状态、`code` 和公开 `message`。常规分类为 invalid→400、forbidden→403、not_found→404、conflict→409、resource_exhausted→429、incompatible→422、result_unknown/manual_recovery_required→503、internal→500。业务路由 method 不受支持时返回 405/invalid，Upgrade 缺头返回 426/invalid，Preview 上游不可用返回 502/internal。
+
+业务入口在确认公开对象缺失或对当前身份不可见时返回 `ErrNotFound`。内部记录查询遇到未分类的 `sql.ErrNoRows` 只公开 500/internal。服务通过 `errors.Is` 保留原始错误分类。HTTP 边界为每种失败选定公开消息；业务输入校验可通过 `errs.InvalidInput` 显式选择一条固定的纠错提示。包装错误附带的诊断保留在服务内。取消等待与已接纳待恢复都返回 503/result_unknown，消息分别为 `operation wait ended` 与 `accepted operation retained for recovery`。已接纳 operation 的终态失败在同步响应中返回 500，GET operation 返回 200，两者使用同一 `internal/internal service error` payload。
 
 默认新 lease 为 300 秒。暂停中的 checkpoint 复用原 pause receipt 和睡眠 publication，只增加 checkpoint binding，不唤醒或重新捕获。fork 的 count 为 1–32，省略取 1；支持 running/paused sandbox 或 checkpoint。running 来源只捕获一次供整批分支使用。接纳事务固定全部目标与业务 birth identity，并同时预留整批 slot、磁盘及宿主峰值；资源分配事务将整批 forecast 交给每个真实候选后才 dispatch。失败分支使用原 failed intent 的 discard，成功分支使用正常业务 release；父工作流持久链接各清理子操作，核验回收后才完成失败。各分支原激活结果独立冻结，父结果不会被后来续租或配置覆盖。
 
 ```nu
 havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token list
 havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token --key claim-001 --request-file /private/claim.json claim
+havenctl --endpoint http://127.0.0.1:7777 --token-file /private/tenant.token --key fork-001 --request-file /private/fork.json fork-checkpoint checkpoint_id
 havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token exec sandbox_id 'printf hello'
 ```
 
@@ -84,7 +87,7 @@ havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token ex
 
 管理 adapter 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../types/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
 
-`loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
+`loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID`、`fork-checkpoint ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
 
 ```nu
 loomctl --socket /private/haven-run/management.sock status

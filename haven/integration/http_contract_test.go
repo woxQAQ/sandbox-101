@@ -27,16 +27,18 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 			Path:   path,
 		}, 404)
 	}
-	controlHTTP(t, endpoint, contractRequest{
+	methodFailure := controlHTTP(t, endpoint, contractRequest{
 		Method: "PUT",
 		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 	}, 405)
-	controlHTTP(t, endpoint, contractRequest{
+	requireFailure(t, methodFailure, types.CodeInvalid, "method not allowed")
+	upgradeFailure := controlHTTP(t, endpoint, contractRequest{
 		Method: "GET",
 		Path:   "/v1/sandboxes/" + firstID + "/connect",
 		Token:  scoped.Token,
 	}, 426)
+	requireFailure(t, upgradeFailure, types.CodeInvalid, "Connection: Upgrade and Upgrade: sandbox-v1 required")
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "GET",
 		Path:   "/metrics",
@@ -55,12 +57,20 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Body:   []byte(`{}`),
 	}, 404)
 	command := []byte(`{"template_id":"fixture","policy":{"mode":"none"}}`)
-	controlHTTP(t, endpoint, contractRequest{
+	missingKey := controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
 		Path:   "/v1/sandboxes",
 		Token:  "transport-token",
 		Body:   command,
 	}, 400)
+	requireFailure(t, missingKey, types.CodeInvalid, "Idempotency-Key required (max 256 bytes)")
+	missingCheckpoint := controlHTTP(t, endpoint, contractRequest{
+		Method: "DELETE",
+		Path:   "/v1/checkpoints/missing",
+		Token:  "transport-token",
+		Key:    "missing-checkpoint",
+	}, 404)
+	requireFailure(t, missingCheckpoint, types.CodeNotFound, "not found")
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "POST",
 		Path:   "/v1/sandboxes",
@@ -157,6 +167,33 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Path:   "/v1/sandboxes/missing",
 		Token:  foreign.Token,
 	}, 404)
+	oldDeadline := acceptedRecord.Result.Sandbox.Deadline
+	renewed, err := tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "renew-before-release", types.Command{Action: "renew", TTLSeconds: 120})
+	if err != nil || renewed.Sandbox == nil || renewed.Sandbox.Deadline.Equal(oldDeadline) {
+		t.Fatal("lease did not change", renewed, err)
+	}
+	_, err = tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "stale-release", types.Command{Action: "release", LeaseDeadline: oldDeadline})
+	if err == nil || err.Error() != "conflict: operation conflicts with current state" {
+		t.Fatal("release with the previous deadline must conflict", err)
+	}
+	current, err := tenant.Get(ctx, acceptedRecord.Result.Sandbox.ID)
+	if err != nil || current.State != "running" || !current.Deadline.Equal(renewed.Sandbox.Deadline) {
+		t.Fatal("stale release changed renewed sandbox", current, err)
+	}
+	// A bodyless release and its SDK replay describe the same intent. Adding a
+	// deadline to the replay must change the command identity.
+	message := contractRequest{
+		Method: http.MethodDelete,
+		Path:   "/v1/sandboxes/" + firstID,
+		Token:  tenant.Token,
+		Key:    "bodyless-release",
+	}
+	controlHTTP(t, endpoint, message, 200)
+	if replay, err := tenant.Change(ctx, firstID, "bodyless-release", types.Command{Action: "release"}); err != nil || replay.Sandbox == nil || replay.Sandbox.State != "terminated" {
+		t.Fatal("bodyless release replay", replay, err)
+	}
+	message.Body = []byte(`{"lease_deadline":"2020-01-01T00:00:00Z"}`)
+	controlHTTP(t, endpoint, message, 409)
 	scopedClient := sdk.New(endpoint, acceptedRecord.Result.Tokens[acceptedRecord.Result.Sandbox.ID])
 	released, err := scopedClient.Change(ctx, acceptedRecord.Result.Sandbox.ID, "self-release", types.Command{
 		Action: "release",
@@ -172,6 +209,17 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Path:   "/v1/sandboxes/" + acceptedRecord.Result.Sandbox.ID,
 		Token:  scopedClient.Token,
 	}, 404)
+}
+
+func requireFailure(t *testing.T, payload []byte, code, message string) {
+	t.Helper()
+	var failure types.ApiError
+	if err := json.Unmarshal(payload, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Code != code || failure.Message != message {
+		t.Fatalf("got %s, want %s / %s", payload, code, message)
+	}
 }
 
 type contractRequest struct {

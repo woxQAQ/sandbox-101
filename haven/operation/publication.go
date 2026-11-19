@@ -54,6 +54,38 @@ func ProjectionHeader(ctx context.Context, query store.DBTX, id string) (types.O
 	return out, result, nil
 }
 
+// ValidateDelivery checks the object promised by a successful business action
+// using only the frozen view. Failed operations may carry partial results.
+func ValidateDelivery(view types.Operation) error {
+	if view.Status != "succeeded" {
+		return nil
+	}
+	switch view.Command.Action {
+	case "claim", "fork_branch", "renew", "configure", "pause", "resume", "rollback", "release":
+		if len(view.IDs) != 1 || view.Result.Sandbox == nil || view.Result.Sandbox.ID != view.IDs[0] {
+			return fmt.Errorf("%w: missing sandbox delivery for %s", errs.ErrManualRecovery, view.ID)
+		}
+	case "fork":
+		if len(view.IDs) == 0 || len(view.Result.Sandboxes) != len(view.IDs) {
+			return fmt.Errorf("%w: incomplete fork delivery for %s", errs.ErrManualRecovery, view.ID)
+		}
+		for index, id := range view.IDs {
+			if view.Result.Sandboxes[index].ID != id {
+				return fmt.Errorf("%w: fork delivery order changed for %s", errs.ErrManualRecovery, view.ID)
+			}
+		}
+	case "checkpoint":
+		if view.Result.Checkpoint == nil {
+			return fmt.Errorf("%w: missing checkpoint delivery for %s", errs.ErrManualRecovery, view.ID)
+		}
+	case "template_put", "template_build", "refill":
+		if view.Result.Template == nil {
+			return fmt.Errorf("%w: missing template delivery for %s", errs.ErrManualRecovery, view.ID)
+		}
+	}
+	return nil
+}
+
 // LoadPublication reads the original delivery. It never rebuilds a terminal
 // view from current resources and rejects persisted transport fields or tokens.
 func LoadPublication(ctx context.Context, query store.DBTX, id string) (types.Operation, error) {
@@ -68,7 +100,7 @@ func LoadPublication(ctx context.Context, query store.DBTX, id string) (types.Op
 	if view.ID != id || view.Result.OperationID != id || (view.Status != "succeeded" && view.Status != "failed") || view.Result.Tokens != nil || view.Error != nil {
 		return view, fmt.Errorf("%w: frozen delivery identity or transport fields changed", errs.ErrManualRecovery)
 	}
-	return view, nil
+	return view, ValidateDelivery(view)
 }
 
 // PublicOperation authorizes delivery of the original business view. Status and

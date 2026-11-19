@@ -71,10 +71,7 @@ func New(services Services) http.Handler {
 				return
 			}
 		}
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeNotFound,
-			Message: "not found",
-		})
+		httpwire.NotFound().Write(c.Writer)
 	})
 	router.NoMethod(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
@@ -83,10 +80,7 @@ func New(services Services) http.Handler {
 				return
 			}
 		}
-		httpwire.JSON(c.Writer, 405, &types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "method not allowed",
-		})
+		httpwire.NewFailure(http.StatusMethodNotAllowed, types.CodeInvalid, "method not allowed").Write(c.Writer)
 	})
 	router.Match([]string{
 		http.MethodGet,
@@ -114,7 +108,7 @@ func New(services Services) http.Handler {
 		h.connectSandbox(c.Writer, c.Request, principal(c), c.Param("id"))
 	})
 	v1.POST("/sandboxes", h.claimSandbox)
-	v1.DELETE("/sandboxes/:id", h.releaseSandbox)
+	v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
 	for _, action := range sandboxActions {
 		v1.POST("/sandboxes/:id/"+action, h.sandboxAction(action))
 	}
@@ -133,10 +127,7 @@ func principal(c *gin.Context) authorization.Principal {
 func (h *handler) authenticate(c *gin.Context) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeNotFound,
-			Message: "not found",
-		})
+		httpwire.NotFound().Write(c.Writer)
 		c.Abort()
 		return
 	}
@@ -160,29 +151,22 @@ func (h *handler) authenticate(c *gin.Context) {
 // repeated action or ID values in the body must agree with it.
 func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Command, bool) {
 	var command types.Command
-	if err := httpwire.ReadJSON(c.Writer, c.Request, &command); err != nil {
-		httpwire.Error(c.Writer, err)
-		return command, false
+	if action != "release" || c.Request.ContentLength != 0 {
+		if err := httpwire.ReadJSON(c.Writer, c.Request, &command); err != nil {
+			httpwire.Error(c.Writer, err)
+			return command, false
+		}
 	}
 	if command.Action != "" && command.Action != action {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "request action disagrees with the route",
-		})
+		httpwire.InvalidRequest("request action disagrees with the route").Write(c.Writer)
 		return command, false
 	}
 	if sandboxID != "" && command.SandboxID != "" && command.SandboxID != sandboxID {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "request sandbox id disagrees with the route",
-		})
+		httpwire.InvalidRequest("request sandbox id disagrees with the route").Write(c.Writer)
 		return command, false
 	}
 	if checkpointID != "" && command.CheckpointID != "" && command.CheckpointID != checkpointID {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "request checkpoint id disagrees with the route",
-		})
+		httpwire.InvalidRequest("request checkpoint id disagrees with the route").Write(c.Writer)
 		return command, false
 	}
 	command.Action = action
@@ -203,13 +187,6 @@ func (h *handler) claimSandbox(c *gin.Context) {
 	h.submit(c, command)
 }
 
-func (h *handler) releaseSandbox(c *gin.Context) {
-	h.submit(c, types.Command{
-		Action:    "release",
-		SandboxID: c.Param("id"),
-	})
-}
-
 // sandboxAction registers one lifecycle command explicitly. The route fixes
 // action and sandbox; the body only carries parameters.
 func (h *handler) sandboxAction(action string) gin.HandlerFunc {
@@ -219,10 +196,7 @@ func (h *handler) sandboxAction(action string) gin.HandlerFunc {
 			return
 		}
 		if action == "fork" && command.CheckpointID != "" {
-			httpwire.Failure(c.Writer, types.ApiError{
-				Code:    types.CodeInvalid,
-				Message: "sandbox fork source is the route sandbox",
-			})
+			httpwire.InvalidRequest("sandbox fork source is the route sandbox").Write(c.Writer)
 			return
 		}
 		h.submit(c, command)
@@ -243,20 +217,14 @@ func (h *handler) buildTemplate(c *gin.Context) {
 		return
 	}
 	if command.Template == nil {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "template field is required",
-		})
+		httpwire.InvalidRequest("template field is required").Write(c.Writer)
 		return
 	}
 	if command.Template.ID == "" {
 		command.Template.ID = c.Param("id")
 	}
 	if command.Template.ID != c.Param("id") {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "request template id disagrees with the route",
-		})
+		httpwire.InvalidRequest("request template id disagrees with the route").Write(c.Writer)
 		return
 	}
 	h.submit(c, command)
@@ -278,10 +246,7 @@ func (h *handler) forkCheckpoint(c *gin.Context) {
 		return
 	}
 	if command.SandboxID != "" {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "checkpoint fork source is the route checkpoint",
-		})
+		httpwire.InvalidRequest("checkpoint fork source is the route checkpoint").Write(c.Writer)
 		return
 	}
 	h.submit(c, command)
@@ -294,10 +259,7 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 	request := c.Request
 	key := request.Header.Get("Idempotency-Key")
 	if len(key) < 1 || len(key) > 256 {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "Idempotency-Key required (max 256 bytes)",
-		})
+		httpwire.InvalidRequest("Idempotency-Key required (max 256 bytes)").Write(c.Writer)
 		return
 	}
 	payload, err := json.Marshal(command)
@@ -335,9 +297,8 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 		httpwire.Error(c.Writer, err)
 		return
 	}
-	view = operationView(view)
-	if view.Error != nil {
-		httpwire.Failure(c.Writer, *view.Error)
+	if view.Status == "failed" {
+		httpwire.InternalFailure().Write(c.Writer)
 		return
 	}
 	httpwire.Respond(c.Writer, view.Result, nil)
@@ -345,15 +306,12 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 
 // operationView adds transport error data to a copy of the frozen business
 // view. Internal diagnostics never determine HTTP categories or enter this
-// view. It is the single formatter for accepted terminal failures, shared by
-// synchronous delivery, asynchronous answers and operation GET.
+// view. Both asynchronous answers and operation GET use this representation.
 func operationView(view types.Operation) types.Operation {
 	view.Error = nil
 	if view.Status == "failed" {
-		view.Error = &types.ApiError{
-			Code:    types.CodeInternal,
-			Message: "internal service error",
-		}
+		failure := httpwire.InternalFailure()
+		view.Error = &failure.Payload
 	}
 	return view
 }
@@ -390,10 +348,7 @@ func (h *handler) status(c *gin.Context) {
 
 func (h *handler) drainNode(c *gin.Context) {
 	if !principal(c).Root {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeForbidden,
-			Message: "root access required",
-		})
+		httpwire.AdminRequired().Write(c.Writer)
 		return
 	}
 	h.services.Management.Drain()
@@ -405,10 +360,7 @@ func (h *handler) drainNode(c *gin.Context) {
 func (h *handler) putTenant(c *gin.Context) {
 	owner := principal(c)
 	if !owner.Root {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeForbidden,
-			Message: "root access required",
-		})
+		httpwire.AdminRequired().Write(c.Writer)
 		return
 	}
 	var value types.Tenant
@@ -417,10 +369,7 @@ func (h *handler) putTenant(c *gin.Context) {
 		return
 	}
 	if value.ID == "" || value.MaxSandboxes < 1 || value.MaxStorageMiB < 1 {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeInvalid,
-			Message: "tenant id and positive quotas required",
-		})
+		httpwire.InvalidRequest("tenant id and positive quotas required").Write(c.Writer)
 		return
 	}
 	if value.Token == "" {
@@ -441,10 +390,7 @@ func (h *handler) putTenant(c *gin.Context) {
 
 func (h *handler) metrics(c *gin.Context) {
 	if !principal(c).Root {
-		httpwire.Failure(c.Writer, types.ApiError{
-			Code:    types.CodeForbidden,
-			Message: "root access required",
-		})
+		httpwire.AdminRequired().Write(c.Writer)
 		return
 	}
 	sandboxes, err := h.services.Catalog.List(c.Request.Context(), principal(c))

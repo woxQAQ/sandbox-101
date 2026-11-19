@@ -199,7 +199,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 				settings.Deadline = deadline
 				settings.OnExpire = state
 			}
-			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", testfixture.Encode(settings), id)); err != nil {
+			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), id)); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Command{

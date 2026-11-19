@@ -12,6 +12,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenSnapshotDeleteAdmissionAtomicity(t *testing.T) {
@@ -137,7 +138,7 @@ func TestHavenSnapshotDeleteConflictDoesNotDispatch(t *testing.T) {
 	_, err = deletions.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 		TenantID:   "tenant",
 		Key:        "delete-snapshot",
-		SnapshotID: testfixture.NewID("snap-"),
+		SnapshotID: operation.NewID("snap-"),
 	})
 	worker := fixture.Service.Workers.State(accepted.ID)
 	if err == nil || worker.Active || worker.Completed {

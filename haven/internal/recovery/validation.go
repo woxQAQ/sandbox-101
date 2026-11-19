@@ -97,6 +97,9 @@ func (r *Recovery) publications(ctx context.Context, database *sql.DB) error {
 		if proof.ScopeKind != "tenant" || !terminal || view.ID != proof.ID || view.Key != proof.Key || view.TenantID != proof.ScopeID || view.Status != proof.Status || view.Result.OperationID != proof.ID || view.Result.Tokens != nil || view.Error != nil || !view.CreatedAt.Equal(start) || !view.FinishedAt.Equal(end) || !reflect.DeepEqual(view.Command, command) || !slices.Equal(view.IDs, ids) {
 			return fmt.Errorf("frozen delivery differs from accepted operation %s", proof.ID)
 		}
+		if err = operation.ValidateDelivery(view); err != nil {
+			return err
+		}
 		if view.Result.Checkpoint != nil && view.Result.Checkpoint.ID != result.CheckpointID {
 			return fmt.Errorf("frozen checkpoint delivery differs from terminal result")
 		}

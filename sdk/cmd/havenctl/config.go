@@ -23,7 +23,7 @@ func newFlagSet() *pflag.FlagSet {
 	flags.String("token-file", "", "private bearer token file")
 	flags.String("tenant", "", "root administrator's target tenant")
 	flags.String("key", "", "stable idempotency key for one intent")
-	flags.String("request-file", "", "private JSON intent file for tenant, claim, template or change")
+	flags.String("request-file", "", "private JSON intent file for tenant, claim, template, change or fork-checkpoint")
 	return flags
 }
 

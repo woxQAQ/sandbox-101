@@ -46,7 +46,7 @@ func (p *Plane) PreviewURL(ctx context.Context, principal authorization.Principa
 		return "", fmt.Errorf("%w: sandbox not available", errs.ErrConflict)
 	}
 	if port < 1 || port > 65535 || ttl <= 0 {
-		return "", fmt.Errorf("%w: valid port and positive duration required", errs.ErrInvalid)
+		return "", errs.InvalidInput("valid port and positive duration required")
 	}
 	expires := time.Now().Add(ttl)
 	if expires.After(sandbox.Deadline) {

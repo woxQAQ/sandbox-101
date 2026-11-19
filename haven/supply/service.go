@@ -24,11 +24,10 @@ type SupplyBackend interface {
 }
 
 type SupplyGuest interface {
-	Info(context.Context, loom.Resource) error
-	Activate(context.Context, loom.Resource, guest.Activation) error
-
-	PrepareTemplate(context.Context, loom.Resource) error
-	Exec(context.Context, loom.Resource, string, string) error
+	Info(ctx context.Context, resource loom.Resource) error
+	Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error
+	PrepareTemplate(ctx context.Context, resource loom.Resource) error
+	Exec(ctx context.Context, resource loom.Resource, execKey, command string) error
 }
 
 type SupplyGuards interface {

@@ -34,7 +34,7 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 			clone := testfixture.AdmitCloneFixture(t, service, source.Result.SnapshotID, "clone")
 			historical := testutil.AwaitColdWorker(t, service, clone.ID)
 			cloneLiability(t, service, historical, true)
-			frozen := testfixture.Encode(historical)
+			frozen := operation.Encode(historical)
 			release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
 				TenantID:  "tenant",
 				Key:       "release-clone",
@@ -60,7 +60,7 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 				t.Fatal("clone release retired source cost or retained clone debt", backing, held, sourceCost, err)
 			}
 			after, err := machine.LoadResourceStep(context.Background(), service.State.Database(), clone.ID)
-			if err != nil || !bytes.Equal(testfixture.Encode(after), frozen) {
+			if err != nil || !bytes.Equal(operation.Encode(after), frozen) {
 				t.Fatal("cleanup rewrote original restore witness", err)
 			}
 			snapshot, err := machine.LoadOwnedSnapshot(context.Background(), service.State.Database(), "tenant", source.Result.SnapshotID)
@@ -127,7 +127,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 			case "missing-proof":
 				state := before.State
 				state.Materials = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='resource'", testfixture.Encode(state), clone.ID); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='resource'", operation.Encode(state), clone.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

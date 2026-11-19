@@ -28,10 +28,12 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/operation"
 	protocol "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
@@ -126,8 +128,7 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 			if err := os.Mkdir(store, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			e := testfixture.NativeImageFixtureAt(t, store)
-			defer e.Close()
+			e := testapp.NativeImageFixtureAt(t, store)
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
 			var image string
@@ -181,7 +182,7 @@ func TestGuestOCIFileViewAndCOW(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			imageDir := filepath.Join(e.Opts.StateDir, "images", image[7:])
+			imageDir := filepath.Join(e.StateDir, "images", image[7:])
 			bindings, err := manifest.ReadOnlyBindings(imageDir)
 			if err != nil {
 				t.Fatal(err)
@@ -363,10 +364,7 @@ func TestGuestRootfsOCI(t *testing.T) {
 			image := testfixture.PutOCIManifest(t, layout, "provider-independent-runtime", []testfixture.OCILayerFixture{
 				layer,
 			})
-			e := testfixture.NewNativeImageFixture(t)
-			t.Cleanup(func() {
-				e.Close()
-			})
+			e := testapp.NewNativeImageFixture(t)
 			m, err := e.ImportOCI(context.Background(), imageimport.ImageImportOptions{
 				Layout:          layout,
 				Digest:          image,
@@ -377,12 +375,7 @@ func TestGuestRootfsOCI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var tree string
-			if materialization == host.MergedOCIEROFSLayout {
-				tree = testfixture.ExtractMergedManifest(t, e, m)
-			} else {
-				tree = testfixture.ExtractManifest(t, e, m)
-			}
+			tree := testfixture.ExtractManifest(t, e.StateDir, m)
 			for name, expected := range map[string]string{
 				target:                            payload,
 				"usr/lib/systemd/systemd":         payload,
@@ -1041,7 +1034,7 @@ func (vm *guestVM) rpc(t *testing.T, request guestRequest) (map[string]any, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := testfixture.NewID("fixture-")
+	id := operation.NewID("fixture-")
 	first := min(len(data), protocol.ChunkSize)
 	if err := protocol.WriteFrame(
 		conn,

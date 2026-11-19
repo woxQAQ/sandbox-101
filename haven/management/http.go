@@ -15,10 +15,7 @@ import (
 func New(service *node.Management) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !localuds.Authorized(r.Context()) {
-			httpwire.Failure(w, types.ApiError{
-				Code:    types.CodeForbidden,
-				Message: "local administrator peer required",
-			})
+			httpwire.NewFailure(http.StatusForbidden, types.CodeForbidden, "local administrator peer required").Write(w)
 			return
 		}
 		principal := authorization.Principal{
@@ -40,19 +37,13 @@ func New(service *node.Management) http.Handler {
 		case strings.HasPrefix(r.URL.Path, "/v1/operations/") && r.Method == http.MethodGet:
 			id := strings.TrimPrefix(r.URL.Path, "/v1/operations/")
 			if id == "" || strings.Contains(id, "/") {
-				httpwire.Failure(w, types.ApiError{
-					Code:    types.CodeNotFound,
-					Message: "not found",
-				})
+				httpwire.NotFound().Write(w)
 				return
 			}
 			value, err := service.ManagementOperation(r.Context(), principal, id)
 			httpwire.Respond(w, value, err)
 		default:
-			httpwire.Failure(w, types.ApiError{
-				Code:    types.CodeNotFound,
-				Message: "not found",
-			})
+			httpwire.NotFound().Write(w)
 		}
 	})
 }

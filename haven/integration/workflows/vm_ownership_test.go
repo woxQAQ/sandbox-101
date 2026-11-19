@@ -8,6 +8,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
@@ -24,8 +25,8 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 				}
 				return nil
 			})
-			operation := testfixture.ColdClaim(t, service, "late")
-			before := testutil.AwaitColdWorker(t, service, operation.ID)
+			claim := testfixture.ColdClaim(t, service, "late")
+			before := testutil.AwaitColdWorker(t, service, claim.ID)
 			var other string
 			if err := service.State.Database().QueryRow("SELECT operation_id FROM template_intents WHERE template_id='cold'").Scan(&other); err != nil {
 				t.Fatal(err)
@@ -36,28 +37,28 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "current-instance":
-				if _, err := service.State.Database().Exec("UPDATE vms SET current_instance=? WHERE id=?", testfixture.NewID("run-"), before.Candidate); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE vms SET current_instance=? WHERE id=?", operation.NewID("run-"), before.Candidate); err != nil {
 					t.Fatal(err)
 				}
 			case "resource-version":
-				if _, err := service.State.Database().Exec("UPDATE resource_versions SET body=json_set(body,'$.resource.instance',?) WHERE vm_id=?", testfixture.NewID("run-"), before.Candidate); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE resource_versions SET body=json_set(body,'$.resource.instance',?) WHERE vm_id=?", operation.NewID("run-"), before.Candidate); err != nil {
 					t.Fatal(err)
 				}
 			}
 			agents := backend.Count("agent")
 			service = testapp.ReopenCloneService(t, service, backend)
-			after := testutil.AwaitColdWorker(t, service, operation.ID)
+			after := testutil.AwaitColdWorker(t, service, claim.ID)
 			if after.Status == "succeeded" || after.State.Witness != "" || after.Input.Resource.Instance != before.Input.Resource.Instance {
 				t.Fatal("late worker completed another owner/instance", after.State)
 			}
 			if backend.Count("launch") != 1 || backend.Count("agent") != agents || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 				t.Fatal("stale ownership caused another host effect")
 			}
-			result, err := service.Operations.GetOperation(context.Background(), "tenant", operation.ID)
+			result, err := service.Operations.GetOperation(context.Background(), "tenant", claim.ID)
 			if err != nil || result.Result.ResourceReady {
 				t.Fatal("current state backfilled a historical delivery proof", err)
 			}
-			coldResponsibility(t, service, operation, false)
+			coldResponsibility(t, service, claim, false)
 		})
 	}
 }

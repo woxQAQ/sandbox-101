@@ -61,7 +61,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 // an unregistered directory remains unknown regardless of its age or contents.
 func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	t.Parallel()
-	fixture, layout, layers, published := testfixture.ImportFixture(t)
+	fixture, layout, layers, published := testapp.ImportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	root := authorization.Principal{
@@ -87,8 +87,8 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 		t.Fatal("missing failed import")
 	}
 	fixture.Faults.Set(nil)
-	orphanPath := filepath.Join(fixture.Opts.StateDir, "layer-cache", published.Builder[7:], orphan.Diff.Encoded())
-	unknown := filepath.Join(fixture.Opts.StateDir, "layer-cache", published.Builder[7:], ".pending-unknown")
+	orphanPath := filepath.Join(fixture.StateDir, "layer-cache", published.Builder[7:], orphan.Diff.Encoded())
+	unknown := filepath.Join(fixture.StateDir, "layer-cache", published.Builder[7:], ".pending-unknown")
 	if err := os.Mkdir(unknown, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestGCActualLayerCacheAndCompletedImport(t *testing.T) {
 	if !unknownReported {
 		t.Fatal("unknown stage not reported", deferred)
 	}
-	if err := published.Verify(filepath.Join(fixture.Opts.StateDir, "images", published.Digest[7:]), published.Digest); err != nil {
+	if err := published.Verify(filepath.Join(fixture.StateDir, "images", published.Digest[7:]), published.Digest); err != nil {
 		t.Fatal("GC broke published layer cache", err)
 	}
 	second := testfixture.PutOCIManifest(t, layout, "gc-concurrent", layers)

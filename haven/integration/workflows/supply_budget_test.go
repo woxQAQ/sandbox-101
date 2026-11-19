@@ -7,9 +7,9 @@ import (
 
 	"github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/supply"
@@ -47,7 +47,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 				Key:        "supply",
 				TemplateID: "cold",
 			}
-			frozen := testfixture.Encode(struct {
+			frozen := operation.Encode(struct {
 				Action  string
 				Request machine.FreshRequest
 			}{"claim", request})

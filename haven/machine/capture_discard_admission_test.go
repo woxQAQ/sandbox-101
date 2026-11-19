@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenCaptureDiscardAdmissionAtomicity(t *testing.T) {
@@ -67,7 +67,7 @@ func TestHavenCaptureDiscardAuthorization(t *testing.T) {
 			case "tenant":
 				request.TenantID = "another-tenant"
 			case "instance":
-				request.ExpectedInstance = testfixture.NewID("run-")
+				request.ExpectedInstance = operation.NewID("run-")
 			case "stop":
 				request.StopOperationID = failed.OperationID
 			case "not_capture":

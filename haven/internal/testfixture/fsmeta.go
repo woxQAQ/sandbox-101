@@ -20,7 +20,6 @@ import (
 
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
-	"github.com/woxQAQ/haven/loom/imageimport"
 )
 
 func RequireEROFS(t *testing.T) {
@@ -40,6 +39,24 @@ func RequireEROFS(t *testing.T) {
 	}
 	if err := host.RunImageTool(context.Background(), t.TempDir(), "mkfs.erofs", "--version"); err != nil {
 		fail(err)
+	}
+}
+
+func RequireMergedOCI(t *testing.T) {
+	t.Helper()
+	RequireEROFS(t)
+	tools, err := host.ImageTools(context.Background())
+	if err == nil {
+		_, err = host.MergedOCITools(context.Background(), tools)
+	}
+	if err == nil {
+		err = host.RunImageTool(context.Background(), t.TempDir(), "umoci", "--version")
+	}
+	if err != nil {
+		if os.Getenv("SANDBOX_REQUIRE_EROFS_TESTS") == "1" {
+			t.Fatal(err)
+		}
+		t.Skipf("actual OCI compatibility tool/namespace test unavailable: %v", err)
 	}
 }
 
@@ -216,9 +233,8 @@ func BootLayerEntries() []TarEntry {
 }
 
 //nolint:staticcheck // Exercise archive/tar's binary xattr encoding used by the OCI materializers.
-func ImportFixture(t *testing.T) (*NativeImageFixture, string, []OCILayerFixture, host.ImageManifest) {
+func LayeredOCILayout(t *testing.T) (string, []OCILayerFixture, string) {
 	t.Helper()
-	RequireEROFS(t)
 	layout := t.TempDir()
 	base := append(
 		BootLayerEntries(),
@@ -246,25 +262,12 @@ func ImportFixture(t *testing.T) (*NativeImageFixture, string, []OCILayerFixture
 		PutOCILayer(t, layout, top, false),
 	}
 	image := PutOCIManifest(t, layout, "first", layers)
-	e := NewNativeImageFixture(t)
-	m, err := e.ImportOCI(
-		context.Background(),
-		imageimport.ImageImportOptions{
-			Layout:   layout,
-			Digest:   image,
-			MaxBytes: 4 << 20,
-			MaxFiles: 1000,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e, layout, layers, m
+	return layout, layers, image
 }
 
-func ExtractManifest(t *testing.T, e *NativeImageFixture, m host.ImageManifest) string {
+func ExtractManifest(t *testing.T, stateDir string, m host.ImageManifest) string {
 	t.Helper()
-	dir := filepath.Join(e.Opts.StateDir, "images", m.Digest[7:])
+	dir := filepath.Join(stateDir, "images", m.Digest[7:])
 	bindings, err := m.ReadOnlyBindings(dir)
 	if err != nil {
 		t.Fatal(err)

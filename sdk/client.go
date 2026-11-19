@@ -107,6 +107,7 @@ func (c *Client) Change(ctx context.Context, id, key string, command types.Comma
 			Method: "DELETE",
 			Path:   "/v1/sandboxes/" + url.PathEscape(id),
 			Key:    key,
+			Body:   command,
 		})
 	}
 	return call[types.Result](ctx, c, controlRequest{
@@ -142,6 +143,15 @@ func (c *Client) Operation(ctx context.Context, id string) (types.Operation, err
 	return call[types.Operation](ctx, c, controlRequest{
 		Method: "GET",
 		Path:   "/v1/operations/" + url.PathEscape(id),
+	})
+}
+
+func (c *Client) ForkCheckpoint(ctx context.Context, id, key string, command types.Command) (types.Result, error) {
+	return call[types.Result](ctx, c, controlRequest{
+		Method: "POST",
+		Path:   "/v1/checkpoints/" + url.PathEscape(id) + "/fork",
+		Key:    key,
+		Body:   command,
 	})
 }
 

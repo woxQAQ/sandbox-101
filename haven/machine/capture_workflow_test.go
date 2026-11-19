@@ -19,6 +19,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
@@ -305,13 +306,13 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 			case "missing-checksums":
 				state := step.State
 				state.Files = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", testfixture.Encode(state), step.OperationID); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", operation.Encode(state), step.OperationID); err != nil {
 					t.Fatal(err)
 				}
 			case "missing-boundary":
 				state := step.State
 				state.Boundary = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", testfixture.Encode(state), step.OperationID); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", operation.Encode(state), step.OperationID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -399,7 +400,7 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 		service, backend := testapp.ColdService(t, nil)
 		claim := testfixture.ColdClaim(t, service, "source")
 		source := testutil.AwaitColdWorker(t, service, claim.ID)
-		if _, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", testfixture.Encode(authorization.Limits{
+		if _, err := service.State.Database().Exec("UPDATE tenants SET body=? WHERE id='tenant'", operation.Encode(authorization.Limits{
 			MaxSandboxes:  10,
 			MaxStorageMiB: 255,
 		})); err != nil {

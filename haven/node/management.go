@@ -106,26 +106,26 @@ func (m *Management) Manage(ctx context.Context, principal authorization.Princip
 	switch request.Action {
 	case types.ManagementActionImport:
 		if request.Import == nil || request.GC != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
-			return response, fmt.Errorf("%w: import requires only import options", errs.ErrInvalid)
+			return response, errs.InvalidInput("import requires only import options")
 		}
 		accepted, err = m.images.AdmitImport(ctx, principal, request.Key, imageimport.ImageImportOptions(*request.Import))
 	case types.ManagementActionGC:
 		if request.GC == nil || request.Import != nil || request.OperationID != "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
-			return response, fmt.Errorf("%w: gc requires only gc options", errs.ErrInvalid)
+			return response, errs.InvalidInput("gc requires only gc options")
 		}
 		report, err := m.collector.Collect(ctx, principal, request.Key, *request.GC)
 		response.GC = &report
 		return response, err
 	case types.ManagementActionSupplyCleanup:
 		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
-			return response, fmt.Errorf("%w: supply cleanup requires only original operation id", errs.ErrInvalid)
+			return response, errs.InvalidInput("supply cleanup requires only original operation id")
 		}
 		accepted, err = m.supplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
 			OperationID: request.OperationID,
 		})
 	case types.ManagementActionImageCleanup:
 		if request.Import != nil || request.GC != nil {
-			return response, fmt.Errorf("%w: image cleanup accepts only original import or cache identity", errs.ErrInvalid)
+			return response, errs.InvalidInput("image cleanup accepts only original import or cache identity")
 		}
 		accepted, err = m.images.AdmitCleanup(ctx, principal, request.Key, image.ImageCleanupRequest{
 			ImportOperationID: request.OperationID,
@@ -133,7 +133,7 @@ func (m *Management) Manage(ctx context.Context, principal authorization.Princip
 			CacheDiffID:       request.CacheDiffID,
 		})
 	default:
-		return response, fmt.Errorf("%w: unsupported management action", errs.ErrInvalid)
+		return response, errs.InvalidInput("unsupported management action")
 	}
 	if accepted.ID != "" {
 		view := managementOperation(accepted)

@@ -10,16 +10,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
+	"github.com/woxQAQ/haven/operation"
 )
 
 func TestActualLayeredManifestVerification(t *testing.T) {
 	t.Parallel()
-	e, _, _, original := testfixture.ImportFixture(t)
-	dir := filepath.Join(e.Opts.StateDir, "images", original.Digest[7:])
+	e, _, _, original := testapp.ImportFixture(t)
+	dir := filepath.Join(e.StateDir, "images", original.Digest[7:])
 	for name, mutate := range map[string]func(*host.ImageManifest){
 		"format": func(m *host.ImageManifest) {
 			m.Format = 1
@@ -90,14 +92,14 @@ func TestActualLayeredManifestVerification(t *testing.T) {
 
 func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 	t.Parallel()
-	e, layout, layers, m := testfixture.ImportFixture(t)
-	dir := filepath.Join(e.Opts.StateDir, "images", m.Digest[7:])
+	e, layout, layers, m := testapp.ImportFixture(t)
+	dir := filepath.Join(e.StateDir, "images", m.Digest[7:])
 	for _, rel := range []string{
 		m.Artifacts[0].Path,
 		m.Artifacts[1].Path,
 		filepath.Join(filepath.Dir(m.Artifacts[1].Path), "layer.json"),
 	} {
-		file := filepath.Join(e.Opts.StateDir, rel)
+		file := filepath.Join(e.StateDir, rel)
 		moved := file + ".saved"
 		if err := os.Rename(file, moved); err != nil {
 			t.Fatal(err)
@@ -118,7 +120,7 @@ func TestActualMissingAndUnsafeArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cacheDir := filepath.Dir(filepath.Join(e.Opts.StateDir, m.Artifacts[1].Path))
+	cacheDir := filepath.Dir(filepath.Join(e.StateDir, m.Artifacts[1].Path))
 	if err := os.Rename(cacheDir, cacheDir+".saved"); err != nil {
 		t.Fatal(err)
 	}
@@ -164,8 +166,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	image := testfixture.PutOCIManifest(t, layout, "legacy-native", []testfixture.OCILayerFixture{
 		layer,
 	})
-	e := testfixture.NewNativeImageFixture(t)
-	defer e.Close()
+	e := testapp.NewNativeImageFixture(t)
 	input := filepath.Join(layout, "blobs", "sha256", layer.Descriptor.Digest.Encoded())
 	n, count, err := host.ValidateLayer(host.LayerInput{
 		Path:      input,
@@ -178,7 +179,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := host.BuildLayerCache(ctx, e.Opts.StateDir, host.LayerCacheRequest{
+	cache, err := host.BuildLayerCache(ctx, e.StateDir, host.LayerCacheRequest{
 		Input: host.LayerInput{
 			Path:      input,
 			MediaType: layer.Descriptor.MediaType,
@@ -191,16 +192,16 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := cache.Artifact(e.Opts.StateDir, 0)
+	artifact, err := cache.Artifact(e.StateDir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(e.Opts.StateDir, "images", image[7:])
+	out := filepath.Join(e.StateDir, "images", image[7:])
 	if err = os.MkdirAll(out, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err = host.MaterializeFsmeta(ctx, host.FsmetaLayers{
-		StateRoot: e.Opts.StateDir,
+		StateRoot: e.StateDir,
 		Output:    out,
 		Artifacts: []host.ImageArtifact{
 			artifact,
@@ -244,7 +245,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err = loom.SealTree(out); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.DB.Exec("INSERT INTO images VALUES(?,?)", image, testfixture.Encode(m)); err != nil {
+	if _, err = e.DB.Exec("INSERT INTO images VALUES(?,?)", image, operation.Encode(m)); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.Verify(out, image); err != nil {
@@ -257,7 +258,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(m, reimported) {
 		t.Fatalf("old catalog identity changed: %v", err)
 	}
-	root := testfixture.ExtractManifest(t, e, reimported)
+	root := testfixture.ExtractManifest(t, e.StateDir, reimported)
 	if got, err := os.ReadFile(filepath.Join(root, "boot/vmlinux")); err != nil || string(got) != "kernel-fixture" {
 		t.Fatalf("old catalog lost native contents: %v", err)
 	}

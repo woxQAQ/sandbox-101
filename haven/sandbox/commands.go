@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -40,10 +39,10 @@ func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, 
 		policy.Mode = "proxy"
 	}
 	if policy.Mode != "none" && policy.Mode != "proxy" && policy.Mode != "direct" {
-		return nil, fmt.Errorf("%w: invalid network mode", errs.ErrInvalid)
+		return nil, errs.InvalidInput("invalid network mode")
 	}
 	if len(secrets) > 0 && policy.Mode != "proxy" {
-		return nil, fmt.Errorf("%w: host credentials require proxy mode", errs.ErrInvalid)
+		return nil, errs.InvalidInput("host credentials require proxy mode")
 	}
 	if policy.Mode == "direct" {
 		if _, err = machine.DirectNetworkPolicy(policy); err != nil {
@@ -55,14 +54,14 @@ func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, 
 		ttl = 300
 	}
 	if ttl < 1 || ttl > int64(sc.maxTTL.Seconds()) {
-		return nil, fmt.Errorf("%w: lease duration exceeds host bound", errs.ErrInvalid)
+		return nil, errs.InvalidInput("lease duration exceeds host bound")
 	}
 	onExpire := command.OnExpire
 	if onExpire == "" {
 		onExpire = "kill"
 	}
 	if onExpire != "kill" && onExpire != "pause" {
-		return nil, fmt.Errorf("%w: on_expire must be kill or pause", errs.ErrInvalid)
+		return nil, errs.InvalidInput("on_expire must be kill or pause")
 	}
 	return &ClaimAdmission{
 		Command: operation.SanitizedCommand(command),
@@ -98,11 +97,11 @@ func SplitEnv(env map[string]operation.EnvVar) (map[string]string, map[string]eg
 	descriptors := map[string]authorization.Injection{}
 	for key, value := range env {
 		if key == "" || len(key) > 256 || strings.ContainsAny(key, "=\x00\n") || strings.ContainsRune(value.Value, 0) {
-			return nil, nil, nil, fmt.Errorf("%w: invalid environment variable", errs.ErrInvalid)
+			return nil, nil, nil, errs.InvalidInput("invalid environment variable")
 		}
 		if value.IsSecret() {
 			if value.Inject == nil || len(value.Inject.Hosts) == 0 || value.Inject.Header == "" || value.Value == "" {
-				return nil, nil, nil, fmt.Errorf("%w: host credential requires authorized injection", errs.ErrInvalid)
+				return nil, nil, nil, errs.InvalidInput("host credential requires authorized injection")
 			}
 			descriptors[key] = *value.Inject
 			secrets[key] = egress.Secret{

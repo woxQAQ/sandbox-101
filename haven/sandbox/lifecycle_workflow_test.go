@@ -15,6 +15,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/sandbox"
 )
 
 func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
@@ -56,7 +57,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			if err != nil || capture.Status != "succeeded" {
 				t.Fatal("completed child was lost", capture, err)
 			}
-			if _, err = service.Catalog.GetCheckpoint(context.Background(), principal, accepted.Result.CheckpointID); !errors.Is(err, sql.ErrNoRows) {
+			if _, err = sandbox.LoadCheckpoint(context.Background(), service.State.Database(), accepted.Result.CheckpointID); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatal("checkpoint published without dependency handoff", err)
 			}
 			var slots, storage int
