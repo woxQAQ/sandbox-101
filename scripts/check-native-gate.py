@@ -14,18 +14,20 @@ import tempfile
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-NATIVE_PACKAGE = "github.com/woxQAQ/haven/tests/native"
+IMAGE_PACKAGE = "github.com/woxQAQ/haven/image"
+GC_PACKAGE = "github.com/woxQAQ/haven/gc"
+LAYERED_IMPORT = "TestActualLayeredEROFSImportAndExtraction"
 REQUIRED_TESTS = (
-    "TestActualLayeredEROFSImportAndExtraction",
-    "TestActualSharedOCIHardlinksAndMetadata",
-    "TestActualMergedOCIHardlinksAndMetadata",
-    "TestGCActualLayerCacheAndCompletedImport",
+    (IMAGE_PACKAGE, LAYERED_IMPORT),
+    (IMAGE_PACKAGE, "TestActualSharedOCIHardlinksAndMetadata"),
+    (IMAGE_PACKAGE, "TestActualMergedOCIHardlinksAndMetadata"),
+    (GC_PACKAGE, "TestGCActualLayerCacheAndCompletedImport"),
 )
 NATIVE_TESTS = re.compile(
     r"^Test(HavenActual|Actual|GCActual|LayerValidation|LegacyNativeLayered|SharedCached|MergedOCI)"
 )
 MISSING_MKFS = re.compile(
-    r"[ \t]+fsmeta_test\.go:[0-9]+: required OCI tool missing: mkfs\.erofs\n"
+    r"[ \t]+import_workflow_test\.go:[0-9]+: required OCI tool missing: mkfs\.erofs\n"
 )
 REQUIRED_ENV = {"SANDBOX_REQUIRE_EROFS_TESTS": "1", "GOWORK": "off"}
 
@@ -85,10 +87,10 @@ def check_positive(logs, result, required):
     require(result.returncode == 0, f"test command failed with exit {result.returncode}")
     require(not any(e["Action"] in ("fail", "build-fail") for e in stream),
             "Go JSON contains a failure")
-    for test in required:
-        require(any(e["Action"] == "pass" and e["Package"] == NATIVE_PACKAGE
+    for package, test in required:
+        require(any(e["Action"] == "pass" and e["Package"] == package
                     and e.get("Test") == test for e in stream),
-                f"missing native pass event: {test}")
+                f"missing native pass event: {package}.{test}")
 
 
 def executable(name):
@@ -130,9 +132,9 @@ def preflight(logs):
     test = "TestActualMergedOCIExplicitSelectionAndVerification"
     result = capture(logs, "merged-import", [
         "go", "-C", "haven", "test", "-json", "-run", f"^{test}$",
-        "-count=1", "-timeout=60s", "./tests/native",
+        "-count=1", "-timeout=60s", "./image",
     ], env={**os.environ, **REQUIRED_ENV})
-    check_positive(logs, result, (test,))
+    check_positive(logs, result, [(IMAGE_PACKAGE, test)])
 
 
 def negative(logs):
@@ -152,19 +154,19 @@ def negative(logs):
                     link.symlink_to(entry.absolute())
         require(shutil.which("mkfs.erofs", path=str(view)) is None,
                 "negative PATH still contains mkfs.erofs")
-        test = REQUIRED_TESTS[0]
+        test = LAYERED_IMPORT
         result = capture(logs, "negative", [
             go, "-C", "haven", "test", "-json", "-run", f"^{test}$",
-            "-count=1", "-timeout=60s", "./tests/native",
+            "-count=1", "-timeout=60s", "./image",
         ], env={**os.environ, **REQUIRED_ENV, "PATH": str(view)})
         stream = events(result)
         require(result.returncode != 0, "missing mkfs.erofs unexpectedly succeeded")
-        require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
+        require(any(e["Package"] == IMAGE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "output"
                     and MISSING_MKFS.fullmatch(e.get("Output", "")) is not None
                     for e in stream),
                 "negative command did not report the exact missing-mkfs test diagnostic")
-        require(any(e["Package"] == NATIVE_PACKAGE and e.get("Test") == test
+        require(any(e["Package"] == IMAGE_PACKAGE and e.get("Test") == test
                     and e["Action"] == "fail" for e in stream),
                 "negative command did not execute and fail the selected test")
     finally:

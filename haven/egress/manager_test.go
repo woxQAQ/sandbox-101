@@ -20,199 +20,6 @@ import (
 	"time"
 )
 
-type resolverFunc func(context.Context, string, string) ([]netip.Addr, error)
-
-func (f resolverFunc) LookupNetIP(c context.Context, n, h string) ([]netip.Addr, error) {
-	return f(c, n, h)
-}
-
-func publicResolver() Resolver {
-	return resolverFunc(
-		func(context.Context, string, string) ([]netip.Addr, error) {
-			return []netip.Addr{
-				netip.MustParseAddr("93.184.216.34"),
-			}, nil
-		},
-	)
-}
-
-func targetDialer(target string, count *atomic.Int32) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, n, addr string) (net.Conn, error) {
-		h, _, err := net.SplitHostPort(addr)
-		if err != nil || net.ParseIP(h) == nil {
-			return nil, errors.New("dialer received a DNS name")
-		}
-		if count != nil {
-			count.Add(1)
-		}
-		return (&net.Dialer{}).DialContext(ctx, n, target)
-	}
-}
-
-func newTestManager(t *testing.T, opts Options, p Policy, secrets map[string]Secret) (*Manager, Binding) {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "egress-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(dir)
-	})
-	if opts.Resolver == nil {
-		opts.Resolver = publicResolver()
-	}
-	if len(secrets) != 0 && opts.Audit == nil && opts.AuditRecord == nil {
-		opts.Audit = func(AuditEvent) {}
-	}
-	m, err := New(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := m.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	if err := m.Bind(context.Background(), BindingTarget{
-		SandboxID: "sandbox-1",
-		TenantID:  "tenant-1",
-		VSockPath: filepath.Join(dir, "vsock"),
-	}, p, secrets); err != nil {
-		t.Fatal(err)
-	}
-	b, ok := m.Binding("sandbox-1")
-	if !ok {
-		t.Fatal("missing activation metadata")
-	}
-	return m, b
-}
-
-func proxyClient(t *testing.T, m *Manager, b Binding) *http.Client {
-	t.Helper()
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(m.CACertPEM()) {
-		t.Fatal("invalid CA PEM")
-	}
-	proxyURL, _ := url.Parse("http://proxy.invalid")
-	tr := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", b.HTTPPath)
-		},
-		TLSClientConfig: &tls.Config{
-			RootCAs:    pool,
-			MinVersion: tls.VersionTLS12,
-		},
-		DisableKeepAlives: true,
-	}
-	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{
-		Transport: tr,
-		Timeout:   5 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-func readResponse(t *testing.T, resp *http.Response, err error) string {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}
-
-func get(t *testing.T, c *http.Client, u string) (*http.Response, string) {
-	t.Helper()
-	r, err := c.Get(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r, readResponse(t, r, nil)
-}
-
-func connectTunnel(t *testing.T, path, host string) net.Conn {
-	t.Helper()
-	conn, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, _ = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
-	reader := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(reader, &http.Request{
-		Method: "CONNECT",
-	})
-	if err != nil {
-		_ = conn.Close()
-		t.Fatal(err)
-	}
-	if resp.StatusCode != 200 {
-		_ = conn.Close()
-		t.Fatalf("CONNECT status: %d", resp.StatusCode)
-	}
-	if reader.Buffered() != 0 {
-		t.Fatal("unexpected CONNECT response bytes")
-	}
-	return conn
-}
-
-func socksConnect(t *testing.T, path, host string, command byte) (net.Conn, byte) {
-	t.Helper()
-	conn, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, _ = conn.Write([]byte{
-		5,
-		1,
-		0,
-	})
-	var auth [2]byte
-	if _, err := io.ReadFull(conn, auth[:]); err != nil {
-		t.Fatal(err)
-	}
-	if auth != [2]byte{
-		5,
-		0,
-	} {
-		t.Fatalf("unexpected auth: %v", auth)
-	}
-	req := append([]byte{
-		5,
-		command,
-		0,
-		3,
-		byte(len(host)),
-	}, []byte(host)...)
-	req = append(req, 0, 80)
-	_, _ = conn.Write(req)
-	var reply [4]byte
-	if _, err := io.ReadFull(conn, reply[:]); err != nil {
-		t.Fatal(err)
-	}
-	var remainder int
-	switch reply[3] {
-	case 1:
-		remainder = 6
-	case 4:
-		remainder = 18
-	default:
-		t.Fatalf("unexpected address type %d", reply[3])
-	}
-	if _, err := io.CopyN(io.Discard, conn, int64(remainder)); err != nil {
-		t.Fatal(err)
-	}
-	return conn, reply[1]
-}
-
 func TestConnectionBudgetAndRevoke(t *testing.T) {
 	up := httptest.NewServer(
 		http.HandlerFunc(
@@ -421,6 +228,199 @@ func TestPolicyIsCopiedAndBindContextIsInstallationOnly(t *testing.T) {
 	}, p, nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed manager accepted binding: %v", err)
 	}
+}
+
+type resolverFunc func(context.Context, string, string) ([]netip.Addr, error)
+
+func (f resolverFunc) LookupNetIP(c context.Context, n, h string) ([]netip.Addr, error) {
+	return f(c, n, h)
+}
+
+func publicResolver() Resolver {
+	return resolverFunc(
+		func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{
+				netip.MustParseAddr("93.184.216.34"),
+			}, nil
+		},
+	)
+}
+
+func targetDialer(target string, count *atomic.Int32) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, n, addr string) (net.Conn, error) {
+		h, _, err := net.SplitHostPort(addr)
+		if err != nil || net.ParseIP(h) == nil {
+			return nil, errors.New("dialer received a DNS name")
+		}
+		if count != nil {
+			count.Add(1)
+		}
+		return (&net.Dialer{}).DialContext(ctx, n, target)
+	}
+}
+
+func newTestManager(t *testing.T, opts Options, p Policy, secrets map[string]Secret) (*Manager, Binding) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "egress-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	if opts.Resolver == nil {
+		opts.Resolver = publicResolver()
+	}
+	if len(secrets) != 0 && opts.Audit == nil && opts.AuditRecord == nil {
+		opts.Audit = func(AuditEvent) {}
+	}
+	m, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := m.Bind(context.Background(), BindingTarget{
+		SandboxID: "sandbox-1",
+		TenantID:  "tenant-1",
+		VSockPath: filepath.Join(dir, "vsock"),
+	}, p, secrets); err != nil {
+		t.Fatal(err)
+	}
+	b, ok := m.Binding("sandbox-1")
+	if !ok {
+		t.Fatal("missing activation metadata")
+	}
+	return m, b
+}
+
+func proxyClient(t *testing.T, m *Manager, b Binding) *http.Client {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(m.CACertPEM()) {
+		t.Fatal("invalid CA PEM")
+	}
+	proxyURL, _ := url.Parse("http://proxy.invalid")
+	tr := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", b.HTTPPath)
+		},
+		TLSClientConfig: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		},
+		DisableKeepAlives: true,
+	}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{
+		Transport: tr,
+		Timeout:   5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func readResponse(t *testing.T, resp *http.Response, err error) string {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func get(t *testing.T, c *http.Client, u string) (*http.Response, string) {
+	t.Helper()
+	r, err := c.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, readResponse(t, r, nil)
+}
+
+func connectTunnel(t *testing.T, path, host string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{
+		Method: "CONNECT",
+	})
+	if err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		_ = conn.Close()
+		t.Fatalf("CONNECT status: %d", resp.StatusCode)
+	}
+	if reader.Buffered() != 0 {
+		t.Fatal("unexpected CONNECT response bytes")
+	}
+	return conn
+}
+
+func socksConnect(t *testing.T, path, host string, command byte) (net.Conn, byte) {
+	t.Helper()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = conn.Write([]byte{
+		5,
+		1,
+		0,
+	})
+	var auth [2]byte
+	if _, err := io.ReadFull(conn, auth[:]); err != nil {
+		t.Fatal(err)
+	}
+	if auth != [2]byte{
+		5,
+		0,
+	} {
+		t.Fatalf("unexpected auth: %v", auth)
+	}
+	req := append([]byte{
+		5,
+		command,
+		0,
+		3,
+		byte(len(host)),
+	}, []byte(host)...)
+	req = append(req, 0, 80)
+	_, _ = conn.Write(req)
+	var reply [4]byte
+	if _, err := io.ReadFull(conn, reply[:]); err != nil {
+		t.Fatal(err)
+	}
+	var remainder int
+	switch reply[3] {
+	case 1:
+		remainder = 6
+	case 4:
+		remainder = 18
+	default:
+		t.Fatalf("unexpected address type %d", reply[3])
+	}
+	if _, err := io.CopyN(io.Discard, conn, int64(remainder)); err != nil {
+		t.Fatal(err)
+	}
+	return conn, reply[1]
 }
 
 func mitmClient(t *testing.T, m *Manager, b Binding) *tls.Conn {

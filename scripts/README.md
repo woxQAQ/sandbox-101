@@ -13,11 +13,11 @@ Choose a runner by the behavior it exercises. KVM is the Linux virtualization in
 
 Deployment qualification applies to a particular host, including its storage budget, firewall and delegated controllers. Historical run records identify the source, inputs and outcome for each execution. See [host deployment](../deploy/host/README.md) and [historical test results](../docs/verification-history.md).
 
-## Component and native tests
+## Go package tests and integration scenarios
 
 `just integration` builds the Rust fixture and selects `haven/integration/` with the `integration` build tag. The fixture supplies owned host, System and Admin effects. Haven persists control intents, witnesses and accounting in SQLite. Missing `SANDBOX_AGENT_FIXTURE` fails the tagged run.
 
-Single-capability Service/SQLite scenarios live in the owner's external test package. `haven/internal/testfixture` supplies private store/runtime materials independently of application. `haven/internal/testapp` composes full App fixtures. `haven/tests/component` covers cross-capability, restart and shutdown behavior. `haven/tests/native` covers real image tools and the separately tagged `guest_image` scenarios. Both suites share helpers from `haven/tests/fixtures`. Scenario directories contain `Test...` entrypoints and call public APIs through their owning packages. Only tests import fixture packages. Go test recipes use `-p=1`, four lifecycle slots and the ordinary 120s, race 10m and native 300s budgets.
+Package tests live beside the implementation they exercise. `haven/image` tests OCI import and materialization, and `haven/gc` tests reclamation against real artifacts. `haven/integration/workflows` covers in-process scenarios spanning multiple services and runs in the ordinary test suite. Tests under `haven/integration` select external runtime dependencies with build tags. See [Haven test ownership](../haven/README.md#测试归属).
 
 The native gate captures the Go JSON stream from `just test-native` and requires explicit pass events for its native test inventory. `just --quiet` suppresses that stream. Missing tools or runner capabilities fail a required run. The negative gate checks that deliberately removing a required tool produces the expected diagnostic. See [build and local verification](../README.md#build-and-local-verification).
 
@@ -78,6 +78,6 @@ The rootfs regression imports and extracts the generated OCI layer through both 
 
 ```nu
 with-env {GOWORK: "off", SANDBOX_REQUIRE_EROFS_TESTS: "1"} {
-    go -C haven test -tags=guest_image ./tests/native -run '^TestGuestRootfsOCI$' -count=1
+    go -C haven test -tags=guest_image ./integration -run '^TestGuestRootfsOCI$' -count=1
 }
 ```

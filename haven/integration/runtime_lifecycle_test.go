@@ -3,23 +3,30 @@
 package integration_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
+	_ "modernc.org/sqlite"
 
+	"github.com/woxQAQ/haven/loom"
 	engine "github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
@@ -251,7 +258,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 		store.process.stop(t)
 	}()
 	ec := newVMInventory(t, "/run/p/e", backend)
-	defer ec.Close()
+	defer ec.close()
 	client := store.client
 	scenario := runtimeScenario{
 		Client:    client,
@@ -338,7 +345,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 				t.Errorf("release adopted VM: %v", err)
 			}
 		}()
-		before, err := ec.GetVM(ctx, claim.Sandbox.VMID)
+		before, err := ec.getVM(ctx, claim.Sandbox.VMID)
 		if err != nil || !before.Verified || !before.AgentReady || before.PID <= 0 {
 			t.Fatalf("VMM not verified/ready: %+v: %v", before, err)
 		}
@@ -378,7 +385,7 @@ func TestHavenRuntimeLifecycle(t *testing.T) {
 			_, err := client.List(attempt)
 			return err
 		})
-		after, err := ec.GetVM(ctx, before.ID)
+		after, err := ec.getVM(ctx, before.ID)
 		if err != nil || !after.Verified || !after.AgentReady || after.PID != before.PID ||
 			after.StartTime != before.StartTime ||
 			after.Instance != before.Instance {
@@ -596,7 +603,7 @@ func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx contex
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	before, err := ec.GetVM(ctx, warmID)
+	before, err := ec.getVM(ctx, warmID)
 	if err != nil || !before.Verified || !before.AgentReady || before.NetworkActual || before.NetworkEnabled {
 		t.Fatalf("ready pool VMM is not verified/ready/blocked: %+v: %v", before, err)
 	}
@@ -621,7 +628,7 @@ func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx contex
 		t.Fatal(err)
 	}
 	owned = append(owned, warm.Sandbox.ID)
-	after, err := ec.GetVM(ctx, warm.Sandbox.VMID)
+	after, err := ec.getVM(ctx, warm.Sandbox.VMID)
 	if err != nil || warm.Sandbox.ProvisionSource != "warm" || warm.Sandbox.VMID != warmID || after.PID != before.PID ||
 		after.StartTime != before.StartTime ||
 		after.Instance != before.Instance {
@@ -1017,4 +1024,432 @@ func recordVMMProof(t *testing.T, artifacts, stage string, vm vmObservation) {
 			),
 		)
 	}
+}
+
+// These public addresses exist only on the fresh outer namespace's loopback.
+// Every probe crosses the real guest virtio/TAP, namespace policy and SNAT;
+// the namespace has no external interface or route to the actual Internet.
+func (scenario runtimeScenario) probeGuestTCP(t *testing.T, ctx context.Context) {
+	client, ec, artifacts, image := scenario.Client, scenario.Inventory, scenario.Artifacts, scenario.Image
+	t.Helper()
+	const allowed, denied = "93.184.216.34", "93.184.216.35"
+	for _, address := range []string{
+		allowed,
+		denied,
+	} {
+		if out, err := exec.CommandContext(ctx, "ip", "addr", "add", address+"/32", "dev", "lo").
+			CombinedOutput(); err != nil {
+			t.Fatalf("private loopback TCP target: %v: %s", err, out)
+		}
+	}
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	type observation struct {
+		Stage    string `json:"stage"`
+		RemoteIP string `json:"remote_ip"`
+	}
+	observed := make(chan observation, 16)
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			line, err := bufio.NewReaderSize(conn, 256).ReadString('\n')
+			if err == nil && len(line) < 128 {
+				stage := strings.TrimSpace(line)
+				_, _ = fmt.Fprintf(conn, "reply-%s\n", stage)
+				observed <- observation{
+					Stage:    stage,
+					RemoteIP: conn.RemoteAddr().(*net.TCPAddr).IP.String(),
+				}
+			}
+			conn.Close()
+		}
+	}()
+	defer func() {
+		listener.Close()
+		<-serverDone
+	}()
+	_, err = client.PutTemplate(
+		ctx,
+		"tcp-template",
+		types.Template{
+			ID:    "runtime-tcp",
+			Image: image,
+			Shape: types.Shape{
+				VCPUs:     1,
+				MemoryMiB: microVMMemoryMiB(t),
+				DiskMiB:   512,
+			},
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owned []string
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		for _, id := range owned {
+			if _, err := client.Change(
+				cleanup,
+				id,
+				"tcp-release-"+id,
+				types.Command{
+					Action: "release",
+				},
+			); err != nil {
+				t.Errorf("release TCP sandbox: %v", err)
+			}
+		}
+	}()
+	claim := func(key, mode string) types.Sandbox {
+		t.Helper()
+		policy := types.Policy{
+			Mode: mode,
+		}
+		if mode == "direct" {
+			policy.AllowedCIDRs = []string{
+				allowed + "/32",
+			}
+			policy.MaxConnections = 16
+		}
+		result, err := client.Claim(
+			ctx,
+			"tcp-claim-"+key,
+			types.Command{
+				Action:     "claim",
+				TemplateID: "runtime-tcp",
+				TTLSeconds: 600,
+				Policy:     policy,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owned = append(owned, result.Sandbox.ID)
+		return *result.Sandbox
+	}
+	var proof []observation
+	probe := func(sandbox types.Sandbox, stage, address string, want bool) {
+		t.Helper()
+		// The supplied guest's /bin/sh is real Bash. Locate its existing coreutils
+		// timeout through /bin/cat; no guest binary or network operation is mocked.
+		script := fmt.Sprintf(
+			"exec 9<>/dev/tcp/%s/%d; printf '%s\\n' >&9; IFS= read -r reply <&9; test \"$reply\" = 'reply-%s'",
+			address,
+			port,
+			stage,
+			stage,
+		)
+		command := fmt.Sprintf(
+			"tool=$(/bin/readlink /bin/cat); if \"${tool%%/*}/timeout\" 4 /bin/sh -c '%s'; then printf allowed; else printf blocked; fi",
+			strings.ReplaceAll(script, "'", "'\\''"),
+		)
+		got := scenario.guestExec(t, ctx, sandbox.ID, command)
+		if got != map[bool]string{
+			true:  "allowed",
+			false: "blocked",
+		}[want] {
+			t.Fatalf("actual guest TCP %s: got %q allowed=%v", stage, got, want)
+		}
+		vm, err := ec.getVM(ctx, sandbox.VMID)
+		if err != nil || !vm.Verified {
+			t.Fatalf("TCP probe VMM lost verification: %+v: %v", vm, err)
+		}
+		if !want {
+			select {
+			case event := <-observed:
+				t.Fatalf("denied guest TCP reached listener: %+v", event)
+			default:
+			}
+			return
+		}
+		if !vm.NetworkActual || !vm.NetworkEnabled || vm.NetworkPolicyInstance != vm.Instance {
+			t.Fatalf("allowed TCP has no verified current direct policy: %+v", vm)
+		}
+		select {
+		case event := <-observed:
+			if event.Stage != stage || !strings.HasPrefix(event.RemoteIP, "10.200.") {
+				t.Fatalf("TCP did not cross owned SNAT: %+v", event)
+			}
+			proof = append(proof, event)
+		case <-time.After(time.Second):
+			t.Fatal("guest reported TCP success without a real listener observation")
+		}
+	}
+	direct := claim("direct", "direct")
+	probe(direct, "source", allowed, true)
+	probe(direct, "denied-cidr", denied, false)
+	none := claim("none", "none")
+	probe(none, "none-policy", allowed, false)
+	if _, err := client.Change(ctx, none.ID, "tcp-release-none", types.Command{
+		Action: "release",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	owned = owned[:1]
+	forked, err := client.Change(ctx, direct.ID, "tcp-fork", types.Command{
+		Action: "fork",
+		Count:  1,
+	})
+	if err != nil || len(forked.Sandboxes) != 1 {
+		t.Fatalf("capture/fork for real TCP rebind: %+v: %v", forked.Sandboxes, err)
+	}
+	branch := forked.Sandboxes[0]
+	owned = append(owned, branch.ID)
+	probe(branch, "fork", allowed, true)
+	probe(branch, "fork-denied", denied, false)
+	if _, err := client.Change(ctx, direct.ID, "tcp-pause", types.Command{
+		Action: "pause",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Connecting performs the actual sandbox auto-resume and instance rebind.
+	scenario.guestExec(t, ctx, direct.ID, "printf resumed")
+	resumed, err := client.Get(ctx, direct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe(resumed, "resume", allowed, true)
+	probe(resumed, "resume-denied", denied, false)
+	data, err := json.MarshalIndent(proof, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeArtifact(t, artifacts, "guest-tcp.json", data)
+	t.Log(
+		"real guest virtio/TAP + policy + SNAT TCP passed for source, fork and resume; denied CIDR and none policy blocked",
+	)
+}
+
+// vmInventory observes only the isolated run's explicitly supplied
+// store and verifies its exact resource through the real host inspector. It has
+// no SQL writes, admission, lifecycle operations or daemon control protocol.
+type vmInventory struct {
+	db           *sql.DB
+	backend      *engine.CloudHypervisor
+	ownedBackend bool
+}
+
+type vmObservation struct {
+	ID                    string
+	Instance              string
+	PID                   int
+	StartTime             uint64
+	Verified              bool
+	AgentReady            bool
+	NetworkEnabled        bool
+	NetworkActual         bool
+	NetworkPolicyInstance string
+}
+
+func newVMInventory(t *testing.T, state string, backends ...*engine.CloudHypervisor) *vmInventory {
+	t.Helper()
+	inventory := &vmInventory{}
+	if len(backends) == 1 {
+		inventory.backend = backends[0]
+	} else {
+		inventory.ownedBackend = true
+		inventory.backend = engine.NewCloudHypervisor(engine.CloudOptions{
+			Binary:       requireEnv(t, "SANDBOX_E2E_HYPERVISOR"),
+			BuildReceipt: requireEnv(t, "SANDBOX_E2E_BUILD_RECEIPT"),
+			CgroupRoot:   requireEnv(t, "SANDBOX_E2E_CGROUP_ROOT"),
+			IOMax:        requireEnv(t, "SANDBOX_E2E_IO_MAX"),
+			UID:          vmmIdentity(t, "SANDBOX_E2E_VMM_UID"),
+			GID:          vmmIdentity(t, "SANDBOX_E2E_VMM_GID"),
+		})
+	}
+	var err error
+	inventory.db, err = sql.Open("sqlite", "file:"+filepath.Join(state, "haven.db")+"?mode=ro&_pragma=busy_timeout(1000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inventory
+}
+
+func vmmIdentity(t *testing.T, name string) uint32 {
+	t.Helper()
+	value, err := strconv.ParseUint(requireEnv(t, name), 10, 32)
+	if err != nil || value == 0 {
+		t.Fatalf("%s must be a nonzero 32-bit VMM identity", name)
+	}
+	return uint32(value)
+}
+
+func (inventory *vmInventory) close() {
+	_ = inventory.db.Close()
+	if inventory.ownedBackend {
+		_ = inventory.backend.Close()
+	}
+}
+
+func (inventory *vmInventory) getVM(ctx context.Context, id string) (vmObservation, error) {
+	var vm vmObservation
+	var raw []byte
+	if err := inventory.db.QueryRowContext(ctx, "SELECT body FROM vms WHERE id=?", id).Scan(&raw); err != nil {
+		return vm, err
+	}
+	var record struct {
+		Resource   loom.Resource `json:"resource"`
+		Verified   bool          `json:"verified"`
+		AgentReady bool          `json:"agent_ready"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return vm, err
+	}
+	if record.Resource.VMID != id || record.Resource.Instance == "" {
+		return vm, fmt.Errorf("VM observation lacks exact resource identity")
+	}
+	observation, err := inventory.backend.Inspect(ctx, record.Resource)
+	if err != nil || !observation.Alive {
+		return vm, fmt.Errorf("actual VM inspection: alive=%v: %w", observation.Alive, err)
+	}
+	vm = vmObservation{
+		ID:            id,
+		Instance:      record.Resource.Instance,
+		PID:           observation.PID,
+		StartTime:     observation.StartTime,
+		Verified:      record.Verified,
+		AgentReady:    record.AgentReady,
+		NetworkActual: observation.Network,
+	}
+	var policyRaw []byte
+	err = inventory.db.QueryRowContext(ctx, "SELECT instance,body FROM network_policies WHERE vm_id=?", id).Scan(&vm.NetworkPolicyInstance, &policyRaw)
+	if err == nil {
+		var policy loom.NetworkPolicy
+		if err = json.Unmarshal(policyRaw, &policy); err != nil {
+			return vm, err
+		}
+		if vm.NetworkPolicyInstance != vm.Instance {
+			return vm, fmt.Errorf("direct policy belongs to another instance")
+		}
+		if err = inventory.backend.VerifyNetworkPolicy(ctx, record.Resource, &policy); err != nil {
+			return vm, err
+		}
+		vm.NetworkEnabled = true
+	} else if err != sql.ErrNoRows {
+		return vm, err
+	}
+	return vm, nil
+}
+
+func (inventory *vmInventory) listVMs(ctx context.Context) ([]string, error) {
+	rows, err := inventory.db.QueryContext(ctx, "SELECT id FROM vms ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+type runningHaven struct {
+	process *daemonProcess
+	client  *sdk.Client
+	token   string
+	args    []string
+}
+
+type havenLaunch struct {
+	Artifacts string
+	Materials string
+	Cgroup    string
+	IOMax     string
+	Layout    string
+	Image     string
+}
+
+func startHaven(t *testing.T, ctx context.Context, launch havenLaunch) (*runningHaven, error) {
+	artifacts, materials, cgroup, ioMax, layout, image := launch.Artifacts, launch.Materials, launch.Cgroup, launch.IOMax, launch.Layout, launch.Image
+	t.Helper()
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return nil, err
+	}
+	token := hex.EncodeToString(secret[:])
+	if err := os.WriteFile("/run/p/root-token", []byte(token), 0o600); err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	address := listener.Addr().String()
+	if err = listener.Close(); err != nil {
+		return nil, err
+	}
+	args := []string{
+		"--state-dir=/run/p/e",
+		"--socket=/run/p/manage/control.sock",
+		"--listen=" + address,
+		"--root-token-file=/run/p/root-token",
+		"--cloud-hypervisor=" + filepath.Join(materials, "cloud-hypervisor"),
+		"--build-receipt=" + filepath.Join(materials, "cloud-hypervisor.json"),
+		"--cgroup-root=" + cgroup,
+		"--host-policy=" + filepath.Join(artifacts, "host-policy.json"),
+		"--io-max=" + ioMax,
+		"--vmm-uid=65534",
+		"--vmm-gid=65534",
+		"--max-memory-mib=4096",
+		"--max-vcpus=8",
+	}
+	retainConsoles(t, artifacts, cgroup)
+	process := startProcess(t, artifacts, processCommand{
+		Name:   "haven-1",
+		Binary: "/run/p/bin/haven",
+		Args:   append(append([]string{}, args...), "--init"),
+	})
+	t.Cleanup(func() {
+		process.stop(t)
+	})
+	client := sdk.New("http://"+address, token)
+	awaitProcess(t, ctx, process, func(attempt context.Context) error {
+		_, err := client.List(attempt)
+		return err
+	})
+	management := sdk.NewManagement("/run/p/manage/control.sock")
+	response, err := management.Manage(ctx, types.ManagementRequest{
+		Action: "import",
+		Key:    "runtime-import",
+		Import: &types.ImageImport{
+			Layout:   layout,
+			Digest:   image,
+			MaxBytes: 512 << 20,
+			MaxFiles: 100000,
+		},
+	})
+	if err != nil || response.Operation == nil || response.Operation.Status != "succeeded" || response.Operation.Result.ImageDigest != image {
+		return nil, fmt.Errorf("OCI import through Haven: %+v: %w", response, err)
+	}
+	businessStatus, err := client.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	managementStatus, err := management.Status(ctx)
+	if err != nil || businessStatus.StoreID != managementStatus.StoreID {
+		return nil, fmt.Errorf("business and management store differ: %w", err)
+	}
+	return &runningHaven{
+		process: process,
+		client:  client,
+		token:   token,
+		args:    args,
+	}, nil
 }

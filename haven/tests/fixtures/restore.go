@@ -71,11 +71,6 @@ func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, 
 	return errors.Join(truncateErr, file.Close())
 }
 
-func CloneFixture(t *testing.T) (*application.App, *RestorableRuntime, operation.Record) {
-	t.Helper()
-	return CloneFixtureWithFault(t, nil)
-}
-
 func CloneFixtureWithFault(t *testing.T, fault func(string) error) (*application.App, *RestorableRuntime, operation.Record) {
 	t.Helper()
 	service, _ := ColdServiceWithBackend(t, fault, RestorableBackend)
@@ -97,18 +92,4 @@ func AdmitCloneFixture(t *testing.T, service *application.App, snapshot, key str
 		t.Fatal(err)
 	}
 	return acceptedOperation
-}
-
-func CloneLiability(t *testing.T, service *application.App, step machine.ResourceStep, ready bool) {
-	t.Helper()
-	var lease, backing, storage int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM source_leases WHERE operation_id=?),(SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?)", step.OperationID, step.Candidate, step.OperationID).Scan(&lease, &backing, &storage); err != nil {
-		t.Fatal(err)
-	}
-	if storage != 64 || step.State.BackingReady && (lease != 0 || backing != 1) || !step.State.BackingReady && (lease != 1 || backing != 0) {
-		t.Fatal("restore source/disk responsibility is discontinuous", lease, backing, storage)
-	}
-	if ready != (step.Status == "succeeded") || ready != (step.State.Witness != "") {
-		t.Fatal("clone instance publication disagrees", step.State)
-	}
 }

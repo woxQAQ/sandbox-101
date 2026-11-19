@@ -17,58 +17,6 @@ import (
 	"time"
 )
 
-const testMITMHeaderBytes = 1 << 20
-
-func mitmBoundsFixture(t *testing.T) (*Manager, Binding, *atomic.Int32, *atomic.Int32) {
-	t.Helper()
-	up := httptest.NewTLSServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}),
-	)
-	t.Cleanup(up.Close)
-	pool := x509.NewCertPool()
-	pool.AddCert(up.Certificate())
-	var dials, injections atomic.Int32
-	m, b := newTestManager(t, Options{
-		RootCAs:     pool,
-		IdleTimeout: 2 * time.Second,
-		DialContext: targetDialer(up.Listener.Addr().String(), &dials),
-		Audit: func(e AuditEvent) {
-			if e.Action == "inject" {
-				injections.Add(1)
-			}
-		},
-	}, Policy{
-		Mode: "proxy",
-	}, map[string]Secret{
-		"TOKEN": {
-			Value: "host-only-test-value",
-			Hosts: []string{
-				"example.com",
-			},
-			Header: "Authorization",
-		},
-	})
-	return m, b, &dials, &injections
-}
-
-func expectMITMHeaderRejection(t *testing.T, r *bufio.Reader) {
-	t.Helper()
-	resp, err := http.ReadResponse(r, nil)
-	if err != nil {
-		var timeout net.Error
-		if errors.As(err, &timeout) && timeout.Timeout() {
-			t.Error("header parser did not reject before client deadline")
-		}
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
-		t.Errorf("oversized header accepted: status=%d", resp.StatusCode)
-	}
-}
-
 func TestMITMHeaderBounds(t *testing.T) {
 	const oversized = testMITMHeaderBytes + 16*1024
 	for _, kind := range []string{
@@ -273,29 +221,6 @@ func TestMITMStreamingBodyAndReuse(t *testing.T) {
 	}
 }
 
-// Wait on the binding's connection accounting, rather than timing goroutine
-// counts. Revoke subsequently waits for the registered tunnel worker as well.
-func waitMITMInboundClosed(t *testing.T, b *binding) {
-	t.Helper()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	limit := time.NewTimer(2 * time.Second)
-	defer limit.Stop()
-	for {
-		b.mu.Lock()
-		inbound := b.inbound
-		b.mu.Unlock()
-		if inbound == 0 {
-			return
-		}
-		select {
-		case <-ticker.C:
-		case <-limit.C:
-			t.Fatal("inner connection remained tracked after peer shutdown")
-		}
-	}
-}
-
 func TestMITMRevokeClosesParser(t *testing.T) {
 	for _, stage := range []string{
 		"header",
@@ -423,6 +348,81 @@ func TestMITMRevokeClosesParser(t *testing.T) {
 					t.Fatal("tracked connections survived teardown")
 				}
 			})
+		}
+	}
+}
+
+const testMITMHeaderBytes = 1 << 20
+
+func mitmBoundsFixture(t *testing.T) (*Manager, Binding, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	up := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+	t.Cleanup(up.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(up.Certificate())
+	var dials, injections atomic.Int32
+	m, b := newTestManager(t, Options{
+		RootCAs:     pool,
+		IdleTimeout: 2 * time.Second,
+		DialContext: targetDialer(up.Listener.Addr().String(), &dials),
+		Audit: func(e AuditEvent) {
+			if e.Action == "inject" {
+				injections.Add(1)
+			}
+		},
+	}, Policy{
+		Mode: "proxy",
+	}, map[string]Secret{
+		"TOKEN": {
+			Value: "host-only-test-value",
+			Hosts: []string{
+				"example.com",
+			},
+			Header: "Authorization",
+		},
+	})
+	return m, b, &dials, &injections
+}
+
+func expectMITMHeaderRejection(t *testing.T, r *bufio.Reader) {
+	t.Helper()
+	resp, err := http.ReadResponse(r, nil)
+	if err != nil {
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Error("header parser did not reject before client deadline")
+		}
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("oversized header accepted: status=%d", resp.StatusCode)
+	}
+}
+
+// Wait on the binding's connection accounting, rather than timing goroutine
+// counts. Revoke subsequently waits for the registered tunnel worker as well.
+func waitMITMInboundClosed(t *testing.T, b *binding) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	limit := time.NewTimer(2 * time.Second)
+	defer limit.Stop()
+	for {
+		b.mu.Lock()
+		inbound := b.inbound
+		b.mu.Unlock()
+		if inbound == 0 {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-limit.C:
+			t.Fatal("inner connection remained tracked after peer shutdown")
 		}
 	}
 }

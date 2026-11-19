@@ -134,8 +134,8 @@ environment provider. `just test` is the quick entrypoint and may skip native
 tests for missing tools or privileges. `just test-native` forces `SANDBOX_REQUIRE_EROFS_TESTS=1` and runs every host workspace module independently
 with `-json -race ./... -count=1 -timeout=300s`;
 missing prerequisites fail, and stdout contains only Go JSON. The required native
-pass events belong to `github.com/woxQAQ/haven/tests/native`, where the
-original image scenarios execute through the real Haven importer.
+pass events come from `github.com/woxQAQ/haven/image` for materialization and
+`github.com/woxQAQ/haven/gc` for cache reclamation.
 
 The gate additionally checks the original command exit code and individual
 pass events for `TestActualLayeredEROFSImportAndExtraction`,

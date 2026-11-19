@@ -21,19 +21,6 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-type failedPublicationGuest struct {
-	transportGuest
-	fail       atomic.Bool
-	diagnostic error
-}
-
-func (guest *failedPublicationGuest) Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error {
-	if guest.fail.Load() {
-		return guest.diagnostic
-	}
-	return guest.transportGuest.Activate(ctx, resource, activation)
-}
-
 func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	privatePath := filepath.Join(t.TempDir(), "private-host-input")
 	_, missing := os.ReadFile(privatePath)
@@ -107,4 +94,18 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 			t.Fatal("retry changed the completed operation response")
 		}
 	}
+}
+
+type failedPublicationGuest struct {
+	transportGuest
+
+	fail       atomic.Bool
+	diagnostic error
+}
+
+func (guest *failedPublicationGuest) Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error {
+	if guest.fail.Load() {
+		return guest.diagnostic
+	}
+	return guest.transportGuest.Activate(ctx, resource, activation)
 }

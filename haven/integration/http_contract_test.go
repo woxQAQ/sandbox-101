@@ -15,51 +15,6 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-type contractRequest struct {
-	Method string
-	Path   string
-	Token  string
-	Key    string
-	Body   []byte
-	Prefer string
-}
-
-func controlHTTP(t *testing.T, endpoint string, message contractRequest, status int) []byte {
-	t.Helper()
-	method, path, token, key, body := message.Method, message.Path, message.Token, message.Key, message.Body
-	request, err := http.NewRequest(method, endpoint+path, bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if token != "" {
-		request.Header.Set("Authorization", "Bearer "+token)
-	}
-	if key != "" {
-		request.Header.Set("Idempotency-Key", key)
-	}
-	if message.Prefer != "" {
-		request.Header.Set("Prefer", message.Prefer)
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = response.Body.Close()
-	}()
-	payload, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != status {
-		t.Fatalf("%s %s: HTTP %d, wanted %d: %s", method, path, response.StatusCode, status, payload)
-	}
-	if response.Header.Get("Cache-Control") != "no-store" {
-		t.Fatal("control response may be cached")
-	}
-	return payload
-}
-
 func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 	_, scoped, _, firstID := transportFixture(t)
 	endpoint := scoped.Endpoint
@@ -217,4 +172,49 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Path:   "/v1/sandboxes/" + acceptedRecord.Result.Sandbox.ID,
 		Token:  scopedClient.Token,
 	}, 404)
+}
+
+type contractRequest struct {
+	Method string
+	Path   string
+	Token  string
+	Key    string
+	Body   []byte
+	Prefer string
+}
+
+func controlHTTP(t *testing.T, endpoint string, message contractRequest, status int) []byte {
+	t.Helper()
+	method, path, token, key, body := message.Method, message.Path, message.Token, message.Key, message.Body
+	request, err := http.NewRequest(method, endpoint+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	if key != "" {
+		request.Header.Set("Idempotency-Key", key)
+	}
+	if message.Prefer != "" {
+		request.Header.Set("Prefer", message.Prefer)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != status {
+		t.Fatalf("%s %s: HTTP %d, wanted %d: %s", method, path, response.StatusCode, status, payload)
+	}
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("control response may be cached")
+	}
+	return payload
 }

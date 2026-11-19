@@ -2,7 +2,6 @@ package fixtures
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,24 +14,6 @@ import (
 
 func OpenStore(directory string, initialize bool) (*store.State, error) {
 	return store.Open(directory, initialize, recovery.NewRecovery().Validation())
-}
-
-func StoreTestSQL(t *testing.T, path, statement string) {
-	t.Helper()
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = database.Exec(statement); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err = database.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 type storeFileSnapshot struct {

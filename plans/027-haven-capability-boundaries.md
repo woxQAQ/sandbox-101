@@ -2,7 +2,7 @@
 
 ## 状态与范围
 
-**IMPLEMENTED / VALIDATION_BLOCKED**。包边界、私有 SQL、测试归属与文档收尾已实施；普通 120 秒入口和 native runner 条件仍未满足，不能称全部验收完成。最终源码与实际结果见 [实施证据](evidence/027-capability-map.md)。优先级 P1，工作量 L，变更风险 HIGH。
+**IMPLEMENTED / VALIDATION_BLOCKED**。包边界、私有 SQL、测试归属与文档收尾已实施。027 交付树的普通入口超时和 native runner 缺项记录在[实施证据](evidence/027-capability-map.md)。后续测试归位后的运行与剩余缺项见[计划索引](README.md#待完成验收)。优先级 P1，工作量 L，变更风险 HIGH。
 
 下文的旧源码路径、175 文件统计和设计片段记录实施前基准；当前声明、查询和测试去向以证据中的最终映射为准。后续测试整理已将共享辅助代码移到 `haven/tests/fixtures`，并删除架构检查脚本及其回归入口；下文相关门禁命令仅记录原实施要求，不再是当前验证入口。
 
@@ -272,7 +272,7 @@ sqlc 配置按能力组织：machine 合并现有 vm/snapshot 查询，supply �
 
 data 依赖 sandbox，sandbox 撤权走共享 access.Registry；node/collection/maintenance 只组合能力，不复制业务资格判断。所有 owner 的 GC 根查询绑定同一 read transaction，不能每个模块各开 snapshot 导致混合时刻的“无引用”。
 
-单能力的 Service/SQLite 测试迁至 owner 包的外部测试包；需要完整 App、跨能力事务、重启/备份/关闭的场景留在 tests/component。原生镜像物化、guest 启动与 Rust RPC 保持独立入口。共享 fixture 分离“基础 store/runtime 材料”与“完整 App 组装”，基础 fixture 不反向依赖 application。
+实现包的外部测试包覆盖本包的公开行为。跨服务工作流在 `haven/integration/workflows`，应用启动与关闭在 `haven/internal/application`。真实镜像物化在 `haven/image` 和 `haven/gc`，带标签的 guest 启动与 Rust RPC 场景在 `haven/integration`。共享 fixture 分离“基础 store/runtime 材料”与“完整 App 组装”，基础 fixture 不反向依赖 application。
 
 分散测试前保持全局调度预算：Haven 多包执行可显式使用 `-p=1`，各生命周期 suite 最多四个活跃场景；禁止多个包各开四个并发从而暗增资源上限。记录新旧测试名映射；包级 timeout 粒度改变不能宣称旧 120 秒问题已优化。
 

@@ -11,10 +11,9 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
 )
 
-type generationRuntime struct {
+type GenerationRuntime struct {
 	*RestorableRuntime
 
 	generations    sync.Mutex
@@ -24,14 +23,14 @@ type generationRuntime struct {
 }
 
 func GenerationBackend(runtime *testfixture.ColdRuntime) loom.Backend {
-	return &generationRuntime{
+	return &GenerationRuntime{
 		RestorableRuntime: &RestorableRuntime{runtime},
 		known:             map[string]loom.Resource{},
 		states:            map[string]loom.Observation{},
 	}
 }
 
-func (backend *generationRuntime) Inspect(_ context.Context, r loom.Resource) (loom.Observation, error) {
+func (backend *GenerationRuntime) Inspect(_ context.Context, r loom.Resource) (loom.Observation, error) {
 	backend.generations.Lock()
 	defer backend.generations.Unlock()
 	if backend.unknownSibling {
@@ -45,7 +44,7 @@ func (backend *generationRuntime) Inspect(_ context.Context, r loom.Resource) (l
 	return backend.states[r.Instance], nil
 }
 
-func (backend *generationRuntime) Launch(ctx context.Context, r loom.Resource, restore bool) error {
+func (backend *GenerationRuntime) Launch(ctx context.Context, r loom.Resource, restore bool) error {
 	backend.generations.Lock()
 	defer backend.generations.Unlock()
 	backend.Mu.Lock()
@@ -62,7 +61,7 @@ func (backend *generationRuntime) Launch(ctx context.Context, r loom.Resource, r
 	return nil
 }
 
-func (backend *generationRuntime) Boot(ctx context.Context, r loom.Resource, restore bool) error {
+func (backend *GenerationRuntime) Boot(ctx context.Context, r loom.Resource, restore bool) error {
 	backend.generations.Lock()
 	defer backend.generations.Unlock()
 	backend.Mu.Lock()
@@ -77,7 +76,7 @@ func (backend *generationRuntime) Boot(ctx context.Context, r loom.Resource, res
 	return nil
 }
 
-func (backend *generationRuntime) Stop(_ context.Context, r loom.Resource) error {
+func (backend *GenerationRuntime) Stop(_ context.Context, r loom.Resource) error {
 	if err := backend.Effect("stop", r); err != nil {
 		return err
 	}
@@ -90,7 +89,7 @@ func (backend *generationRuntime) Stop(_ context.Context, r loom.Resource) error
 	return nil
 }
 
-func (backend *generationRuntime) Network(_ context.Context, r loom.Resource, on bool) error {
+func (backend *GenerationRuntime) Network(_ context.Context, r loom.Resource, on bool) error {
 	if err := backend.Effect("network", r); err != nil {
 		return err
 	}
@@ -107,7 +106,7 @@ func (backend *generationRuntime) Network(_ context.Context, r loom.Resource, on
 	return nil
 }
 
-func (backend *generationRuntime) Remove(_ context.Context, r loom.Resource) error {
+func (backend *GenerationRuntime) Remove(_ context.Context, r loom.Resource) error {
 	if err := backend.Effect("remove", r); err != nil {
 		return err
 	}
@@ -121,7 +120,7 @@ func (backend *generationRuntime) Remove(_ context.Context, r loom.Resource) err
 	return nil
 }
 
-func (backend *generationRuntime) Pause(ctx context.Context, r loom.Resource) error {
+func (backend *GenerationRuntime) Pause(ctx context.Context, r loom.Resource) error {
 	backend.generations.Lock()
 	defer backend.generations.Unlock()
 	if err := backend.ColdRuntime.Pause(ctx, r); err != nil {
@@ -133,7 +132,7 @@ func (backend *generationRuntime) Pause(ctx context.Context, r loom.Resource) er
 	return nil
 }
 
-func (backend *generationRuntime) Resume(ctx context.Context, r loom.Resource) error {
+func (backend *GenerationRuntime) Resume(ctx context.Context, r loom.Resource) error {
 	backend.generations.Lock()
 	defer backend.generations.Unlock()
 	if err := backend.ColdRuntime.Resume(ctx, r); err != nil {
@@ -145,15 +144,15 @@ func (backend *generationRuntime) Resume(ctx context.Context, r loom.Resource) e
 	return nil
 }
 
-func TargetSetup(t *testing.T) (*application.App, *generationRuntime, machine.RestoreRequest, machine.ResourceStep) {
+func TargetSetup(t *testing.T) (*application.App, *GenerationRuntime, machine.RestoreRequest, machine.ResourceStep) {
 	t.Helper()
 	return TargetSetupWithFault(t, nil)
 }
 
-func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.App, *generationRuntime, machine.RestoreRequest, machine.ResourceStep) {
+func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.App, *GenerationRuntime, machine.RestoreRequest, machine.ResourceStep) {
 	t.Helper()
 	service, _ := ColdServiceWithBackend(t, fault, GenerationBackend)
-	backend := service.Options.Backend.(*generationRuntime)
+	backend := service.Options.Backend.(*GenerationRuntime)
 	capture, _ := CaptureReady(t, service, "target-source")
 	if proof := AwaitCapture(t, service, capture.ID); proof.Status != "succeeded" {
 		t.Fatal(proof.State)
@@ -198,17 +197,6 @@ func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 		StopOperationID:  stop.ID,
 	}
 	return service, backend, request, ready
-}
-
-func TargetFixture(t *testing.T) (*application.App, *generationRuntime, operation.Record, machine.ResourceStep) {
-	t.Helper()
-	service, backend, request, _ := TargetSetup(t)
-	restored, err := service.Provisioning.AdmitRestore(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	step := AwaitColdWorker(t, service, restored.ID)
-	return service, backend, restored, step
 }
 
 func AwaitStop(t *testing.T, service *application.App, id string) machine.StopStep {

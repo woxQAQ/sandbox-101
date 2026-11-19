@@ -107,8 +107,8 @@ jobs:
         run: sudo env -i PATH="$NATIVE_PATH" GOTOOLCHAIN=local python3 -I scripts/check-native-gate.py --preflight
       - name: Import and extract the guest rootfs with both OCI layouts
         run: |
-          GOWORK=off go -C haven test -tags=guest_image -c -o "$RUNNER_TEMP/guest-rootfs.test" ./tests/native
-          cd haven/tests/native
+          GOWORK=off go -C haven test -tags=guest_image -c -o "$RUNNER_TEMP/guest-rootfs.test" ./integration
+          cd haven/integration
           sudo env -i PATH="$NATIVE_PATH" SANDBOX_REQUIRE_EROFS_TESTS=1 \
             "$RUNNER_TEMP/guest-rootfs.test" -test.v -test.run='^TestGuestRootfsOCI$'
       - name: Verify missing-mkfs failure

@@ -23,5 +23,5 @@ export SANDBOX_GUEST_DIR="$guest_dir"
 export SANDBOX_GUEST_IMAGE_ARTIFACTS="$artifacts_dir"
 export SANDBOX_REQUIRE_EROFS_TESTS=1
 bash "$project_root/scripts/check-kernel.sh" "$materials_dir/kernel.config"
-GOWORK=off go -C "$project_root/haven" test -tags=guest_image ./tests/native \
+GOWORK=off go -C "$project_root/haven" test -tags=guest_image ./integration \
   -run '^TestGuestOCIFileViewAndCOW$' -count=1 -v -timeout=25m

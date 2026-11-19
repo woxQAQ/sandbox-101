@@ -11,19 +11,19 @@ template/pool 查询归 supply，VM/snapshot 查询归 machine；旧 services �
 
 ## 测试归属
 
-| 目录 | 验证边界 |
-|---|---|
-| `tests/component/` | 真实 App、SQLite、私有文件系统与注入的宿主/guest 效果；验证责任交接、恢复、幂等、关闭与 HTTP 行为 |
-| `tests/native/` | 实际 OCI/EROFS 工具、缓存、元数据、发布与 GC；guest 镜像启动与快照恢复使用 `guest_image` build tag |
-| `integration/` | `integration` tag 的真实 Rust Unix fixture；`privileged` tag 的显式私有部署验收 |
-| `store/`、`guest/`、`egress/` | 各自的 SQLite/跨 UID、RPC 或代理行为边界 |
-| `authorization/`、`image/`、`machine/` | 单能力 Service/SQLite 与缺少能力端口时的留责边界，不构造完整 App |
-| `internal/testfixture/` | 私有 store、效果替身和故障注入；不得反向依赖 application/testapp |
-| `internal/testapp/` | 完整 App 组装与重启 fixture；仅跨能力/运行场景使用，生产包禁止导入 |
-| `tests/fixtures/` | component/native 共享的领域场景夹具（claim/capture/restore/GC 等）；位于夹具分层顶端，生产包禁止导入 |
+按断言选择目录。`foo.go` 的测试集中在同包目录的 `foo_test.go`，通过公开接口验证时使用 `包名_test`。文件先写 `Test...` 用例，再写本包私有的测试类型、函数和夹具。测试需要 SQLite、完整 App 或真实镜像工具时，仍按被验证的行为归属。
 
-`component` 表示应用组件集成测试，不是独立函数单测，也不证明 VM 或 kernel 路径。
-组件套件的 `fixtures.ParallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
+| 位置 | 示例 |
+|---|---|
+| `machine/`、`sandbox/`、`supply/` | 捕获与删除的原子性、租约与 fork、模板与 warm pool 回收 |
+| `image/`、`gc/` | 用真实 OCI/EROFS 材料验证导入、发布、元数据和缓存回收 |
+| `internal/application/` | 启动时拒绝不完整的工作流、装配回调、关闭时保护 writer |
+| `integration/workflows/` | 跨服务行为，如从 checkpoint 分支、删除原 checkpoint 后验证分支，或备份后恢复整个 App。随普通 `go test ./...` 执行 |
+| `integration/` | `integration` 标签运行 Rust RPC fixture，`guest_image` 运行 guest 镜像场景，`privileged` 运行带 VM 的 Haven 生命周期测试 |
+
+基础 store/runtime 材料在 `internal/testfixture/`，完整 App 组装在 `internal/testapp/`。`tests/fixtures/` 提供多个测试包直接或间接共用的类型与操作。仅在一个包使用的夹具就近放在该包的用例之后。只有测试导入这些夹具。
+
+`fixtures.ParallelLifecycle` 保留最多四个活跃生命周期场景，普通/race/native 入口统一以 `-p=1` 串行调度 Go 包。
 包调度或测试归属变化不构成旧 120 秒超时的性能修复证据。
 测试使用自建状态，不接管现有 daemon、未知资源或真实旧库。
 

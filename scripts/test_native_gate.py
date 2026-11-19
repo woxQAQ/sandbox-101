@@ -13,13 +13,14 @@ import unittest
 
 
 PROJECT = Path(__file__).resolve().parent.parent
-PACKAGE = "github.com/woxQAQ/haven/tests/native"
+PACKAGE = "github.com/woxQAQ/haven/image"
+GC_PACKAGE = "github.com/woxQAQ/haven/gc"
 TESTS = (
     "TestActualLayeredEROFSImportAndExtraction",
     "TestActualSharedOCIHardlinksAndMetadata",
     "TestActualMergedOCIHardlinksAndMetadata",
-    "TestGCActualLayerCacheAndCompletedImport",
 )
+GC_TEST = "TestGCActualLayerCacheAndCompletedImport"
 NATIVE_SKIP = "TestHavenActualOCIImportPublishesSingleCatalog"
 
 
@@ -61,7 +62,7 @@ if Path(sys.argv[0]).name == "just":
     assert sys.argv[1:] == ["test-native"]
 else:
     assert sys.argv[1:] == ["-C", "haven", "test", "-json", "-run",
-        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "./tests/native"]
+        "^TestActualLayeredEROFSImportAndExtraction$", "-count=1", "-timeout=60s", "./image"]
     assert os.environ["GOWORK"] == "off"
     assert os.environ["SANDBOX_REQUIRE_EROFS_TESTS"] == "1"
     assert not (Path(os.environ["PATH"]) / "mkfs.erofs").exists()
@@ -72,7 +73,9 @@ sys.exit(result["exit_code"])
 """
         for name in ("just", "go"):
             self.tool(name, command)
-        self.passes = [event("pass", name) for name in TESTS] + [event("pass")]
+        self.passes = [event("pass", name) for name in TESTS] + [
+            event("pass", GC_TEST, package=GC_PACKAGE), event("pass"),
+        ]
 
     def tool(self, name, body):
         path = self.root / "tools" / name
@@ -132,6 +135,7 @@ sys.exit(result["exit_code"])
         cases = {
             "package-only": [event("pass")],
             "missing-one": self.passes[1:],
+            "gc-in-wrong-package": [event("pass", name) for name in (*TESTS, GC_TEST)],
             "invalid-record": self.passes + [{}],
             "non-object": self.passes + [[]],
             "fail-event": self.passes + [event("fail", "TestOther")],
@@ -166,7 +170,7 @@ sys.exit(result["exit_code"])
     def test_negative_requires_exact_failed_test_and_cleans_path(self):
         # The fixture's mkfs entry is absent only in the child view.
         self.tool("mkfs.erofs", 'raise RuntimeError("must not run")\n')
-        reason = "    fsmeta_test.go:312: required OCI tool missing: mkfs.erofs\n"
+        reason = "    import_workflow_test.go:312: required OCI tool missing: mkfs.erofs\n"
         rows = [event("output", TESTS[0], reason), event("fail", TESTS[0]), event("fail")]
         log = self.run_gate(rows, code=1, args=("--negative",))
         self.assertEqual((log / "negative.exit-code").read_text(), "1\n")

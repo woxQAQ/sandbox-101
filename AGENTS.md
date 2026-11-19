@@ -19,6 +19,7 @@
 
 ## 验证与交付
 
+- Go 测试与源码文件对应，`foo.go` 的用例集中到 `foo_test.go`。用例在前，包私有的测试类型、函数和夹具在后。跨服务行为和端到端场景可独立组织，多个测试包共用的夹具才抽到共享包。
 - 测试围绕真实行为单元（Service/HTTP/SQLite、跨 UID 文件系统、guest RPC、Haven 生命周期）设计，避免镜像 helper 实现的独立函数单测。
 - 跨 Go/Rust 的协议变更同时检查 schema、生成绑定与真实 Rust fixture。
 - 原生镜像验证使用 `SANDBOX_REQUIRE_EROFS_TESTS=1`；缺工具、namespace、mapping 或验收材料时报告 BLOCKED/未运行，保持断言与生产资源限制。

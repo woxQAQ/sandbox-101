@@ -84,7 +84,7 @@ Path(os.environ["RECORD_DIR"], "go.json").write_text(json.dumps({
         record = json.loads((self.root / "go.json").read_text())
         self.assertIn("-tags=guest_image", record["args"])
         self.assertEqual(record["args"][:2], ["-C", str(PROJECT / "haven")])
-        self.assertIn("./tests/native", record["args"])
+        self.assertIn("./integration", record["args"])
         self.assertIn("^TestGuestOCIFileViewAndCOW$", record["args"])
         self.assertEqual(record["environment"]["SANDBOX_GUEST_ROOTFS"], str(rootfs))
         self.assertEqual(record["environment"]["SANDBOX_GUEST_DIR"], str(guest))

@@ -18,19 +18,6 @@ import (
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
-func microVMMemoryMiB(t *testing.T) int64 {
-	t.Helper()
-	memory := int64(512)
-	if value := os.Getenv("SANDBOX_E2E_MEMORY_MIB"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 128 || parsed > 1<<24 {
-			t.Fatalf("SANDBOX_E2E_MEMORY_MIB must be a valid guest shape (128..16777216): %q", value)
-		}
-		memory = parsed
-	}
-	return memory
-}
-
 // Run only against an isolated, provisioned host with the exact CH/kernel/image
 // contract. Missing setup fails explicitly; a skipped test is not VM validation.
 func TestMicroVMLifecycle(t *testing.T) {
@@ -47,7 +34,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 	client := sdk.New(endpoint, strings.TrimSpace(string(token)))
 	client.Tenant = os.Getenv("SANDBOX_E2E_TENANT")
 	engine := newVMInventory(t, socket)
-	defer engine.Close()
+	defer engine.close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	prefix := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
@@ -207,7 +194,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 	if paused.Sandbox.State != "paused" || paused.Sandbox.VMID != "" {
 		t.Fatal("pause retained a VM")
 	}
-	if _, err = engine.GetVM(ctx, source.VMID); err == nil {
+	if _, err = engine.getVM(ctx, source.VMID); err == nil {
 		t.Fatal("pause retained the source VMM")
 	}
 	var wg sync.WaitGroup
@@ -276,7 +263,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := engine.ListVMs(ctx)
+	before, err := engine.listVMs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +277,7 @@ func TestMicroVMLifecycle(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	after, err := engine.ListVMs(ctx)
+	after, err := engine.listVMs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,4 +289,17 @@ func TestMicroVMLifecycle(t *testing.T) {
 			t.Fatal("source deletion broke a branch")
 		}
 	}
+}
+
+func microVMMemoryMiB(t *testing.T) int64 {
+	t.Helper()
+	memory := int64(512)
+	if value := os.Getenv("SANDBOX_E2E_MEMORY_MIB"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 128 || parsed > 1<<24 {
+			t.Fatalf("SANDBOX_E2E_MEMORY_MIB must be a valid guest shape (128..16777216): %q", value)
+		}
+		memory = parsed
+	}
+	return memory
 }

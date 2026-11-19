@@ -6,9 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	ocidigest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,15 +13,16 @@ import (
 	"testing"
 	"time"
 
+	ocidigest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/specs-go"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+
 	"github.com/woxQAQ/haven/authorization"
-	image "github.com/woxQAQ/haven/image"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/testapp"
-	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/store"
 )
 
 func PrivateOCIImport(t *testing.T) imageimport.ImageImportOptions {
@@ -185,42 +183,4 @@ func WaitImportInterruption(t *testing.T, service *application.App, id string) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-}
-
-// The fixture observes only the frozen path and output witnesses under test.
-// Workflow validation remains the same public entry used by store recovery.
-type imageImportEvidence struct {
-	Input struct {
-		Work string `json:"work"`
-	}
-	State struct {
-		Boundary *imageimport.ImageImportBoundary `json:"boundary,omitempty"`
-		Proof    *imageimport.ImageImportProof    `json:"proof,omitempty"`
-	}
-}
-
-func ObserveImageImport(ctx context.Context, database store.DBTX, id string) (imageImportEvidence, error) {
-	var evidence imageImportEvidence
-	if err := image.ValidateImageImport(ctx, database, id); err != nil {
-		return evidence, err
-	}
-	step, err := testfixture.ObserveStep(ctx, database, id, "image_import")
-	if err != nil {
-		return evidence, err
-	}
-	if err = json.Unmarshal(step.Input, &evidence.Input); err != nil {
-		return evidence, err
-	}
-	err = json.Unmarshal(step.Body, &evidence.State)
-	return evidence, err
-}
-
-// This private recovery fixture starts with a frozen plan whose source vanished
-// before staging. The real runner prepares owned directories and records failure;
-// no EROFS materialization, namespace or VM behavior is represented by this fixture.
-func PendingImageRecovery(t *testing.T) (*application.App, string, imageimport.ImageImportOptions) {
-	t.Helper()
-	service, _ := ColdService(t, nil)
-	id, options := testfixture.SeedPendingImageImport(t, service.State)
-	return service, id, options
 }

@@ -14,15 +14,13 @@ import (
 	"testing"
 	"time"
 
+	ocidigest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/specs-go"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
-
-	ocidigest "github.com/opencontainers/go-digest"
-
-	specs "github.com/opencontainers/image-spec/specs-go"
-
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 func RequireEROFS(t *testing.T) {
@@ -218,7 +216,7 @@ func BootLayerEntries() []TarEntry {
 }
 
 //nolint:staticcheck // Exercise archive/tar's binary xattr encoding used by the OCI materializers.
-func ImportFixture(t *testing.T) (*nativeImageFixture, string, []OCILayerFixture, host.ImageManifest) {
+func ImportFixture(t *testing.T) (*NativeImageFixture, string, []OCILayerFixture, host.ImageManifest) {
 	t.Helper()
 	RequireEROFS(t)
 	layout := t.TempDir()
@@ -249,9 +247,6 @@ func ImportFixture(t *testing.T) (*nativeImageFixture, string, []OCILayerFixture
 	}
 	image := PutOCIManifest(t, layout, "first", layers)
 	e := NewNativeImageFixture(t)
-	t.Cleanup(func() {
-		e.Close()
-	})
 	m, err := e.ImportOCI(
 		context.Background(),
 		imageimport.ImageImportOptions{
@@ -267,7 +262,7 @@ func ImportFixture(t *testing.T) (*nativeImageFixture, string, []OCILayerFixture
 	return e, layout, layers, m
 }
 
-func ExtractManifest(t *testing.T, e *nativeImageFixture, m host.ImageManifest) string {
+func ExtractManifest(t *testing.T, e *NativeImageFixture, m host.ImageManifest) string {
 	t.Helper()
 	dir := filepath.Join(e.Opts.StateDir, "images", m.Digest[7:])
 	bindings, err := m.ReadOnlyBindings(dir)
@@ -291,17 +286,4 @@ func ExtractManifest(t *testing.T, e *nativeImageFixture, m host.ImageManifest) 
 		t.Fatal(err)
 	}
 	return filepath.Join(out, "tree")
-}
-
-func CloneImageManifest(t *testing.T, m host.ImageManifest) host.ImageManifest {
-	t.Helper()
-	b, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cloned host.ImageManifest
-	if err = json.Unmarshal(b, &cloned); err != nil {
-		t.Fatal(err)
-	}
-	return cloned
 }
