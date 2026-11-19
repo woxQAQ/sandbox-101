@@ -61,13 +61,13 @@ type App struct {
 	SnapshotDeletion *machine.SnapshotDeletion
 	CaptureDiscard   *machine.CaptureDiscard
 	Captures         *machine.Captures
-	Stops          *machine.Stops
+	Stops            *machine.Stops
 	DirectPolicies   *machine.DirectPolicies
 	DirectBindings   *sandbox.DirectBindings
-	Deletion       *machine.Deletion
+	Deletion         *machine.Deletion
 	SupplyCleanup    *supply.SupplyCleanup
 	GC               *gc.Collector
-	Provisioning   *sandbox.Provisioning
+	Provisioning     *sandbox.Provisioning
 	Supply           *supply.Supply
 	Lifecycle        *sandbox.Lifecycle
 	Sandboxes        *sandbox.Sandboxes

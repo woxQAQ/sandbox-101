@@ -39,15 +39,15 @@ check:
     cargo clippy --locked --workspace --all-targets -- -D warnings
 
 lint:
-    go fix {{packages}} ./operator/...
-    golangci-lint run {{packages}} ./operator/...
+    go fix {{packages}}
+    golangci-lint run {{packages}}
 
 # Report Go functions with too many parameters; extra arguments are detector flags.
 check-funcparams *args:
-    GOWORK=off go -C tools tool long-funcparam-detectorgo -ignore dbgen -ignore sandbox.pb.go {{args}} ../haven ../loom ../sdk ../types ../common ../tools ../protocol/gen ../operator
+    GOWORK=off go -C tools tool long-funcparam-detectorgo -ignore dbgen -ignore sandbox.pb.go {{args}} ../haven ../loom ../sdk ../types ../common ../tools ../protocol/gen
 
 lint-fix:
-    golangci-lint run --fix {{packages}} ./operator/...
+    golangci-lint run --fix {{packages}}
 
 fmt:
     rg --files "$PWD/haven" "$PWD/loom" "$PWD/sdk" "$PWD/types" "$PWD/common" "$PWD/tools" "$PWD/protocol/gen" -g '*.go' -g '!sandbox.pb.go' -g '!**/internal/dbgen/**' -0 | xargs -0 go -C tools tool structfmt -split-fields -w
