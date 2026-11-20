@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
 	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/types"
@@ -22,23 +21,27 @@ import (
 
 // connectSandbox handles the client HTTP Upgrade to the guest Workload portal.
 // It delivers a raw duplex stream after the 101 response; bytes already read
-// with the headers belong to the upgraded stream.
-func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, principal authorization.Principal, id string) {
+// with the headers belong to the upgraded stream. gin's ResponseWriter always
+// exposes Hijacker; a connection that cannot be hijacked fails Hijack itself.
+func (h *handler) connectSandbox(c *gin.Context) {
+	w := c.Writer
+	r := c.Request
+	id := c.Param("id")
+	owner := principal(c)
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
 		httpwire.NewFailure(http.StatusUpgradeRequired, types.CodeInvalid, "Connection: Upgrade and Upgrade: sandbox-v1 required").Write(w)
 		return
 	}
-	hijacker, ok := w.(http.Hijacker)
-	if r.ProtoMajor != 1 || !ok {
+	if r.ProtoMajor != 1 {
 		httpwire.NewFailure(http.StatusUnprocessableEntity, types.CodeIncompatible, "HTTP/1.1 Upgrade required").Write(w)
 		return
 	}
-	if _, err := h.services.Dataplane.Ready(r.Context(), principal, id); err != nil {
+	if _, err := h.services.Dataplane.Ready(r.Context(), owner, id); err != nil {
 		httpwire.Error(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	upstream, err := h.services.Dataplane.Connect(ctx, principal, id)
+	upstream, err := h.services.Dataplane.Connect(ctx, owner, id)
 	cancel()
 	if err != nil {
 		httpwire.Error(w, err)
@@ -49,12 +52,12 @@ func (h *handler) connectSandbox(w http.ResponseWriter, r *http.Request, princip
 	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := h.services.Dataplane.Attach(r.Context(), principal, dataplane.HandoffRequest{
+	downstream, err := h.services.Dataplane.Attach(r.Context(), owner, dataplane.HandoffRequest{
 		SandboxID: id,
 		Upstream:  upstream,
 		Accept: func() (net.Conn, error) {
 			var err error
-			raw, buffer, err = hijacker.Hijack()
+			raw, buffer, err = w.Hijack()
 			return raw, err
 		},
 	})

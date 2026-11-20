@@ -104,9 +104,7 @@ func New(services Services) http.Handler {
 	v1.GET("/checkpoints", h.listCheckpoints)
 	v1.GET("/sandboxes/:id", h.getSandbox)
 	v1.GET("/operations/:id", h.getOperation)
-	v1.GET("/sandboxes/:id/connect", func(c *gin.Context) {
-		h.connectSandbox(c.Writer, c.Request, principal(c), c.Param("id"))
-	})
+	v1.GET("/sandboxes/:id/connect", h.connectSandbox)
 	v1.POST("/sandboxes", h.claimSandbox)
 	v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
 	for _, action := range sandboxActions {
