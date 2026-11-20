@@ -37,7 +37,7 @@ type StopHistory struct {
 
 func (StopHistory) VerifyStopParent(ctx context.Context, query store.DBTX, proof machine.StopParentProof) (string, error) {
 	step, source, record := proof.Step, proof.Source, proof.Sandbox
-	parent, err := LoadLifecycle(ctx, query, step.Input.Lifecycle)
+	parent, err := LoadLifecycleStep(ctx, query, step.Input.Lifecycle)
 	if err != nil {
 		return "", err
 	}
@@ -64,7 +64,7 @@ func (CaptureDiscardHistory) VerifyCaptureDiscardParent(ctx context.Context, que
 	input, request := step.Input, step.Input.Request
 	source := input.Source
 	resource := source.Input.Source
-	parent, err := LoadLifecycle(ctx, query, input.Lifecycle)
+	parent, err := LoadLifecycleStep(ctx, query, input.Lifecycle)
 	if err != nil {
 		return false, err
 	}
@@ -178,7 +178,7 @@ func (DeletionHandoff) TerminateSandbox(ctx context.Context, tx *sql.Tx, termina
 func (DeletionHandoff) CompleteRelease(ctx context.Context, tx *sql.Tx, step machine.ResourceStep) error {
 	input := step.Input
 	if input.SlotDestination != nil && input.SlotDestination.Kind == "sleep" {
-		parent, err := LoadLifecycle(ctx, tx, input.SlotDestination.OperationID)
+		parent, err := LoadLifecycleStep(ctx, tx, input.SlotDestination.OperationID)
 		if err != nil {
 			return err
 		}

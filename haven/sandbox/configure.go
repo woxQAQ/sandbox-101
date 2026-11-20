@@ -115,7 +115,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 
 	priorFence, fenceErr := LifecycleFence(ctx, tx, current.ID)
 	if fenceErr == nil {
-		if lifecycle, lookup := LoadLifecycle(ctx, tx, priorFence); lookup == nil && !operation.Terminal(lifecycle.Status) {
+		if lifecycle, lookup := LoadLifecycleStep(ctx, tx, priorFence); lookup == nil && !operation.Terminal(lifecycle.Status) {
 			return empty, noResource, false, fmt.Errorf("%w: sandbox lifecycle is in progress", errs.ErrConflict)
 		} else if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
 			return empty, noResource, false, lookup

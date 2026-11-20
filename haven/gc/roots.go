@@ -96,7 +96,7 @@ func (c *Collector) graphFence(ctx context.Context) ([]types.GCItem, error) {
 				proofErr = fmt.Errorf("fork source lease mismatch")
 			}
 		case "lifecycle":
-			source, lookup := sandbox.LoadLifecycle(ctx, tx, lease.OperationID)
+			source, lookup := sandbox.LoadLifecycleStep(ctx, tx, lease.OperationID)
 			proofErr = lookup
 			if proofErr == nil && (source.Input.Rollback == nil || source.Input.Command.Action != "rollback" || source.Input.Rollback.Checkpoint.SnapshotID != lease.SnapshotID) {
 				proofErr = fmt.Errorf("rollback source lease mismatch")

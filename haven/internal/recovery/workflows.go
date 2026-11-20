@@ -29,7 +29,7 @@ func validateWorkflowProof(ctx context.Context, database store.DBTX, origin stor
 	case item.Key == "capture":
 		_, proofErr = machine.LoadCapture(ctx, database, item.OperationID)
 	case item.Key == "lifecycle":
-		_, proofErr = sandbox.LoadLifecycle(ctx, database, item.OperationID)
+		_, proofErr = sandbox.LoadLifecycleStep(ctx, database, item.OperationID)
 	case item.Key == "supply":
 		_, proofErr = supply.LoadSupply(ctx, database, item.OperationID)
 	case item.Key == "fork_group":

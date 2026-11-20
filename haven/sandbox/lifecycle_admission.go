@@ -77,7 +77,7 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 	parent := admission.Parent
 	input := admission.Input
 
-	existing, err := LoadLifecycle(ctx, tx, parent.ID)
+	existing, err := LoadLifecycleStep(ctx, tx, parent.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		fence, fenceErr := LifecycleFence(ctx, tx, input.Sandbox.ID)
 		if input.Command.Action == "release" && ((fenceErr == nil && fence != input.PriorFence) || (errors.Is(fenceErr, sql.ErrNoRows) && input.PriorFence != "")) {

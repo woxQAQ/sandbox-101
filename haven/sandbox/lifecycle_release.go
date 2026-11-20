@@ -24,7 +24,7 @@ func pausedReceipt(ctx context.Context, q store.DBTX, current ownership.Sandbox,
 		return "", err
 	}
 	for _, id := range ids {
-		parent, err := LoadLifecycle(ctx, q, id)
+		parent, err := LoadLifecycleStep(ctx, q, id)
 		if err != nil {
 			return "", err
 		}
@@ -253,7 +253,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 	if id == "" {
 		return nil, nil
 	}
-	prior, err := LoadLifecycle(l.ctx, tx, id)
+	prior, err := LoadLifecycleStep(l.ctx, tx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return l.warmClaims.RetireSupersededIn(tx, step)
 	}
@@ -420,7 +420,7 @@ func (admission *LifecycleAdmission) ReleaseDestination(ctx context.Context, tx 
 		return nil, false, nil
 	}
 	if admission.Input.Command.Action == "pause" {
-		parent, err := LoadLifecycle(ctx, tx, admission.Parent.ID)
+		parent, err := LoadLifecycleStep(ctx, tx, admission.Parent.ID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -460,7 +460,7 @@ func ValidateReleaseSlotDestination(ctx context.Context, tx *sql.Tx, resource ma
 	if destination.Kind == "claim" {
 		return validateWarmSlotDestination(ctx, tx, resource)
 	}
-	parent, err := LoadLifecycle(ctx, tx, destination.OperationID)
+	parent, err := LoadLifecycleStep(ctx, tx, destination.OperationID)
 	if err != nil {
 		return err
 	}

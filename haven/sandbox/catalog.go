@@ -65,8 +65,8 @@ func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id
 		return View{}, fenceErr
 	}
 	if fenceErr == nil {
-		lifecycle, lookup := LoadLifecycle(ctx, c.database, fence)
-		if lookup == nil && lifecycle.Status != "succeeded" && lifecycle.Status != "failed" && lifecycle.Input.OwnerTenantID == record.TenantID && lifecycle.Input.Sandbox.ID == id {
+		lifecycle, lookup := LoadLifecycleStep(ctx, c.database, fence)
+		if lookup == nil && lifecycle.IsComplete() && lifecycle.Input.OwnerTenantID == record.TenantID && lifecycle.Input.Sandbox.ID == id {
 			switch lifecycle.Input.Command.Action {
 			case "rollback":
 				state = "rolling_back"

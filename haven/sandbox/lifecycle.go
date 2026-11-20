@@ -154,7 +154,7 @@ func (l *Lifecycle) Resume(id string) (bool, error) {
 	if l.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume lifecycle", errs.ErrManualRecovery)
 	}
-	step, err := LoadLifecycle(l.ctx, l.store.Database, id)
+	step, err := LoadLifecycleStep(l.ctx, l.store.Database, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -164,7 +164,7 @@ func (l *Lifecycle) Resume(id string) (bool, error) {
 	lock := l.guards.Sandbox(step.Input.Sandbox.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	step, err = LoadLifecycle(l.ctx, l.store.Database, id)
+	step, err = LoadLifecycleStep(l.ctx, l.store.Database, id)
 	if err != nil {
 		return true, err
 	}
@@ -239,7 +239,11 @@ type LifecycleStep struct {
 	State       LifecycleState
 }
 
-func LoadLifecycle(ctx context.Context, database store.DBTX, id string) (LifecycleStep, error) {
+func (step LifecycleStep) IsComplete() bool {
+	return step.Status != "succeeded" && step.Status != "failed"
+}
+
+func LoadLifecycleStep(ctx context.Context, database store.DBTX, id string) (LifecycleStep, error) {
 	step := LifecycleStep{
 		OperationID: id,
 	}

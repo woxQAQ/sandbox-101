@@ -37,7 +37,7 @@ func (c *Collector) internalSnapshot(ctx context.Context, source machine.Snapsho
 	if link.Kind != "capture" || link.Candidate != source.Snapshot.ID {
 		return false, false, fmt.Errorf("snapshot control link identity changed")
 	}
-	if lifecycle, err := sandbox.LoadLifecycle(ctx, c.store.Database, entry.OperationID); err == nil {
+	if lifecycle, err := sandbox.LoadLifecycleStep(ctx, c.store.Database, entry.OperationID); err == nil {
 		if lifecycle.Input.OwnerTenantID != source.Snapshot.TenantID || (lifecycle.Input.Command.Action != "pause" && lifecycle.Input.Command.Action != "checkpoint") {
 			return false, false, fmt.Errorf("snapshot lifecycle publication scope changed")
 		}

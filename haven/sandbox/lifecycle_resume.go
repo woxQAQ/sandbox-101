@@ -255,7 +255,7 @@ func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadLifecycle(l.ctx, tx, step.OperationID)
+	current, err := LoadLifecycleStep(l.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -363,7 +363,7 @@ func ResumeDestination(ctx context.Context, tx *sql.Tx, destination *machine.Quo
 	if destination == nil || destination.Kind != "sleep" {
 		return empty, fmt.Errorf("%w: resume slot destination missing", errs.ErrManualRecovery)
 	}
-	parent, err := LoadLifecycle(ctx, tx, destination.OperationID)
+	parent, err := LoadLifecycleStep(ctx, tx, destination.OperationID)
 	if err != nil {
 		return parent, err
 	}

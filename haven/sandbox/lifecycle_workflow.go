@@ -198,7 +198,7 @@ func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest
 }
 
 func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step LifecycleStep) error {
-	current, err := LoadLifecycle(ctx, tx, step.OperationID)
+	current, err := LoadLifecycleStep(ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -524,7 +524,7 @@ func checkRollbackCaptures(ctx context.Context, tx *sql.Tx, input LifecycleInput
 // CompleteLifecycleActivation transfers active sandbox ownership in the same
 // transaction that publishes running, after the resource child has committed.
 func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation ActivationStep) error {
-	lifecycle, err := LoadLifecycle(ctx, tx, activation.OperationID)
+	lifecycle, err := LoadLifecycleStep(ctx, tx, activation.OperationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -601,7 +601,7 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := LoadLifecycle(l.ctx, tx, step.OperationID)
+	current, err := LoadLifecycleStep(l.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}

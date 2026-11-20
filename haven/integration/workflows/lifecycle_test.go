@@ -355,7 +355,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 				t.Fatal(failed, err)
 			}
 			for {
-				step, err := sandbox.LoadLifecycle(ctx, service.State.Database(), failed.ID)
+				step, err := sandbox.LoadLifecycleStep(ctx, service.State.Database(), failed.ID)
 				if err != nil {
 					t.Fatal(err)
 				}

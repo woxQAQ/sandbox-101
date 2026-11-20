@@ -43,7 +43,7 @@ func (p *Plane) ensureResume(ctx context.Context, principal authorization.Princi
 		}, accepted.ID)
 		return err
 	case "resuming":
-		lifecycle, err := sandbox.LoadLifecycle(ctx, p.store.Database, view.OperationID)
+		lifecycle, err := sandbox.LoadLifecycleStep(ctx, p.store.Database, view.OperationID)
 		if err != nil {
 			return err
 		}
