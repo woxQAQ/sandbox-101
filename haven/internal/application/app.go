@@ -136,12 +136,7 @@ func Open(opts Options) (*App, error) {
 	authentication := authorization.NewAuthentication(opts.AdminToken, authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign)
 	operations := operation.NewOperations(state.Database(), workers, state.Identity().Identity)
 	registry := ephemeral.New()
-	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.CommandIdentityDependencies{
-		Operations: operation.New(state.Database()),
-		View:       operations,
-		Registry:   registry,
-		Sign:       state.Sign,
-	})
+	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.New(state.Database()), operations, registry, state.Sign)
 	service := &App{
 		Authentication:  authentication,
 		Availability:    execution.NewAvailability(guards.Registration()),
@@ -431,13 +426,7 @@ func Open(opts Options) (*App, error) {
 		Epoch:   registry.Epoch(),
 	})
 	service.Node = node.New(state, service.Availability)
-	service.SandboxRequests = sandbox.NewSandboxRequests(sandbox.SandboxRequestDependencies{
-		Sandboxes:  service.Sandboxes,
-		Lifecycle:  service.Lifecycle,
-		Supply:     service.Supply,
-		Forks:      service.Forks,
-		Operations: service.Operations,
-	})
+	service.SandboxRequests = sandbox.NewSandboxRequests(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
 	policies := service.DirectPolicies
 	deletion := service.Deletion
 	service.Reconcile = reconcile.New(state, reconcile.Dependencies{

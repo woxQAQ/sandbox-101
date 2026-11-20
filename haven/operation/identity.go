@@ -75,20 +75,13 @@ type CommandIdentity struct {
 	sign       func(...string) string
 }
 
-type CommandIdentityDependencies struct {
-	Operations *Repository
-	View       *Operations
-	Registry   *ephemeral.Registry
-	Sign       func(...string) string
-}
-
-func NewCommandIdentity(ctx context.Context, dependencies CommandIdentityDependencies) *CommandIdentity {
+func NewCommandIdentity(ctx context.Context, operations *Repository, view *Operations, registry *ephemeral.Registry, sign func(...string) string) *CommandIdentity {
 	return &CommandIdentity{
 		ctx:        ctx,
-		operations: dependencies.Operations,
-		view:       dependencies.View,
-		registry:   dependencies.Registry,
-		sign:       dependencies.Sign,
+		operations: operations,
+		view:       view,
+		registry:   registry,
+		sign:       sign,
 	}
 }
 

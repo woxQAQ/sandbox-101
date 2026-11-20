@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,11 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
+// SandboxSubmitter admits sandbox commands on behalf of the HTTP handler.
+type SandboxSubmitter interface {
+	Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error)
+}
+
 // Services names the business capabilities exposed by the public protocol.
 // The handler receives no application lifecycle, runtime or database authority.
 type Services struct {
@@ -30,7 +36,7 @@ type Services struct {
 	Operations     *operation.Operations
 	Delivery       *sandbox.OperationDelivery
 	Tenants        *authorization.Tenants
-	Requests       *sandbox.SandboxRequests
+	Requests       SandboxSubmitter
 	Dataplane      *dataplane.Plane
 	Node           *node.Service
 }

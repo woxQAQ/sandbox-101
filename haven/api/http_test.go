@@ -14,7 +14,6 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -36,9 +35,10 @@ func TestTemplateAdmissionFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := api.New(api.Services{
 				Authentication: authorization.NewAuthentication("test-admin", nil, nil, nil),
-				Requests: sandbox.NewSandboxRequests(sandbox.SandboxRequestDependencies{
-					Supply: rejectedTemplate{cause: fmt.Errorf("%w: private fixture detail", tc.cause)},
-				}),
+				Requests: rejectedTemplate{
+					t:     t,
+					cause: fmt.Errorf("%w: private fixture detail", tc.cause),
+				},
 			})
 			req := httptest.NewRequest(http.MethodPost, "/v1/templates", strings.NewReader(`{"template":{"id":"base"}}`))
 			req.Header.Set("Authorization", "Bearer test-admin")
@@ -57,13 +57,14 @@ func TestTemplateAdmissionFailures(t *testing.T) {
 }
 
 type rejectedTemplate struct {
+	t     *testing.T
 	cause error
 }
 
-func (s rejectedTemplate) AdmitTemplate(context.Context, authorization.Principal, string, operation.Command) (operation.Record, error) {
+func (s rejectedTemplate) Submit(_ context.Context, _ authorization.Principal, _ string, command operation.Command) (operation.Record, error) {
+	s.t.Helper()
+	if command.Action != "template_put" {
+		s.t.Fatalf("submitted action %q, want template_put", command.Action)
+	}
 	return operation.Record{}, s.cause
-}
-
-func (s rejectedTemplate) AdmitRefill(context.Context, authorization.Principal, string, operation.Command) (operation.Record, error) {
-	panic("template submission routed to refill")
 }

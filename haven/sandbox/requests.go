@@ -24,21 +24,13 @@ type SandboxRequests struct {
 	operations *operation.Operations
 }
 
-type SandboxRequestDependencies struct {
-	Sandboxes  *Sandboxes
-	Lifecycle  *Lifecycle
-	Supply     SupplyCommands
-	Forks      *Forks
-	Operations *operation.Operations
-}
-
-func NewSandboxRequests(dependencies SandboxRequestDependencies) *SandboxRequests {
+func NewSandboxRequests(sandboxes *Sandboxes, lifecycle *Lifecycle, supply SupplyCommands, forks *Forks, operations *operation.Operations) *SandboxRequests {
 	return &SandboxRequests{
-		sandboxes:  dependencies.Sandboxes,
-		lifecycle:  dependencies.Lifecycle,
-		supply:     dependencies.Supply,
-		forks:      dependencies.Forks,
-		operations: dependencies.Operations,
+		sandboxes:  sandboxes,
+		lifecycle:  lifecycle,
+		supply:     supply,
+		forks:      forks,
+		operations: operations,
 	}
 }
 
