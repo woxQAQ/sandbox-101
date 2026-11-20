@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
@@ -86,8 +88,8 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 					t.Fatal("renewal changed identity or did not update the lease", after, err)
 				}
 				replay, err := service.Lifecycle.AdmitRenew(ctx, principal, "renew-held", command)
-				if err != nil || replay.ID != accepted.ID {
-					t.Fatal("renewal replay changed identity", replay, err)
+				if err != nil || !reflect.DeepEqual(replay, accepted) {
+					t.Fatal("renewal replay changed operation", replay, err)
 				}
 				replayed, err := sandbox.LoadSettings(ctx, service.State.Database(), id)
 				if err != nil || !reflect.DeepEqual(replayed, after) {
@@ -157,6 +159,74 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	}
 	if _, err = service.Dataplane.Ready(context.Background(), principal, id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixture(t)
+	ctx := t.Context()
+	principal := authorization.Principal{TenantID: "tenant"}
+	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "claim", nil, egress.Policy{Mode: "none"})
+	id := claim.Result.SandboxID
+	command := operation.Command{
+		Action:     "renew",
+		SandboxID:  id,
+		TTLSeconds: 120,
+	}
+	before, err := sandbox.LoadSettings(ctx, service.State.Database(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed an inconsistent renewal that has an authenticated request but no completion.
+	original := operation.Record{
+		ID:     operation.NewID("op-"),
+		Key:    "renew-pending",
+		Status: "pending",
+		Result: operation.Result{SandboxID: id, VMID: claim.Result.VMID},
+	}
+	request := operation.Encode(struct {
+		Action  string
+		Request operation.Command
+	}{command.Action, command})
+	operations := operation.New(service.State.Database())
+	if err = operations.Insert(ctx, operation.Admission{
+		ID:        original.ID,
+		ScopeKind: "tenant",
+		ScopeID:   principal.TenantID,
+		Key:       original.Key,
+		Hash:      operation.Digest(request),
+		Request:   request,
+		Status:    original.Status,
+		Body:      operation.Encode(original.Result),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mac := service.Commands.Identity.CommandMAC(principal, command)
+	if err = operations.InsertCredential(ctx, original.ID, mac); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := command
+	changed.TTLSeconds++
+	if _, err = service.Lifecycle.AdmitRenew(ctx, principal, original.Key, changed); !errors.Is(err, errs.ErrConflict) {
+		t.Fatalf("changed renewal parameters returned %v, want conflict", err)
+	}
+	replay, err := service.Lifecycle.AdmitRenew(ctx, principal, original.Key, command)
+	if !errors.Is(err, errs.ErrManualRecovery) || !reflect.DeepEqual(replay, original) {
+		t.Errorf("renewal replay returned %+v, %v, want the original operation and manual recovery", replay, err)
+	}
+	if worker := service.Workers.State(original.ID); worker.Active || worker.Completed {
+		t.Errorf("renewal replay dispatched a worker: %+v", worker)
+	}
+	stored, err := service.Operations.Operation(ctx, principal, original.ID)
+	if err != nil || !reflect.DeepEqual(stored, original) {
+		t.Errorf("renewal replay changed the persisted operation: %+v, %v", stored, err)
+	}
+	after, err := sandbox.LoadSettings(ctx, service.State.Database(), id)
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Errorf("renewal replay changed lease or configuration: %+v, %v", after, err)
 	}
 }
 

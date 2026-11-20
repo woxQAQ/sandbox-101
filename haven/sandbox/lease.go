@@ -68,10 +68,17 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	mac := l.commands.Identity.CommandMAC(principal, command)
-	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
+	previous, found, err := l.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
-	}); found || err != nil {
-		return accepted, err
+	})
+	if err != nil {
+		return previous, err
+	}
+	if found {
+		if !operation.Terminal(previous.Status) {
+			return previous, fmt.Errorf("%w: renewal operation %s has non-terminal status %q", errs.ErrManualRecovery, previous.ID, previous.Status)
+		}
+		return previous, nil
 	}
 	guard := l.guards.Configuration(command.SandboxID)
 	guard.Lock()
