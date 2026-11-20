@@ -88,38 +88,44 @@ func New(services Services) http.Handler {
 		http.MethodGet,
 		http.MethodHead,
 	}, "/metrics", h.authenticate, h.metrics)
-	router.Any("/preview/*path", gin.WrapF(h.preview))
+
 	v1 := router.Group("/v1", h.authenticate)
-	v1.POST("/tenants", h.putTenant)
-	v1.GET("/status", h.status)
-	v1.POST("/node/drain", h.drainNode)
-	v1.GET("/sandboxes", h.listSandboxes)
-	v1.GET("/templates", h.listTemplates)
-	v1.GET("/checkpoints", h.listCheckpoints)
-	v1.GET("/sandboxes/:id", h.getSandbox)
-	v1.GET("/operations/:id", h.getOperation)
+	{
+		v1.POST("/tenants", h.putTenant)
+		v1.GET("/status", h.status)
+		v1.POST("/node/drain", h.drainNode)
+		v1.GET("/sandboxes", h.listSandboxes)
+		v1.GET("/sandboxes/:id", h.getSandbox)
+		v1.POST("/sandboxes", h.claimSandbox)
+		v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
+		// Lifecycle actions on an admitted sandbox. Each gets an explicit route so the
+		// URL decides command and target; the request body only supplies parameters.
+		var sandboxActions = []string{
+			"configure",
+			"renew",
+			"checkpoint",
+			"pause",
+			"resume",
+			"rollback",
+			"fork",
+		}
+		for _, action := range sandboxActions {
+			v1.POST("/sandboxes/:id/"+action, h.sandboxAction(action))
+		}
+
+		v1.GET("/operations/:id", h.getOperation)
+		v1.GET("/templates", h.listTemplates)
+		v1.POST("/templates", h.registerTemplate)
+		v1.POST("/templates/:id/build", h.buildTemplate)
+
+		v1.GET("/checkpoints", h.listCheckpoints)
+		v1.DELETE("/checkpoints/:id", h.deleteCheckpoint)
+		v1.POST("/checkpoints/:id/fork", h.forkCheckpoint)
+	}
+	// see data.go
+	router.Any("/preview/*path", gin.WrapF(h.preview))
 	v1.GET("/sandboxes/:id/connect", h.connectSandbox)
-	v1.POST("/sandboxes", h.claimSandbox)
-	v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
-	// Lifecycle actions on an admitted sandbox. Each gets an explicit route so the
-	// URL decides command and target; the request body only supplies parameters.
-	var sandboxActions = []string{
-		"configure",
-		"renew",
-		"checkpoint",
-		"pause",
-		"resume",
-		"rollback",
-		"fork",
-	}
-	for _, action := range sandboxActions {
-		v1.POST("/sandboxes/:id/"+action, h.sandboxAction(action))
-	}
 	v1.POST("/sandboxes/:id/preview", h.previewSandbox)
-	v1.POST("/templates", h.registerTemplate)
-	v1.POST("/templates/:id/build", h.buildTemplate)
-	v1.DELETE("/checkpoints/:id", h.deleteCheckpoint)
-	v1.POST("/checkpoints/:id/fork", h.forkCheckpoint)
 	return router
 }
 
@@ -148,6 +154,151 @@ func (h *handler) authenticate(c *gin.Context) {
 		value.TenantID = c.GetHeader("X-Tenant-ID")
 	}
 	c.Set("principal", value)
+}
+
+// handlers
+func (h *handler) putTenant(c *gin.Context) {
+	owner := principal(c)
+	if !owner.Root {
+		httpwire.AdminRequired().Write(c.Writer)
+		return
+	}
+	var value types.Tenant
+	if err := httpwire.ReadJSON(c.Writer, c.Request, &value); err != nil {
+		httpwire.Error(c.Writer, err)
+		return
+	}
+	if value.ID == "" || value.MaxSandboxes < 1 || value.MaxStorageMiB < 1 {
+		httpwire.InvalidRequest("tenant id and positive quotas required").Write(c.Writer)
+		return
+	}
+	if value.Token == "" {
+		var entropy [32]byte
+		if _, err := rand.Read(entropy[:]); err != nil {
+			httpwire.Error(c.Writer, err)
+			return
+		}
+		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
+	}
+	_, err := h.services.Tenants.PutTenant(c.Request.Context(), owner, value)
+	if err != nil {
+		httpwire.Error(c.Writer, err)
+		return
+	}
+	httpwire.JSON(c.Writer, 201, value)
+}
+
+func (h *handler) status(c *gin.Context) {
+	value, err := h.services.Node.Status(c.Request.Context(), principal(c))
+	httpwire.Respond(c.Writer, value, err)
+}
+
+func (h *handler) drainNode(c *gin.Context) {
+	if err := h.services.Node.Drain(principal(c)); err != nil {
+		httpwire.Error(c.Writer, err)
+		return
+	}
+	httpwire.JSON(c.Writer, 200, map[string]bool{
+		"draining": true,
+	})
+}
+
+func (h *handler) listSandboxes(c *gin.Context) {
+	value, err := h.services.Catalog.List(c.Request.Context(), principal(c))
+	httpwire.Respond(c.Writer, value, err)
+}
+
+func (h *handler) getSandbox(c *gin.Context) {
+	value, err := h.services.Catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
+	httpwire.Respond(c.Writer, value, err)
+}
+
+func (h *handler) claimSandbox(c *gin.Context) {
+	command, ok := decode(c, "claim", "", "")
+	if !ok {
+		return
+	}
+	h.submit(c, command)
+}
+
+// sandboxAction registers one lifecycle command explicitly. The route fixes
+// action and sandbox; the body only carries parameters.
+func (h *handler) sandboxAction(action string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		command, ok := decode(c, action, c.Param("id"), "")
+		if !ok {
+			return
+		}
+		if action == "fork" && command.CheckpointID != "" {
+			httpwire.InvalidRequest("sandbox fork source is the route sandbox").Write(c.Writer)
+			return
+		}
+		h.submit(c, command)
+	}
+}
+
+func (h *handler) getOperation(c *gin.Context) {
+	view, err := h.services.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
+	httpwire.Respond(c.Writer, operationView(view), err)
+}
+
+func (h *handler) listTemplates(c *gin.Context) {
+	value, err := h.services.Templates.Templates(c.Request.Context(), principal(c))
+	httpwire.Respond(c.Writer, value, err)
+}
+
+func (h *handler) registerTemplate(c *gin.Context) {
+	command, ok := decode(c, "template_put", "", "")
+	if !ok {
+		return
+	}
+	h.submit(c, command)
+}
+
+func (h *handler) buildTemplate(c *gin.Context) {
+	command, ok := decode(c, "template_build", "", "")
+	if !ok {
+		return
+	}
+	if command.Template == nil {
+		httpwire.InvalidRequest("template field is required").Write(c.Writer)
+		return
+	}
+	if command.Template.ID == "" {
+		command.Template.ID = c.Param("id")
+	}
+	if command.Template.ID != c.Param("id") {
+		httpwire.InvalidRequest("request template id disagrees with the route").Write(c.Writer)
+		return
+	}
+	h.submit(c, command)
+}
+
+func (h *handler) listCheckpoints(c *gin.Context) {
+	value, err := h.services.Catalog.Checkpoints(c.Request.Context(), principal(c))
+	httpwire.Respond(c.Writer, value, err)
+}
+
+func (h *handler) deleteCheckpoint(c *gin.Context) {
+	h.submit(c, types.Command{
+		// Clients use the public "delete_checkpoint" spelling; the stored
+		// action is "checkpoint_delete". The reverse translation lives in
+		// operation decode.
+		Action:       "checkpoint_delete",
+		CheckpointID: c.Param("id"),
+	})
+}
+
+func (h *handler) forkCheckpoint(c *gin.Context) {
+	command, ok := decode(c, "fork", "", c.Param("id"))
+	if !ok {
+		return
+	}
+	if command.SandboxID != "" {
+		httpwire.InvalidRequest("checkpoint fork source is the route checkpoint").Write(c.Writer)
+		return
+	}
+	h.submit(c, command)
 }
 
 // decode strictly reads one public command. The path decides action and target;
@@ -180,79 +331,6 @@ func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Comma
 		command.CheckpointID = checkpointID
 	}
 	return command, true
-}
-
-func (h *handler) claimSandbox(c *gin.Context) {
-	command, ok := decode(c, "claim", "", "")
-	if !ok {
-		return
-	}
-	h.submit(c, command)
-}
-
-// sandboxAction registers one lifecycle command explicitly. The route fixes
-// action and sandbox; the body only carries parameters.
-func (h *handler) sandboxAction(action string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		command, ok := decode(c, action, c.Param("id"), "")
-		if !ok {
-			return
-		}
-		if action == "fork" && command.CheckpointID != "" {
-			httpwire.InvalidRequest("sandbox fork source is the route sandbox").Write(c.Writer)
-			return
-		}
-		h.submit(c, command)
-	}
-}
-
-func (h *handler) registerTemplate(c *gin.Context) {
-	command, ok := decode(c, "template_put", "", "")
-	if !ok {
-		return
-	}
-	h.submit(c, command)
-}
-
-func (h *handler) buildTemplate(c *gin.Context) {
-	command, ok := decode(c, "template_build", "", "")
-	if !ok {
-		return
-	}
-	if command.Template == nil {
-		httpwire.InvalidRequest("template field is required").Write(c.Writer)
-		return
-	}
-	if command.Template.ID == "" {
-		command.Template.ID = c.Param("id")
-	}
-	if command.Template.ID != c.Param("id") {
-		httpwire.InvalidRequest("request template id disagrees with the route").Write(c.Writer)
-		return
-	}
-	h.submit(c, command)
-}
-
-func (h *handler) deleteCheckpoint(c *gin.Context) {
-	h.submit(c, types.Command{
-		// Clients use the public "delete_checkpoint" spelling; the stored
-		// action is "checkpoint_delete". The reverse translation lives in
-		// operation decode.
-		Action:       "checkpoint_delete",
-		CheckpointID: c.Param("id"),
-	})
-}
-
-func (h *handler) forkCheckpoint(c *gin.Context) {
-	command, ok := decode(c, "fork", "", c.Param("id"))
-	if !ok {
-		return
-	}
-	if command.SandboxID != "" {
-		httpwire.InvalidRequest("checkpoint fork source is the route checkpoint").Write(c.Writer)
-		return
-	}
-	h.submit(c, command)
 }
 
 // submit accepts one business command and delivers the accepted operation
@@ -317,77 +395,6 @@ func operationView(view types.Operation) types.Operation {
 		view.Error = &failure.Payload
 	}
 	return view
-}
-
-func (h *handler) getOperation(c *gin.Context) {
-	view, err := h.services.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
-	httpwire.Respond(c.Writer, operationView(view), err)
-}
-
-func (h *handler) listSandboxes(c *gin.Context) {
-	value, err := h.services.Catalog.List(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
-}
-
-func (h *handler) listTemplates(c *gin.Context) {
-	value, err := h.services.Templates.Templates(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
-}
-
-func (h *handler) listCheckpoints(c *gin.Context) {
-	value, err := h.services.Catalog.Checkpoints(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
-}
-
-func (h *handler) getSandbox(c *gin.Context) {
-	value, err := h.services.Catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
-	httpwire.Respond(c.Writer, value, err)
-}
-
-func (h *handler) status(c *gin.Context) {
-	value, err := h.services.Node.Status(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
-}
-
-func (h *handler) drainNode(c *gin.Context) {
-	if err := h.services.Node.Drain(principal(c)); err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	httpwire.JSON(c.Writer, 200, map[string]bool{
-		"draining": true,
-	})
-}
-
-func (h *handler) putTenant(c *gin.Context) {
-	owner := principal(c)
-	if !owner.Root {
-		httpwire.AdminRequired().Write(c.Writer)
-		return
-	}
-	var value types.Tenant
-	if err := httpwire.ReadJSON(c.Writer, c.Request, &value); err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	if value.ID == "" || value.MaxSandboxes < 1 || value.MaxStorageMiB < 1 {
-		httpwire.InvalidRequest("tenant id and positive quotas required").Write(c.Writer)
-		return
-	}
-	if value.Token == "" {
-		var entropy [32]byte
-		if _, err := rand.Read(entropy[:]); err != nil {
-			httpwire.Error(c.Writer, err)
-			return
-		}
-		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
-	}
-	_, err := h.services.Tenants.PutTenant(c.Request.Context(), owner, value)
-	if err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	httpwire.JSON(c.Writer, 201, value)
 }
 
 func (h *handler) metrics(c *gin.Context) {
