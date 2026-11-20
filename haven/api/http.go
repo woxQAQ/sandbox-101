@@ -48,18 +48,6 @@ type handler struct {
 	services Services
 }
 
-// Lifecycle actions on an admitted sandbox. Each gets an explicit route so the
-// URL decides command and target; the request body only supplies parameters.
-var sandboxActions = []string{
-	"configure",
-	"renew",
-	"checkpoint",
-	"pause",
-	"resume",
-	"rollback",
-	"fork",
-}
-
 func New(services Services) http.Handler {
 	h := &handler{
 		services: services,
@@ -113,6 +101,17 @@ func New(services Services) http.Handler {
 	v1.GET("/sandboxes/:id/connect", h.connectSandbox)
 	v1.POST("/sandboxes", h.claimSandbox)
 	v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
+	// Lifecycle actions on an admitted sandbox. Each gets an explicit route so the
+	// URL decides command and target; the request body only supplies parameters.
+	var sandboxActions = []string{
+		"configure",
+		"renew",
+		"checkpoint",
+		"pause",
+		"resume",
+		"rollback",
+		"fork",
+	}
 	for _, action := range sandboxActions {
 		v1.POST("/sandboxes/:id/"+action, h.sandboxAction(action))
 	}
