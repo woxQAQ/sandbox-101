@@ -1,5 +1,5 @@
-// Package cli shares bounded JSON file input and output for protocol clients.
-package cli
+// Package clijson reads JSON request files and writes JSON output for command-line clients.
+package clijson
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"syscall"
 )
 
-// ReadJSONFile reads one bounded intent from an explicit file. Stdin is never consumed.
-func ReadJSONFile(path string, value any) error {
+// ReadFile reads one bounded JSON value from a regular file.
+func ReadFile(path string, value any) error {
 	if path == "" || path == "-" {
 		return errors.New("--request-file requires a JSON file path")
 	}
@@ -48,7 +48,8 @@ func ReadJSONFile(path string, value any) error {
 	return nil
 }
 
-func JSON(writer io.Writer, value any) error {
+// Write encodes value as indented JSON followed by a newline.
+func Write(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)

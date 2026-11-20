@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/woxQAQ/haven/common/cli"
+	"github.com/woxQAQ/haven/common/clijson"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
 )
@@ -76,7 +76,7 @@ func run(arguments []string) error {
 			return errors.New("tenant requires --request-file FILE and takes no arguments")
 		}
 		var tenant types.Tenant
-		if err = cli.ReadJSONFile(cfg.RequestFile, &tenant); err != nil {
+		if err = clijson.ReadFile(cfg.RequestFile, &tenant); err != nil {
 			return err
 		}
 		value, err = client.PutTenant(ctx, tenant)
@@ -92,7 +92,7 @@ func run(arguments []string) error {
 			return fmt.Errorf("%s expects %d positional arguments", args[0], wantArgs-1)
 		}
 		var command types.Command
-		if err = cli.ReadJSONFile(cfg.RequestFile, &command); err != nil {
+		if err = clijson.ReadFile(cfg.RequestFile, &command); err != nil {
 			return err
 		}
 		switch args[0] {
@@ -141,5 +141,5 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	return cli.JSON(os.Stdout, value)
+	return clijson.Write(os.Stdout, value)
 }

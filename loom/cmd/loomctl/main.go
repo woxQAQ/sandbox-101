@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/woxQAQ/haven/common/cli"
+	"github.com/woxQAQ/haven/common/clijson"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
 )
@@ -85,7 +85,7 @@ func run(arguments []string) error {
 			request.CacheBuilder = cfg.CacheBuilder
 			request.CacheDiffID = cfg.CacheDiffID
 		case "request":
-			if err := cli.ReadJSONFile(cfg.RequestFile, &request); err != nil {
+			if err := clijson.ReadFile(cfg.RequestFile, &request); err != nil {
 				return err
 			}
 			if cfg.Key != "" {
@@ -108,5 +108,5 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	return cli.JSON(os.Stdout, value)
+	return clijson.Write(os.Stdout, value)
 }
