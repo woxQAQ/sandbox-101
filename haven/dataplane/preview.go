@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
@@ -21,11 +22,13 @@ type previewCapability struct {
 	Expires int64  `json:"x"`
 }
 
-// PreviewTarget contains only the verified forwarding authority of a capability.
+// PreviewTarget binds a guest forward to the identity admitted for this request.
+// PoolHost identifies reusable sockets for this tenant, sandbox birth, instance
+// and configuration. The transport keys connections by PoolHost and Port.
 type PreviewTarget struct {
-	Principal authorization.Principal
-	SandboxID string
-	Port      int
+	PoolHost string
+	Port     int
+	Forward  func(context.Context) (net.Conn, error)
 }
 
 // PreviewRequest fixes the target and requested lifetime of one signed
@@ -66,7 +69,7 @@ func (p *Plane) PreviewURL(ctx context.Context, principal authorization.Principa
 	return "/preview/" + body + "." + p.sign("preview-v1", body) + "/", nil
 }
 
-func (p *Plane) ResolvePreview(ctx context.Context, body, signature string) (PreviewTarget, error) {
+func (p *Plane) AdmitPreview(ctx context.Context, body, signature string) (PreviewTarget, error) {
 	denied := fmt.Errorf("%w: not found", errs.ErrNotFound)
 	if !hmac.Equal([]byte(signature), []byte(p.sign("preview-v1", body))) {
 		return PreviewTarget{}, denied
@@ -84,9 +87,19 @@ func (p *Plane) ResolvePreview(ctx context.Context, body, signature string) (Pre
 	if err != nil || sandbox.Epoch != value.Epoch || sandbox.State == "terminated" || value.Expires > sandbox.Deadline.Unix() {
 		return PreviewTarget{}, denied
 	}
+	var stream streamAdmission
+	view, err := p.admit(ctx, principal, value.Sandbox, &stream)
+	if err != nil {
+		return PreviewTarget{}, err
+	}
+	if view.Epoch != value.Epoch || time.Now().Unix() >= value.Expires || value.Expires > view.Deadline.Unix() {
+		return PreviewTarget{}, denied
+	}
 	return PreviewTarget{
-		Principal: principal,
-		SandboxID: value.Sandbox,
-		Port:      value.Port,
+		PoolHost: p.sign("preview-pool-v1", view.TenantID, view.ID, view.Epoch, stream.identity.Instance, stream.identity.Generation),
+		Port:     value.Port,
+		Forward: func(ctx context.Context) (net.Conn, error) {
+			return p.open(ctx, stream, value.Port)
+		},
 	}, nil
 }

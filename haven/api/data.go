@@ -3,7 +3,9 @@ package api
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -127,10 +129,23 @@ func (h *Services) previewSandbox(c *gin.Context) {
 	if _, ok := decode(c, "preview", c.Param("id"), ""); !ok {
 		return
 	}
-	port, _ := strconv.Atoi(c.Request.URL.Query().Get("port"))
-	ttl, _ := strconv.ParseInt(c.Request.URL.Query().Get("ttl_seconds"), 10, 64)
-	if ttl == 0 {
-		ttl = 300
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		invalidRequest(c, "invalid preview query")
+		return
+	}
+	port, err := strconv.Atoi(query.Get("port"))
+	if len(query["port"]) != 1 || err != nil || port < 1 || port > 65535 {
+		invalidRequest(c, "port must be an integer from 1 to 65535")
+		return
+	}
+	ttl := int64(300)
+	if values, present := query["ttl_seconds"]; present {
+		ttl, err = strconv.ParseInt(values[0], 10, 64)
+		if len(values) != 1 || err != nil || ttl <= 0 || ttl > math.MaxInt64/int64(time.Second) {
+			invalidRequest(c, "ttl_seconds must be a positive duration in whole seconds")
+			return
+		}
 	}
 	path, err := h.Dataplane.PreviewURL(c.Request.Context(), principal(c), dataplane.PreviewRequest{
 		SandboxID: c.Param("id"),
@@ -146,7 +161,23 @@ func (h *Services) previewSandbox(c *gin.Context) {
 	})
 }
 
-func (h *Services) preview(c *gin.Context) {
+type previewTargetKey struct{}
+
+func newPreviewTransport() *http.Transport {
+	return &http.Transport{
+		MaxIdleConns:          32,
+		IdleConnTimeout:       15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			target := ctx.Value(previewTargetKey{}).(dataplane.PreviewTarget)
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return target.Forward(ctx)
+		},
+	}
+}
+
+func (h *Services) preview(c *gin.Context, transport *http.Transport) {
 	w := c.Writer
 	r := c.Request
 	path := strings.TrimPrefix(r.URL.Path, "/preview/")
@@ -156,29 +187,21 @@ func (h *Services) preview(c *gin.Context) {
 		notFound(c)
 		return
 	}
-	target, err := h.Dataplane.ResolvePreview(r.Context(), body, signature)
+	target, err := h.Dataplane.AdmitPreview(r.Context(), body, signature)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	if _, err = h.Dataplane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
-		writeError(c, err)
-		return
-	}
-	transport := &http.Transport{
-		DisableKeepAlives: true,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return h.Dataplane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
-		},
-	}
-	defer transport.CloseIdleConnections()
+	port := strconv.Itoa(target.Port)
 	proxy := &httputil.ReverseProxy{
 		Transport: transport,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(&url.URL{
 				Scheme: "http",
-				Host:   net.JoinHostPort("127.0.0.1", strconv.Itoa(target.Port)),
+				Host:   net.JoinHostPort(target.PoolHost, port),
 			})
+			// URL.Host selects the isolated pool. Host is the guest-facing HTTP authority.
+			request.Out.Host = net.JoinHostPort("127.0.0.1", port)
 			request.Out.URL.Path = "/" + tail
 			request.Out.URL.RawPath = ""
 			request.Out.Header.Del("Authorization")
@@ -189,13 +212,17 @@ func (h *Services) preview(c *gin.Context) {
 			response.Header.Set("Referrer-Policy", "no-referrer")
 			return nil
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
+			if admission, ok := errors.AsType[dataplane.AdmissionError](err); ok {
+				writeError(c, admission)
+				return
+			}
 			c.AbortWithStatusJSON(http.StatusBadGateway, types.ApiError{
 				Code:    types.CodeInternal,
 				Message: "preview upstream unavailable",
 			})
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), previewTargetKey{}, target)))
 }

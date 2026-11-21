@@ -11,6 +11,7 @@ import (
 	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/types"
 )
@@ -25,6 +26,17 @@ func (p *Plane) beginCall() error {
 // Ready verifies actual resource collaboration outside the short publication
 // guard, then repeats lease/fence/generation checks before local admission.
 func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id string) (types.Sandbox, error) {
+	return p.admit(ctx, principal, id, nil)
+}
+
+// streamAdmission pins the resource and configuration checked before dialing.
+type streamAdmission struct {
+	principal authorization.Principal
+	identity  ephemeral.ConnectionIdentity
+	resource  loom.Resource
+}
+
+func (p *Plane) admit(ctx context.Context, principal authorization.Principal, id string, stream *streamAdmission) (types.Sandbox, error) {
 	if err := p.beginCall(); err != nil {
 		return types.Sandbox{}, err
 	}
@@ -99,16 +111,25 @@ func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id
 	guard := p.guards.ForSandboxConfiguration(id)
 	guard.Lock()
 	defer guard.Unlock()
-	view, settings, err = p.finalAdmission(ctx, principal, ephemeral.ConnectionIdentity{
+	identity := ephemeral.ConnectionIdentity{
 		SandboxID:  id,
 		Instance:   view.Instance,
 		Generation: settings.Generation,
-	})
+	}
+	view, settings, err = p.finalAdmission(ctx, principal, identity)
 	if err != nil {
 		return view, err
 	}
 	view.Env = settings.Env
-	return p.renewLease(ctx, id, view, settings)
+	view, err = p.renewLease(ctx, id, view, settings)
+	if err == nil && stream != nil {
+		*stream = streamAdmission{
+			principal: principal,
+			identity:  identity,
+			resource:  source.Input.Resource,
+		}
+	}
+	return view, err
 }
 
 // finalAdmission verifies the original connection identity under the
@@ -173,53 +194,48 @@ func (p *Plane) renewLease(ctx context.Context, id string, view types.Sandbox, s
 	return view, nil
 }
 
-func (p *Plane) open(ctx context.Context, principal authorization.Principal, id string, port int) (net.Conn, error) {
+// AdmissionError identifies a failure to hand off a newly dialed socket.
+// The preview proxy preserves its HTTP status even after dialing has started.
+type AdmissionError struct {
+	error
+}
+
+func (e AdmissionError) Unwrap() error {
+	return e.error
+}
+
+func (p *Plane) open(ctx context.Context, admission streamAdmission, port int) (net.Conn, error) {
 	if err := p.beginCall(); err != nil {
-		return nil, err
+		return nil, AdmissionError{err}
 	}
 	defer p.lifetime.End()
-	view, err := p.Ready(ctx, principal, id)
-	if err != nil {
-		return nil, err
-	}
-	settings, err := sandbox.LoadSettings(ctx, p.store.Database, id)
-	if err != nil {
-		return nil, err
-	}
-	source, err := p.catalog.ResourceForData(ctx, view)
-	if err != nil {
-		return nil, err
-	}
 	if p.opts.Guest == nil {
-		return nil, fmt.Errorf("%w: guest workload effects unavailable", errs.ErrIncompatible)
+		return nil, AdmissionError{fmt.Errorf("%w: guest workload effects unavailable", errs.ErrIncompatible)}
 	}
+	identity, principal := admission.identity, admission.principal
 	var conn net.Conn
+	var err error
 	if port == 0 {
-		conn, err = p.opts.Guest.Connect(ctx, source.Input.Resource)
+		conn, err = p.opts.Guest.Connect(ctx, admission.resource)
 	} else {
-		conn, err = p.opts.Guest.Forward(ctx, source.Input.Resource, port)
+		conn, err = p.opts.Guest.Forward(ctx, admission.resource, port)
 	}
 	if err != nil {
 		return nil, err
 	}
-	identity := ephemeral.ConnectionIdentity{
-		SandboxID:  id,
-		Instance:   view.Instance,
-		Generation: settings.Generation,
-	}
-	guard := p.guards.ForSandboxConfiguration(id)
+	guard := p.guards.ForSandboxConfiguration(identity.SandboxID)
 	guard.Lock()
 	if _, _, err = p.finalAdmission(ctx, principal, identity); err != nil {
 		guard.Unlock()
 		_ = conn.Close()
-		return nil, err
+		return nil, AdmissionError{err}
 	}
 	p.mu.Lock()
 	if p.store.Reviewed || !p.lifetime.Begin() {
 		p.mu.Unlock()
 		guard.Unlock()
 		_ = conn.Close()
-		return nil, fmt.Errorf("%w: haven is closing", errs.ErrConflict)
+		return nil, AdmissionError{fmt.Errorf("%w: haven is closing", errs.ErrConflict)}
 	}
 	tracked := p.registry.Track(conn, identity)
 	p.mu.Unlock()
@@ -284,14 +300,11 @@ func (p *Plane) Attach(ctx context.Context, principal authorization.Principal, r
 }
 
 func (p *Plane) Connect(ctx context.Context, principal authorization.Principal, id string) (net.Conn, error) {
-	return p.open(ctx, principal, id, 0)
-}
-
-func (p *Plane) Forward(ctx context.Context, principal authorization.Principal, id string, port int) (net.Conn, error) {
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("%w: invalid forward port", errs.ErrInvalid)
+	var admission streamAdmission
+	if _, err := p.admit(ctx, principal, id, &admission); err != nil {
+		return nil, err
 	}
-	return p.open(ctx, principal, id, port)
+	return p.open(ctx, admission, 0)
 }
 
 func (p *Plane) enforceLease(conn *ephemeral.Connection, principal authorization.Principal) {

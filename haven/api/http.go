@@ -104,7 +104,10 @@ func New(h Services) http.Handler {
 		v1.POST("/checkpoints/:id/fork", h.forkCheckpoint)
 	}
 	// see data.go
-	router.Any("/preview/*path", h.preview)
+	previewTransport := newPreviewTransport()
+	router.Any("/preview/*path", func(c *gin.Context) {
+		h.preview(c, previewTransport)
+	})
 	v1.GET("/sandboxes/:id/connect", h.connectSandbox)
 	v1.POST("/sandboxes/:id/preview", h.previewSandbox)
 	return router

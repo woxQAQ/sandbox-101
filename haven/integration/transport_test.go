@@ -289,38 +289,93 @@ func TestRustPreviewUsesRawForward(t *testing.T) {
 		if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
 			t.Error("preview forwarded platform credentials")
 		}
+		if r.Host != r.Context().Value(http.LocalAddrContextKey).(net.Addr).String() {
+			t.Errorf("preview sent guest Host %q", r.Host)
+		}
+		w.Header().Set("Fixture-Peer", r.RemoteAddr)
 		w.Header().Add("Referrer-Policy", "unsafe-url")
 		_, _ = io.WriteString(w, "preview:"+r.URL.Path)
 	}))
 	defer upstream.Close()
 	port := upstream.Listener.Addr().(*net.TCPAddr).Port
-	capability, err := service.Dataplane.PreviewURL(context.Background(), principal, dataplane.PreviewRequest{
-		SandboxID: id,
-		Port:      port,
-		TTL:       time.Minute,
+	preview := func(id string) string {
+		t.Helper()
+		path, err := service.Dataplane.PreviewURL(t.Context(), principal, dataplane.PreviewRequest{
+			SandboxID: id,
+			Port:      port,
+			TTL:       time.Minute,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client.Endpoint + path
+	}
+	fetch := func(url string) string {
+		t.Helper()
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url+"hello", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer harmless-preview-test")
+		request.Header.Set("Cookie", "platform=harmless-preview-test")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = response.Body.Close()
+		}()
+		body, err := io.ReadAll(response.Body)
+		if err != nil || response.StatusCode != 200 || string(body) != "preview:/hello" {
+			t.Fatalf("preview: HTTP %d %q %v", response.StatusCode, body, err)
+		}
+		if policies := response.Header.Values("Referrer-Policy"); len(policies) != 1 || policies[0] != "no-referrer" {
+			t.Fatalf("guest overrode Preview referrer protection: %v", policies)
+		}
+		return response.Header.Get("Fixture-Peer")
+	}
+	epoch := func() int64 {
+		t.Helper()
+		value, err := service.State.Epoch(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	first := fetch(preview(id))
+	other, err := service.CommandAdmission.Execute(t.Context(), principal, "preview-auto-renew", operation.Intent{
+		Action:     "claim",
+		TemplateID: "fixture",
+		AutoRenew:  true,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequest("GET", client.Endpoint+capability+"hello", nil)
+	otherID := other.Result.SandboxID
+	url := preview(otherID)
+	before := epoch()
+	peer := fetch(url)
+	if peer == first || epoch() != before+1 {
+		t.Fatal("first request must open a sandbox-specific forward and checkpoint one renewal")
+	}
+	if fetch(url) != peer || epoch() != before+2 {
+		t.Fatal("second request must reuse its forward and checkpoint one fresh renewal")
+	}
+	_, err = service.CommandAdmission.Execute(t.Context(), principal, "preview-reconfigure", operation.Intent{
+		Action:    "configure",
+		SandboxID: otherID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer harmless-preview-test")
-	request.Header.Set("Cookie", "platform=harmless-preview-test")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = response.Body.Close()
-	}()
-	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode != 200 || string(body) != "preview:/hello" {
-		t.Fatalf("preview: HTTP %d %q", response.StatusCode, body)
-	}
-	if policies := response.Header.Values("Referrer-Policy"); len(policies) != 1 || policies[0] != "no-referrer" {
-		t.Fatalf("guest overrode Preview referrer protection: %v", policies)
+	if fetch(url) == peer {
+		t.Fatal("reconfigured sandbox reused a previous generation's forward")
 	}
 }
 

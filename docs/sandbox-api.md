@@ -134,4 +134,8 @@ configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 s
 
 数据 setup、最终 downstream Hijack 和上下游连接均参与配置 guard、revocation registry 与 shutdown。Preview 绑定 tenant/sandbox/epoch/port/expiry，期限不超 lease；移除 Authorization/Cookie，强制 no-referrer。当前没有每 sandbox 浏览器 origin。
 
+Preview 签发要求 `port` 为 1–65535 的整数。省略 `ttl_seconds` 取 300 秒；显式提供时须为可表示的正整数秒，空值、重复值及越界值返回 400。实际有效期以 sandbox lease 为上限。
+
+每次 Preview HTTP 请求均验签并完成一次 readiness admission，开启 `auto_renew` 时续租一次。同一 tenant、sandbox creation epoch、实例、配置代次和端口可复用已登记的 guest forward。新 forward 建连上限为 5 秒，请求写完后等待上游响应头的上限为 30 秒；两个超时都返回 502。响应体可以继续流式传输，连接仍受 lease、配置撤权与 shutdown 约束。
+
 当前 schema 见 [Haven control](haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。各运行场景的输入见[测试入口](../scripts/README.md)，历史源码与材料见[验证记录](verification-history.md)。
