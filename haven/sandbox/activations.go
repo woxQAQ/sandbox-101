@@ -140,7 +140,7 @@ func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machi
 	})); err != nil {
 		return err
 	}
-	if err := store.RequireOne(dbgen.New(tx).InsertConfigurationFence(a.ctx, dbgen.InsertConfigurationFenceParams{
+	if err := store.RequireOne(dbgen.New(tx).InsertFence(a.ctx, dbgen.InsertFenceParams{
 		SandboxID:   resource.SandboxID,
 		OperationID: record.ID,
 	})); err != nil {

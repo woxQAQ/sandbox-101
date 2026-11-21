@@ -31,8 +31,8 @@ UPDATE sandboxes SET state='provisioning',body=sqlc.arg(new_body) WHERE id=sqlc.
 -- name: InsertSandboxSettings :execrows
 INSERT INTO sandbox_settings(sandbox_id,body) VALUES(?,?);
 
--- name: InsertConfigurationFence :execrows
-INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?);
+-- name: InsertFence :execrows
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?);
 
 -- name: UpdateProvisioningSandboxBody :execrows
 UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='provisioning';
@@ -65,10 +65,10 @@ SELECT tenant FROM sandboxes WHERE id=?;
 SELECT body FROM sandbox_settings WHERE sandbox_id=?;
 
 -- name: UpsertFence :execrows
-INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id;
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id;
 
 -- name: GetFence :one
-SELECT operation_id FROM configuration_fences WHERE sandbox_id=?;
+SELECT operation_id FROM sandbox_operation_fences WHERE sandbox_id=?;
 
 -- name: ListSandboxIDs :many
 SELECT id,tenant FROM sandboxes ORDER BY id;
@@ -92,4 +92,4 @@ INSERT INTO checkpoint_bindings(id,tenant,snapshot_id,operation_id,body) VALUES(
 DELETE FROM checkpoint_bindings WHERE id=? AND tenant=? AND snapshot_id=? AND body=?;
 
 -- name: DeleteFence :execrows
-DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?;
+DELETE FROM sandbox_operation_fences WHERE sandbox_id=? AND operation_id=?;

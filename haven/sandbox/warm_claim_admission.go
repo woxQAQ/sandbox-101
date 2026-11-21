@@ -169,7 +169,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	})); err != nil {
 		return empty, false, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertConfigurationFence(ctx, dbgen.InsertConfigurationFenceParams{
+	if err = store.RequireOne(dbgen.New(tx).InsertFence(ctx, dbgen.InsertFenceParams{
 		SandboxID:   selected.SandboxID,
 		OperationID: accepted.ID,
 	})); err != nil {

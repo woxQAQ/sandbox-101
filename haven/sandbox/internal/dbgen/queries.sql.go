@@ -69,7 +69,7 @@ func (q *Queries) DeleteCheckpoint(ctx context.Context, arg DeleteCheckpointPara
 }
 
 const deleteFence = `-- name: DeleteFence :execrows
-DELETE FROM configuration_fences WHERE sandbox_id=? AND operation_id=?
+DELETE FROM sandbox_operation_fences WHERE sandbox_id=? AND operation_id=?
 `
 
 type DeleteFenceParams struct {
@@ -114,7 +114,7 @@ func (q *Queries) GetCheckpoint(ctx context.Context, id string) ([]byte, error) 
 }
 
 const getFence = `-- name: GetFence :one
-SELECT operation_id FROM configuration_fences WHERE sandbox_id=?
+SELECT operation_id FROM sandbox_operation_fences WHERE sandbox_id=?
 `
 
 func (q *Queries) GetFence(ctx context.Context, sandboxID string) (string, error) {
@@ -198,17 +198,17 @@ func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointPara
 	return result.RowsAffected()
 }
 
-const insertConfigurationFence = `-- name: InsertConfigurationFence :execrows
-INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?)
+const insertFence = `-- name: InsertFence :execrows
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?)
 `
 
-type InsertConfigurationFenceParams struct {
+type InsertFenceParams struct {
 	SandboxID   string
 	OperationID string
 }
 
-func (q *Queries) InsertConfigurationFence(ctx context.Context, arg InsertConfigurationFenceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertConfigurationFence, arg.SandboxID, arg.OperationID)
+func (q *Queries) InsertFence(ctx context.Context, arg InsertFenceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertFence, arg.SandboxID, arg.OperationID)
 	if err != nil {
 		return 0, err
 	}
@@ -666,7 +666,7 @@ func (q *Queries) UpdateSandboxBody(ctx context.Context, arg UpdateSandboxBodyPa
 }
 
 const upsertFence = `-- name: UpsertFence :execrows
-INSERT INTO configuration_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id
 `
 
 type UpsertFenceParams struct {

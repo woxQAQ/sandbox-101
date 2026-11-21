@@ -15,7 +15,7 @@ var epochTables = []string{
 	"operation_credentials",
 	"sandbox_settings",
 	"network_policies",
-	"configuration_fences",
+	"sandbox_operation_fences",
 	"vms",
 	"instances",
 	"resource_versions",

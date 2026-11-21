@@ -97,13 +97,13 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			case "final_settings":
 				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandbox_settings WHEN json_extract(NEW.body,'$.active_epoch') IS NOT NULL AND json_extract(NEW.body,'$.env.REVISION')='new' BEGIN SELECT RAISE(ABORT,'private final settings refusal'); END`
 			case "fence_delete":
-				statement = `CREATE TRIGGER deny_config BEFORE DELETE ON configuration_fences BEGIN SELECT RAISE(ABORT,'private fence refusal'); END`
+				statement = `CREATE TRIGGER deny_config BEFORE DELETE ON sandbox_operation_fences BEGIN SELECT RAISE(ABORT,'private fence refusal'); END`
 			case "fence_ignored":
-				statement = `CREATE TRIGGER deny_config BEFORE DELETE ON configuration_fences BEGIN SELECT RAISE(IGNORE); END`
+				statement = `CREATE TRIGGER deny_config BEFORE DELETE ON sandbox_operation_fences BEGIN SELECT RAISE(IGNORE); END`
 			case "operation_result":
 				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON operations WHEN NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'private result refusal'); END`
 			case "commit":
-				statement = `CREATE TABLE fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER deny_config AFTER DELETE ON configuration_fences BEGIN INSERT INTO fault_child VALUES(1); END`
+				statement = `CREATE TABLE fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER deny_config AFTER DELETE ON sandbox_operation_fences BEGIN INSERT INTO fault_child VALUES(1); END`
 			}
 			if statement != "" {
 				if _, err = service.State.Database().Exec(statement); err != nil {
@@ -133,7 +133,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			}
 			testutil.WaitFixtureWorker(t, service, failed.ID)
 			var fence string
-			if err = service.State.Database().QueryRow("SELECT operation_id FROM configuration_fences WHERE sandbox_id=?", before.ID).Scan(&fence); err != nil || fence != failed.ID {
+			if err = service.State.Database().QueryRow("SELECT operation_id FROM sandbox_operation_fences WHERE sandbox_id=?", before.ID).Scan(&fence); err != nil || fence != failed.ID {
 				t.Fatal("failure lost durable fence", fence, failed, err)
 			}
 			after, err := service.Catalog.Get(ctx, principal, before.ID)

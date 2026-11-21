@@ -48,7 +48,7 @@ CREATE TABLE snapshot_owners(snapshot_id TEXT PRIMARY KEY,tenant_id TEXT NOT NUL
 CREATE TABLE operation_credentials(operation_id TEXT PRIMARY KEY REFERENCES operations(id),request_mac TEXT NOT NULL);
 CREATE TABLE sandbox_settings(sandbox_id TEXT PRIMARY KEY REFERENCES sandboxes(id),body BLOB NOT NULL);
 CREATE TABLE network_policies(vm_id TEXT PRIMARY KEY REFERENCES vms(id),instance TEXT NOT NULL,operation_id TEXT NOT NULL REFERENCES operations(id),body BLOB NOT NULL);
-CREATE TABLE configuration_fences(sandbox_id TEXT PRIMARY KEY,operation_id TEXT NOT NULL REFERENCES operations(id));
+CREATE TABLE sandbox_operation_fences(sandbox_id TEXT PRIMARY KEY,operation_id TEXT NOT NULL REFERENCES operations(id));
 CREATE TABLE vms(id TEXT PRIMARY KEY NOT NULL,slot INTEGER NOT NULL UNIQUE CHECK(slot>=0),current_instance TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('creating','created','running','stopped')),operation_id TEXT REFERENCES operations(id),body BLOB NOT NULL);
 CREATE TABLE instances(id TEXT PRIMARY KEY,vm_id TEXT NOT NULL REFERENCES vms(id),operation_id TEXT NOT NULL REFERENCES operations(id),body BLOB NOT NULL);
 CREATE TABLE resource_versions(id TEXT PRIMARY KEY,vm_id TEXT NOT NULL REFERENCES vms(id),operation_id TEXT NOT NULL,step_key TEXT NOT NULL,body BLOB NOT NULL,FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key));
