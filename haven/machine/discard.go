@@ -110,8 +110,8 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		Request DiscardRequest
 	}{"discard", request})
 	hash := operation.Digest(frozen)
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	closing := d.lifetime.Closing() || d.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)

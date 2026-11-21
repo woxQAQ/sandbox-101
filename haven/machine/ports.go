@@ -30,11 +30,9 @@ type SupplyCleanupAuthority interface {
 }
 
 // VMGuards borrows the shared admission and per-VM lock domains.
-type VMGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
+type VMGuards struct {
+	StoreWriteMu   execution.Guard
+	LifecycleLocks *execution.KeyedLocks[string]
 }
 
 // ActivationProof carries only the original step identity and resource linkage.

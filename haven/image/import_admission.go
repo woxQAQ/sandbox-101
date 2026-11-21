@@ -34,9 +34,8 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 	if err != nil {
 		return empty, err
 	}
-	guard := i.guards.ForNodeIdempotencyKey(i.nodeID, key)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := i.nodeIdempotencyLocks.Lock(i.nodeID, key)
+	defer unlock()
 	frozen := operation.Encode(struct {
 		Action  string
 		Options imageimport.ImageImportOptions
@@ -51,8 +50,8 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		}
 		return cached, err
 	}
-	i.guards.ForImageArtifacts().Lock()
-	defer i.guards.ForImageArtifacts().Unlock()
+	i.imageArtifactsMu.Lock()
+	defer i.imageArtifactsMu.Unlock()
 	if err = ctx.Err(); err != nil {
 		return empty, err
 	}
@@ -83,8 +82,8 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		input.Plan = &plan
 		input.Reservation = options.MaxBytes*4 + options.MaxFiles*8192 + 32<<20
 	}
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	if err = i.gate.Check(); err != nil {
 		return empty, err
 	}

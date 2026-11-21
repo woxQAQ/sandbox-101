@@ -144,8 +144,8 @@ func (i *Images) runImageImport(step imageImportStep) (returned error) {
 }
 
 func (i *Images) failImageImport(step imageImportStep) error {
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
@@ -207,8 +207,8 @@ func (i *Images) completeImageImport(step imageImportStep) error {
 	if err := proof.Verify(i.ctx, i.directory, step.Input.Target, *step.State.Boundary); err != nil {
 		return err
 	}
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err

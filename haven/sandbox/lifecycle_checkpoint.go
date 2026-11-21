@@ -119,9 +119,8 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "checkpoint_delete" || command.CheckpointID == "" {
 		return empty, fmt.Errorf("%w: checkpoint deletion requires tenant authority, checkpoint and key", errs.ErrInvalid)
 	}
-	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	unlock := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
 	mac := l.identity.CommandMAC(principal, command)
 	if cached, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
@@ -132,8 +131,8 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if err != nil {
 		return empty, err
 	}
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	if err = l.gate.Check(); err != nil {
 		return empty, err
 	}
@@ -251,8 +250,8 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 // not launch, capture or renew the source and cannot infer a missing pause receipt.
 func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.State, input LifecycleInput, mac string) (operation.State, error) {
 	var empty operation.State
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}

@@ -49,8 +49,8 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		Request ReleaseRequest
 	}{"release", request})
 	hash := operation.Digest(frozen)
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	closing := d.lifetime.Closing() || d.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)

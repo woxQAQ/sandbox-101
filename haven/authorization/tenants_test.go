@@ -86,8 +86,8 @@ func TestHavenTenantCheckpointFailureRetainsCommittedCredential(t *testing.T) {
 	service := newTenantFixture(t)
 	failure := errors.New("fixture checkpoint unavailable")
 	service.Tenants = authorization.NewTenants(authorization.New(service.State.Database()), authorization.TenantDependencies{
-		Admission: service.Admission,
-		Lifetime:  service.Lifetime,
+		StoreWriteMu: service.StoreWriteMu,
+		Lifetime:     service.Lifetime,
 		Checkpoint: func() error {
 			return failure
 		},
@@ -114,7 +114,7 @@ type tenantFixture struct {
 	State          *store.State
 	Tenants        *authorization.Tenants
 	Authentication *authorization.Authentication
-	Admission      sync.Locker
+	StoreWriteMu   sync.Locker
 	Lifetime       *execution.Lifetime
 }
 
@@ -122,17 +122,17 @@ func newTenantFixture(t *testing.T) *tenantFixture {
 	t.Helper()
 	state := testfixture.OpenState(t)
 	lifetime := execution.NewLifetime(context.Background())
-	gate := &sync.Mutex{}
+	storeWriteMu := &sync.Mutex{}
 	fixture := &tenantFixture{
 		State: state,
 		Tenants: authorization.NewTenants(authorization.New(state.Database()), authorization.TenantDependencies{
-			Admission:  gate,
-			Lifetime:   lifetime,
-			Reviewed:   state.Reviewed(),
-			Checkpoint: state.Checkpoint,
+			StoreWriteMu: storeWriteMu,
+			Lifetime:     lifetime,
+			Reviewed:     state.Reviewed(),
+			Checkpoint:   state.Checkpoint,
 		}),
 		Authentication: authorization.NewAuthentication("fixture-root-token", authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign),
-		Admission:      gate,
+		StoreWriteMu:   storeWriteMu,
 		Lifetime:       lifetime,
 	}
 	t.Cleanup(func() {

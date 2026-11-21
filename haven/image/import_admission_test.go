@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,15 +124,16 @@ func newImageFixture(t *testing.T) *imageFixture {
 	t.Helper()
 	state := testfixture.OpenState(t)
 	lifetime := execution.NewLifetime(t.Context())
-	guards := execution.NewGuards()
 	workers := execution.NewWorkers(lifetime)
-	gate := execution.NewAdmissionGate(guards.ForServiceAdmission(), lifetime, state.Reviewed())
+	gate := execution.NewAdmissionGate(new(sync.Mutex), lifetime, state.Reviewed())
 	fixture := &imageFixture{
 		State: state,
 		Images: image.NewImages(state, image.ImageDependencies{
-			Guards:  guards,
-			Gate:    gate,
-			Workers: workers,
+			StoreWriteMu:         new(sync.Mutex),
+			ImageArtifactsMu:     new(sync.Mutex),
+			NodeIdempotencyLocks: new(operation.IdempotencyLocks),
+			Gate:                 gate,
+			Workers:              workers,
 		}, image.ImageOptions{}),
 		Operations: operation.NewMonitor(state.Database(), workers, state.Identity().Identity),
 		Workers:    workers,

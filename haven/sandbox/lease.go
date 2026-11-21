@@ -64,9 +64,8 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	if command.Action != "renew" || command.SandboxID == "" || principal.TenantID == "" || key == "" || len(key) > 256 || (principal.SandboxID != "" && principal.SandboxID != command.SandboxID) {
 		return empty, fmt.Errorf("%w: renew requires scoped sandbox and key", errs.ErrInvalid)
 	}
-	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
 	previous, found, err := l.identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
@@ -80,11 +79,10 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 		}
 		return previous, nil
 	}
-	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	unlock := l.sandboxConfigLocks.Lock(command.SandboxID)
+	defer unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}

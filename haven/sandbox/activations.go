@@ -42,15 +42,6 @@ type EgressBindings interface {
 	Revoke(sandboxID string) error
 }
 
-type ActivationGuards interface {
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
-	ForSandboxConfiguration(sandboxID string) execution.Guard
-}
-
 type ActivationOptions struct {
 	Backend ActivationBackend
 	Guest   ActivationGuest
@@ -63,30 +54,32 @@ type ActivationOptions struct {
 // ActivationDependencies names the shared guards, lifetime and publication
 // authority borrowed while activating a sandbox.
 type ActivationDependencies struct {
-	Guards    ActivationGuards
-	Lifetime  *execution.Lifetime
-	Registry  *ephemeral.Registry
-	Proofs    machine.ResourceProofs
-	Committer *operation.Committer
+	VMGuards           machine.VMGuards
+	SandboxConfigLocks *execution.KeyedLocks[string]
+	Lifetime           *execution.Lifetime
+	Registry           *ephemeral.Registry
+	Proofs             machine.ResourceProofs
+	Committer          *operation.Committer
 }
 
 // Activations establishes guest delivery under a frozen configuration. The
 // parent runner retains its original VM guard and worker custody throughout.
 type Activations struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	guards     ActivationGuards
-	proofs     machine.ResourceProofs
-	backend    ActivationBackend
-	guest      ActivationGuest
-	egress     EgressBindings
-	caPEM      string
-	epoch      string
-	registry   *ephemeral.Registry
-	sign       func(...string) string
-	faultPoint func(string) error
-	committer  *operation.Committer
+	store              store.Workflow
+	ctx                context.Context
+	storeWriteMu       execution.Guard
+	vmLifecycleLocks   *execution.KeyedLocks[string]
+	sandboxConfigLocks *execution.KeyedLocks[string]
+	proofs             machine.ResourceProofs
+	backend            ActivationBackend
+	guest              ActivationGuest
+	egress             EgressBindings
+	caPEM              string
+	epoch              string
+	registry           *ephemeral.Registry
+	sign               func(...string) string
+	faultPoint         func(string) error
+	committer          *operation.Committer
 }
 
 func NewActivations(state *store.State, dependencies ActivationDependencies, options ActivationOptions) *Activations {
@@ -97,19 +90,20 @@ func NewActivations(state *store.State, dependencies ActivationDependencies, opt
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Lifetime.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		proofs:     dependencies.Proofs,
-		backend:    options.Backend,
-		guest:      options.Guest,
-		egress:     options.Egress,
-		caPEM:      options.CAPEM,
-		epoch:      options.Epoch,
-		registry:   dependencies.Registry,
-		sign:       state.Sign,
-		faultPoint: options.Fault,
-		committer:  dependencies.Committer,
+		ctx:                dependencies.Lifetime.Context(),
+		storeWriteMu:       dependencies.VMGuards.StoreWriteMu,
+		vmLifecycleLocks:   dependencies.VMGuards.LifecycleLocks,
+		sandboxConfigLocks: dependencies.SandboxConfigLocks,
+		proofs:             dependencies.Proofs,
+		backend:            options.Backend,
+		guest:              options.Guest,
+		egress:             options.Egress,
+		caPEM:              options.CAPEM,
+		epoch:              options.Epoch,
+		registry:           dependencies.Registry,
+		sign:               state.Sign,
+		faultPoint:         options.Fault,
+		committer:          dependencies.Committer,
 	}
 }
 
@@ -174,10 +168,7 @@ func (a *Activations) Resume(operationID string) (bool, error) {
 		if lookup != nil {
 			return false, lookup
 		}
-		guard := a.guards.ForVMLifecycle(source.Candidate)
-		guard.Lock()
-		defer guard.Unlock()
-		return true, a.Continue(operationID)
+		return true, a.activateVM(source.Candidate, operationID)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
@@ -188,9 +179,8 @@ func (a *Activations) Resume(operationID string) (bool, error) {
 // blockActivation retains the configuration fence and all resource charges. A
 // superseded worker records only its own failure and cannot revoke a successor.
 func (a *Activations) blockActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := a.sandboxConfigLocks.Lock(step.Input.SandboxID)
+	defer unlock()
 	return a.BlockGuarded(step, source)
 }
 
@@ -209,8 +199,8 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 		cleanupErr = a.backend.SetNetworkEnabled(ctx, source.Input.Resource, false)
 		cleanupErr = errors.Join(cleanupErr, a.RevokeSandbox(step.Input.SandboxID))
 	}
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.Join(cleanupErr, err)
@@ -287,9 +277,8 @@ func (a *Activations) activationSecrets(step ActivationStep) (map[string]egress.
 }
 
 func (a *Activations) bindActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := a.sandboxConfigLocks.Lock(step.Input.SandboxID)
+	defer unlock()
 	if _, err := a.checkActivation(step); err != nil {
 		return err
 	}

@@ -54,8 +54,8 @@ func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent 
 		Request StopRequest
 	}{"stop", request})
 	hash := operation.Digest(frozen)
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	closing := s.lifetime.Closing() || s.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")
@@ -236,14 +236,14 @@ func (s *Stops) runStop(step StopStep) error {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	s.admission.Lock()
+	s.storeWriteMu.Lock()
 	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	var source ResourceStep
 	if err == nil {
 		source, _, err = s.stopProof(tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	s.admission.Unlock()
+	s.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -289,8 +289,8 @@ func (s *Stops) runStop(step StopStep) error {
 	if err = s.fault("stop_effect_stopped"); err != nil {
 		return err
 	}
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	tx, err = s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err

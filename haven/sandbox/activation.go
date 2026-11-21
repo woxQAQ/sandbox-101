@@ -76,8 +76,8 @@ func LoadActivation(ctx context.Context, query store.DBTX, id string) (Activatio
 }
 
 func (a *Activations) checkActivation(step ActivationStep) (machine.ResourceStep, error) {
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return machine.ResourceStep{}, err
@@ -97,8 +97,8 @@ func (a *Activations) checkActivation(step ActivationStep) (machine.ResourceStep
 }
 
 func (a *Activations) markActivation(step *ActivationStep, phase string) error {
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
@@ -130,8 +130,8 @@ func (a *Activations) markActivation(step *ActivationStep, phase string) error {
 }
 
 func (a *Activations) commitActivationPolicy(step ActivationStep, source machine.ResourceStep, policy *loom.NetworkPolicy) error {
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err
@@ -196,8 +196,8 @@ func (a *Activations) commitActivationPolicy(step ActivationStep, source machine
 }
 
 func (a *Activations) completeActivation(step ActivationStep) error {
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err

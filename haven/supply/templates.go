@@ -137,9 +137,8 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Template == nil || (command.Action != "template_put" && command.Action != "template_build") {
 		return empty, fmt.Errorf("%w: template requires tenant authority, specification and key", errs.ErrInvalid)
 	}
-	keyGuard := s.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	unlock := s.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
 	mac := s.commands.CommandMAC(principal, command)
 	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
@@ -282,8 +281,8 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 }
 
 func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, input SupplyInput, mac string) (operation.State, error) {
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	if err := s.gate.Check(); err != nil {
 		return operation.State{}, err
 	}

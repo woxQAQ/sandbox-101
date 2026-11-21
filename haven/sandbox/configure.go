@@ -33,9 +33,8 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	if err != nil {
 		return empty, err
 	}
-	keyGuard := sb.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	releaseKey := sb.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer releaseKey()
 	mac := sb.identity.CommandMAC(principal, command)
 	retry := &ClaimAdmission{
 		MAC:     mac,
@@ -44,9 +43,8 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	if accepted, found, err := sb.existing(ctx, principal, key, retry); found || err != nil {
 		return accepted, err
 	}
-	guard := sb.guards.ForSandboxConfiguration(command.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := sb.sandboxConfigLocks.Lock(command.SandboxID)
+	defer unlock()
 	accepted, resource, paused, admissionErr := sb.admitConfiguration(ctx, principal, key, configurationRequest{
 		Command: command,
 		MAC:     mac,
@@ -93,8 +91,8 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	command, mac := request.Command, request.MAC
 	var empty operation.State
 	var noResource loom.Resource
-	sb.admission.Lock()
-	defer sb.admission.Unlock()
+	sb.storeWriteMu.Lock()
+	defer sb.storeWriteMu.Unlock()
 	if err := sb.checkConfigurationOpen(); err != nil {
 		return empty, noResource, false, err
 	}
@@ -288,11 +286,10 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 // saveConfigurationIntent separates accepted revocation from publication of new
 // settings, so a rejected settings write leaves the durable fence and old policy.
 func (a *Activations) saveConfigurationIntent(step *ActivationStep) error {
-	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	unlock := a.sandboxConfigLocks.Lock(step.Input.SandboxID)
+	defer unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	tx, err := a.store.Database.BeginTx(a.ctx, nil)
 	if err != nil {
 		return err

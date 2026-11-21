@@ -18,13 +18,13 @@ import (
 )
 
 func (p *Provisioning) runCold(step ResourceStep) error {
-	p.admission.Lock()
+	p.storeWriteMu.Lock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err == nil {
 		_, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	p.admission.Unlock()
+	p.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -186,8 +186,8 @@ func (p *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		}
 		next.DiskIdentity = &identity
 	}
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
@@ -259,8 +259,8 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	if p.ctx.Err() != nil {
 		return p.ctx.Err()
 	}
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return errors.Join(cause, err)
@@ -330,8 +330,8 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 }
 
 func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observation) error {
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err

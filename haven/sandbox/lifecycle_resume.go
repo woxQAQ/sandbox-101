@@ -28,9 +28,8 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 		return empty, fmt.Errorf("%w: resume requires tenant authority, sandbox and key", errs.ErrInvalid)
 	}
 	credentials := l.registry.SandboxSecrets(command.SandboxID)
-	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
 	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC:     mac,
@@ -38,9 +37,8 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 	}); found || err != nil {
 		return operation, err
 	}
-	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := l.sandboxConfigLocks.Lock(command.SandboxID)
+	defer unlock()
 
 	sandboxRecord, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 	if err != nil {
@@ -147,8 +145,8 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 }
 
 func (l *Lifecycle) restoreActivation(step LifecycleStep, child machine.ResourceStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
@@ -235,10 +233,7 @@ func (l *Lifecycle) runResume(step LifecycleStep) error {
 	if err = l.restoreActivation(step, child); err != nil {
 		return err
 	}
-	lock := l.guards.ForVMLifecycle(child.Candidate)
-	lock.Lock()
-	err = l.activations.Continue(step.OperationID)
-	lock.Unlock()
+	err = l.activations.activateVM(child.Candidate, step.OperationID)
 	if activation, lookup := LoadActivation(l.ctx, l.store.Database, step.OperationID); lookup == nil && activation.Status == "failed" {
 		return l.compensateResumeCandidate(step, child)
 	}
@@ -246,8 +241,8 @@ func (l *Lifecycle) runResume(step LifecycleStep) error {
 }
 
 func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err

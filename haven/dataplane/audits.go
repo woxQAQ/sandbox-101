@@ -18,18 +18,18 @@ type auditLog interface {
 
 // Audits commits sanitized proxy events before credential substitution.
 type Audits struct {
-	journal   auditLog
-	admission execution.Guard
-	lifetime  *execution.Lifetime
-	reviewed  bool
+	journal      auditLog
+	storeWriteMu execution.Guard
+	lifetime     *execution.Lifetime
+	reviewed     bool
 }
 
-func NewAudits(state *store.State, admission execution.Guard, lifetime *execution.Lifetime) *Audits {
+func NewAudits(state *store.State, storeWriteMu execution.Guard, lifetime *execution.Lifetime) *Audits {
 	return &Audits{
-		journal:   state,
-		admission: admission,
-		lifetime:  lifetime,
-		reviewed:  state.Reviewed(),
+		journal:      state,
+		storeWriteMu: storeWriteMu,
+		lifetime:     lifetime,
+		reviewed:     state.Reviewed(),
 	}
 }
 
@@ -38,8 +38,8 @@ func (a *Audits) Audit(ctx context.Context, event any) error {
 		return fmt.Errorf("%w: sandbox data admission is closed", errs.ErrConflict)
 	}
 	defer a.lifetime.End()
-	a.admission.Lock()
-	defer a.admission.Unlock()
+	a.storeWriteMu.Lock()
+	defer a.storeWriteMu.Unlock()
 	body := operation.Encode(struct {
 		Time  time.Time `json:"time"`
 		Event any       `json:"event"`

@@ -29,9 +29,8 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") || key == "" || len(key) > 256 || f.opts.Guest == nil {
 		return empty, errs.InvalidInput("fork requires tenant authority, one source, count 1..32 and key")
 	}
-	keyGuard := f.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	unlock := f.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
 	_, secrets, _, err := SplitEnv(command.Env)
 	if err != nil {
 		return empty, err
@@ -212,8 +211,8 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 }
 
 func (f *Forks) admitForkSnapshot(ctx context.Context, parent *forkAdmission) error {
-	f.admission.Lock()
-	defer f.admission.Unlock()
+	f.storeWriteMu.Lock()
+	defer f.storeWriteMu.Unlock()
 	if err := f.gate.Check(); err != nil {
 		return err
 	}

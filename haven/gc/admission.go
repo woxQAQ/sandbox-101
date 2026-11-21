@@ -41,9 +41,8 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 	if options.Batch < 1 || options.Batch > 1024 || options.Budget <= 0 {
 		return empty, fmt.Errorf("%w: invalid GC batch or budget", errs.ErrInvalid)
 	}
-	requestGuard := c.guards.ForNodeIdempotencyKey(c.nodeID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
+	unlock := c.nodeIdempotencyLocks.Lock(c.nodeID, key)
+	defer unlock()
 	request := operation.Encode(struct {
 		Action  string
 		Options types.GCOptions
@@ -68,7 +67,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 	}
 	budgetCtx, cancel := context.WithTimeout(ctx, options.Budget)
 	defer cancel()
-	if !c.guards.ForGCAdmission().TryLock() {
+	if !c.inventoryMu.TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -79,8 +78,8 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 			},
 		}, nil
 	}
-	defer c.guards.ForGCAdmission().Unlock()
-	if !c.guards.ForImageArtifacts().TryLock() {
+	defer c.inventoryMu.Unlock()
+	if !c.imageArtifactsMu.TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -92,7 +91,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		}, nil
 	}
 	report, err := c.inventory(budgetCtx)
-	c.guards.ForImageArtifacts().Unlock()
+	c.imageArtifactsMu.Unlock()
 	report.DryRun = options.DryRun
 	if err != nil {
 		return report, err
@@ -131,7 +130,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		Report:          report,
 	}
 	payload := operation.Encode(input)
-	c.admission.Lock()
+	c.storeWriteMu.Lock()
 	if err = c.gate.Check(); err == nil {
 		var tx *sql.Tx
 		tx, err = c.store.Database.BeginTx(ctx, nil)
@@ -172,7 +171,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 			}
 		}
 	}
-	c.admission.Unlock()
+	c.storeWriteMu.Unlock()
 	if err != nil {
 		return report, err
 	}

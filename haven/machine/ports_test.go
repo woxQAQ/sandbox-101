@@ -3,6 +3,7 @@ package machine_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/woxQAQ/haven/execution"
@@ -19,7 +20,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	var err error
 	lifetime := execution.NewLifetime(ctx)
 	workers := execution.NewWorkers(lifetime)
-	guards := execution.NewGuards()
+	guards := machine.VMGuards{StoreWriteMu: new(sync.Mutex), LifecycleLocks: new(execution.KeyedLocks[string])}
 	defer func() {
 		if err := lifetime.Close(ctx, func() {}, func() error {
 			return nil
@@ -52,28 +53,28 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	}
 
 	captures := machine.NewCaptures(state, machine.CapturesDependencies{
-		Guards:   guards,
+		VMGuards: guards,
 		Lifetime: lifetime,
 		Workers:  workers,
 	}, machine.CapturesOptions{})
 	stops := machine.NewVMStops(state, machine.VMStopsDependencies{
-		Guards:   guards,
+		VMGuards: guards,
 		Lifetime: lifetime,
 		Workers:  workers,
 	}, nil)
 	deletion := machine.NewVMDeletion(state, machine.VMDeletionDependencies{
-		Guards:   guards,
+		VMGuards: guards,
 		Lifetime: lifetime,
 		Workers:  workers,
 	}, nil)
 	snapshots := machine.NewSnapshotDeletion(state, machine.SnapshotDeletionDependencies{
-		Guards:   guards,
-		Lifetime: lifetime,
-		Workers:  workers,
+		StoreWriteMu: guards.StoreWriteMu,
+		Lifetime:     lifetime,
+		Workers:      workers,
 	}, nil)
 	provision := machine.NewProvisioning(state, machine.ProvisioningDependencies{
-		Context:   ctx,
-		Admission: guards.ForStoreMutation(),
+		Context:  ctx,
+		VMGuards: guards,
 	}, nil)
 	for _, scenario := range []struct {
 		name string
@@ -112,9 +113,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 			return err
 		}},
 		{"provisioning", func() error {
-			return provision.AdvanceLocked(machine.ResourceStep{
-				OperationID: "retained",
-			})
+			return provision.Continue("retained")
 		}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {

@@ -113,8 +113,8 @@ func (f *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) err
 	if err = machine.VerifyRestoreSourceFiles(source); err != nil {
 		return err
 	}
-	f.admission.Lock()
-	defer f.admission.Unlock()
+	f.storeWriteMu.Lock()
+	defer f.storeWriteMu.Unlock()
 	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err
@@ -177,8 +177,8 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 	if err != nil {
 		return err
 	}
-	f.admission.Lock()
-	defer f.admission.Unlock()
+	f.storeWriteMu.Lock()
+	defer f.storeWriteMu.Unlock()
 	if err = f.gate.Check(); err != nil {
 		return err
 	}
@@ -276,8 +276,8 @@ func (f *Forks) compensateFork(step *ForkStep, message string) error {
 }
 
 func (f *Forks) completeFork(step ForkStep) error {
-	f.admission.Lock()
-	defer f.admission.Unlock()
+	f.storeWriteMu.Lock()
+	defer f.storeWriteMu.Unlock()
 	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err

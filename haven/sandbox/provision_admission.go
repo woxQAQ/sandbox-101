@@ -135,8 +135,8 @@ func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) 
 	if err != nil {
 		return empty, err
 	}
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	if err = p.gate.Check(); err != nil {
 		return empty, err
 	}

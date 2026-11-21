@@ -49,8 +49,8 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 		Request CaptureDiscardRequest
 	}{"capture_discard", request})
 	hash := operation.Digest(frozen)
-	cd.admission.Lock()
-	defer cd.admission.Unlock()
+	cd.storeWriteMu.Lock()
+	defer cd.storeWriteMu.Unlock()
 	closing := cd.lifetime.Closing() || cd.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")

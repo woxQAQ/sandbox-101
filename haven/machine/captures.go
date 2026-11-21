@@ -2,9 +2,7 @@ package machine
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/woxQAQ/haven/execution"
@@ -28,30 +26,24 @@ type CaptureBackend interface {
 	Capture(ctx context.Context, resource loom.Resource, directory string) error
 }
 
-type CapturesGuards interface {
-	VMGuards
-
-	// AcquireCaptureSlot waits for the process-wide capture slot and returns its release function.
-	AcquireCaptureSlot(ctx context.Context) (func(), error)
-}
-
 // Captures freezes source custody and peak responsibility before pausing, then
 // resumes the source before completing durable snapshot publication.
 type Captures struct {
-	store       store.Workflow
-	ctx         context.Context
-	admission   execution.Guard
-	guards      CapturesGuards
-	lifetime    *execution.Lifetime
-	workers     *execution.Workers
-	backend     CaptureBackend
-	ownership   SandboxOwnershipReader
-	safetyBytes int64
-	faultPoint  func(string) error
+	store        store.Workflow
+	ctx          context.Context
+	storeWriteMu execution.Guard
+	steps        vmSteps[CaptureStep]
+	captureSlot  chan struct{}
+	lifetime     *execution.Lifetime
+	workers      *execution.Workers
+	backend      CaptureBackend
+	ownership    SandboxOwnershipReader
+	safetyBytes  int64
+	faultPoint   func(string) error
 }
 
 type CapturesDependencies struct {
-	Guards    CapturesGuards
+	VMGuards  VMGuards
 	Lifetime  *execution.Lifetime
 	Workers   *execution.Workers
 	Backend   CaptureBackend
@@ -71,15 +63,16 @@ func NewCaptures(state *store.State, dependencies CapturesDependencies, options 
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:         dependencies.Workers.Context(),
-		admission:   dependencies.Guards.ForStoreMutation(),
-		guards:      dependencies.Guards,
-		lifetime:    dependencies.Lifetime,
-		workers:     dependencies.Workers,
-		backend:     dependencies.Backend,
-		ownership:   dependencies.Ownership,
-		safetyBytes: options.SafetyBytes,
-		faultPoint:  options.Fault,
+		ctx:          dependencies.Workers.Context(),
+		storeWriteMu: dependencies.VMGuards.StoreWriteMu,
+		steps:        newVMSteps(state.Database(), dependencies.VMGuards.LifecycleLocks, LoadCapture),
+		captureSlot:  make(chan struct{}, 1),
+		lifetime:     dependencies.Lifetime,
+		workers:      dependencies.Workers,
+		backend:      dependencies.Backend,
+		ownership:    dependencies.Ownership,
+		safetyBytes:  options.SafetyBytes,
+		faultPoint:   options.Fault,
 	}
 }
 
@@ -124,21 +117,7 @@ func (c *Captures) Resume(id string) (bool, error) {
 	if c.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume capture", errs.ErrManualRecovery)
 	}
-	step, err := LoadCapture(c.ctx, c.store.Database, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	guard := c.guards.ForVMLifecycle(step.Input.Source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadCapture(c.ctx, c.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	return true, c.runCapture(step)
+	return c.steps.resume(c.ctx, id, c.runCapture)
 }
 
 type CaptureRequest struct {
@@ -175,6 +154,10 @@ type CaptureStep struct {
 	Status      string
 	Input       CaptureInput
 	State       CaptureState
+}
+
+func (step CaptureStep) sourceVMID() string {
+	return step.Input.Source.Candidate
 }
 
 func LoadCapture(ctx context.Context, query store.DBTX, operationID string) (CaptureStep, error) {

@@ -8,7 +8,7 @@ sandbox 拥有 claim/configuration、activation、生命周期、checkpoint bind
 
 LifecycleAdmission 在资源调用者事务中核验当前 sandbox/settings/fence 与冻结父意图，写入 parent、credential、step、fence、source lease、上层责任和 child link。它不提交、不 checkpoint、不派发效果，也不另取 workflow lock。release/stop/capture-discard 的 history reader 仍检查原 lifecycle、hash、source、child link 和 fence；当前状态不能替代缺失历史。
 
-DeletionHandoff 和 ProvisionHandoff 是显式写参与者，使用调用方原事务更新 sandbox body、activation 或 slot。VMProvisioning 连续持有原 VM guard，在 machine.Provisioning.AdvanceLocked 返回后继续 activation；中间不释放或重入该锁。admission、commit、secret 登记、checkpoint、fault 与 dispatch 仍按原次序发生。
+DeletionHandoff 和 ProvisionHandoff 是显式写参与者，使用调用方原事务更新 sandbox body、activation 或 slot。VMProvisioning 把 activation 交给 `machine.Provisioning.Continue`，由同一个 VM 生命周期覆盖资源步骤重读、物理推进和激活。独立激活由 Activations 进入来源 VM 的生命周期，并核对当前激活的来源与所持 VM 一致。admission、commit、secret 登记、checkpoint、fault 与 dispatch 仍按原次序发生。
 
 ## 生命周期
 

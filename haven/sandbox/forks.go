@@ -27,15 +27,6 @@ type ForkBackend interface {
 	ValidateHostConfig(ctx context.Context, config loom.Config) error
 }
 
-type ForkGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
-	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
-	// ForForkBatch returns the lock for advancing the branches of one fork operation.
-	ForForkBatch(operationID string) execution.Guard
-}
-
 type ForkOptions struct {
 	Backend  ForkBackend
 	Guest    ActivationGuest
@@ -44,48 +35,50 @@ type ForkOptions struct {
 }
 
 type ForkDependencies struct {
-	Guards          ForkGuards
-	Gate            execution.AdmissionGate
-	Workers         *execution.Workers
-	Registry        *ephemeral.Registry
-	History         machine.SnapshotProofs
-	Committer       *operation.Committer
-	CommandIdentity *operation.CommandIdentity
-	AdmissionPolicy *AdmissionPolicy
-	Availability    *execution.Availability
-	Operations      *operation.Monitor
-	Provisioning    *Provisioning
-	Captures        *machine.Captures
-	Deletion        *machine.Deletion
-	Lifecycle       *Lifecycle
-	Policies        *machine.DirectPolicies
-	Links           *machine.ResourceLinks
+	StoreWriteMu           execution.Guard
+	TenantIdempotencyLocks *operation.IdempotencyLocks
+	Gate                   execution.AdmissionGate
+	Workers                *execution.Workers
+	Registry               *ephemeral.Registry
+	History                machine.SnapshotProofs
+	Committer              *operation.Committer
+	CommandIdentity        *operation.CommandIdentity
+	AdmissionPolicy        *AdmissionPolicy
+	Availability           *execution.Availability
+	Operations             *operation.Monitor
+	Provisioning           *Provisioning
+	Captures               *machine.Captures
+	Deletion               *machine.Deletion
+	Lifecycle              *Lifecycle
+	Policies               *machine.DirectPolicies
+	Links                  *machine.ResourceLinks
 }
 
 // Forks owns batch placement and compensation. Every target and reservation is
 // committed together before branch effects; child publications remain immutable.
 type Forks struct {
-	store        store.Workflow
-	ctx          context.Context
-	admission    execution.Guard
-	gate         execution.AdmissionGate
-	guards       ForkGuards
-	workers      *execution.Workers
-	registry     *ephemeral.Registry
-	history      machine.SnapshotProofs
-	catalog      *Catalog
-	identity     *operation.CommandIdentity
-	policy       *AdmissionPolicy
-	availability *execution.Availability
-	operations   *operation.Monitor
-	provisioning *Provisioning
-	captures     *machine.Captures
-	deletion     *machine.Deletion
-	lifecycle    *Lifecycle
-	policies     *machine.DirectPolicies
-	links        *machine.ResourceLinks
-	opts         ForkOptions
-	committer    *operation.Committer
+	store                  store.Workflow
+	ctx                    context.Context
+	storeWriteMu           execution.Guard
+	gate                   execution.AdmissionGate
+	tenantIdempotencyLocks *operation.IdempotencyLocks
+	forkBatchLocks         execution.KeyedLocks[string]
+	workers                *execution.Workers
+	registry               *ephemeral.Registry
+	history                machine.SnapshotProofs
+	catalog                *Catalog
+	identity               *operation.CommandIdentity
+	policy                 *AdmissionPolicy
+	availability           *execution.Availability
+	operations             *operation.Monitor
+	provisioning           *Provisioning
+	captures               *machine.Captures
+	deletion               *machine.Deletion
+	lifecycle              *Lifecycle
+	policies               *machine.DirectPolicies
+	links                  *machine.ResourceLinks
+	opts                   ForkOptions
+	committer              *operation.Committer
 }
 
 func NewForks(state *store.State, dependencies ForkDependencies, options ForkOptions) *Forks {
@@ -96,26 +89,26 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.ForStoreMutation(),
-		gate:         dependencies.Gate,
-		guards:       dependencies.Guards,
-		workers:      dependencies.Workers,
-		registry:     dependencies.Registry,
-		history:      dependencies.History,
-		catalog:      NewCatalog(state.Database()),
-		identity:     dependencies.CommandIdentity,
-		policy:       dependencies.AdmissionPolicy,
-		availability: dependencies.Availability,
-		operations:   dependencies.Operations,
-		provisioning: dependencies.Provisioning,
-		captures:     dependencies.Captures,
-		deletion:     dependencies.Deletion,
-		lifecycle:    dependencies.Lifecycle,
-		policies:     dependencies.Policies,
-		links:        dependencies.Links,
-		opts:         options,
-		committer:    dependencies.Committer,
+		ctx:                    dependencies.Workers.Context(),
+		storeWriteMu:           dependencies.StoreWriteMu,
+		gate:                   dependencies.Gate,
+		tenantIdempotencyLocks: dependencies.TenantIdempotencyLocks,
+		workers:                dependencies.Workers,
+		registry:               dependencies.Registry,
+		history:                dependencies.History,
+		catalog:                NewCatalog(state.Database()),
+		identity:               dependencies.CommandIdentity,
+		policy:                 dependencies.AdmissionPolicy,
+		availability:           dependencies.Availability,
+		operations:             dependencies.Operations,
+		provisioning:           dependencies.Provisioning,
+		captures:               dependencies.Captures,
+		deletion:               dependencies.Deletion,
+		lifecycle:              dependencies.Lifecycle,
+		policies:               dependencies.Policies,
+		links:                  dependencies.Links,
+		opts:                   options,
+		committer:              dependencies.Committer,
 	}
 }
 
@@ -173,9 +166,8 @@ func (f *Forks) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := f.guards.ForForkBatch(id)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := f.forkBatchLocks.Lock(id)
+	defer unlock()
 	group, err = LoadFork(f.ctx, f.store.Database, id)
 	if err != nil {
 		return true, err
@@ -374,8 +366,8 @@ func forkTargetIDs(input ForkInput) []string {
 }
 
 func (f *Forks) saveFork(step *ForkStep, state ForkState) error {
-	f.admission.Lock()
-	defer f.admission.Unlock()
+	f.storeWriteMu.Lock()
+	defer f.storeWriteMu.Unlock()
 	tx, err := f.store.Database.BeginTx(f.ctx, nil)
 	if err != nil {
 		return err

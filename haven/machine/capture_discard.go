@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -19,20 +18,20 @@ import (
 // CaptureDiscard reclaims a failed capture while retaining the original VM and
 // disk. Frozen stop, generation and funding proofs authorize each handoff.
 type CaptureDiscard struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	guards     VMGuards
-	lifetime   *execution.Lifetime
-	workers    *execution.Workers
-	proofs     ResourceProofs
-	inspector  InstanceInspector
-	ownership  CaptureDiscardOwnershipReader
-	faultPoint func(string) error
+	store        store.Workflow
+	ctx          context.Context
+	storeWriteMu execution.Guard
+	steps        vmSteps[CaptureDiscardStep]
+	lifetime     *execution.Lifetime
+	workers      *execution.Workers
+	proofs       ResourceProofs
+	inspector    InstanceInspector
+	ownership    CaptureDiscardOwnershipReader
+	faultPoint   func(string) error
 }
 
 type CaptureDiscardDependencies struct {
-	Guards    VMGuards
+	VMGuards  VMGuards
 	Lifetime  *execution.Lifetime
 	Workers   *execution.Workers
 	Proofs    ResourceProofs
@@ -48,15 +47,15 @@ func NewCaptureDiscard(state *store.State, dependencies CaptureDiscardDependenci
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		lifetime:   dependencies.Lifetime,
-		workers:    dependencies.Workers,
-		proofs:     dependencies.Proofs,
-		inspector:  dependencies.Inspector,
-		ownership:  dependencies.Ownership,
-		faultPoint: fault,
+		ctx:          dependencies.Workers.Context(),
+		storeWriteMu: dependencies.VMGuards.StoreWriteMu,
+		steps:        newVMSteps(state.Database(), dependencies.VMGuards.LifecycleLocks, LoadCaptureDiscard),
+		lifetime:     dependencies.Lifetime,
+		workers:      dependencies.Workers,
+		proofs:       dependencies.Proofs,
+		inspector:    dependencies.Inspector,
+		ownership:    dependencies.Ownership,
+		faultPoint:   fault,
 	}
 }
 
@@ -101,21 +100,7 @@ func (cd *CaptureDiscard) Resume(id string) (bool, error) {
 	if cd.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume capture discard", errs.ErrManualRecovery)
 	}
-	step, err := LoadCaptureDiscard(cd.ctx, cd.store.Database, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	guard := cd.guards.ForVMLifecycle(step.Input.Source.Input.Source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadCaptureDiscard(cd.ctx, cd.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	return true, cd.runCaptureDiscard(step)
+	return cd.steps.resume(cd.ctx, id, cd.runCaptureDiscard)
 }
 
 func ValidateCaptureDiscard(ctx context.Context, database store.DBTX, id string) error {
@@ -147,6 +132,10 @@ type (
 		Input       CaptureDiscardInput
 	}
 )
+
+func (step CaptureDiscardStep) sourceVMID() string {
+	return step.Input.Source.sourceVMID()
+}
 
 func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDiscardStep, error) {
 	step := CaptureDiscardStep{

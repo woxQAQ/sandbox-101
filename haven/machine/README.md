@@ -43,7 +43,7 @@ network policy 更新仍只更新原 instance/operation/body 三列。历史退�
 
 ## 运行编排与交接
 
-`Provisioning.AdvanceLocked` 只推进物理 generation。调用方 coordinator 从原 VM guard 的获取到 activation 完成都连续持锁；物理推进不重入或释放该锁。原 admission guard、Lifetime、Workers、故障点与 checkpoint 顺序继续共用。
+`Provisioning.Continue` 负责进入 VM 生命周期，锁内重读冻结步骤并核对候选和输入 hash。物理推进成功或重放已成功的 generation 时，在同一临界区内调用 sandbox 的激活回调。原 admission guard、Lifetime、Workers、故障点与 checkpoint 顺序继续共用。
 
 `SandboxOwnershipReader`、`StopOwnershipReader`、`CaptureDiscardOwnershipReader`、`DeletionOwnershipReader` 与 `ProvisionOwnershipReader` 读取调用方事务中的当前归属和原始历史证明。stop 与 capture-discard 的 sandbox 实现仍核对原 lifecycle、child link、冻结 source 和 fence，不能以当前状态替代它们。
 

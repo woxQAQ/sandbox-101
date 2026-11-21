@@ -19,8 +19,8 @@ import (
 )
 
 func (d *Deletion) releaseGenerationSet(step ResourceStep) ([]ResourceStep, error) {
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return nil, err
@@ -229,8 +229,8 @@ func (d *Deletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error
 	if err != nil {
 		return intent, err
 	}
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return intent, err
@@ -259,8 +259,8 @@ func (d *Deletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error
 }
 
 func (d *Deletion) completeRelease(step ResourceStep) error {
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err
@@ -448,8 +448,8 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 func (d *Deletion) markRelease(step *ResourceStep, phase string) error {
 	next := step.State
 	next.Phase = phase
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err

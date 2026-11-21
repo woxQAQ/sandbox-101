@@ -25,8 +25,8 @@ func captureDiscardPaths(step CaptureDiscardStep) []string {
 }
 
 func (cd *CaptureDiscard) checkCaptureDiscard(step CaptureDiscardStep) error {
-	cd.admission.Lock()
-	defer cd.admission.Unlock()
+	cd.storeWriteMu.Lock()
+	defer cd.storeWriteMu.Unlock()
 	tx, err := cd.store.Database.BeginTx(cd.ctx, nil)
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func (cd *CaptureDiscard) checkCaptureDiscard(step CaptureDiscardStep) error {
 }
 
 func (cd *CaptureDiscard) inspectCaptureDiscardSource(step CaptureDiscardStep) error {
-	cd.admission.Lock()
+	cd.storeWriteMu.Lock()
 	tx, err := cd.store.Database.BeginTx(cd.ctx, nil)
 	var history []ResourceStep
 	if err == nil {
@@ -55,7 +55,7 @@ func (cd *CaptureDiscard) inspectCaptureDiscardSource(step CaptureDiscardStep) e
 		}
 		err = errors.Join(err, tx.Rollback())
 	}
-	cd.admission.Unlock()
+	cd.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -108,8 +108,8 @@ func (cd *CaptureDiscard) captureDiscardReceipts(step *CaptureDiscardStep) ([]lo
 	if err = loom.VerifyCaptureDeletion(intents, paths[0], paths[1], source.State.Boundary); err != nil {
 		return nil, err
 	}
-	cd.admission.Lock()
-	defer cd.admission.Unlock()
+	cd.storeWriteMu.Lock()
+	defer cd.storeWriteMu.Unlock()
 	tx, err := cd.store.Database.BeginTx(cd.ctx, nil)
 	if err != nil {
 		return nil, err
@@ -228,8 +228,8 @@ func (cd *CaptureDiscard) runCaptureDiscard(step CaptureDiscardStep) error {
 }
 
 func (cd *CaptureDiscard) markCaptureDiscardRemoved(step *CaptureDiscardStep) error {
-	cd.admission.Lock()
-	defer cd.admission.Unlock()
+	cd.storeWriteMu.Lock()
+	defer cd.storeWriteMu.Unlock()
 	tx, err := cd.store.Database.BeginTx(cd.ctx, nil)
 	if err != nil {
 		return err
@@ -260,8 +260,8 @@ func (cd *CaptureDiscard) markCaptureDiscardRemoved(step *CaptureDiscardStep) er
 }
 
 func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error {
-	cd.admission.Lock()
-	defer cd.admission.Unlock()
+	cd.storeWriteMu.Lock()
+	defer cd.storeWriteMu.Unlock()
 	tx, err := cd.store.Database.BeginTx(cd.ctx, nil)
 	if err != nil {
 		return err

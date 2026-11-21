@@ -20,29 +20,23 @@ type DirectBackend interface {
 	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 }
 
-type DirectPoliciesGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
-	ForSandboxConfiguration(sandboxID string) execution.Guard
-}
-
 // DirectPolicies binds teardown to the original activation and instance. The
 // effect caller retains its existing lifecycle/configuration guard; recovery
 // acquires the same configuration guard as the original application runner.
 type DirectPolicies struct {
-	store      store.Workflow
-	admission  execution.Guard
-	guards     DirectPoliciesGuards
-	proofs     ResourceProofs
-	backend    DirectBackend
-	faultPoint func(string) error
+	store              store.Workflow
+	storeWriteMu       execution.Guard
+	sandboxConfigLocks *execution.KeyedLocks[string]
+	proofs             ResourceProofs
+	backend            DirectBackend
+	faultPoint         func(string) error
 }
 
 type DirectPoliciesDependencies struct {
-	Guards  DirectPoliciesGuards
-	Proofs  ResourceProofs
-	Backend DirectBackend
+	StoreWriteMu       execution.Guard
+	SandboxConfigLocks *execution.KeyedLocks[string]
+	Proofs             ResourceProofs
+	Backend            DirectBackend
 }
 
 func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependencies, fault func(string) error) *DirectPolicies {
@@ -53,11 +47,11 @@ func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependenci
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		proofs:     dependencies.Proofs,
-		backend:    dependencies.Backend,
-		faultPoint: fault,
+		storeWriteMu:       dependencies.StoreWriteMu,
+		sandboxConfigLocks: dependencies.SandboxConfigLocks,
+		proofs:             dependencies.Proofs,
+		backend:            dependencies.Backend,
+		faultPoint:         fault,
 	}
 }
 
@@ -82,8 +76,7 @@ func (dp *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
 	if operation.Terminal(step.Status) || step.State.Phase != "pending" {
 		return false, nil
 	}
-	guard := dp.guards.ForSandboxConfiguration(step.Input.Source.Input.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := dp.sandboxConfigLocks.Lock(step.Input.Source.Input.SandboxID)
+	defer unlock()
 	return true, dp.retireDirect(ctx, id)
 }

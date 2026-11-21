@@ -14,20 +14,6 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-// ImageGuards exposes the existing lock domains used by image producers and collectors.
-type ImageGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForImageArtifacts returns the lock shared by image publication, cleanup and GC inventory.
-	ForImageArtifacts() execution.Guard
-	// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
-	ForNodeIdempotencyKey(nodeID, key string) execution.Guard
-	// ForImageImport returns the lock for advancing one image import operation.
-	ForImageImport(operationID string) execution.Guard
-	// ForImageCleanup returns the lock for advancing one image cleanup operation.
-	ForImageCleanup(operationID string) execution.Guard
-}
-
 type ImageOptions struct {
 	SafetyBytes int64
 	Fault       func(string) error
@@ -36,40 +22,46 @@ type ImageOptions struct {
 // Images coordinates import, immutable publication, cache funding and collection.
 // It borrows the shared store and execution owners; it does not close either.
 type Images struct {
-	database    *store.Database
-	directory   string
-	nodeID      string
-	reviewed    bool
-	safetyBytes int64
-	checkpoint  func() error
-	faultPoint  func(string) error
-	ctx         context.Context
-	guards      ImageGuards
-	admission   execution.Guard
-	gate        execution.AdmissionGate
-	workers     *execution.Workers
+	database             *store.Database
+	directory            string
+	nodeID               string
+	reviewed             bool
+	safetyBytes          int64
+	checkpoint           func() error
+	faultPoint           func(string) error
+	ctx                  context.Context
+	imageArtifactsMu     execution.Guard
+	nodeIdempotencyLocks *operation.IdempotencyLocks
+	importLocks          execution.KeyedLocks[string]
+	cleanupLocks         execution.KeyedLocks[string]
+	storeWriteMu         execution.Guard
+	gate                 execution.AdmissionGate
+	workers              *execution.Workers
 }
 
 type ImageDependencies struct {
-	Guards  ImageGuards
-	Gate    execution.AdmissionGate
-	Workers *execution.Workers
+	StoreWriteMu         execution.Guard
+	ImageArtifactsMu     execution.Guard
+	NodeIdempotencyLocks *operation.IdempotencyLocks
+	Gate                 execution.AdmissionGate
+	Workers              *execution.Workers
 }
 
 func NewImages(state *store.State, dependencies ImageDependencies, options ImageOptions) *Images {
 	return &Images{
-		database:    state.Database(),
-		directory:   state.Directory(),
-		nodeID:      state.Identity().Identity,
-		reviewed:    state.Reviewed(),
-		safetyBytes: options.SafetyBytes,
-		checkpoint:  state.Checkpoint,
-		faultPoint:  options.Fault,
-		ctx:         dependencies.Workers.Context(),
-		guards:      dependencies.Guards,
-		admission:   dependencies.Guards.ForStoreMutation(),
-		gate:        dependencies.Gate,
-		workers:     dependencies.Workers,
+		database:             state.Database(),
+		directory:            state.Directory(),
+		nodeID:               state.Identity().Identity,
+		reviewed:             state.Reviewed(),
+		safetyBytes:          options.SafetyBytes,
+		checkpoint:           state.Checkpoint,
+		faultPoint:           options.Fault,
+		ctx:                  dependencies.Workers.Context(),
+		imageArtifactsMu:     dependencies.ImageArtifactsMu,
+		nodeIdempotencyLocks: dependencies.NodeIdempotencyLocks,
+		storeWriteMu:         dependencies.StoreWriteMu,
+		gate:                 dependencies.Gate,
+		workers:              dependencies.Workers,
 	}
 }
 
@@ -104,9 +96,8 @@ func (i *Images) Resume(id string) (bool, error) {
 	}
 	cleanup, err := loadImageCleanup(i.ctx, i.database, id)
 	if err == nil {
-		guard := i.guards.ForImageCleanup(id)
-		guard.Lock()
-		defer guard.Unlock()
+		unlock := i.cleanupLocks.Lock(id)
+		defer unlock()
 		cleanup, err = loadImageCleanup(i.ctx, i.database, id)
 		if err != nil {
 			return true, err
@@ -114,8 +105,8 @@ func (i *Images) Resume(id string) (bool, error) {
 		if operation.Terminal(cleanup.Status) {
 			return true, nil
 		}
-		i.guards.ForImageArtifacts().Lock()
-		defer i.guards.ForImageArtifacts().Unlock()
+		i.imageArtifactsMu.Lock()
+		defer i.imageArtifactsMu.Unlock()
 		return true, i.runImageCleanup(cleanup)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -128,9 +119,8 @@ func (i *Images) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := i.guards.ForImageImport(id)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := i.importLocks.Lock(id)
+	defer unlock()
 	step, err = loadImageImport(i.ctx, i.database, id)
 	if err != nil {
 		return true, err
@@ -138,8 +128,8 @@ func (i *Images) Resume(id string) (bool, error) {
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	i.guards.ForImageArtifacts().Lock()
-	defer i.guards.ForImageArtifacts().Unlock()
+	i.imageArtifactsMu.Lock()
+	defer i.imageArtifactsMu.Unlock()
 	return true, i.runImageImport(step)
 }
 

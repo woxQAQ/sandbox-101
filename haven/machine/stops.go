@@ -27,20 +27,20 @@ type StopBackend interface {
 // Stops retains the original generation and funding proof while confirming
 // process exit and network removal before publishing the stopped state.
 type Stops struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	guards     VMGuards
-	lifetime   *execution.Lifetime
-	workers    *execution.Workers
-	proofs     ResourceProofs
-	backend    StopBackend
-	ownership  StopOwnershipReader
-	faultPoint func(string) error
+	store            store.Workflow
+	ctx              context.Context
+	storeWriteMu     execution.Guard
+	vmLifecycleLocks *execution.KeyedLocks[string]
+	lifetime         *execution.Lifetime
+	workers          *execution.Workers
+	proofs           ResourceProofs
+	backend          StopBackend
+	ownership        StopOwnershipReader
+	faultPoint       func(string) error
 }
 
 type VMStopsDependencies struct {
-	Guards    VMGuards
+	VMGuards  VMGuards
 	Lifetime  *execution.Lifetime
 	Workers   *execution.Workers
 	Proofs    ResourceProofs
@@ -56,15 +56,15 @@ func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		lifetime:   dependencies.Lifetime,
-		workers:    dependencies.Workers,
-		proofs:     dependencies.Proofs,
-		backend:    dependencies.Backend,
-		ownership:  dependencies.Ownership,
-		faultPoint: fault,
+		ctx:              dependencies.Workers.Context(),
+		storeWriteMu:     dependencies.VMGuards.StoreWriteMu,
+		vmLifecycleLocks: dependencies.VMGuards.LifecycleLocks,
+		lifetime:         dependencies.Lifetime,
+		workers:          dependencies.Workers,
+		proofs:           dependencies.Proofs,
+		backend:          dependencies.Backend,
+		ownership:        dependencies.Ownership,
+		faultPoint:       fault,
 	}
 }
 
@@ -116,14 +116,13 @@ func (s *Stops) Resume(id string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	guard := s.guards.ForVMLifecycle(source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadStop(s.ctx, s.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	return true, s.runStop(step)
+	return true, s.vmLifecycleLocks.With(source.Candidate, func() error {
+		step, err := LoadStop(s.ctx, s.store.Database, id)
+		if err != nil {
+			return err
+		}
+		return s.runStop(step)
+	})
 }
 
 type StopRequest struct {

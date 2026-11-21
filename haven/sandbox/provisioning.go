@@ -17,13 +17,6 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-type ProvisionGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
-}
-
 // ProvisionOptions freezes the runtime effects and node capacity at construction.
 type ProvisionOptions struct {
 	Backend  machine.ProvisionBackend
@@ -34,7 +27,7 @@ type ProvisionOptions struct {
 // ProvisionDependencies supplies the coordinator's shared execution owners and
 // physical capabilities. Construction does not select workflow modes.
 type ProvisionDependencies struct {
-	Guards      ProvisionGuards
+	VMGuards    machine.VMGuards
 	Lifetime    *execution.Lifetime
 	Gate        execution.AdmissionGate
 	Workers     *execution.Workers
@@ -43,31 +36,41 @@ type ProvisionDependencies struct {
 	Activations *Activations
 	Policies    *machine.DirectPolicies
 	Committer   *operation.Committer
-	Physical    *machine.Provisioning
+	Ownership   machine.ProvisionOwnershipReader
+	Handoff     machine.ProvisionParticipant
 }
 
 // Provisioning admits and executes cold/clone/restore intents using the shared
 // admission gate and workers. It owns no independent shutdown or runner state.
 type Provisioning struct {
-	store       store.Workflow
-	ctx         context.Context
-	lifetime    *execution.Lifetime
-	admission   execution.Guard
-	gate        execution.AdmissionGate
-	workers     *execution.Workers
-	registry    *ephemeral.Registry
-	policies    *machine.DirectPolicies
-	guards      ProvisionGuards
-	proofs      machine.ResourceProofs
-	backend     machine.ProvisionBackend
-	activations *Activations
-	capacity    ProvisionCapacity
-	faultPoint  func(string) error
-	committer   *operation.Committer
-	physical    *machine.Provisioning
+	store        store.Workflow
+	ctx          context.Context
+	lifetime     *execution.Lifetime
+	storeWriteMu execution.Guard
+	gate         execution.AdmissionGate
+	workers      *execution.Workers
+	registry     *ephemeral.Registry
+	policies     *machine.DirectPolicies
+	proofs       machine.ResourceProofs
+	backend      machine.ProvisionBackend
+	activations  *Activations
+	capacity     ProvisionCapacity
+	faultPoint   func(string) error
+	committer    *operation.Committer
+	physical     *machine.Provisioning
 }
 
 func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, options ProvisionOptions) *Provisioning {
+	physical := machine.NewProvisioning(state, machine.ProvisioningDependencies{
+		Context:   dependencies.Lifetime.Context(),
+		VMGuards:  dependencies.VMGuards,
+		Proofs:    dependencies.Proofs,
+		Backend:   options.Backend,
+		Ownership: dependencies.Ownership,
+		Handoff:   dependencies.Handoff,
+		Activate:  dependencies.Activations.activate,
+		Committer: dependencies.Committer,
+	}, options.Fault)
 	return &Provisioning{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -75,21 +78,20 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:         dependencies.Lifetime.Context(),
-		lifetime:    dependencies.Lifetime,
-		admission:   dependencies.Guards.ForStoreMutation(),
-		guards:      dependencies.Guards,
-		proofs:      dependencies.Proofs,
-		gate:        dependencies.Gate,
-		workers:     dependencies.Workers,
-		registry:    dependencies.Registry,
-		policies:    dependencies.Policies,
-		backend:     options.Backend,
-		activations: dependencies.Activations,
-		physical:    dependencies.Physical,
-		capacity:    options.Capacity,
-		faultPoint:  options.Fault,
-		committer:   dependencies.Committer,
+		ctx:          dependencies.Lifetime.Context(),
+		lifetime:     dependencies.Lifetime,
+		storeWriteMu: dependencies.VMGuards.StoreWriteMu,
+		proofs:       dependencies.Proofs,
+		gate:         dependencies.Gate,
+		workers:      dependencies.Workers,
+		registry:     dependencies.Registry,
+		policies:     dependencies.Policies,
+		backend:      options.Backend,
+		activations:  dependencies.Activations,
+		physical:     physical,
+		capacity:     options.Capacity,
+		faultPoint:   options.Fault,
+		committer:    dependencies.Committer,
 	}
 }
 
@@ -101,33 +103,7 @@ func (p *Provisioning) fault(point string) error {
 }
 
 func (p *Provisioning) Continue(id string) error {
-	if p.store.Reviewed {
-		return fmt.Errorf("%w: reviewed rollback cannot provision VM", errs.ErrManualRecovery)
-	}
-	step, err := machine.LoadResourceStep(p.ctx, p.store.Database, id)
-	if err != nil {
-		return err
-	}
-	if err = machine.ValidateResourceStep(p.store.Directory, step); err != nil {
-		return err
-	}
-	lock := p.guards.ForVMLifecycle(step.Candidate)
-	lock.Lock()
-	defer lock.Unlock()
-	step, err = machine.LoadResourceStep(p.ctx, p.store.Database, id)
-	if err != nil {
-		return err
-	}
-	if operation.Terminal(step.Status) {
-		if step.Status == "succeeded" {
-			return p.activations.Continue(id)
-		}
-		return nil
-	}
-	if err = p.physical.AdvanceLocked(step); err != nil {
-		return err
-	}
-	return p.activations.Continue(id)
+	return p.physical.Continue(id)
 }
 
 // ClaimAdmission carries the sanitized command/settings and ephemeral host

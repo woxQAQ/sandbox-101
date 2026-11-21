@@ -25,19 +25,6 @@ type LifecycleBackend interface {
 	ValidateHostConfig(ctx context.Context, config loom.Config) error
 }
 
-type LifecycleGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
-	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
-	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
-	ForSandboxConfiguration(sandboxID string) execution.Guard
-	// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
-	ForSandboxLifecycle(sandboxID string) execution.Guard
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
-}
-
 type LifecycleOptions struct {
 	Backend   LifecycleBackend
 	MaxTTL    time.Duration
@@ -46,53 +33,58 @@ type LifecycleOptions struct {
 }
 
 type LifecycleDependencies struct {
-	Guards          LifecycleGuards
-	Gate            execution.AdmissionGate
-	Workers         *execution.Workers
-	Registry        *ephemeral.Registry
-	Proofs          machine.ResourceProofs
-	Committer       *operation.Committer
-	CommandIdentity *operation.CommandIdentity
-	AdmissionPolicy *AdmissionPolicy
-	Activations     *Activations
-	WarmClaims      *WarmClaims
-	Provisioning    *Provisioning
-	Captures        *machine.Captures
-	Stops           *machine.Stops
-	Deletion        *machine.Deletion
-	CaptureDiscard  *machine.CaptureDiscard
-	CaptureCleanup  *machine.CaptureCleanup
-	Policies        *machine.DirectPolicies
-	Links           *machine.ResourceLinks
+	StoreWriteMu           execution.Guard
+	TenantIdempotencyLocks *operation.IdempotencyLocks
+	SandboxConfigLocks     *execution.KeyedLocks[string]
+	SandboxLifecycleLocks  *execution.KeyedLocks[string]
+	Gate                   execution.AdmissionGate
+	Workers                *execution.Workers
+	Registry               *ephemeral.Registry
+	Proofs                 machine.ResourceProofs
+	Committer              *operation.Committer
+	CommandIdentity        *operation.CommandIdentity
+	AdmissionPolicy        *AdmissionPolicy
+	Activations            *Activations
+	WarmClaims             *WarmClaims
+	Provisioning           *Provisioning
+	Captures               *machine.Captures
+	Stops                  *machine.Stops
+	Deletion               *machine.Deletion
+	CaptureDiscard         *machine.CaptureDiscard
+	CaptureCleanup         *machine.CaptureCleanup
+	Policies               *machine.DirectPolicies
+	Links                  *machine.ResourceLinks
 }
 
 // Lifecycle owns sandbox pause/resume, rollback, release and checkpoint custody.
 // Child effects keep their original services and guards; publication joins the
 // original parent transaction before the same store checkpoint boundary.
 type Lifecycle struct {
-	store          store.Workflow
-	ctx            context.Context
-	admission      execution.Guard
-	gate           execution.AdmissionGate
-	guards         LifecycleGuards
-	workers        *execution.Workers
-	registry       *ephemeral.Registry
-	proofs         machine.ResourceProofs
-	catalog        *Catalog
-	identity       *operation.CommandIdentity
-	policy         *AdmissionPolicy
-	activations    *Activations
-	warmClaims     *WarmClaims
-	provisioning   *Provisioning
-	captures       *machine.Captures
-	stops          *machine.Stops
-	deletion       *machine.Deletion
-	captureDiscard *machine.CaptureDiscard
-	captureCleanup *machine.CaptureCleanup
-	policies       *machine.DirectPolicies
-	links          *machine.ResourceLinks
-	opts           LifecycleOptions
-	committer      *operation.Committer
+	store                  store.Workflow
+	ctx                    context.Context
+	storeWriteMu           execution.Guard
+	gate                   execution.AdmissionGate
+	tenantIdempotencyLocks *operation.IdempotencyLocks
+	sandboxConfigLocks     *execution.KeyedLocks[string]
+	sandboxLifecycleLocks  *execution.KeyedLocks[string]
+	workers                *execution.Workers
+	registry               *ephemeral.Registry
+	proofs                 machine.ResourceProofs
+	catalog                *Catalog
+	identity               *operation.CommandIdentity
+	policy                 *AdmissionPolicy
+	activations            *Activations
+	warmClaims             *WarmClaims
+	provisioning           *Provisioning
+	captures               *machine.Captures
+	stops                  *machine.Stops
+	deletion               *machine.Deletion
+	captureDiscard         *machine.CaptureDiscard
+	captureCleanup         *machine.CaptureCleanup
+	policies               *machine.DirectPolicies
+	links                  *machine.ResourceLinks
+	opts                   LifecycleOptions
+	committer              *operation.Committer
 }
 
 func NewLifecycle(state *store.State, dependencies LifecycleDependencies, options LifecycleOptions) *Lifecycle {
@@ -103,28 +95,30 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:            dependencies.Workers.Context(),
-		admission:      dependencies.Guards.ForStoreMutation(),
-		gate:           dependencies.Gate,
-		guards:         dependencies.Guards,
-		workers:        dependencies.Workers,
-		registry:       dependencies.Registry,
-		proofs:         dependencies.Proofs,
-		catalog:        NewCatalog(state.Database()),
-		identity:       dependencies.CommandIdentity,
-		policy:         dependencies.AdmissionPolicy,
-		activations:    dependencies.Activations,
-		warmClaims:     dependencies.WarmClaims,
-		provisioning:   dependencies.Provisioning,
-		captures:       dependencies.Captures,
-		stops:          dependencies.Stops,
-		deletion:       dependencies.Deletion,
-		captureDiscard: dependencies.CaptureDiscard,
-		captureCleanup: dependencies.CaptureCleanup,
-		policies:       dependencies.Policies,
-		links:          dependencies.Links,
-		opts:           options,
-		committer:      dependencies.Committer,
+		ctx:                    dependencies.Workers.Context(),
+		storeWriteMu:           dependencies.StoreWriteMu,
+		gate:                   dependencies.Gate,
+		tenantIdempotencyLocks: dependencies.TenantIdempotencyLocks,
+		sandboxConfigLocks:     dependencies.SandboxConfigLocks,
+		sandboxLifecycleLocks:  dependencies.SandboxLifecycleLocks,
+		workers:                dependencies.Workers,
+		registry:               dependencies.Registry,
+		proofs:                 dependencies.Proofs,
+		catalog:                NewCatalog(state.Database()),
+		identity:               dependencies.CommandIdentity,
+		policy:                 dependencies.AdmissionPolicy,
+		activations:            dependencies.Activations,
+		warmClaims:             dependencies.WarmClaims,
+		provisioning:           dependencies.Provisioning,
+		captures:               dependencies.Captures,
+		stops:                  dependencies.Stops,
+		deletion:               dependencies.Deletion,
+		captureDiscard:         dependencies.CaptureDiscard,
+		captureCleanup:         dependencies.CaptureCleanup,
+		policies:               dependencies.Policies,
+		links:                  dependencies.Links,
+		opts:                   options,
+		committer:              dependencies.Committer,
 	}
 }
 
@@ -170,9 +164,8 @@ func (l *Lifecycle) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := l.guards.ForSandboxLifecycle(step.Input.Sandbox.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := l.sandboxLifecycleLocks.Lock(step.Input.Sandbox.ID)
+	defer unlock()
 	step, err = LoadLifecycleStep(l.ctx, l.store.Database, id)
 	if err != nil {
 		return true, err

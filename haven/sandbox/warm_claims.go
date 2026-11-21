@@ -20,49 +20,41 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-type WarmClaimGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
-	ForSandboxConfiguration(sandboxID string) execution.Guard
-	// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
-	ForSandboxLifecycle(sandboxID string) execution.Guard
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
-}
-
 type WarmClaimDependencies struct {
-	Guards       WarmClaimGuards
-	Gate         execution.AdmissionGate
-	Workers      *execution.Workers
-	Registry     *ephemeral.Registry
-	Proofs       machine.ResourceProofs
-	Committer    *operation.Committer
-	Activations  *Activations
-	Provisioning *Provisioning
-	Deletion     *machine.Deletion
-	Policies     *machine.DirectPolicies
-	Links        *machine.ResourceLinks
+	StoreWriteMu          execution.Guard
+	SandboxConfigLocks    *execution.KeyedLocks[string]
+	SandboxLifecycleLocks *execution.KeyedLocks[string]
+	Gate                  execution.AdmissionGate
+	Workers               *execution.Workers
+	Registry              *ephemeral.Registry
+	Proofs                machine.ResourceProofs
+	Committer             *operation.Committer
+	Activations           *Activations
+	Provisioning          *Provisioning
+	Deletion              *machine.Deletion
+	Policies              *machine.DirectPolicies
+	Links                 *machine.ResourceLinks
 }
 
 // WarmClaims selects original ready pool custody and owns warm activation,
 // release/fallback, failure retention and supersession by sandbox release.
 type WarmClaims struct {
-	store        store.Workflow
-	ctx          context.Context
-	admission    execution.Guard
-	gate         execution.AdmissionGate
-	guards       WarmClaimGuards
-	workers      *execution.Workers
-	registry     *ephemeral.Registry
-	proofs       machine.ResourceProofs
-	activations  *Activations
-	provisioning *Provisioning
-	deletion     *machine.Deletion
-	policies     *machine.DirectPolicies
-	links        *machine.ResourceLinks
-	faultPoint   func(string) error
-	committer    *operation.Committer
+	store                 store.Workflow
+	ctx                   context.Context
+	storeWriteMu          execution.Guard
+	gate                  execution.AdmissionGate
+	sandboxConfigLocks    *execution.KeyedLocks[string]
+	sandboxLifecycleLocks *execution.KeyedLocks[string]
+	workers               *execution.Workers
+	registry              *ephemeral.Registry
+	proofs                machine.ResourceProofs
+	activations           *Activations
+	provisioning          *Provisioning
+	deletion              *machine.Deletion
+	policies              *machine.DirectPolicies
+	links                 *machine.ResourceLinks
+	faultPoint            func(string) error
+	committer             *operation.Committer
 }
 
 func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault func(string) error) *WarmClaims {
@@ -73,20 +65,21 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.ForStoreMutation(),
-		gate:         dependencies.Gate,
-		guards:       dependencies.Guards,
-		workers:      dependencies.Workers,
-		registry:     dependencies.Registry,
-		proofs:       dependencies.Proofs,
-		activations:  dependencies.Activations,
-		provisioning: dependencies.Provisioning,
-		deletion:     dependencies.Deletion,
-		policies:     dependencies.Policies,
-		links:        dependencies.Links,
-		faultPoint:   fault,
-		committer:    dependencies.Committer,
+		ctx:                   dependencies.Workers.Context(),
+		storeWriteMu:          dependencies.StoreWriteMu,
+		gate:                  dependencies.Gate,
+		sandboxConfigLocks:    dependencies.SandboxConfigLocks,
+		sandboxLifecycleLocks: dependencies.SandboxLifecycleLocks,
+		workers:               dependencies.Workers,
+		registry:              dependencies.Registry,
+		proofs:                dependencies.Proofs,
+		activations:           dependencies.Activations,
+		provisioning:          dependencies.Provisioning,
+		deletion:              dependencies.Deletion,
+		policies:              dependencies.Policies,
+		links:                 dependencies.Links,
+		faultPoint:            fault,
+		committer:             dependencies.Committer,
 	}
 }
 
@@ -121,9 +114,8 @@ func (wc *WarmClaims) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := wc.guards.ForSandboxLifecycle(step.Input.Pool.SandboxID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := wc.sandboxLifecycleLocks.Lock(step.Input.Pool.SandboxID)
+	defer unlock()
 	step, err = LoadWarmClaim(wc.ctx, wc.store.Database, id)
 	if err != nil {
 		return true, err

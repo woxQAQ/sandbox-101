@@ -28,8 +28,8 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 		Request SnapshotDeleteRequest
 	}{"snapshot_delete", request})
 	hash := operation.Digest(frozen)
-	sd.admission.Lock()
-	defer sd.admission.Unlock()
+	sd.storeWriteMu.Lock()
+	defer sd.storeWriteMu.Unlock()
 	closing := sd.lifetime.Closing() || sd.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")

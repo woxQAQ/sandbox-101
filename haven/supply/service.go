@@ -37,17 +37,6 @@ type SupplyGuest interface {
 	Exec(ctx context.Context, resource loom.Resource, execKey, command string) error
 }
 
-type SupplyGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
-	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
-	// ForTemplateSupply returns the lock shared by build, refill and cleanup for one template.
-	ForTemplateSupply(templateID string) execution.Guard
-	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
-	ForVMLifecycle(vmID string) execution.Guard
-}
-
 type SupplyOptions struct {
 	Backend SupplyBackend
 	Guest   SupplyGuest
@@ -59,41 +48,45 @@ type SupplyOptions struct {
 // needed for template publication and warm pool production. Each service retains
 // its own custody.
 type SupplyDependencies struct {
-	Guards       SupplyGuards
-	Gate         execution.AdmissionGate
-	Workers      *execution.Workers
-	Proofs       machine.ResourceProofs
-	Committer    *operation.Committer
-	Commands     *operation.CommandIdentity
-	Availability *execution.Availability
-	Provisioning BareProvisioner
-	Ownership    machine.SandboxOwnershipReader
-	Captures     *machine.Captures
-	Deletion     *machine.Deletion
-	Policies     *machine.DirectPolicies
-	Links        *machine.ResourceLinks
+	VMGuards               machine.VMGuards
+	TemplateSupplyLocks    *execution.KeyedLocks[string]
+	TenantIdempotencyLocks *operation.IdempotencyLocks
+	Gate                   execution.AdmissionGate
+	Workers                *execution.Workers
+	Proofs                 machine.ResourceProofs
+	Committer              *operation.Committer
+	Commands               *operation.CommandIdentity
+	Availability           *execution.Availability
+	Provisioning           BareProvisioner
+	Ownership              machine.SandboxOwnershipReader
+	Captures               *machine.Captures
+	Deletion               *machine.Deletion
+	Policies               *machine.DirectPolicies
+	Links                  *machine.ResourceLinks
 }
 
 // Supply owns template put/build, refill, publication and failure retention.
 // All effects and mutable execution mechanisms are borrowed at construction.
 type Supply struct {
-	store        store.Workflow
-	ctx          context.Context
-	admission    execution.Guard
-	gate         execution.AdmissionGate
-	guards       SupplyGuards
-	workers      *execution.Workers
-	proofs       machine.ResourceProofs
-	commands     *operation.CommandIdentity
-	availability *execution.Availability
-	provisioning BareProvisioner
-	ownership    machine.SandboxOwnershipReader
-	captures     *machine.Captures
-	deletion     *machine.Deletion
-	policies     *machine.DirectPolicies
-	links        *machine.ResourceLinks
-	opts         SupplyOptions
-	committer    *operation.Committer
+	store                  store.Workflow
+	ctx                    context.Context
+	storeWriteMu           execution.Guard
+	gate                   execution.AdmissionGate
+	vmLifecycleLocks       *execution.KeyedLocks[string]
+	templateSupplyLocks    *execution.KeyedLocks[string]
+	tenantIdempotencyLocks *operation.IdempotencyLocks
+	workers                *execution.Workers
+	proofs                 machine.ResourceProofs
+	commands               *operation.CommandIdentity
+	availability           *execution.Availability
+	provisioning           BareProvisioner
+	ownership              machine.SandboxOwnershipReader
+	captures               *machine.Captures
+	deletion               *machine.Deletion
+	policies               *machine.DirectPolicies
+	links                  *machine.ResourceLinks
+	opts                   SupplyOptions
+	committer              *operation.Committer
 }
 
 func NewSupply(state *store.State, dependencies SupplyDependencies, options SupplyOptions) *Supply {
@@ -104,22 +97,24 @@ func NewSupply(state *store.State, dependencies SupplyDependencies, options Supp
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.ForStoreMutation(),
-		gate:         dependencies.Gate,
-		guards:       dependencies.Guards,
-		workers:      dependencies.Workers,
-		proofs:       dependencies.Proofs,
-		commands:     dependencies.Commands,
-		availability: dependencies.Availability,
-		provisioning: dependencies.Provisioning,
-		ownership:    dependencies.Ownership,
-		captures:     dependencies.Captures,
-		deletion:     dependencies.Deletion,
-		policies:     dependencies.Policies,
-		links:        dependencies.Links,
-		opts:         options,
-		committer:    dependencies.Committer,
+		ctx:                    dependencies.Workers.Context(),
+		storeWriteMu:           dependencies.VMGuards.StoreWriteMu,
+		gate:                   dependencies.Gate,
+		vmLifecycleLocks:       dependencies.VMGuards.LifecycleLocks,
+		templateSupplyLocks:    dependencies.TemplateSupplyLocks,
+		tenantIdempotencyLocks: dependencies.TenantIdempotencyLocks,
+		workers:                dependencies.Workers,
+		proofs:                 dependencies.Proofs,
+		commands:               dependencies.Commands,
+		availability:           dependencies.Availability,
+		provisioning:           dependencies.Provisioning,
+		ownership:              dependencies.Ownership,
+		captures:               dependencies.Captures,
+		deletion:               dependencies.Deletion,
+		policies:               dependencies.Policies,
+		links:                  dependencies.Links,
+		opts:                   options,
+		committer:              dependencies.Committer,
 	}
 }
 
@@ -161,9 +156,8 @@ func (s *Supply) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := s.guards.ForTemplateSupply(step.Input.Template.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := s.templateSupplyLocks.Lock(step.Input.Template.ID)
+	defer unlock()
 	step, err = LoadSupply(s.ctx, s.store.Database, id)
 	if err != nil {
 		return true, err

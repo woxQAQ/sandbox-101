@@ -56,8 +56,8 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 		return empty, err
 	}
 	compatibility, cpu := c.backend.Compatibility(), host.CPUIdentity()
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	closing := c.lifetime.Closing() || c.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)

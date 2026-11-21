@@ -86,14 +86,14 @@ func (c *Collector) run(step Step) error {
 	}
 	ctx, cancel := context.WithDeadline(c.ctx, step.Input.Deadline)
 	defer cancel()
-	if !c.guards.ForImageArtifacts().TryLock() {
+	if !c.imageArtifactsMu.TryLock() {
 		step.State.Report.Deferred = append(step.State.Report.Deferred, types.GCItem{
 			Kind:   "busy",
 			Reason: "artifact publication active",
 		})
 		step.State.Next = len(step.Input.Report.Candidates)
 	} else {
-		c.guards.ForImageArtifacts().Unlock()
+		c.imageArtifactsMu.Unlock()
 		for step.State.Next < len(step.Input.Report.Candidates) {
 			item := step.Input.Report.Candidates[step.State.Next]
 			if ctx.Err() != nil {
@@ -136,8 +136,8 @@ func (c *Collector) run(step Step) error {
 }
 
 func (c *Collector) save(step Step, complete bool) error {
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err

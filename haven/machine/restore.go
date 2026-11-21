@@ -21,13 +21,13 @@ func (p *Provisioning) runClone(step ResourceStep) error {
 	if step.Input.Restore == nil || step.State.RestoreBlocked {
 		return fmt.Errorf("%w: restore source missing or candidate blocked", errs.ErrManualRecovery)
 	}
-	p.admission.Lock()
+	p.storeWriteMu.Lock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err == nil {
 		_, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	p.admission.Unlock()
+	p.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -320,8 +320,8 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 }
 
 func (p *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error {
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err
@@ -370,8 +370,8 @@ func (p *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error
 }
 
 func (p *Provisioning) transferRestore(step *ResourceStep) error {
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	tx, err := p.store.Database.BeginTx(p.ctx, nil)
 	if err != nil {
 		return err

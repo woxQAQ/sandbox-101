@@ -18,27 +18,27 @@ type ClosingReader interface {
 // Tenants manages credentials and admission budgets. The admission guard is the
 // same instance used by resource transactions and final store shutdown.
 type Tenants struct {
-	repository *Repository
-	admission  sync.Locker
-	lifetime   ClosingReader
-	reviewed   bool
-	checkpoint func() error
+	repository   *Repository
+	storeWriteMu sync.Locker
+	lifetime     ClosingReader
+	reviewed     bool
+	checkpoint   func() error
 }
 
 type TenantDependencies struct {
-	Admission  sync.Locker
-	Lifetime   ClosingReader
-	Reviewed   bool
-	Checkpoint func() error
+	StoreWriteMu sync.Locker
+	Lifetime     ClosingReader
+	Reviewed     bool
+	Checkpoint   func() error
 }
 
 func NewTenants(repository *Repository, dependencies TenantDependencies) *Tenants {
 	return &Tenants{
-		repository: repository,
-		admission:  dependencies.Admission,
-		lifetime:   dependencies.Lifetime,
-		reviewed:   dependencies.Reviewed,
-		checkpoint: dependencies.Checkpoint,
+		repository:   repository,
+		storeWriteMu: dependencies.StoreWriteMu,
+		lifetime:     dependencies.Lifetime,
+		reviewed:     dependencies.Reviewed,
+		checkpoint:   dependencies.Checkpoint,
 	}
 }
 
@@ -46,8 +46,8 @@ func (t *Tenants) PutTenant(ctx context.Context, principal Principal, tenant typ
 	if !principal.Root || tenant.ID == "" || tenant.Token == "" || tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 {
 		return types.Tenant{}, fmt.Errorf("%w: tenant administration requires root, token and finite budgets", errs.ErrInvalid)
 	}
-	t.admission.Lock()
-	defer t.admission.Unlock()
+	t.storeWriteMu.Lock()
+	defer t.storeWriteMu.Unlock()
 	if t.reviewed {
 		return types.Tenant{}, fmt.Errorf("%w: reviewed metadata rollback does not authorize new effects", errs.ErrManualRecovery)
 	}

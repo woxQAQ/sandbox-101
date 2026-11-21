@@ -108,7 +108,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	dp.admission.Lock()
+	dp.storeWriteMu.Lock()
 	tx, err := dp.store.Database.BeginTx(ctx, nil)
 	if err == nil {
 		current, lookup := LoadDirectRetirement(ctx, tx, operationID)
@@ -166,7 +166,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 			err = errors.Join(err, tx.Rollback())
 		}
 	}
-	dp.admission.Unlock()
+	dp.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -197,8 +197,8 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 	if err = dp.fault("direct_retirement_effect"); err != nil {
 		return err
 	}
-	dp.admission.Lock()
-	defer dp.admission.Unlock()
+	dp.storeWriteMu.Lock()
+	defer dp.storeWriteMu.Unlock()
 	tx, err = dp.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return err

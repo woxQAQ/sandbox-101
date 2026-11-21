@@ -76,8 +76,8 @@ func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportS
 
 func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 	step.State.Phase = phase
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err

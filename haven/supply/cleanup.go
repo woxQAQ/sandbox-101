@@ -19,45 +19,38 @@ import (
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
 )
 
-type SupplyCleanupGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
-	ForNodeIdempotencyKey(nodeID, key string) execution.Guard
-	// ForTemplateSupply returns the lock shared by build, refill and cleanup for one template.
-	ForTemplateSupply(templateID string) execution.Guard
-	// ForSupplyCleanup returns the lock for retiring the supply allocation on one candidate VM.
-	ForSupplyCleanup(vmID string) execution.Guard
-}
-
 // SupplyCleanup owns an independent collector for failed supply work or an
 // unclaimed warm publication. Child services retain their original resource
 // proofs; the collector retires its own pool and image custody only afterward.
 type SupplyCleanup struct {
-	store      store.Workflow
-	ctx        context.Context
-	nodeID     string
-	admission  execution.Guard
-	gate       execution.AdmissionGate
-	guards     SupplyCleanupGuards
-	workers    *execution.Workers
-	proofs     machine.ResourceProofs
-	stops      *machine.Stops
-	captures   *machine.CaptureDiscard
-	deletion   *machine.Deletion
-	ownership  CleanupOwnershipReader
-	faultPoint func(string) error
+	store                store.Workflow
+	ctx                  context.Context
+	nodeID               string
+	storeWriteMu         execution.Guard
+	gate                 execution.AdmissionGate
+	candidateVMLocks     execution.KeyedLocks[string]
+	templateSupplyLocks  *execution.KeyedLocks[string]
+	nodeIdempotencyLocks *operation.IdempotencyLocks
+	workers              *execution.Workers
+	proofs               machine.ResourceProofs
+	stops                *machine.Stops
+	captures             *machine.CaptureDiscard
+	deletion             *machine.Deletion
+	ownership            CleanupOwnershipReader
+	faultPoint           func(string) error
 }
 
 type SupplyCleanupDependencies struct {
-	Guards    SupplyCleanupGuards
-	Gate      execution.AdmissionGate
-	Workers   *execution.Workers
-	Proofs    machine.ResourceProofs
-	Stops     *machine.Stops
-	Captures  *machine.CaptureDiscard
-	Deletion  *machine.Deletion
-	Ownership CleanupOwnershipReader
+	StoreWriteMu         execution.Guard
+	TemplateSupplyLocks  *execution.KeyedLocks[string]
+	NodeIdempotencyLocks *operation.IdempotencyLocks
+	Gate                 execution.AdmissionGate
+	Workers              *execution.Workers
+	Proofs               machine.ResourceProofs
+	Stops                *machine.Stops
+	Captures             *machine.CaptureDiscard
+	Deletion             *machine.Deletion
+	Ownership            CleanupOwnershipReader
 }
 
 func NewSupplyCleanup(state *store.State, dependencies SupplyCleanupDependencies, fault func(string) error) *SupplyCleanup {
@@ -68,18 +61,19 @@ func NewSupplyCleanup(state *store.State, dependencies SupplyCleanupDependencies
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Workers.Context(),
-		nodeID:     state.Identity().Identity,
-		admission:  dependencies.Guards.ForStoreMutation(),
-		gate:       dependencies.Gate,
-		guards:     dependencies.Guards,
-		workers:    dependencies.Workers,
-		proofs:     dependencies.Proofs,
-		stops:      dependencies.Stops,
-		captures:   dependencies.Captures,
-		deletion:   dependencies.Deletion,
-		ownership:  dependencies.Ownership,
-		faultPoint: fault,
+		ctx:                  dependencies.Workers.Context(),
+		nodeID:               state.Identity().Identity,
+		storeWriteMu:         dependencies.StoreWriteMu,
+		gate:                 dependencies.Gate,
+		templateSupplyLocks:  dependencies.TemplateSupplyLocks,
+		nodeIdempotencyLocks: dependencies.NodeIdempotencyLocks,
+		workers:              dependencies.Workers,
+		proofs:               dependencies.Proofs,
+		stops:                dependencies.Stops,
+		captures:             dependencies.Captures,
+		deletion:             dependencies.Deletion,
+		ownership:            dependencies.Ownership,
+		faultPoint:           fault,
 	}
 }
 
@@ -111,9 +105,8 @@ func (sc *SupplyCleanup) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := sc.guards.ForSupplyCleanup(step.Input.Source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := sc.candidateVMLocks.Lock(step.Input.Source.Candidate)
+	defer unlock()
 	step, err = LoadSupplyCleanup(sc.ctx, sc.store.Database, id)
 	if err != nil {
 		return true, err
@@ -153,9 +146,8 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || !loom.ValidResourceID(request.OperationID, "op-") {
 		return empty, fmt.Errorf("%w: supply cleanup requires management authority, original operation and key", errs.ErrInvalid)
 	}
-	requestGuard := sc.guards.ForNodeIdempotencyKey(sc.nodeID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
+	releaseKey := sc.nodeIdempotencyLocks.Lock(sc.nodeID, key)
+	defer releaseKey()
 	frozen := operation.Encode(struct {
 		Action  string
 		Request SupplyCleanupRequest
@@ -174,13 +166,13 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	if err != nil {
 		return empty, err
 	}
-	guard := sc.guards.ForTemplateSupply(original.Input.Template.ID)
-	if !guard.TryLock() {
+	unlock := sc.templateSupplyLocks.TryLock(original.Input.Template.ID)
+	if unlock == nil {
 		return empty, fmt.Errorf("%w: supply workflow is active", errs.ErrConflict)
 	}
-	defer guard.Unlock()
-	sc.admission.Lock()
-	defer sc.admission.Unlock()
+	defer unlock()
+	sc.storeWriteMu.Lock()
+	defer sc.storeWriteMu.Unlock()
 	if err = sc.gate.Check(); err != nil {
 		return empty, err
 	}
@@ -376,8 +368,8 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 }
 
 func (sc *SupplyCleanup) completeResourceLink(parent, role string, link machine.ResourceLink) error {
-	sc.admission.Lock()
-	defer sc.admission.Unlock()
+	sc.storeWriteMu.Lock()
+	defer sc.storeWriteMu.Unlock()
 	tx, err := sc.store.Database.BeginTx(sc.ctx, nil)
 	if err != nil {
 		return err
@@ -542,8 +534,8 @@ func (sc *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
 }
 
 func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
-	sc.admission.Lock()
-	defer sc.admission.Unlock()
+	sc.storeWriteMu.Lock()
+	defer sc.storeWriteMu.Unlock()
 	tx, err := sc.store.Database.BeginTx(sc.ctx, nil)
 	if err != nil {
 		return err

@@ -125,25 +125,25 @@ func (link ResourceLink) Complete(ctx context.Context, tx *sql.Tx, parent, role 
 // ResourceLinks coordinates child receipts in the parent's workflow. The parent
 // supplies its domain child execution; locks, transactions and HEAD are shared.
 type ResourceLinks struct {
-	store     store.Workflow
-	ctx       context.Context
-	admission execution.Guard
+	store        store.Workflow
+	ctx          context.Context
+	storeWriteMu execution.Guard
 }
 
-func NewResourceLinks(state *store.State, admission execution.Guard, ctx context.Context) *ResourceLinks {
+func NewResourceLinks(state *store.State, storeWriteMu execution.Guard, ctx context.Context) *ResourceLinks {
 	return &ResourceLinks{
 		store: store.Workflow{
 			Database:   state.Database(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:       ctx,
-		admission: admission,
+		ctx:          ctx,
+		storeWriteMu: storeWriteMu,
 	}
 }
 
 func (rl *ResourceLinks) Complete(parent, role string, link ResourceLink) error {
-	rl.admission.Lock()
-	defer rl.admission.Unlock()
+	rl.storeWriteMu.Lock()
+	defer rl.storeWriteMu.Unlock()
 	tx, err := rl.store.Database.BeginTx(rl.ctx, nil)
 	if err != nil {
 		return err

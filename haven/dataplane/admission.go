@@ -44,9 +44,8 @@ func (p *Plane) admit(ctx context.Context, principal authorization.Principal, id
 	if err := p.ensureResume(ctx, principal, id); err != nil {
 		return types.Sandbox{}, err
 	}
-	lock := p.guards.ForSandboxLifecycle(id)
-	lock.Lock()
-	defer lock.Unlock()
+	releaseLifecycle := p.sandboxLifecycleLocks.Lock(id)
+	defer releaseLifecycle()
 	view, err := p.catalog.Get(ctx, principal, id)
 	if err != nil {
 		return view, err
@@ -108,9 +107,8 @@ func (p *Plane) admit(ctx context.Context, principal authorization.Principal, id
 			return view, err
 		}
 	}
-	guard := p.guards.ForSandboxConfiguration(id)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := p.sandboxConfigLocks.Lock(id)
+	defer unlock()
 	identity := ephemeral.ConnectionIdentity{
 		SandboxID:  id,
 		Instance:   view.Instance,
@@ -153,10 +151,10 @@ func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Prin
 	if err != nil {
 		return view, sandbox.Settings{}, err
 	}
-	p.mu.Lock()
+	p.registrationMu.Lock()
 	closing := p.lifetime.Closing() || p.store.Reviewed
 	bound := p.registry.Binding(id)
-	p.mu.Unlock()
+	p.registrationMu.Unlock()
 	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != p.epoch || !time.Now().Before(settings.Deadline) || p.policy.CredentialsMissing(id, settings) {
 		return view, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission changed", errs.ErrConflict)
 	}
@@ -223,23 +221,22 @@ func (p *Plane) open(ctx context.Context, admission streamAdmission, port int) (
 	if err != nil {
 		return nil, err
 	}
-	guard := p.guards.ForSandboxConfiguration(identity.SandboxID)
-	guard.Lock()
+	unlock := p.sandboxConfigLocks.Lock(identity.SandboxID)
 	if _, _, err = p.finalAdmission(ctx, principal, identity); err != nil {
-		guard.Unlock()
+		unlock()
 		_ = conn.Close()
 		return nil, AdmissionError{err}
 	}
-	p.mu.Lock()
+	p.registrationMu.Lock()
 	if p.store.Reviewed || !p.lifetime.Begin() {
-		p.mu.Unlock()
-		guard.Unlock()
+		p.registrationMu.Unlock()
+		unlock()
 		_ = conn.Close()
 		return nil, AdmissionError{fmt.Errorf("%w: haven is closing", errs.ErrConflict)}
 	}
 	tracked := p.registry.Track(conn, identity)
-	p.mu.Unlock()
-	guard.Unlock()
+	p.registrationMu.Unlock()
+	unlock()
 	go func() {
 		defer p.lifetime.End()
 		p.enforceLease(tracked, principal)
@@ -268,9 +265,8 @@ func (p *Plane) Attach(ctx context.Context, principal authorization.Principal, r
 	if !ok || !up.BelongsTo(p.registry) || up.Identity().SandboxID != id {
 		return nil, fmt.Errorf("%w: connection belongs to another admission", errs.ErrInvalid)
 	}
-	guard := p.guards.ForSandboxConfiguration(id)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := p.sandboxConfigLocks.Lock(id)
+	defer unlock()
 	select {
 	case <-up.Done():
 		return nil, fmt.Errorf("%w: upstream admission is closed", errs.ErrConflict)
@@ -284,14 +280,14 @@ func (p *Plane) Attach(ctx context.Context, principal authorization.Principal, r
 	if err != nil {
 		return nil, err
 	}
-	p.mu.Lock()
+	p.registrationMu.Lock()
 	if p.store.Reviewed || !p.lifetime.Begin() {
-		p.mu.Unlock()
+		p.registrationMu.Unlock()
 		_ = conn.Close()
 		return nil, fmt.Errorf("%w: Haven is closing", errs.ErrConflict)
 	}
 	tracked := p.registry.Track(conn, identity)
-	p.mu.Unlock()
+	p.registrationMu.Unlock()
 	go func() {
 		defer p.lifetime.End()
 		p.enforceLease(tracked, principal)
@@ -319,10 +315,9 @@ func (p *Plane) enforceLease(conn *ephemeral.Connection, principal authorization
 		case <-conn.Done():
 			return
 		case <-ticker.C:
-			guard := p.guards.ForSandboxConfiguration(identity.SandboxID)
-			guard.Lock()
+			unlock := p.sandboxConfigLocks.Lock(identity.SandboxID)
 			_, _, err := p.finalAdmission(p.ctx, principal, identity)
-			guard.Unlock()
+			unlock()
 			if err != nil {
 				_ = conn.Close()
 				return

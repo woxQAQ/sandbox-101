@@ -93,9 +93,8 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 	if key == "" || len(key) > 256 || work == cache || (work && (request.CacheBuilder != "" || request.CacheDiffID != "")) {
 		return empty, fmt.Errorf("%w: image cleanup requires one exact import or cache", errs.ErrInvalid)
 	}
-	guard := i.guards.ForNodeIdempotencyKey(i.nodeID, key)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := i.nodeIdempotencyLocks.Lock(i.nodeID, key)
+	defer unlock()
 	frozen := operation.Encode(struct {
 		Action  string
 		Request ImageCleanupRequest
@@ -110,10 +109,10 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 		}
 		return cached, err
 	}
-	if !i.guards.ForImageArtifacts().TryLock() {
+	if !i.imageArtifactsMu.TryLock() {
 		return empty, fmt.Errorf("%w: artifact producer or collector active", errs.ErrConflict)
 	}
-	defer i.guards.ForImageArtifacts().Unlock()
+	defer i.imageArtifactsMu.Unlock()
 	input := imageCleanupInput{
 		RequestTenantID: principal.TenantID,
 	}
@@ -137,8 +136,8 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 		input.ResourceID = request.CacheBuilder + ":" + request.CacheDiffID
 		input.Cache = &cache
 	}
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	if err := i.gate.Check(); err != nil {
 		return empty, err
 	}

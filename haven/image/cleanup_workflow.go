@@ -89,8 +89,8 @@ func (i *Images) imageCleanupIntents(step imageCleanupStep) ([]loom.DeletionInte
 }
 
 func (i *Images) saveImageCleanup(step *imageCleanupStep, state imageCleanupState) error {
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err
@@ -236,8 +236,8 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 			return fmt.Errorf("image artifact directory reclamation unconfirmed")
 		}
 	}
-	i.admission.Lock()
-	defer i.admission.Unlock()
+	i.storeWriteMu.Lock()
+	defer i.storeWriteMu.Unlock()
 	tx, err := i.database.BeginTx(i.ctx, nil)
 	if err != nil {
 		return err

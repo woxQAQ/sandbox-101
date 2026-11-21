@@ -207,8 +207,8 @@ func snapshotRawPath(source SnapshotSource) string {
 }
 
 func (sd *SnapshotDeletion) checkSnapshotDelete(step SnapshotDeleteStep) error {
-	sd.admission.Lock()
-	defer sd.admission.Unlock()
+	sd.storeWriteMu.Lock()
+	defer sd.storeWriteMu.Unlock()
 	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err
@@ -256,8 +256,8 @@ func (sd *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep) (loo
 	if err != nil {
 		return intent, err
 	}
-	sd.admission.Lock()
-	defer sd.admission.Unlock()
+	sd.storeWriteMu.Lock()
+	defer sd.storeWriteMu.Unlock()
 	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return intent, err
@@ -362,8 +362,8 @@ func (sd *SnapshotDeletion) runSnapshotDelete(step SnapshotDeleteStep) error {
 }
 
 func (sd *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) error {
-	sd.admission.Lock()
-	defer sd.admission.Unlock()
+	sd.storeWriteMu.Lock()
+	defer sd.storeWriteMu.Unlock()
 	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err
@@ -394,8 +394,8 @@ func (sd *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) error 
 }
 
 func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) error {
-	sd.admission.Lock()
-	defer sd.admission.Unlock()
+	sd.storeWriteMu.Lock()
+	defer sd.storeWriteMu.Unlock()
 	tx, err := sd.store.Database.BeginTx(sd.ctx, nil)
 	if err != nil {
 		return err

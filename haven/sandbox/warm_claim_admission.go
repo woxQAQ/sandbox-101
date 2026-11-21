@@ -32,8 +32,8 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	principal, key, admission := request.Principal, request.Key, request.Admission
 	selectedTemplate, restore := request.Template, request.Restore
 	var empty operation.State
-	wc.admission.Lock()
-	defer wc.admission.Unlock()
+	wc.storeWriteMu.Lock()
+	defer wc.storeWriteMu.Unlock()
 	if err := wc.gate.Check(); err != nil {
 		return empty, false, err
 	}

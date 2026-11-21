@@ -25,23 +25,23 @@ type DeletionBackend interface {
 // original funding and deletion receipts before the final transaction retires
 // physical responsibility. Release and discard retain distinct frozen proofs.
 type Deletion struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	guards     VMGuards
-	lifetime   *execution.Lifetime
-	workers    *execution.Workers
-	proofs     ResourceProofs
-	backend    DeletionBackend
-	faultPoint func(string) error
-	committer  *operation.Committer
-	ownership  DeletionOwnershipReader
-	handoff    DeletionParticipant
-	usage      VMUsageReader
+	store            store.Workflow
+	ctx              context.Context
+	storeWriteMu     execution.Guard
+	vmLifecycleLocks *execution.KeyedLocks[string]
+	lifetime         *execution.Lifetime
+	workers          *execution.Workers
+	proofs           ResourceProofs
+	backend          DeletionBackend
+	faultPoint       func(string) error
+	committer        *operation.Committer
+	ownership        DeletionOwnershipReader
+	handoff          DeletionParticipant
+	usage            VMUsageReader
 }
 
 type VMDeletionDependencies struct {
-	Guards    VMGuards
+	VMGuards  VMGuards
 	Lifetime  *execution.Lifetime
 	Workers   *execution.Workers
 	Proofs    ResourceProofs
@@ -60,18 +60,18 @@ func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, faul
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		lifetime:   dependencies.Lifetime,
-		workers:    dependencies.Workers,
-		proofs:     dependencies.Proofs,
-		backend:    dependencies.Backend,
-		ownership:  dependencies.Ownership,
-		handoff:    dependencies.Handoff,
-		usage:      dependencies.Usage,
-		faultPoint: fault,
-		committer:  dependencies.Committer,
+		ctx:              dependencies.Workers.Context(),
+		storeWriteMu:     dependencies.VMGuards.StoreWriteMu,
+		vmLifecycleLocks: dependencies.VMGuards.LifecycleLocks,
+		lifetime:         dependencies.Lifetime,
+		workers:          dependencies.Workers,
+		proofs:           dependencies.Proofs,
+		backend:          dependencies.Backend,
+		ownership:        dependencies.Ownership,
+		handoff:          dependencies.Handoff,
+		usage:            dependencies.Usage,
+		faultPoint:       fault,
+		committer:        dependencies.Committer,
 	}
 }
 
@@ -128,14 +128,13 @@ func (d *Deletion) ResumeDiscard(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := d.guards.ForVMLifecycle(step.Input.Source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadDiscard(d.ctx, d.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	return true, d.runDiscard(step)
+	return true, d.vmLifecycleLocks.With(step.Input.Source.Candidate, func() error {
+		step, err := LoadDiscard(d.ctx, d.store.Database, id)
+		if err != nil {
+			return err
+		}
+		return d.runDiscard(step)
+	})
 }
 
 func (d *Deletion) ResumeRelease(id string) (bool, error) {
@@ -165,27 +164,23 @@ func (d *Deletion) ResumeRelease(id string) (bool, error) {
 	if err = d.validateStep(step); err != nil {
 		return true, err
 	}
-	guard := d.guards.ForVMLifecycle(step.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadResourceStep(d.ctx, d.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	if operation.Terminal(step.Status) {
-		return true, nil
-	}
-	if err = d.validateStep(step); err != nil {
-		return true, err
-	}
-	currentMachine, instance, owner, err := LoadVM(d.ctx, d.store.Database, step)
-	if err != nil {
-		return true, err
-	}
-	if owner != step.OperationID || !currentMachine.Deleting || instance != "" && !ExpectedCurrentInstance(step, instance) {
-		return true, fmt.Errorf("resource step lost current VM ownership")
-	}
-	return true, d.runRelease(step)
+	return true, d.vmLifecycleLocks.With(step.Candidate, func() error {
+		step, err := LoadResourceStep(d.ctx, d.store.Database, id)
+		if err != nil || operation.Terminal(step.Status) {
+			return err
+		}
+		if err = d.validateStep(step); err != nil {
+			return err
+		}
+		currentMachine, instance, owner, err := LoadVM(d.ctx, d.store.Database, step)
+		if err != nil {
+			return err
+		}
+		if owner != step.OperationID || !currentMachine.Deleting || instance != "" && !ExpectedCurrentInstance(step, instance) {
+			return fmt.Errorf("resource step lost current VM ownership")
+		}
+		return d.runRelease(step)
+	})
 }
 
 func GenerationFixedNodes(source ResourceStep) map[string]loom.FileIdentity {

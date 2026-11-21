@@ -25,15 +25,15 @@ func (p *Plane) ReconcileBindings() error {
 	}
 	for _, subject := range subjects {
 		id, tenant := subject.ID, subject.TenantID
-		guard := p.guards.ForSandboxConfiguration(id)
-		if !guard.TryLock() {
+		unlock := p.sandboxConfigLocks.TryLock(id)
+		if unlock == nil {
 			continue
 		}
 		settings, lookup := sandbox.LoadSettings(p.ctx, p.store.Database, id)
 		if lookup == nil {
 			_, fenceErr := sandbox.LifecycleFence(p.ctx, p.store.Database, id)
 			if fenceErr == nil {
-				guard.Unlock()
+				unlock()
 				continue
 			}
 			if !errors.Is(fenceErr, sql.ErrNoRows) {
@@ -44,7 +44,7 @@ func (p *Plane) ReconcileBindings() error {
 			lookup = p.activations.RevokeSandbox(id)
 		}
 		rebind := lookup == nil && settings.ActiveEpoch != p.epoch && len(settings.Secrets) == 0 && time.Now().Before(settings.Deadline) && p.opts.Guest != nil
-		guard.Unlock()
+		unlock()
 		if rebind {
 			bindingCtx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
 			_, lookup = p.waitRestartBinding(bindingCtx, types.Sandbox{

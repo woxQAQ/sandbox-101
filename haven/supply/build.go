@@ -32,8 +32,8 @@ func (s *Supply) setSupplyState(step *SupplyStep, next SupplyState) error {
 }
 
 func (s *Supply) supplyCandidate(step SupplyStep, source machine.ResourceStep) error {
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
@@ -211,8 +211,8 @@ func (s *Supply) runBuild(step SupplyStep) error {
 			return err
 		}
 	}
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
@@ -258,8 +258,8 @@ func (s *Supply) runSupply(step SupplyStep) (runErr error) {
 }
 
 func (s *Supply) failSupply(step SupplyStep) error {
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err

@@ -15,8 +15,8 @@ import (
 )
 
 func (l *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.CaptureStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
@@ -123,8 +123,8 @@ func (l *Lifecycle) runPause(step LifecycleStep) error {
 }
 
 func (l *Lifecycle) completePause(step LifecycleStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err

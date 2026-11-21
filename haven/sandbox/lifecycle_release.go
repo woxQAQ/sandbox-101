@@ -56,8 +56,8 @@ func pausedReceipt(ctx context.Context, q store.DBTX, current ownership.Sandbox,
 func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.State, error) {
 	parent, input, mac, upper := admission.Parent, admission.Input, admission.MAC, admission.Upper
 	var empty operation.State
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}

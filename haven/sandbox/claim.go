@@ -28,9 +28,8 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 	}
 	// Bind the original values, including secrets, to the authenticated role for replay.
 	admission.MAC = sb.identity.CommandMAC(principal, command)
-	keyGuard := sb.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	unlock := sb.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
 	if operation, found, err := sb.existing(ctx, principal, key, admission); found || err != nil {
 		return operation, err
 	}

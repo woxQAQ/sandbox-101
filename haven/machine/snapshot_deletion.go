@@ -14,33 +14,26 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-type SnapshotDeletionGuards interface {
-	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
-	ForStoreMutation() execution.Guard
-	// ForSnapshotDeletion returns the lock for retiring one snapshot.
-	ForSnapshotDeletion(snapshotID string) execution.Guard
-}
-
 // SnapshotDeletion coordinates one immutable deletion intent and its retained
 // responsibility. The shared execution and persistence owners outlive this service.
 type SnapshotDeletion struct {
-	store      store.Workflow
-	proofs     SnapshotProofs
-	usage      SnapshotUsageReader
-	ctx        context.Context
-	admission  execution.Guard
-	guards     SnapshotDeletionGuards
-	lifetime   *execution.Lifetime
-	workers    *execution.Workers
-	faultPoint func(string) error
+	store               store.Workflow
+	proofs              SnapshotProofs
+	usage               SnapshotUsageReader
+	ctx                 context.Context
+	storeWriteMu        execution.Guard
+	snapshotDeleteLocks execution.KeyedLocks[string]
+	lifetime            *execution.Lifetime
+	workers             *execution.Workers
+	faultPoint          func(string) error
 }
 
 type SnapshotDeletionDependencies struct {
-	Proofs   SnapshotProofs
-	Guards   SnapshotDeletionGuards
-	Lifetime *execution.Lifetime
-	Workers  *execution.Workers
-	Usage    SnapshotUsageReader
+	Proofs       SnapshotProofs
+	StoreWriteMu execution.Guard
+	Lifetime     *execution.Lifetime
+	Workers      *execution.Workers
+	Usage        SnapshotUsageReader
 }
 
 func NewSnapshotDeletion(state *store.State, dependencies SnapshotDeletionDependencies, fault func(string) error) *SnapshotDeletion {
@@ -51,14 +44,13 @@ func NewSnapshotDeletion(state *store.State, dependencies SnapshotDeletionDepend
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		proofs:     dependencies.Proofs,
-		usage:      dependencies.Usage,
-		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		lifetime:   dependencies.Lifetime,
-		workers:    dependencies.Workers,
-		faultPoint: fault,
+		proofs:       dependencies.Proofs,
+		usage:        dependencies.Usage,
+		ctx:          dependencies.Workers.Context(),
+		storeWriteMu: dependencies.StoreWriteMu,
+		lifetime:     dependencies.Lifetime,
+		workers:      dependencies.Workers,
+		faultPoint:   fault,
 	}
 }
 
@@ -102,9 +94,8 @@ func (sd *SnapshotDeletion) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := sd.guards.ForSnapshotDeletion(step.Input.Request.SnapshotID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := sd.snapshotDeleteLocks.Lock(step.Input.Request.SnapshotID)
+	defer unlock()
 	step, err = LoadSnapshotDelete(sd.ctx, sd.store.Database, id)
 	if err != nil {
 		return true, err

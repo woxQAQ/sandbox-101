@@ -44,18 +44,16 @@ func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest
 	if command.Action != "release" && command.Action != "checkpoint" && command.Action != "pause" {
 		return empty, fmt.Errorf("%w: unsupported lifecycle action", errs.ErrInvalid)
 	}
-	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
 	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return operation, err
 	}
-	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := l.sandboxConfigLocks.Lock(command.SandboxID)
+	defer unlock()
 
 	sandboxRecord, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 	if err != nil {
@@ -248,8 +246,8 @@ func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step Lifecyc
 }
 
 func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.CaptureStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
@@ -330,8 +328,8 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 }
 
 func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err
@@ -591,8 +589,8 @@ func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation Act
 // failLifecycle commits failure only from a durable child terminal result.
 // An effect error with a pending child retains an unresolved accepted intent.
 func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	tx, err := l.store.Database.BeginTx(l.ctx, nil)
 	if err != nil {
 		return err

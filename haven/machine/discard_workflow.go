@@ -18,8 +18,8 @@ import (
 )
 
 func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err
@@ -70,8 +70,8 @@ func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
 }
 
 func (d *Deletion) discardGenerationSet(step DiscardStep) ([]ResourceStep, error) {
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return nil, err
@@ -96,13 +96,13 @@ func (d *Deletion) runDiscard(step DiscardStep) error {
 	if err != nil {
 		return err
 	}
-	d.admission.Lock()
+	d.storeWriteMu.Lock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err == nil {
 		_, err = d.discardProof(d.ctx, tx, step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	d.admission.Unlock()
+	d.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -273,8 +273,8 @@ func (d *Deletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error
 	if err != nil {
 		return intent, err
 	}
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return intent, err
@@ -303,8 +303,8 @@ func (d *Deletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error
 }
 
 func (d *Deletion) completeDiscard(step DiscardStep) error {
-	d.admission.Lock()
-	defer d.admission.Unlock()
+	d.storeWriteMu.Lock()
+	defer d.storeWriteMu.Unlock()
 	tx, err := d.store.Database.BeginTx(d.ctx, nil)
 	if err != nil {
 		return err

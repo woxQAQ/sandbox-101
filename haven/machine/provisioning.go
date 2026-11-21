@@ -10,27 +10,30 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-// ResourceProvisioning advances physical generations under the coordinator's
-// continuous VM guard. It owns no worker, shutdown state, or separate lock domain.
+// Provisioning advances physical generations and completes their sandbox handoff
+// within the same VM lifecycle scope.
 type Provisioning struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	proofs     ResourceProofs
-	backend    ProvisionBackend
-	ownership  ProvisionOwnershipReader
-	handoff    ProvisionParticipant
-	faultPoint func(string) error
-	committer  *operation.Committer
+	store            store.Workflow
+	ctx              context.Context
+	storeWriteMu     execution.Guard
+	vmLifecycleLocks *execution.KeyedLocks[string]
+	proofs           ResourceProofs
+	backend          ProvisionBackend
+	ownership        ProvisionOwnershipReader
+	handoff          ProvisionParticipant
+	activate         func(vmID, operationID string) error
+	faultPoint       func(string) error
+	committer        *operation.Committer
 }
 
 type ProvisioningDependencies struct {
 	Context   context.Context
-	Admission execution.Guard
+	VMGuards  VMGuards
 	Proofs    ResourceProofs
 	Backend   ProvisionBackend
 	Ownership ProvisionOwnershipReader
 	Handoff   ProvisionParticipant
+	Activate  func(vmID, operationID string) error
 	Committer *operation.Committer
 }
 
@@ -42,14 +45,16 @@ func NewProvisioning(state *store.State, dependencies ProvisioningDependencies, 
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Context,
-		admission:  dependencies.Admission,
-		proofs:     dependencies.Proofs,
-		backend:    dependencies.Backend,
-		ownership:  dependencies.Ownership,
-		handoff:    dependencies.Handoff,
-		faultPoint: fault,
-		committer:  dependencies.Committer,
+		ctx:              dependencies.Context,
+		storeWriteMu:     dependencies.VMGuards.StoreWriteMu,
+		vmLifecycleLocks: dependencies.VMGuards.LifecycleLocks,
+		proofs:           dependencies.Proofs,
+		backend:          dependencies.Backend,
+		ownership:        dependencies.Ownership,
+		handoff:          dependencies.Handoff,
+		activate:         dependencies.Activate,
+		faultPoint:       fault,
+		committer:        dependencies.Committer,
 	}
 }
 
@@ -60,20 +65,43 @@ func (p *Provisioning) fault(point string) error {
 	return nil
 }
 
-// AdvanceLocked requires the original VM guard to remain held through the
-// subsequent activation. It neither obtains nor releases that guard.
-func (p *Provisioning) AdvanceLocked(step ResourceStep) error {
-	if p.
-		ownership ==
-		nil || p.handoff == nil {
-		return fmt.Errorf("%w: required Provisioning capability port unavailable",
-
-			errs.ErrManualRecovery)
+// Continue reloads the frozen operation inside its VM scope. Successful new
+// and replayed generations finish activation before competing effects can enter.
+func (p *Provisioning) Continue(operationID string) error {
+	if p.store.Reviewed {
+		return fmt.Errorf("%w: reviewed rollback cannot provision VM", errs.ErrManualRecovery)
 	}
-
-	if err := ValidateResourceStep(p.store.Directory, step); err != nil {
+	if p.ownership == nil || p.handoff == nil || p.activate == nil {
+		return fmt.Errorf("%w: provisioning or activation unavailable", errs.ErrManualRecovery)
+	}
+	original, err := LoadResourceStep(p.ctx, p.store.Database, operationID)
+	if err != nil {
 		return err
 	}
+	return p.vmLifecycleLocks.With(original.Candidate, func() error {
+		step, err := LoadResourceStep(p.ctx, p.store.Database, operationID)
+		if err != nil {
+			return err
+		}
+		if step.Candidate != original.Candidate || step.Hash != original.Hash {
+			return fmt.Errorf("%w: provisioning identity changed", errs.ErrManualRecovery)
+		}
+		if err := ValidateResourceStep(p.store.Directory, step); err != nil {
+			return err
+		}
+		if step.Status == "failed" {
+			return nil
+		}
+		if step.Status != "succeeded" {
+			if err := p.advance(step); err != nil {
+				return err
+			}
+		}
+		return p.activate(step.Candidate, operationID)
+	})
+}
+
+func (p *Provisioning) advance(step ResourceStep) error {
 	currentMachine, instance, owner, err := LoadVM(p.ctx, p.store.Database, step)
 	if err != nil {
 		return err

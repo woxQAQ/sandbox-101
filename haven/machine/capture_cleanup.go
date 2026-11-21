@@ -20,20 +20,20 @@ import (
 // CaptureCleanup retires raw VMM output only after its original publication and
 // stop proofs establish that the retained generation no longer runs.
 type CaptureCleanup struct {
-	store      store.Workflow
-	ctx        context.Context
-	admission  execution.Guard
-	guards     VMGuards
-	gate       execution.AdmissionGate
-	workers    *execution.Workers
-	inspector  InstanceInspector
-	ownership  SandboxOwnershipReader
-	faultPoint func(string) error
+	store        store.Workflow
+	ctx          context.Context
+	storeWriteMu execution.Guard
+	steps        vmSteps[CaptureCleanupStep]
+	gate         execution.AdmissionGate
+	workers      *execution.Workers
+	inspector    InstanceInspector
+	ownership    SandboxOwnershipReader
+	faultPoint   func(string) error
 }
 
 type CaptureCleanupDependencies struct {
 	Gate      execution.AdmissionGate
-	Guards    VMGuards
+	VMGuards  VMGuards
 	Workers   *execution.Workers
 	Inspector InstanceInspector
 	Ownership SandboxOwnershipReader
@@ -47,14 +47,14 @@ func NewCaptureCleanup(state *store.State, dependencies CaptureCleanupDependenci
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.ForStoreMutation(),
-		guards:     dependencies.Guards,
-		gate:       dependencies.Gate,
-		workers:    dependencies.Workers,
-		inspector:  dependencies.Inspector,
-		ownership:  dependencies.Ownership,
-		faultPoint: fault,
+		ctx:          dependencies.Workers.Context(),
+		storeWriteMu: dependencies.VMGuards.StoreWriteMu,
+		steps:        newVMSteps(state.Database(), dependencies.VMGuards.LifecycleLocks, LoadCaptureCleanup),
+		gate:         dependencies.Gate,
+		workers:      dependencies.Workers,
+		inspector:    dependencies.Inspector,
+		ownership:    dependencies.Ownership,
+		faultPoint:   fault,
 	}
 }
 
@@ -86,34 +86,14 @@ func (cc *CaptureCleanup) dispatch(id string) {
 }
 
 func (cc *CaptureCleanup) Resume(id string) (bool, error) {
-	if cc.
-		ownership ==
-		nil {
-		return false,
-
-			fmt.Errorf("%w: required CaptureCleanup capability port unavailable",
-				errs.
-					ErrManualRecovery)
+	if cc.ownership == nil {
+		return false, fmt.Errorf("%w: required CaptureCleanup capability port unavailable", errs.ErrManualRecovery)
 	}
 
 	if cc.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume raw cleanup", errs.ErrManualRecovery)
 	}
-	step, err := LoadCaptureCleanup(cc.ctx, cc.store.Database, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	guard := cc.guards.ForVMLifecycle(step.Input.Capture.Input.Source.Candidate)
-	guard.Lock()
-	defer guard.Unlock()
-	step, err = LoadCaptureCleanup(cc.ctx, cc.store.Database, id)
-	if err != nil {
-		return true, err
-	}
-	return true, cc.runCaptureCleanup(step)
+	return cc.steps.resume(cc.ctx, id, cc.runCaptureCleanup)
 }
 
 func ValidateCaptureCleanup(ctx context.Context, database store.DBTX, id string) error {
@@ -142,6 +122,10 @@ type (
 	}
 )
 
+func (step CaptureCleanupStep) sourceVMID() string {
+	return step.Input.Capture.sourceVMID()
+}
+
 func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCleanupStep, error) {
 	step := CaptureCleanupStep{
 		OperationID: id,
@@ -168,7 +152,7 @@ func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCl
 	if err = json.Unmarshal(body, &step.Phase); err != nil {
 		return step, err
 	}
-	if action != "capture_cleanup" || candidate != step.Input.Capture.Input.Source.Candidate || expected != step.Input.Capture.Input.Request.ExpectedInstance {
+	if action != "capture_cleanup" || candidate != step.sourceVMID() || expected != step.Input.Capture.Input.Request.ExpectedInstance {
 		return step, fmt.Errorf("raw capture cleanup identity changed")
 	}
 	return step, nil
@@ -195,8 +179,8 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 		Request CaptureCleanupRequest
 	}{"capture_cleanup", request})
 	hash := operation.Digest(frozen)
-	cc.admission.Lock()
-	defer cc.admission.Unlock()
+	cc.storeWriteMu.Lock()
+	defer cc.storeWriteMu.Unlock()
 	if err := cc.gate.Check(); err != nil {
 		return empty, err
 	}
@@ -220,7 +204,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	if err != nil {
 		return empty, err
 	}
-	if err = AllocationCleanupFence(ctx, tx, capture.Input.Source.Candidate, parent); err != nil {
+	if err = AllocationCleanupFence(ctx, tx, capture.sourceVMID(), parent); err != nil {
 		return empty, err
 	}
 	if authority, ok := parent.(CaptureCleanupParentAuthority); ok {
@@ -236,7 +220,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 		return empty, fmt.Errorf("%w: raw capture stop proof differs from captured generation", errs.ErrConflict)
 	}
 	if err = CaptureCleanupProof(ctx, tx, capture, CaptureCleanupTarget{
-		VMID:     capture.Input.Source.Candidate,
+		VMID:     capture.sourceVMID(),
 		Instance: capture.Input.Request.ExpectedInstance,
 		Status:   "pending",
 	}); err != nil {
@@ -417,8 +401,8 @@ func (cc *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) e
 }
 
 func (cc *CaptureCleanup) checkCaptureRaw(step CaptureCleanupStep) error {
-	cc.admission.Lock()
-	defer cc.admission.Unlock()
+	cc.storeWriteMu.Lock()
+	defer cc.storeWriteMu.Unlock()
 	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return err
@@ -460,8 +444,8 @@ func (cc *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom.Dele
 	if err != nil {
 		return intent, err
 	}
-	cc.admission.Lock()
-	defer cc.admission.Unlock()
+	cc.storeWriteMu.Lock()
+	defer cc.storeWriteMu.Unlock()
 	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return intent, err
@@ -557,8 +541,8 @@ func (cc *CaptureCleanup) runCaptureCleanup(step CaptureCleanupStep) error {
 }
 
 func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loom.DeletionIntent) error {
-	cc.admission.Lock()
-	defer cc.admission.Unlock()
+	cc.storeWriteMu.Lock()
+	defer cc.storeWriteMu.Unlock()
 	tx, err := cc.store.Database.BeginTx(cc.ctx, nil)
 	if err != nil {
 		return err

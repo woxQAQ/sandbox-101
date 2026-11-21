@@ -8,7 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/woxQAQ/haven/authorization"
 
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -20,6 +25,76 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 )
+
+func TestVMActivationSerializesCompetingEffects(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	for _, action := range []string{"stop", "release"} {
+		t.Run(action, func(t *testing.T) {
+			entered, release := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			var firstActivation atomic.Bool
+			service, backend, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
+				if point == "activation_admin_effect" && firstActivation.CompareAndSwap(false, true) {
+					close(entered)
+					<-release
+					return errs.ErrInterrupted
+				}
+				return nil
+			})
+			t.Cleanup(unblock)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			principal := authorization.Principal{TenantID: "tenant"}
+			command := operation.Intent{Action: "claim", TemplateID: "cold", TTLSeconds: 60}
+			claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "claim", command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("claim did not reach guest activation")
+			}
+			source, err := machine.LoadResourceStep(ctx, service.State.Database(), claim.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var competing operation.State
+			if action == "stop" {
+				competing, err = service.Stops.AdmitStop(ctx, machine.StopRequest{
+					TenantID:         principal.TenantID,
+					Key:              action,
+					SandboxID:        source.Input.SandboxID,
+					ExpectedInstance: source.State.Witness,
+				})
+			} else {
+				competing, err = service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
+					TenantID:  principal.TenantID,
+					Key:       action,
+					SandboxID: source.Input.SandboxID,
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := service.Sandboxes.AdmitClaim(ctx, principal, "other-vm", command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = service.Operations.Wait(ctx, principal, other.ID); err != nil {
+				t.Fatalf("independent VM could not activate: %v", err)
+			}
+			if !service.Workers.State(competing.ID).Active || backend.Count("stop") != 0 {
+				t.Fatalf("%s advanced during activation", action)
+			}
+			unblock()
+			result, err := service.Operations.Wait(ctx, principal, competing.ID)
+			if err != nil || result.Status != "succeeded" {
+				t.Fatalf("%s after activation exited: %s, %v", action, result.Status, err)
+			}
+		})
+	}
+}
 
 func TestHavenStepAdmissionAtomicity(t *testing.T) {
 	testutil.ParallelLifecycle(t)
@@ -95,10 +170,10 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 	t.Run("committed-before-effects", func(t *testing.T) {
 		service, backend := testapp.ColdService(t, nil)
 		backend.Before = func(_ string, resource loom.Resource) error {
-			if !service.Admission.TryLock() {
+			if !service.StoreWriteMu.TryLock() {
 				return fmt.Errorf("effect held the global admission lock")
 			}
-			service.Admission.Unlock()
+			service.StoreWriteMu.Unlock()
 			var count int
 			if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM vms v JOIN instances i ON i.vm_id=v.id JOIN resource_versions r ON r.vm_id=v.id WHERE v.id=? AND i.id=?", resource.VMID, resource.Instance).Scan(&count); err != nil {
 				return err

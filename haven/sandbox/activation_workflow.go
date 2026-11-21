@@ -24,7 +24,14 @@ func (a *Activations) actualActivation(source machine.ResourceStep) error {
 	return nil
 }
 
-func (a *Activations) Continue(acceptedOperation string) (runErr error) {
+func (a *Activations) activateVM(vmID, operationID string) error {
+	return a.vmLifecycleLocks.With(vmID, func() error {
+		return a.activate(vmID, operationID)
+	})
+}
+
+// activate runs inside the VM lifecycle scope shared with physical provisioning.
+func (a *Activations) activate(vmID, acceptedOperation string) (runErr error) {
 	if a.store.Reviewed {
 		return fmt.Errorf("%w: reviewed rollback cannot activate sandbox", errs.ErrManualRecovery)
 	}
@@ -42,7 +49,7 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if source.Hash != step.Input.ResourceHash || source.State.Witness != step.Input.ExpectedInstance {
+	if source.Candidate != vmID || source.Hash != step.Input.ResourceHash || source.State.Witness != step.Input.ExpectedInstance {
 		return fmt.Errorf("activation lacks original resource witness")
 	}
 	defer func() {
@@ -162,9 +169,8 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 			}
 		}
 	}
-	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := a.sandboxConfigLocks.Lock(step.Input.SandboxID)
+	defer unlock()
 	if _, err = a.checkActivation(step); err != nil {
 		return err
 	}

@@ -22,18 +22,16 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	if command.Action != "rollback" || command.SandboxID == "" || command.CheckpointID == "" || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: rollback requires tenant authority, sandbox, checkpoint and key", errs.ErrInvalid)
 	}
-	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
 	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return accepted, err
 	}
-	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
-	guard.Lock()
-	defer guard.Unlock()
+	unlock := l.sandboxConfigLocks.Lock(command.SandboxID)
+	defer unlock()
 	current, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
 	if err != nil {
 		return empty, err
@@ -135,8 +133,8 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 
 func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.State, input LifecycleInput, mac string) (operation.State, error) {
 	var empty operation.State
-	l.admission.Lock()
-	defer l.admission.Unlock()
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
 	if err := l.gate.Check(); err != nil {
 		return empty, err
 	}
@@ -323,10 +321,7 @@ func (l *Lifecycle) runRollback(step LifecycleStep) error {
 	if err = l.restoreActivation(step, child); err != nil {
 		return err
 	}
-	lock := l.guards.ForVMLifecycle(child.Candidate)
-	lock.Lock()
-	defer lock.Unlock()
-	return l.activations.Continue(step.OperationID)
+	return l.activations.activateVM(child.Candidate, step.OperationID)
 }
 
 func (l *Lifecycle) cleanupRollbackCaptures(step LifecycleStep, stop string) error {

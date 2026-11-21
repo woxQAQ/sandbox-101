@@ -38,10 +38,13 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	}) {
 		return fmt.Errorf("refill source differs from original pool reservation")
 	}
-	lock := s.guards.ForVMLifecycle(source.Candidate)
-	lock.Lock()
-	defer lock.Unlock()
-	if err = s.opts.Backend.SetNetworkEnabled(s.ctx, source.Input.Resource, false); err != nil {
+	return s.vmLifecycleLocks.With(source.Candidate, func() error {
+		return s.publishWarm(step, source, reservation)
+	})
+}
+
+func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reservation PoolReservation) error {
+	if err := s.opts.Backend.SetNetworkEnabled(s.ctx, source.Input.Resource, false); err != nil {
 		return err
 	}
 	observed, err := s.opts.Backend.Inspect(s.ctx, source.Input.Resource)
@@ -57,8 +60,8 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	if err = s.opts.Guest.Info(s.ctx, source.Input.Resource); err != nil {
 		return err
 	}
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	tx, err := s.store.Database.BeginTx(s.ctx, nil)
 	if err != nil {
 		return err
@@ -172,9 +175,8 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "refill" || command.TemplateID == "" {
 		return empty, fmt.Errorf("%w: refill requires tenant authority, template and key", errs.ErrInvalid)
 	}
-	keyGuard := s.guards.ForTenantIdempotencyKey(principal.TenantID, key)
-	keyGuard.Lock()
-	defer keyGuard.Unlock()
+	unlock := s.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
 	mac := s.commands.CommandMAC(principal, command)
 	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
@@ -280,8 +282,8 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 }
 
 func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State, input SupplyInput, mac string) (operation.State, error) {
-	s.admission.Lock()
-	defer s.admission.Unlock()
+	s.storeWriteMu.Lock()
+	defer s.storeWriteMu.Unlock()
 	if err := s.gate.Check(); err != nil {
 		return operation.State{}, err
 	}

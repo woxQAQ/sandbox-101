@@ -57,8 +57,8 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if err != nil {
 		return empty, err
 	}
-	p.admission.Lock()
-	defer p.admission.Unlock()
+	p.storeWriteMu.Lock()
+	defer p.storeWriteMu.Unlock()
 	closing := p.lifetime.Closing() || p.store.Reviewed
 	if closing {
 		return empty, fmt.Errorf("haven is closing")

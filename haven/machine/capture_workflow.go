@@ -23,8 +23,8 @@ import (
 )
 
 func (c *Captures) checkCapture(step CaptureStep) error {
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
@@ -37,8 +37,8 @@ func (c *Captures) checkCapture(step CaptureStep) error {
 }
 
 func (c *Captures) saveCapture(ctx context.Context, step *CaptureStep, next CaptureState) error {
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -79,13 +79,13 @@ func (c *Captures) resumeCapture(step *CaptureStep) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	c.admission.Lock()
+	c.storeWriteMu.Lock()
 	tx, err := c.store.Database.BeginTx(ctx, nil)
 	if err == nil {
 		_, err = c.captureProof(ctx, tx, *step)
 		err = errors.Join(err, tx.Rollback())
 	}
-	c.admission.Unlock()
+	c.storeWriteMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -128,8 +128,8 @@ func (c *Captures) failCapture(step *CaptureStep, cause error) error {
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()
 	}
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
@@ -222,11 +222,12 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 		if !observation.Alive || observation.Paused {
 			return c.failCapture(&step, fmt.Errorf("capture requires unpaused source"))
 		}
-		releaseCapture, err := c.guards.AcquireCaptureSlot(c.ctx)
-		if err != nil {
-			return err
+		select {
+		case c.captureSlot <- struct{}{}:
+			defer func() { <-c.captureSlot }()
+		case <-c.ctx.Done():
+			return c.ctx.Err()
 		}
-		defer releaseCapture()
 		if step.State.Boundary == nil {
 			boundary, err := loom.PrepareCapture(r, step.OperationID)
 			if err != nil {
@@ -416,8 +417,8 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 }
 
 func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
-	c.admission.Lock()
-	defer c.admission.Unlock()
+	c.storeWriteMu.Lock()
+	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(c.ctx, nil)
 	if err != nil {
 		return err
