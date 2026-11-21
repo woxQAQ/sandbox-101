@@ -25,31 +25,70 @@ var (
 func translateError(err error) (int, types.ApiError) {
 	switch {
 	case errors.Is(err, errs.ErrNotFound), errors.Is(err, errs.ErrNotVisible):
-		return http.StatusNotFound, types.ApiError{Code: types.CodeNotFound, Message: "not found"}
+		return http.StatusNotFound, types.ApiError{
+			Code:    types.CodeNotFound,
+			Message: "not found",
+		}
 	case errors.Is(err, errs.ErrForbidden):
-		return http.StatusForbidden, types.ApiError{Code: types.CodeForbidden, Message: "root access required"}
+		return http.StatusForbidden, types.ApiError{
+			Code:    types.CodeForbidden,
+			Message: "root access required",
+		}
 	case errors.Is(err, errs.ErrConflict):
-		return http.StatusConflict, types.ApiError{Code: types.CodeConflict, Message: "operation conflicts with current state"}
+		return http.StatusConflict, types.ApiError{
+			Code:    types.CodeConflict,
+			Message: "operation conflicts with current state",
+		}
 	case errors.Is(err, errs.ErrInvalid):
-		return http.StatusBadRequest, types.ApiError{Code: types.CodeInvalid, Message: errs.InvalidInputMessage(err)}
+		return http.StatusBadRequest, types.ApiError{
+			Code:    types.CodeInvalid,
+			Message: errs.InvalidInputMessage(err),
+		}
 	case errors.Is(err, errs.ErrExhausted):
-		return http.StatusTooManyRequests, types.ApiError{Code: types.CodeExhausted, Message: "admission capacity exhausted"}
+		return http.StatusTooManyRequests, types.ApiError{
+			Code:    types.CodeExhausted,
+			Message: "admission capacity exhausted",
+		}
 	case errors.Is(err, errs.ErrIncompatible):
-		return http.StatusUnprocessableEntity, types.ApiError{Code: types.CodeIncompatible, Message: "incompatible resource"}
+		return http.StatusUnprocessableEntity, types.ApiError{
+			Code:    types.CodeIncompatible,
+			Message: "incompatible resource",
+		}
 	case errors.Is(err, errs.ErrUnknown):
-		return http.StatusServiceUnavailable, types.ApiError{Code: types.CodeUnknown, Message: "effect outcome unknown"}
+		return http.StatusServiceUnavailable, types.ApiError{
+			Code:    types.CodeUnknown,
+			Message: "effect outcome unknown",
+		}
 	case errors.Is(err, errs.ErrManualRecovery):
-		return http.StatusServiceUnavailable, types.ApiError{Code: types.CodeManualRecovery, Message: "manual recovery required"}
+		return http.StatusServiceUnavailable, types.ApiError{
+			Code:    types.CodeManualRecovery,
+			Message: "manual recovery required",
+		}
 	case errors.Is(err, errInvalidJSON):
-		return http.StatusBadRequest, types.ApiError{Code: types.CodeInvalid, Message: errInvalidJSON.Error()}
+		return http.StatusBadRequest, types.ApiError{
+			Code:    types.CodeInvalid,
+			Message: errInvalidJSON.Error(),
+		}
 	case errors.Is(err, errExtraJSON):
-		return http.StatusBadRequest, types.ApiError{Code: types.CodeInvalid, Message: errExtraJSON.Error()}
+		return http.StatusBadRequest, types.ApiError{
+			Code:    types.CodeInvalid,
+			Message: errExtraJSON.Error(),
+		}
 	case errors.Is(err, errs.ErrInterrupted):
-		return http.StatusServiceUnavailable, types.ApiError{Code: types.CodeUnknown, Message: "accepted operation retained for recovery"}
+		return http.StatusServiceUnavailable, types.ApiError{
+			Code:    types.CodeUnknown,
+			Message: "accepted operation retained for recovery",
+		}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return http.StatusServiceUnavailable, types.ApiError{Code: types.CodeUnknown, Message: "operation wait ended"}
+		return http.StatusServiceUnavailable, types.ApiError{
+			Code:    types.CodeUnknown,
+			Message: "operation wait ended",
+		}
 	default:
-		return http.StatusInternalServerError, types.ApiError{Code: types.CodeInternal, Message: "internal service error"}
+		return http.StatusInternalServerError, types.ApiError{
+			Code:    types.CodeInternal,
+			Message: "internal service error",
+		}
 	}
 }
 
@@ -62,17 +101,26 @@ func writeError(c *gin.Context, err error) {
 
 // invalidRequest rejects the request with one public client error message.
 func invalidRequest(c *gin.Context, message string) {
-	c.AbortWithStatusJSON(http.StatusBadRequest, types.ApiError{Code: types.CodeInvalid, Message: message})
+	c.AbortWithStatusJSON(http.StatusBadRequest, types.ApiError{
+		Code:    types.CodeInvalid,
+		Message: message,
+	})
 }
 
 // notFound hides both absent and invisible objects behind one answer.
 func notFound(c *gin.Context) {
-	c.AbortWithStatusJSON(http.StatusNotFound, types.ApiError{Code: types.CodeNotFound, Message: "not found"})
+	c.AbortWithStatusJSON(http.StatusNotFound, types.ApiError{
+		Code:    types.CodeNotFound,
+		Message: "not found",
+	})
 }
 
 // internalFailure reports a terminal operation failure without diagnostics.
 func internalFailure(c *gin.Context) {
-	c.AbortWithStatusJSON(http.StatusInternalServerError, types.ApiError{Code: types.CodeInternal, Message: "internal service error"})
+	c.AbortWithStatusJSON(http.StatusInternalServerError, types.ApiError{
+		Code:    types.CodeInternal,
+		Message: "internal service error",
+	})
 }
 
 // decodeJSON reads exactly one bounded JSON value: 1 MiB at most, no unknown

@@ -91,7 +91,9 @@ func TestHavenProvisionRejectsChangedFrozenBytes(t *testing.T) {
 		return nil
 	})
 	accepted, err := service.Provisioning.AdmitCold(t.Context(), machine.FreshRequest{
-		TenantID: "tenant", Key: "interrupted", TemplateID: "cold",
+		TenantID:   "tenant",
+		Key:        "interrupted",
+		TemplateID: "cold",
 	})
 	if !errors.Is(err, errs.ErrInterrupted) || accepted.ID == "" {
 		t.Fatalf("expected a committed admission before dispatch, got %v", err)

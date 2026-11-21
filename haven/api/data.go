@@ -33,11 +33,17 @@ func (h *Services) connectSandbox(c *gin.Context) {
 	id := c.Param("id")
 	owner := principal(c)
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		c.AbortWithStatusJSON(http.StatusUpgradeRequired, types.ApiError{Code: types.CodeInvalid, Message: "Connection: Upgrade and Upgrade: sandbox-v1 required"})
+		c.AbortWithStatusJSON(http.StatusUpgradeRequired, types.ApiError{
+			Code:    types.CodeInvalid,
+			Message: "Connection: Upgrade and Upgrade: sandbox-v1 required",
+		})
 		return
 	}
 	if r.ProtoMajor != 1 {
-		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, types.ApiError{Code: types.CodeIncompatible, Message: "HTTP/1.1 Upgrade required"})
+		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, types.ApiError{
+			Code:    types.CodeIncompatible,
+			Message: "HTTP/1.1 Upgrade required",
+		})
 		return
 	}
 	if _, err := h.Dataplane.Ready(r.Context(), owner, id); err != nil {
@@ -185,7 +191,10 @@ func (h *Services) preview(c *gin.Context) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			c.AbortWithStatusJSON(http.StatusBadGateway, types.ApiError{Code: types.CodeInternal, Message: "preview upstream unavailable"})
+			c.AbortWithStatusJSON(http.StatusBadGateway, types.ApiError{
+				Code:    types.CodeInternal,
+				Message: "preview upstream unavailable",
+			})
 		},
 	}
 	proxy.ServeHTTP(w, r)

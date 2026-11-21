@@ -166,8 +166,14 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	ctx := t.Context()
-	principal := authorization.Principal{TenantID: "tenant"}
-	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "claim", nil, egress.Policy{Mode: "none"})
+	principal := authorization.Principal{
+		TenantID: "tenant",
+	}
+	claim := (testfixture.SandboxClaims{
+		App: service,
+	}).Claim(t, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	id := claim.Result.SandboxID
 	command := operation.Intent{
 		Action:     "renew",
@@ -184,7 +190,10 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 		ID:     operation.NewID("op-"),
 		Key:    "renew-pending",
 		Status: "pending",
-		Result: operation.Result{SandboxID: id, VMID: claim.Result.VMID},
+		Result: operation.Result{
+			SandboxID: id,
+			VMID:      claim.Result.VMID,
+		},
 	}
 	request := operation.Encode(struct {
 		Action  string

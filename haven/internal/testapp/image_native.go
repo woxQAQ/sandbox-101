@@ -61,7 +61,10 @@ func NativeImageFixtureAt(t *testing.T, directory string) *NativeImageFixture {
 }
 
 func (fixture *NativeImageFixture) ImportOCI(ctx context.Context, options imageimport.ImageImportOptions) (host.ImageManifest, error) {
-	root := authorization.Principal{Root: true, TenantID: "root"}
+	root := authorization.Principal{
+		Root:     true,
+		TenantID: "root",
+	}
 	accepted, err := fixture.Service.Images.AdmitImport(ctx, root, "native-"+operation.Digest(operation.Encode(options)), options)
 	if err != nil {
 		return host.ImageManifest{}, err
@@ -91,8 +94,10 @@ func ImportFixture(t *testing.T) (*NativeImageFixture, string, []testfixture.OCI
 	layout, layers, digest := testfixture.LayeredOCILayout(t)
 	fixture := NewNativeImageFixture(t)
 	manifest, err := fixture.ImportOCI(t.Context(), imageimport.ImageImportOptions{
-		Layout: layout, Digest: digest,
-		MaxBytes: 4 << 20, MaxFiles: 1000,
+		Layout:   layout,
+		Digest:   digest,
+		MaxBytes: 4 << 20,
+		MaxFiles: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)

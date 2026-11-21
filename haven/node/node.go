@@ -26,7 +26,10 @@ type Service struct {
 }
 
 func New(metadata Metadata, availability *execution.Availability) *Service {
-	return &Service{metadata: metadata, availability: availability}
+	return &Service{
+		metadata:     metadata,
+		availability: availability,
+	}
 }
 
 // ReadNodeStatus reads metadata under the caller's existing store custody.

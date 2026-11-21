@@ -158,12 +158,24 @@ type provisionRequest[T provisionAction] struct {
 	Claim   *operation.Intent `json:"Claim,omitempty"`
 }
 
-func (FreshRequest) provisionAction() string   { return "claim" }
-func (CloneRequest) provisionAction() string   { return "clone" }
-func (RestoreRequest) provisionAction() string { return "restore" }
+func (FreshRequest) provisionAction() string {
+	return "claim"
+}
+
+func (CloneRequest) provisionAction() string {
+	return "clone"
+}
+
+func (RestoreRequest) provisionAction() string {
+	return "restore"
+}
 
 func FreezeProvisionRequest[T provisionAction](request T, claim *operation.Intent) []byte {
-	return operation.Encode(provisionRequest[T]{Action: request.provisionAction(), Request: request, Claim: claim})
+	return operation.Encode(provisionRequest[T]{
+		Action:  request.provisionAction(),
+		Request: request,
+		Claim:   claim,
+	})
 }
 
 func DecodeProvisionRequest[T provisionAction](body []byte) (T, error) {

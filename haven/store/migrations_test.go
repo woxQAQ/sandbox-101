@@ -58,8 +58,16 @@ func TestSQLiteMigrationTransaction(t *testing.T) {
 	if _, err = db.Exec("INSERT INTO tenants VALUES('owner','token-hash',0,0)"); err != nil {
 		t.Fatal(err)
 	}
-	for _, invalid := range []any{nil, -1, 0.5, "invalid"} {
-		for _, column := range []string{"max_sandboxes", "max_storage_mib"} {
+	for _, invalid := range []any{
+		nil,
+		-1,
+		0.5,
+		"invalid",
+	} {
+		for _, column := range []string{
+			"max_sandboxes",
+			"max_storage_mib",
+		} {
 			if _, err := db.Exec("UPDATE tenants SET "+column+"=? WHERE id='owner'", invalid); err == nil {
 				t.Fatalf("%s accepted invalid budget %v", column, invalid)
 			}

@@ -37,7 +37,10 @@ func NewManagement(services ManagementServices) http.Handler {
 	_ = router.SetTrustedProxies(nil)
 	router.Use(noStore, func(c *gin.Context) {
 		if !localuds.Authorized(c.Request.Context()) {
-			c.AbortWithStatusJSON(http.StatusForbidden, types.ApiError{Code: types.CodeForbidden, Message: "local administrator peer required"})
+			c.AbortWithStatusJSON(http.StatusForbidden, types.ApiError{
+				Code:    types.CodeForbidden,
+				Message: "local administrator peer required",
+			})
 			return
 		}
 		c.Set("principal", authorization.Principal{
@@ -99,14 +102,18 @@ func (s ManagementServices) manage(c *gin.Context) {
 			writeError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, types.ManagementResponse{GC: &report})
+		c.JSON(http.StatusOK, types.ManagementResponse{
+			GC: &report,
+		})
 		return
 	case types.ManagementActionSupplyCleanup:
 		if request.Import != nil || request.GC != nil || request.OperationID == "" || request.CacheBuilder != "" || request.CacheDiffID != "" {
 			invalidRequest(c, "supply cleanup requires only original operation id")
 			return
 		}
-		accepted, err = s.SupplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{OperationID: request.OperationID})
+		accepted, err = s.SupplyCleanup.AdmitSupplyCleanup(ctx, principal, request.Key, supply.SupplyCleanupRequest{
+			OperationID: request.OperationID,
+		})
 	case types.ManagementActionImageCleanup:
 		if request.Import != nil || request.GC != nil {
 			invalidRequest(c, "image cleanup accepts only original import or cache identity")
@@ -135,7 +142,9 @@ func (s ManagementServices) manage(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, types.ManagementResponse{Operation: &view})
+	c.JSON(http.StatusOK, types.ManagementResponse{
+		Operation: &view,
+	})
 }
 
 // managementView projects the durable operation state onto the local

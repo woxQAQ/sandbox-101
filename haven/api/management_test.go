@@ -29,7 +29,10 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 		Import: &input,
 	})
 	peer := adminPeer(t)
-	services := api.ManagementServices{Images: app.Images, Operations: app.Operations}
+	services := api.ManagementServices{
+		Images:     app.Images,
+		Operations: app.Operations,
+	}
 	post := func(ctx context.Context, wantStatus int, wantCode, wantMessage string) {
 		t.Helper()
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/manage", bytes.NewReader(body))
@@ -70,7 +73,9 @@ type cancelDuringCustody struct {
 
 func (c cancelDuringCustody) State(string) execution.WorkerState {
 	c.cancel()
-	return execution.WorkerState{Active: true}
+	return execution.WorkerState{
+		Active: true,
+	}
 }
 
 func adminPeer(t *testing.T) context.Context {

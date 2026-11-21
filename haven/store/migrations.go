@@ -29,7 +29,9 @@ func Migrate(ctx context.Context, db *sql.DB, initialize func(*sql.Tx) error) er
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 	var current, application int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
 		return err
@@ -63,7 +65,9 @@ func Migrate(ctx context.Context, db *sql.DB, initialize func(*sql.Tx) error) er
 	if err := journal.CreateVersionTable(ctx, tx); err != nil {
 		return err
 	}
-	if err := journal.Insert(ctx, tx, database.InsertRequest{Version: Version}); err != nil {
+	if err := journal.Insert(ctx, tx, database.InsertRequest{
+		Version: Version,
+	}); err != nil {
 		return err
 	}
 	if initialize != nil {

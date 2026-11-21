@@ -18,7 +18,10 @@ func TestSandboxTokenUsesPersistedIdentityColumns(t *testing.T) {
 	}
 	auth := service.Authentication
 	principal, err := auth.Authenticate(t.Context(), auth.SandboxToken(tenant, id))
-	if err != nil || principal != (authorization.Principal{TenantID: tenant, SandboxID: id}) {
+	if err != nil || principal != (authorization.Principal{
+		TenantID:  tenant,
+		SandboxID: id,
+	}) {
 		t.Fatalf("sandbox identity lookup returned %+v, %v", principal, err)
 	}
 	if _, err = db.Exec("UPDATE sandboxes SET id='' WHERE id=?", id); err != nil {

@@ -56,7 +56,10 @@ func New(h Services) http.Handler {
 				return
 			}
 		}
-		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, types.ApiError{Code: types.CodeInvalid, Message: "method not allowed"})
+		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, types.ApiError{
+			Code:    types.CodeInvalid,
+			Message: "method not allowed",
+		})
 	})
 	router.Match([]string{
 		http.MethodGet,
@@ -136,7 +139,10 @@ func (h *Services) authenticate(c *gin.Context) {
 func (h *Services) putTenant(c *gin.Context) {
 	owner := principal(c)
 	if !owner.Root {
-		c.AbortWithStatusJSON(http.StatusForbidden, types.ApiError{Code: types.CodeForbidden, Message: "root access required"})
+		c.AbortWithStatusJSON(http.StatusForbidden, types.ApiError{
+			Code:    types.CodeForbidden,
+			Message: "root access required",
+		})
 		return
 	}
 	var value types.Tenant
@@ -381,7 +387,10 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 func operationView(view types.Operation) types.Operation {
 	view.Error = nil
 	if view.Status == "failed" {
-		view.Error = &types.ApiError{Code: types.CodeInternal, Message: "internal service error"}
+		view.Error = &types.ApiError{
+			Code:    types.CodeInternal,
+			Message: "internal service error",
+		}
 	}
 	return view
 }

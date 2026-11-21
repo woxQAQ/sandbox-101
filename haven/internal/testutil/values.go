@@ -21,6 +21,7 @@ func RequireWrite(result sql.Result, err error) error {
 	}
 	return nil
 }
+
 func Terminal(status string) bool {
 	return status == "succeeded" || status == "failed"
 }

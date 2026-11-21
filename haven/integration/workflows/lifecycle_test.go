@@ -251,23 +251,36 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	fork, err := service.CommandRouter.Execute(ctx, principal, "tenant-fork", operation.Intent{
-		Action: "fork", CheckpointID: checkpoint.Result.CheckpointID, Policy: egress.Policy{Mode: "none"},
+		Action:       "fork",
+		CheckpointID: checkpoint.Result.CheckpointID,
+		Policy: egress.Policy{
+			Mode: "none",
+		},
 	})
 	if err != nil {
 		t.Fatal(fork, service.Workers.State(fork.ID).Err, err)
 	}
 	server := httptest.NewServer(api.New(api.Services{
-		Authentication: service.Authentication, Requests: service.CommandRouter,
-		Operations: service.Operations, Delivery: service.Delivery,
+		Authentication: service.Authentication,
+		Requests:       service.CommandRouter,
+		Operations:     service.Operations,
+		Delivery:       service.Delivery,
 	}))
 	t.Cleanup(server.Close)
 	admin := sdk.New(server.URL, service.Options.AdminToken)
 	admin.Tenant = principal.TenantID
-	result, err := admin.ForkCheckpoint(ctx, checkpoint.Result.CheckpointID, "admin-fork", types.Command{Policy: types.Policy{Mode: "none"}})
+	result, err := admin.ForkCheckpoint(ctx, checkpoint.Result.CheckpointID, "admin-fork", types.Command{
+		Policy: types.Policy{
+			Mode: "none",
+		},
+	})
 	if err != nil || len(result.Sandboxes) != 1 {
 		t.Fatal("admin checkpoint fork", result, err)
 	}
-	for _, branch := range []string{fork.Result.SandboxID, result.Sandboxes[0].ID} {
+	for _, branch := range []string{
+		fork.Result.SandboxID,
+		result.Sandboxes[0].ID,
+	} {
 		sandbox, err := service.Dataplane.Ready(ctx, principal, branch)
 		if err != nil || sandbox.State != "running" || sandbox.ID == claim.Result.SandboxID || sandbox.TenantID != "tenant" || sandbox.TemplateID != "cold" {
 			t.Fatal(sandbox, err)
@@ -293,10 +306,19 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, source := range []operation.Intent{
-		{Action: "fork", CheckpointID: checkpoint.Result.CheckpointID},
-		{Action: "fork", SandboxID: claim.Result.SandboxID},
+		{
+			Action:       "fork",
+			CheckpointID: checkpoint.Result.CheckpointID,
+		},
+		{
+			Action:    "fork",
+			SandboxID: claim.Result.SandboxID,
+		},
 	} {
-		_, err = service.Forks.AdmitFork(ctx, authorization.Principal{Root: true, TenantID: "other"}, "wrong-owner", source)
+		_, err = service.Forks.AdmitFork(ctx, authorization.Principal{
+			Root:     true,
+			TenantID: "other",
+		}, "wrong-owner", source)
 		if !errors.Is(err, errs.ErrNotFound) {
 			t.Errorf("foreign source exposed its state: %v", err)
 		}

@@ -37,8 +37,17 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	if err != nil || original.Status != "succeeded" {
 		t.Fatal(original, err)
 	}
-	root := authorization.Principal{Root: true, TenantID: "root"}
-	for _, denied := range []authorization.Principal{principal, {Root: true, SandboxID: original.Result.SandboxID}} {
+	root := authorization.Principal{
+		Root:     true,
+		TenantID: "root",
+	}
+	for _, denied := range []authorization.Principal{
+		principal,
+		{
+			Root:      true,
+			SandboxID: original.Result.SandboxID,
+		},
+	} {
 		if err := service.Node.Drain(denied); !errors.Is(err, errs.ErrForbidden) {
 			t.Fatal("unauthorized drain", err)
 		}

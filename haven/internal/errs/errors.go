@@ -21,10 +21,17 @@ var (
 // type lets other packages pass string constants, but not runtime diagnostics.
 type inputProblem string
 
-func InvalidInput(message inputProblem) error { return message }
+func InvalidInput(message inputProblem) error {
+	return message
+}
 
-func (p inputProblem) Error() string { return ErrInvalid.Error() + ": " + string(p) }
-func (p inputProblem) Unwrap() error { return ErrInvalid }
+func (p inputProblem) Error() string {
+	return ErrInvalid.Error() + ": " + string(p)
+}
+
+func (p inputProblem) Unwrap() error {
+	return ErrInvalid
+}
 
 func InvalidInputMessage(err error) string {
 	if problem, ok := errors.AsType[inputProblem](err); ok {

@@ -123,8 +123,14 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixture(t)
 	ctx := t.Context()
-	principal := authorization.Principal{TenantID: "tenant"}
-	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "claim", nil, egress.Policy{Mode: "none"})
+	principal := authorization.Principal{
+		TenantID: "tenant",
+	}
+	claim := (testfixture.SandboxClaims{
+		App: service,
+	}).Claim(t, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
 	id := claim.Result.SandboxID
 	before, err := service.Catalog.Get(ctx, principal, id)
 	if err != nil {
@@ -134,7 +140,11 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	if _, err = db.Exec(`CREATE TRIGGER lose_settings AFTER UPDATE ON sandbox_settings BEGIN DELETE FROM sandbox_settings WHERE sandbox_id=NEW.sandbox_id; END`); err != nil {
 		t.Fatal(err)
 	}
-	command := operation.Intent{Action: "renew", SandboxID: id, TTLSeconds: 120}
+	command := operation.Intent{
+		Action:     "renew",
+		SandboxID:  id,
+		TTLSeconds: 120,
+	}
 	if _, err = service.CommandRouter.Execute(ctx, principal, "renew", command); err == nil {
 		t.Fatal("renew published success with no settings")
 	}

@@ -168,11 +168,17 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Token:  foreign.Token,
 	}, 404)
 	oldDeadline := acceptedRecord.Result.Sandbox.Deadline
-	renewed, err := tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "renew-before-release", types.Command{Action: "renew", TTLSeconds: 120})
+	renewed, err := tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "renew-before-release", types.Command{
+		Action:     "renew",
+		TTLSeconds: 120,
+	})
 	if err != nil || renewed.Sandbox == nil || renewed.Sandbox.Deadline.Equal(oldDeadline) {
 		t.Fatal("lease did not change", renewed, err)
 	}
-	_, err = tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "stale-release", types.Command{Action: "release", LeaseDeadline: oldDeadline})
+	_, err = tenant.Change(ctx, acceptedRecord.Result.Sandbox.ID, "stale-release", types.Command{
+		Action:        "release",
+		LeaseDeadline: oldDeadline,
+	})
 	if err == nil || err.Error() != "conflict: operation conflicts with current state" {
 		t.Fatal("release with the previous deadline must conflict", err)
 	}
@@ -189,7 +195,9 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Key:    "bodyless-release",
 	}
 	controlHTTP(t, endpoint, message, 200)
-	if replay, err := tenant.Change(ctx, firstID, "bodyless-release", types.Command{Action: "release"}); err != nil || replay.Sandbox == nil || replay.Sandbox.State != "terminated" {
+	if replay, err := tenant.Change(ctx, firstID, "bodyless-release", types.Command{
+		Action: "release",
+	}); err != nil || replay.Sandbox == nil || replay.Sandbox.State != "terminated" {
 		t.Fatal("bodyless release replay", replay, err)
 	}
 	message.Body = []byte(`{"lease_deadline":"2020-01-01T00:00:00Z"}`)

@@ -16,12 +16,26 @@ import (
 
 func TestClaimReplayDuringDrain(t *testing.T) {
 	app, _, _, _ := testapp.SandboxFixture(t)
-	principal := authorization.Principal{Root: true, TenantID: "tenant"}
+	principal := authorization.Principal{
+		Root:     true,
+		TenantID: "tenant",
+	}
 	hostOnly := false
 	accepted, err := app.Sandboxes.AdmitClaim(t.Context(), principal, "original", operation.Intent{
-		Action: "claim", TemplateID: "cold", TTLSeconds: 60,
+		Action:     "claim",
+		TemplateID: "cold",
+		TTLSeconds: 60,
 		Env: map[string]types.EnvVar{
-			"TOKEN": {Value: "fixture-value", Guest: &hostOnly, Inject: &types.Injection{Hosts: []string{"example.test"}, Header: "Authorization"}},
+			"TOKEN": {
+				Value: "fixture-value",
+				Guest: &hostOnly,
+				Inject: &types.Injection{
+					Hosts: []string{
+						"example.test",
+					},
+					Header: "Authorization",
+				},
+			},
 		},
 	})
 	if err != nil {
