@@ -11,7 +11,6 @@ import (
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/dataplane"
-	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/node"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
@@ -40,6 +39,7 @@ func New(h Services) http.Handler {
 	router.HandleMethodNotAllowed = true
 	router.UseRawPath = true
 	_ = router.SetTrustedProxies(nil)
+	router.Use(noStore)
 	router.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
 			h.authenticate(c)
@@ -47,7 +47,7 @@ func New(h Services) http.Handler {
 				return
 			}
 		}
-		httpwire.NotFound().Write(c.Writer)
+		notFound(c)
 	})
 	router.NoMethod(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
@@ -56,13 +56,13 @@ func New(h Services) http.Handler {
 				return
 			}
 		}
-		httpwire.NewFailure(http.StatusMethodNotAllowed, types.CodeInvalid, "method not allowed").Write(c.Writer)
+		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, types.ApiError{Code: types.CodeInvalid, Message: "method not allowed"})
 	})
 	router.Match([]string{
 		http.MethodGet,
 		http.MethodHead,
 	}, "/healthz", func(c *gin.Context) {
-		httpwire.JSON(c.Writer, 200, map[string]string{
+		c.JSON(http.StatusOK, map[string]string{
 			"status": "ok",
 		})
 	})
@@ -101,7 +101,7 @@ func New(h Services) http.Handler {
 		v1.POST("/checkpoints/:id/fork", h.forkCheckpoint)
 	}
 	// see data.go
-	router.Any("/preview/*path", gin.WrapF(h.preview))
+	router.Any("/preview/*path", h.preview)
 	v1.GET("/sandboxes/:id/connect", h.connectSandbox)
 	v1.POST("/sandboxes/:id/preview", h.previewSandbox)
 	return router
@@ -114,8 +114,7 @@ func principal(c *gin.Context) authorization.Principal {
 func (h *Services) authenticate(c *gin.Context) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
-		httpwire.NotFound().Write(c.Writer)
-		c.Abort()
+		notFound(c)
 		return
 	}
 	token := strings.TrimPrefix(header, "Bearer ")
@@ -124,8 +123,7 @@ func (h *Services) authenticate(c *gin.Context) {
 		value, err = h.Authentication.AuthenticateOperation(c.Request.Context(), token)
 	}
 	if err != nil {
-		httpwire.Error(c.Writer, err)
-		c.Abort()
+		writeError(c, err)
 		return
 	}
 	if value.Root && c.GetHeader("X-Tenant-ID") != "" {
@@ -138,57 +136,69 @@ func (h *Services) authenticate(c *gin.Context) {
 func (h *Services) putTenant(c *gin.Context) {
 	owner := principal(c)
 	if !owner.Root {
-		httpwire.AdminRequired().Write(c.Writer)
+		c.AbortWithStatusJSON(http.StatusForbidden, types.ApiError{Code: types.CodeForbidden, Message: "root access required"})
 		return
 	}
 	var value types.Tenant
-	if err := httpwire.ReadJSON(c.Writer, c.Request, &value); err != nil {
-		httpwire.Error(c.Writer, err)
+	if err := decodeJSON(c, &value); err != nil {
+		writeError(c, err)
 		return
 	}
 	if value.ID == "" || value.MaxSandboxes < 1 || value.MaxStorageMiB < 1 {
-		httpwire.InvalidRequest("tenant id and positive quotas required").Write(c.Writer)
+		invalidRequest(c, "tenant id and positive quotas required")
 		return
 	}
 	if value.Token == "" {
 		var entropy [32]byte
 		if _, err := rand.Read(entropy[:]); err != nil {
-			httpwire.Error(c.Writer, err)
+			writeError(c, err)
 			return
 		}
 		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
 	}
 	_, err := h.Tenants.PutTenant(c.Request.Context(), owner, value)
 	if err != nil {
-		httpwire.Error(c.Writer, err)
+		writeError(c, err)
 		return
 	}
-	httpwire.JSON(c.Writer, 201, value)
+	c.JSON(http.StatusCreated, value)
 }
 
 func (h *Services) status(c *gin.Context) {
 	value, err := h.Node.Status(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, value)
 }
 
 func (h *Services) drainNode(c *gin.Context) {
 	if err := h.Node.Drain(principal(c)); err != nil {
-		httpwire.Error(c.Writer, err)
+		writeError(c, err)
 		return
 	}
-	httpwire.JSON(c.Writer, 200, map[string]bool{
+	c.JSON(http.StatusOK, map[string]bool{
 		"draining": true,
 	})
 }
 
 func (h *Services) listSandboxes(c *gin.Context) {
 	value, err := h.Catalog.List(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, value)
 }
 
 func (h *Services) getSandbox(c *gin.Context) {
 	value, err := h.Catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
-	httpwire.Respond(c.Writer, value, err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, value)
 }
 
 func (h *Services) claimSandbox(c *gin.Context) {
@@ -208,7 +218,7 @@ func (h *Services) sandboxAction(action string) gin.HandlerFunc {
 			return
 		}
 		if action == "fork" && command.CheckpointID != "" {
-			httpwire.InvalidRequest("sandbox fork source is the route sandbox").Write(c.Writer)
+			invalidRequest(c, "sandbox fork source is the route sandbox")
 			return
 		}
 		h.submit(c, command)
@@ -217,12 +227,20 @@ func (h *Services) sandboxAction(action string) gin.HandlerFunc {
 
 func (h *Services) getOperation(c *gin.Context) {
 	view, err := h.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
-	httpwire.Respond(c.Writer, operationView(view), err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, operationView(view))
 }
 
 func (h *Services) listTemplates(c *gin.Context) {
 	value, err := h.Templates.Templates(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, value)
 }
 
 func (h *Services) registerTemplate(c *gin.Context) {
@@ -239,14 +257,14 @@ func (h *Services) buildTemplate(c *gin.Context) {
 		return
 	}
 	if command.Template == nil {
-		httpwire.InvalidRequest("template field is required").Write(c.Writer)
+		invalidRequest(c, "template field is required")
 		return
 	}
 	if command.Template.ID == "" {
 		command.Template.ID = c.Param("id")
 	}
 	if command.Template.ID != c.Param("id") {
-		httpwire.InvalidRequest("request template id disagrees with the route").Write(c.Writer)
+		invalidRequest(c, "request template id disagrees with the route")
 		return
 	}
 	h.submit(c, command)
@@ -254,7 +272,11 @@ func (h *Services) buildTemplate(c *gin.Context) {
 
 func (h *Services) listCheckpoints(c *gin.Context) {
 	value, err := h.Catalog.Checkpoints(c.Request.Context(), principal(c))
-	httpwire.Respond(c.Writer, value, err)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, value)
 }
 
 func (h *Services) deleteCheckpoint(c *gin.Context) {
@@ -273,7 +295,7 @@ func (h *Services) forkCheckpoint(c *gin.Context) {
 		return
 	}
 	if command.SandboxID != "" {
-		httpwire.InvalidRequest("checkpoint fork source is the route checkpoint").Write(c.Writer)
+		invalidRequest(c, "checkpoint fork source is the route checkpoint")
 		return
 	}
 	h.submit(c, command)
@@ -284,21 +306,21 @@ func (h *Services) forkCheckpoint(c *gin.Context) {
 func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Command, bool) {
 	var command types.Command
 	if action != "release" || c.Request.ContentLength != 0 {
-		if err := httpwire.ReadJSON(c.Writer, c.Request, &command); err != nil {
-			httpwire.Error(c.Writer, err)
+		if err := decodeJSON(c, &command); err != nil {
+			writeError(c, err)
 			return command, false
 		}
 	}
 	if command.Action != "" && command.Action != action {
-		httpwire.InvalidRequest("request action disagrees with the route").Write(c.Writer)
+		invalidRequest(c, "request action disagrees with the route")
 		return command, false
 	}
 	if sandboxID != "" && command.SandboxID != "" && command.SandboxID != sandboxID {
-		httpwire.InvalidRequest("request sandbox id disagrees with the route").Write(c.Writer)
+		invalidRequest(c, "request sandbox id disagrees with the route")
 		return command, false
 	}
 	if checkpointID != "" && command.CheckpointID != "" && command.CheckpointID != checkpointID {
-		httpwire.InvalidRequest("request checkpoint id disagrees with the route").Write(c.Writer)
+		invalidRequest(c, "request checkpoint id disagrees with the route")
 		return command, false
 	}
 	command.Action = action
@@ -318,39 +340,39 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 	request := c.Request
 	key := request.Header.Get("Idempotency-Key")
 	if len(key) < 1 || len(key) > 256 {
-		httpwire.InvalidRequest("Idempotency-Key required (max 256 bytes)").Write(c.Writer)
+		invalidRequest(c, "Idempotency-Key required (max 256 bytes)")
 		return
 	}
 	accepted, err := h.Requests.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
 	if err != nil {
-		httpwire.Error(c.Writer, err)
+		writeError(c, err)
 		return
 	}
 	if strings.Contains(request.Header.Get("Prefer"), "respond-async") {
 		view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
 		if err != nil {
-			httpwire.Error(c.Writer, err)
+			writeError(c, err)
 			return
 		}
 		c.Header("Location", "/v1/operations/"+accepted.ID)
-		httpwire.JSON(c.Writer, 202, operationView(view))
+		c.JSON(http.StatusAccepted, operationView(view))
 		return
 	}
 	accepted, err = h.Operations.Wait(request.Context(), principal(c), accepted.ID)
 	if err != nil && !accepted.IsTerminalFailure(err) {
-		httpwire.Error(c.Writer, err)
+		writeError(c, err)
 		return
 	}
 	view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
 	if err != nil {
-		httpwire.Error(c.Writer, err)
+		writeError(c, err)
 		return
 	}
 	if view.Status == "failed" {
-		httpwire.InternalFailure().Write(c.Writer)
+		internalFailure(c)
 		return
 	}
-	httpwire.Respond(c.Writer, view.Result, nil)
+	c.JSON(http.StatusOK, view.Result)
 }
 
 // operationView adds transport error data to a copy of the frozen business
@@ -359,8 +381,7 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 func operationView(view types.Operation) types.Operation {
 	view.Error = nil
 	if view.Status == "failed" {
-		failure := httpwire.InternalFailure()
-		view.Error = &failure.Payload
+		view.Error = &types.ApiError{Code: types.CodeInternal, Message: "internal service error"}
 	}
 	return view
 }

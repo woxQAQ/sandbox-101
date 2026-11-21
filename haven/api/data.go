@@ -15,7 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/woxQAQ/haven/dataplane"
-	"github.com/woxQAQ/haven/httpwire"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -34,22 +33,22 @@ func (h *Services) connectSandbox(c *gin.Context) {
 	id := c.Param("id")
 	owner := principal(c)
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "sandbox-v1") || !hasToken(r.Header.Get("Connection"), "upgrade") {
-		httpwire.NewFailure(http.StatusUpgradeRequired, types.CodeInvalid, "Connection: Upgrade and Upgrade: sandbox-v1 required").Write(w)
+		c.AbortWithStatusJSON(http.StatusUpgradeRequired, types.ApiError{Code: types.CodeInvalid, Message: "Connection: Upgrade and Upgrade: sandbox-v1 required"})
 		return
 	}
 	if r.ProtoMajor != 1 {
-		httpwire.NewFailure(http.StatusUnprocessableEntity, types.CodeIncompatible, "HTTP/1.1 Upgrade required").Write(w)
+		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, types.ApiError{Code: types.CodeIncompatible, Message: "HTTP/1.1 Upgrade required"})
 		return
 	}
 	if _, err := h.Dataplane.Ready(r.Context(), owner, id); err != nil {
-		httpwire.Error(w, err)
+		writeError(c, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	upstream, err := h.Dataplane.Connect(ctx, owner, id)
 	cancel()
 	if err != nil {
-		httpwire.Error(w, err)
+		writeError(c, err)
 		return
 	}
 	defer func() {
@@ -68,7 +67,7 @@ func (h *Services) connectSandbox(c *gin.Context) {
 	})
 	if err != nil {
 		if raw == nil {
-			httpwire.Error(w, err)
+			writeError(c, err)
 		}
 		return
 	}
@@ -132,26 +131,32 @@ func (h *Services) previewSandbox(c *gin.Context) {
 		Port:      port,
 		TTL:       time.Duration(ttl) * time.Second,
 	})
-	httpwire.Respond(c.Writer, map[string]string{
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{
 		"url": path,
-	}, err)
+	})
 }
 
-func (h *Services) preview(w http.ResponseWriter, r *http.Request) {
+func (h *Services) preview(c *gin.Context) {
+	w := c.Writer
+	r := c.Request
 	path := strings.TrimPrefix(r.URL.Path, "/preview/")
 	capability, tail, _ := strings.Cut(path, "/")
 	body, signature, ok := strings.Cut(capability, ".")
 	if !ok {
-		httpwire.NotFound().Write(w)
+		notFound(c)
 		return
 	}
 	target, err := h.Dataplane.ResolvePreview(r.Context(), body, signature)
 	if err != nil {
-		httpwire.Error(w, err)
+		writeError(c, err)
 		return
 	}
 	if _, err = h.Dataplane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
-		httpwire.Error(w, err)
+		writeError(c, err)
 		return
 	}
 	transport := &http.Transport{
@@ -180,7 +185,7 @@ func (h *Services) preview(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			httpwire.NewFailure(http.StatusBadGateway, types.CodeInternal, "preview upstream unavailable").Write(w)
+			c.AbortWithStatusJSON(http.StatusBadGateway, types.ApiError{Code: types.CodeInternal, Message: "preview upstream unavailable"})
 		},
 	}
 	proxy.ServeHTTP(w, r)

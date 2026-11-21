@@ -1,4 +1,4 @@
-package management_test
+package api_test
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/woxQAQ/haven/api/management"
+	"github.com/woxQAQ/haven/api"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
@@ -29,12 +29,12 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 		Import: &input,
 	})
 	peer := adminPeer(t)
-	services := management.Services{Images: app.Images, Operations: app.Operations}
+	services := api.ManagementServices{Images: app.Images, Operations: app.Operations}
 	post := func(ctx context.Context, wantStatus int, wantCode, wantMessage string) {
 		t.Helper()
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/manage", bytes.NewReader(body))
 		recorder := httptest.NewRecorder()
-		management.New(services).ServeHTTP(recorder, req)
+		api.NewManagement(services).ServeHTTP(recorder, req)
 		var failure types.ApiError
 		if err := json.Unmarshal(recorder.Body.Bytes(), &failure); err != nil {
 			t.Fatal(err)
@@ -54,7 +54,7 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(peer, http.MethodGet, "/v1/operations/"+id, nil)
-	management.New(services).ServeHTTP(recorder, req)
+	api.NewManagement(services).ServeHTTP(recorder, req)
 	var result types.ManagementOperation
 	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)

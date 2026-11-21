@@ -1,4 +1,4 @@
-package httpwire_test
+package api
 
 import (
 	"context"
@@ -9,12 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/woxQAQ/haven/httpwire"
+	"github.com/gin-gonic/gin"
+
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/types"
 )
 
 func TestPublicFailureResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	for _, tc := range []struct {
 		name    string
 		cause   error
@@ -33,7 +35,8 @@ func TestPublicFailureResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			httpwire.Error(response, fmt.Errorf("%w: private fixture detail", tc.cause))
+			c, _ := gin.CreateTestContext(response)
+			writeError(c, fmt.Errorf("%w: private fixture detail", tc.cause))
 			var failure types.ApiError
 			if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
 				t.Fatal(err)

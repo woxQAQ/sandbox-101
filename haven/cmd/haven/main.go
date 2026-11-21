@@ -20,7 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/woxQAQ/haven/api"
-	"github.com/woxQAQ/haven/api/management"
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/common/logging"
 	"github.com/woxQAQ/haven/config"
@@ -216,7 +215,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 		},
 	}
 	localServer := &http.Server{
-		Handler: management.New(management.Services{
+		Handler: api.NewManagement(api.ManagementServices{
 			Node:          service.Node,
 			Images:        service.Images,
 			GC:            service.GC,
