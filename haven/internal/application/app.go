@@ -30,24 +30,46 @@ import (
 // Options requires an explicit host-effects implementation. The daemon
 // command supplies loom/host; fixtures inject their own owned runtime state.
 type Options struct {
-	Context      context.Context
-	StateDir     string
-	Initialize   bool
-	Backend      loom.Backend
+	// Context is the parent context for application workers. Nil uses context.Background().
+	Context context.Context
+	// StateDir is the private directory holding the database, node key, and managed resources.
+	StateDir string
+	// Initialize creates a new store in a missing or empty StateDir.
+	// When false, Open requires an existing store.
+	Initialize bool
+	// Backend is the required runtime for host-side VM and resource operations.
+	Backend loom.Backend
+	// MaxMemoryMiB caps total VM memory reservations on this node and must be positive.
 	MaxMemoryMiB int64
-	MaxVCPUs     int
-	SafetyBytes  int64
-	Guest        guest.Agent
-	Egress       Egress
-	// EgressFactory binds callbacks before startup reconciliation can use portals.
+	// MaxVCPUs caps total vCPU reservations on this node and must be positive.
+	MaxVCPUs int
+	// SafetyBytes is the minimum free disk space to preserve when admitting
+	// storage reservations. It must be nonnegative.
+	SafetyBytes int64
+	// Guest provides the guest-agent RPCs for activation, template preparation, and workload access.
+	Guest guest.Agent
+	// Egress supplies an existing egress manager that App.Close will close.
+	// Set at most one of Egress and EgressFactory.
+	Egress Egress
+	// EgressFactory receives host callbacks and returns the egress manager and
+	// its PEM-encoded CA certificate before startup reconciliation.
 	EgressFactory func(EgressCallbacks) (Egress, string, error)
-	AdminToken    string
-	CAPEM         string
-	MaxTTL        time.Duration
-	PausedTTL     time.Duration
-	Interval      time.Duration
-	MaxWarm       int
-	Fault         func(string) error
+	// AdminToken is the bearer token for root API access. An empty value disables this authentication path.
+	AdminToken string
+	// CAPEM is the egress CA certificate sent to guests during activation.
+	// EgressFactory supplies this value when configured.
+	CAPEM string
+	// MaxTTL caps a running sandbox lease. Nonpositive values default to one hour.
+	MaxTTL time.Duration
+	// PausedTTL sets the initial paused lease and caps each renewal. Nonpositive values default to 24 hours.
+	PausedTTL time.Duration
+	// Interval records the configured maintenance cadence. Open defaults it to one second when nonpositive.
+	// The daemon schedules its ticker from config.Daemon.MaintenanceInterval.
+	Interval time.Duration
+	// MaxWarm caps the warm-pool target per template. Nonpositive values default to 32.
+	MaxWarm int
+	// Fault is an optional test hook that returns an injected error at a named workflow point.
+	Fault func(string) error
 }
 
 // App assembles the single store, shared execution mechanisms and business
