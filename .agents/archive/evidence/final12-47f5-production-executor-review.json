@@ -1,0 +1,28 @@
+{
+  "accepted":true,
+  "result":"FINAL12_PRODUCTION_EXECUTOR_PREPARED_CODE_PARENT_REVIEWED",
+  "candidate_commit":"47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "candidate_tree":"3e8cc8a12cb70dd36fffc428f9aff83d8712fe73",
+  "source_root":"/home/woxQAQ/.t3/worktrees/sandbox-101/t3-caf25caf",
+  "source_branch":"refs/heads/t3/prepare-final12-production-executor",
+  "prep_dir":"/tmp/final12-production-prep-t3-caf25caf",
+  "report":"/tmp/final12-production-prep-t3-caf25caf/report.md",
+  "handoff":"/tmp/final12-production-prep-t3-caf25caf/handoff.json",
+  "parent_review":"Read all critical final grant gating/source and material binding/observer/metadata/runtime proof/cleanup and postexit confirmation. Six sealed code hashes freshly verified. No production driver entry executed by parent.",
+  "code_hashes":{
+    "binding.py":"1265127d112c4e13faa2b368002c7f27be1fff317164d7db3c2009b4ef51a66e",
+    "capture_git.py":"5b1123ffa335d34537f7205596799e1aae9a7d6bd52eed33a541c4c203e69dd3",
+    "procproof.py":"5985b64f7fa135d5b7c4579ae13281a2a3d310894374797ada4b24a5358a87d2",
+    "observe_inner.py":"a0b15ec4490fbbc2a097266cd970d99982a3fa93ede151654b9892cc00aecc1b",
+    "production_driver.py":"1f1953ca912bac7cd5b8549c878a3d9657de06b3620a4ddfbc6fd94a8e0e2939",
+    "confirm_exit.py":"c2720783dad0e7ff5ee2e4665237a03d573695b3f76dabc3bf862ca2654bcb06"
+  },
+  "preserved_guards":"Failclosed exact format2/task-thread-owner/source/material/receipt+code SHA/budget, parentfresh<=120s, 1800s grant validity and>=1350s remaining atlaunch, one exclusive invocation guard; owned scope/exe/PID-start/namespaces pairing andactualcgroup reads, independent runtime/source/material/cleanup phases, invalidPGID<=0 never queried or counted as empty, originalarchiveSTATONLY, driver-exit separately confirmed.",
+  "preparation_only_actuals":"Readonly inventory+syntax/AST/symtable only; production/VM/namespace/tests/builds0. Future artifact and invocationguard freshly absent at review. Future runtime still needs separate active freshgrant.",
+  "entry_gap":"Initial complete semantic index/refs/source captured beforeFF, but raw index SHA beforeFF not captured; no reconstruction. CLI threadidentity supplied explicitly by parent, not app attestation.",
+  "source_manifest625_plus12_new_algorithm":"bffe83734c6d644f807ec1b9be139309c31d5e5ff411f2801f60a0b4d93afbd7",
+  "source_manifest_note":"Different algorithm from earlier09ec canonical; do not call unequal digests source drift.",
+  "current_production_authorized":false,
+  "final_combination_done":false,
+  "parent_merge_push":false
+}

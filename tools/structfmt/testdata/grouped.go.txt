@@ -1,0 +1,17 @@
+package fixture
+
+type Admission struct {
+	// Identity belongs to the request.
+	ID, ScopeKind, ScopeID, Key, Hash, Status string
+	Request, Body []byte `json:"payload"` // Encoded bytes.
+	First /* before comma , */, /* after comma */ Second *int
+	Left,
+	// Right is documented separately.
+	Right map[string][]byte
+	One, Two struct { X, Y int }
+	*Embedded
+}
+
+type Embedded struct{}
+
+func grouped(a, b int) (x, y int) { return a, b }

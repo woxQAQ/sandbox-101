@@ -1,0 +1,128 @@
+{
+  "plan": "016",
+  "status": "accepted",
+  "source": {
+    "commit": "741cb9dfcf284ef29148e34dee56e6a2aadb0768",
+    "branch": "ci/native-image-016",
+    "base": "dacf00e6645153e2d43bd356da509758ea5602f8",
+    "changed_tracked_paths_during_native_validation": [],
+    "entrypoints_sha256": {
+      "Makefile": "00d2204e2d8d1857dd320eb29152199b4c6dc7c26f1e69744f47fc5205437503",
+      "scripts/check-native-gate.py": "eb7ed6143d0a11fef7360d4f9d05932b406d86372bc60c70b47f2ee5010d14be",
+      ".github/workflows/check.yml": "a6e0f23033539b77462e8c14c6bf0d040500255c7f60c666c5524d5f0a2f072d"
+    }
+  },
+  "run": {
+    "id": 42636560287,
+    "attempt": 1,
+    "event": "push",
+    "url": "https://github.com/woxQAQ/sandbox-101/actions/runs/42636560287",
+    "conclusion": "success",
+    "runner": "ubuntu-24.04",
+    "jobs": {
+      "native-image": {"id": 129226118710, "conclusion": "success"},
+      "core": {"id": 129226119279, "conclusion": "success"},
+      "static-guest": {"id": 129226119315, "conclusion": "success"}
+    }
+  },
+  "artifact": {
+    "id": 13684176598,
+    "name": "native-image-741cb9dfcf284ef29148e34dee56e6a2aadb0768-1",
+    "digest": "sha256:e775e62f3e2bc349c59e565853099dcaeceab24fb3b7832ddd8bb7b46db2a2b6",
+    "size_in_bytes": 52969,
+    "diagnostic_file_count": 87,
+    "downloaded_to": "build/native-gate/ci-42636560287",
+    "private_runtime_home_and_tool_view_excluded": true
+  },
+  "tools": {
+    "go": "1.26.5",
+    "python": "3.12.3",
+    "golangci-lint": "2.14.0 (official binary built with Go 1.27.0)",
+    "golangci-lint-action": "v9.3.0, install-only",
+    "bubblewrap": "0.9.0",
+    "mkfs.erofs": "1.9.4",
+    "fsck.erofs": "1.9.4",
+    "dump.erofs": "1.9.4",
+    "umoci": "0.6.0",
+    "unshare": "2.41.3",
+    "coreutils": "9.4",
+    "nushell_required_or_invoked": false
+  },
+  "preflight": {
+    "log_directory": "run.4ibg1_tp",
+    "real_and_effective_uid_gid": [0, 0, 0, 0],
+    "outer_namespaces": {
+      "user": "user:[4026531837]",
+      "mnt": "mnt:[4026531832]",
+      "pid": "pid:[4026531836]",
+      "net": "net:[4026531833]"
+    },
+    "shared_namespaces": {
+      "user": "user:[4026532312]",
+      "mnt": "mnt:[4026532314]",
+      "pid": "pid:[4026532319]",
+      "net": "net:[4026532321]"
+    },
+    "merged_user_namespace": "user:[4026532314]",
+    "merged_uid_map": [[0, 0, 4294967295]],
+    "merged_gid_map": [[0, 0, 4294967295]],
+    "production_test": "TestActualMergedOCIExplicitSelectionAndVerification",
+    "production_test_pass": true,
+    "production_command_exit_code": 0
+  },
+  "positive": {
+    "log_directory": "run.g_pqnl6r",
+    "command": "make --no-print-directory test-native",
+    "required_environment_forced_by_make": true,
+    "race": true,
+    "engine_timeout_seconds": 300,
+    "exit_code": 0,
+    "json_lines": 1763,
+    "test_pass_events": 406,
+    "fail_events": 0,
+    "engine_elapsed_seconds": 53.176,
+    "required_passes": {
+      "TestActualLayeredEROFSImportAndExtraction": 0.28,
+      "TestActualSharedOCIHardlinksAndMetadata": 0.13,
+      "TestActualMergedOCIHardlinksAndMetadata": 0.12,
+      "TestGCActualLayerCacheAndCompletedImport": 0.21
+    },
+    "only_test_skip": {
+      "test": "TestActualMergedOCIInvalidInputsDoNotPublish/unmapped_owner",
+      "source_diagnostic": "image_compat_test.go:885: root can identity-map all owners",
+      "effective_uid": 0
+    }
+  },
+  "negative": {
+    "log_directory": "run.x0di1z6z",
+    "test": "TestActualLayeredEROFSImportAndExtraction",
+    "go_exit_code": 1,
+    "gate_exit_code": 0,
+    "json_lines": 9,
+    "source_diagnostic": "fsmeta_test.go:312: incompatible: required OCI tool missing: bwrap",
+    "test_fail_event": true,
+    "tool_view_removed": true
+  },
+  "other_checks": {
+    "ordinary_user_make_lint": "success",
+    "cache_post_step": "success",
+    "python_gate_cli_tests": "7 behavior tests and subcases passed",
+    "core_command": "make test check test-race integration smoke",
+    "core_command_result": "success",
+    "sandboxd_race_elapsed_seconds": 285.79,
+    "ordinary_race_module_timeout": "10m",
+    "static_guest_command": "make guest",
+    "static_guest_result": "success"
+  },
+  "boundaries": {
+    "kvm_run": false,
+    "kernel_isolation_run": false,
+    "production_run": false,
+    "current_host_sudo": false,
+    "merged_to_shared_branch": false,
+    "engine_or_sandboxd_source_changes": false,
+    "flake_lock_changes": false,
+    "parallel_plans_023_024_published": false,
+    "historical_results_reused_for_new_code": false
+  }
+}

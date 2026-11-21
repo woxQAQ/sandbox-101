@@ -1,0 +1,21 @@
+{
+  "result":"FINAL12_SOURCE_APPROVE_PARENT_ACCEPTED",
+  "candidate":"47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "tree":"3e8cc8a12cb70dd36fffc428f9aff83d8712fe73",
+  "independent_review":"/tmp/final12-source-review-t3-798e69ce/report.md",
+  "decision":"/tmp/final12-source-review-t3-798e69ce/decision.json",
+  "verdict":"SOURCE_APPROVE",
+  "blocking_findings":[],
+  "all_013_seven_historical_findings_closed_preserved":true,
+  "parent_full_report_and_probe_read":true,
+  "parent_independent_raw_parse":{"runs":{"own-integration":4,"focused-egress-sdk":35,"focused-configuration":20,"own-configuration":3,"own-sdk":3},"RUN":65,"PASS":65,"FAIL":0,"SKIP":0,"RACE":0},
+  "review_setup_failure_preserved":{"FAIL":3,"cause":"Own configure probe omitted mandatory Env; only probe corrected, actual original failure retained.","raw":"/tmp/final12-source-review-t3-798e69ce/own-configuration-original-setup-failure"},
+  "cross_plan_behaviors":"Real UDS CONNECT/TLS incomplete headers and streamed body synchronously joined at configure-none before Activate, fence admission blocked then restored; real SDK HTTP upgrade and Rust132FIFO terminal rejects/stream reuse/tree commit+literal xattrs+pinned pull/invalid tar/watch cancellation/fresh connection; netPipe typed postcommit outcome success/error params preserved.",
+  "source_mapping":"7pure patches complete/no duplicates/base1414six retained/19paths+3441-143;014and019rawdiff only blobindex/hunkline differences documented, all patch-id equal",
+  "source_copy_evidence":"625blob/symlink plus12gitlinks and executor four actual copies independently audited; parent own local proof matches",
+  "guest_and_fresh_Rust49_parent_accepted":"plans/evidence/final12-47f5-parent-guest-verification.json",
+  "KVM_material_stage":"New unique vm-verification-final12-material-47f5.json granted after source approval and fresh2026-11-07T15:35:35UTC slot/material/device/old89PID cleanup readbacks; taskprepare-final12-oci-kvm-47f5 dispatched.",
+  "production_authorized":false,
+  "final_combination_done":false,
+  "parent_merge_push":false
+}

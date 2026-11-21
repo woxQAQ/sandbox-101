@@ -1,0 +1,29 @@
+package fixture
+
+type Point struct { X, Y int }
+type Options struct { Count int; Label string `json:"label"`; *Point }
+type Numbers map[int]string
+
+var _ = Point{X: 1, /* preserve */ Y: 2}
+var _ = []Point{{X: 3, Y: 4}}
+var _ = [2]int{15, 16}
+var _ = [...]string{"array", "literal"}
+var _ = []int{17, /* element comment */ 18 /* final element */}
+var _ = [5]int{1: 19, 20, 4: 21}
+var _ = [][]int{[]int{22, 23}, []int{24, 25}}
+var _ = []int{26, /* slice tail comment */}
+var _ = []int{}
+var _ = [0]int{}
+var _ = Point{27, 28}
+var _ = struct{ P Point; Text string }{P: Point{X: 5,Y: 6}, Text: `X:1,Y:2`}
+var _ = map[string]Point{"first": {X: 7,Y: 8}, "second": {X: 9,Y: 10}}
+var _ = map[Point]string{{X: 11,Y: 12}: "nested key"}
+var _ = map[int]string{1: "one", 2: "two"}
+var _ = Numbers{3: "three", 4: "four"}
+var _ = map[string]int{"ready": 1, /* tail comment */}
+var _ = map[string]func() int{"first": func() int { return 13 }, "second": func() int { return 14 }}
+
+func sum(a,b int) int { value := a+b; if value > 0 { return value }; return 0 }
+var callback = func() int { value := 1; value++; return value }
+func loop(){ for i := 0; i < 2; i++ { _ = i } }
+func settings() map[string]int { return map[string]int{"first": 1, "second": 2} }

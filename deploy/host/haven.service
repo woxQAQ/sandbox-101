@@ -1,0 +1,24 @@
+[Unit]
+Description=Haven single-host sandbox control and workload relay
+After=network.target
+RequiresMountsFor=/var/lib/haven
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/haven/haven.env
+ExecStart=/usr/local/bin/haven --config=/etc/haven/config.yaml
+StateDirectory=haven
+StateDirectoryMode=0700
+RuntimeDirectory=haven
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=2
+# VMMs use separately provisioned cgroups and survive control process exit.
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

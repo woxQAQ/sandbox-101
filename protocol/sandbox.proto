@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package sandbox.v1;
+option go_package = "github.com/woxQAQ/sandbox-protocol/gen;protocol";
+
+import "google/protobuf/struct.proto";
+
+// Both directions use Frame. The transport adds a four-byte big-endian length.
+message Frame {
+  string id = 1;
+  string method = 2;
+  google.protobuf.Struct params = 3;
+  bytes data = 4;
+  bool eof = 5;
+  string error = 6;
+}

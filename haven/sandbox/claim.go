@@ -1,0 +1,103 @@
+package sandbox
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/image"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom/host"
+	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/supply"
+)
+
+// AdmitClaim accepts one tenant claim and returns the operation responsible for delivery.
+// A matching retry resumes the original operation, including while the node is draining.
+func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
+	if sb.guest == nil || principal.TenantID == "" || principal.SandboxID != "" || command.Action != "claim" || command.TemplateID == "" || key == "" || len(key) > 256 {
+		return empty, fmt.Errorf("%w: claim requires tenant authority, template, key and guest effects", errs.ErrInvalid)
+	}
+	// Validate settings before taking the per-key guard. Only redacted values may be frozen.
+	admission, err := sb.policy.Prepare(command)
+	if err != nil {
+		return empty, err
+	}
+	// Bind the original values, including secrets, to the authenticated role for replay.
+	admission.MAC = sb.identity.CommandMAC(principal, command)
+	keyGuard := sb.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	if operation, found, err := sb.existing(ctx, principal, key, admission); found || err != nil {
+		return operation, err
+	}
+	// Drain closes new admissions after the replay check.
+	if sb.availability.IsDraining() {
+		return empty, fmt.Errorf("%w: node is draining", errs.ErrExhausted)
+	}
+	// Verify the owned template and its local image before reserving resources.
+	template, err := supply.NewTemplateCatalog(sb.store.Database).Owned(ctx, principal.TenantID, command.TemplateID)
+	if err != nil {
+		return empty, err
+	}
+	if err = host.CheckConfig(&template.Config); err != nil {
+		return empty, err
+	}
+	if err = sb.backend.ValidateHostConfig(ctx, template.Config); err != nil {
+		return empty, err
+	}
+	manifest, err := image.LoadManifest(ctx, sb.store.Database, template.Config.Image)
+	if err != nil {
+		return empty, err
+	}
+	if err = image.VerifyFiles(manifest, filepath.Join(sb.store.Directory, "images", manifest.Digest[7:])); err != nil {
+		return empty, err
+	}
+	// Prefer a ready warm VM from this snapshot. Otherwise freeze the clone or fresh request.
+	request := supply.ProvisionRequest{
+		TenantID: principal.TenantID,
+		Key:      key,
+		Template: template,
+		Image:    manifest,
+	}
+	if template.SnapshotID != "" {
+		verifiedSource, err := sb.snapshotProofs.LoadSnapshotSource(ctx, sb.store.Database, principal.TenantID, template.SnapshotID)
+		if err != nil {
+			return empty, err
+		}
+		if string(operation.Encode(template.Config)) != string(operation.Encode(verifiedSource.Snapshot.Manifest.Config)) {
+			return empty, fmt.Errorf("%w: template snapshot shape/image differs", errs.ErrConflict)
+		}
+		if err = machine.VerifyRestoreSourceFiles(verifiedSource); err != nil {
+			return empty, err
+		}
+		if warm, found, err := sb.warmClaims.Admit(ctx, WarmClaimRequest{
+			Principal: principal,
+			Key:       key,
+			Admission: *admission,
+			Template:  template,
+			Restore:   verifiedSource,
+		}); found || err != nil {
+			return warm, err
+		}
+		request.Restore = &verifiedSource
+		request.Frozen = machine.FreezeProvisionRequest(machine.CloneRequest{
+			TenantID:   principal.TenantID,
+			Key:        key,
+			SnapshotID: template.SnapshotID,
+		}, &admission.Command)
+	} else {
+		request.Frozen = machine.FreezeProvisionRequest(machine.FreshRequest{
+			TenantID:   principal.TenantID,
+			Key:        key,
+			TemplateID: template.ID,
+		}, &admission.Command)
+	}
+	return sb.provisioning.Admit(ctx, ProvisionAdmission{
+		Request: request,
+		Claim:   admission,
+	})
+}

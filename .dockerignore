@@ -1,0 +1,11 @@
+**
+!image/
+!image/Dockerfile
+!build/
+!build/kernel
+!build/guest/
+!build/guest/initramfs
+!build/guest/sandbox-agent
+!guest/
+!guest/systemd/
+!guest/systemd/sandbox-agent.service
