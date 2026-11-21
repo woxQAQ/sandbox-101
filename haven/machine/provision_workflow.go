@@ -302,10 +302,10 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	if err = json.Unmarshal(body, &result); err != nil {
 		return errors.Join(cause, err)
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
 		result.Error = next.Error
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
 			Result: result,
 			Failed: true,
@@ -320,7 +320,7 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	})); err != nil {
 		return errors.Join(cause, err)
 	}
-	if err = p.committer.Complete(tx, completed...); err != nil {
+	if err = p.committer.Complete(tx, outcomes...); err != nil {
 		return errors.Join(cause, err)
 	}
 	if err = tx.Commit(); err != nil {

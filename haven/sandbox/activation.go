@@ -263,7 +263,7 @@ func (a *Activations) completeActivation(step ActivationStep) error {
 	if err = a.fault("activation_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = a.committer.Complete(tx, operation.Completion{
+	if err = a.committer.Complete(tx, operation.Outcome{
 		ID:          step.OperationID,
 		AdoptResult: true,
 	}); err != nil {

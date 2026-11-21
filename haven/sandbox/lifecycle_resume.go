@@ -290,20 +290,20 @@ func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
 	if err != nil {
 		return err
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "resume failed; sleep snapshot retained"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
 			Result: result,
 			Failed: true,
 		})
 	}
-	if err = l.committer.Complete(tx, completed...); err != nil {
+	if err = l.committer.Complete(tx, outcomes...); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

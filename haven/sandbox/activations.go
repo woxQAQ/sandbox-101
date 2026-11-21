@@ -227,14 +227,14 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(status) && !step.Input.AllowFallback {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return errors.Join(cleanupErr, err)
 		}
 		result.Error = "sandbox activation could not establish delivery"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
 			Result: result,
 			Failed: true,
@@ -256,7 +256,7 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 			}
 		}
 	}
-	if err = a.committer.Complete(tx, completed...); err != nil {
+	if err = a.committer.Complete(tx, outcomes...); err != nil {
 		return errors.Join(cleanupErr, err)
 	}
 	if err = tx.Commit(); err != nil {

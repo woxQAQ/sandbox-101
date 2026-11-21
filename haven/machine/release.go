@@ -281,14 +281,14 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if err != nil {
 		return empty, err
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(parentStatus) {
 		var result operation.Result
 		if err = json.Unmarshal(parentBody, &result); err != nil {
 			return empty, err
 		}
 		result.Error = "released before sandbox delivery"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     source.OperationID,
 			Result: result,
 			Failed: true,
@@ -297,7 +297,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if err = d.fault("release_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = d.committer.Complete(tx, completed...); err != nil {
+	if err = d.committer.Complete(tx, outcomes...); err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {

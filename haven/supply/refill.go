@@ -158,7 +158,7 @@ func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reser
 	if err = s.fault("warm_publication_before_commit"); err != nil {
 		return err
 	}
-	if err = s.committer.Complete(tx, operation.Completion{
+	if err = s.committer.Complete(tx, operation.Outcome{
 		ID:     step.OperationID,
 		Result: result,
 	}); err != nil {
@@ -334,7 +334,7 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State
 	})); err != nil {
 		return operation.State{}, err
 	}
-	if err = s.committer.Complete(tx, operation.Completion{
+	if err = s.committer.Complete(tx, operation.Outcome{
 		ID:     parent.ID,
 		Result: parent.Result,
 		Failed: true,

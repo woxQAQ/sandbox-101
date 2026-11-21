@@ -315,7 +315,7 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 	if err = l.fault("checkpoint_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = l.committer.Complete(tx, operation.Completion{
+	if err = l.committer.Complete(tx, operation.Outcome{
 		ID:          step.OperationID,
 		AdoptResult: true,
 	}); err != nil {
@@ -417,7 +417,7 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = l.committer.Complete(tx, append(superseded, operation.Completion{
+	if err = l.committer.Complete(tx, append(superseded, operation.Outcome{
 		ID:          step.OperationID,
 		AdoptResult: true,
 	})...); err != nil {
@@ -642,20 +642,20 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "sandbox workflow failed; resource responsibility retained"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
 			Result: result,
 			Failed: true,
 		})
 	}
-	if err = l.committer.Complete(tx, completed...); err != nil {
+	if err = l.committer.Complete(tx, outcomes...); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

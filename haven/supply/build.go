@@ -227,7 +227,7 @@ func (s *Supply) runBuild(step SupplyStep) error {
 	if err = s.fault("template_publication_before_commit"); err != nil {
 		return err
 	}
-	if err = s.committer.Complete(tx, operation.Completion{
+	if err = s.committer.Complete(tx, operation.Outcome{
 		ID:     step.OperationID,
 		Result: result,
 	}); err != nil {
@@ -320,7 +320,7 @@ func (s *Supply) failSupply(step SupplyStep) error {
 			return err
 		}
 	}
-	if err = s.committer.Complete(tx, operation.Completion{
+	if err = s.committer.Complete(tx, operation.Outcome{
 		ID:     step.OperationID,
 		Result: result,
 		Failed: true,

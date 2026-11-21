@@ -355,7 +355,7 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, i
 	if err = s.fault("template_publication_before_commit"); err != nil {
 		return operation.State{}, err
 	}
-	if err = s.committer.Complete(tx, operation.Completion{
+	if err = s.committer.Complete(tx, operation.Outcome{
 		ID:     parent.ID,
 		Result: result,
 	}); err != nil {

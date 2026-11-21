@@ -232,7 +232,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	if err = l.fault("paused_release_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = l.committer.Complete(tx, operation.Completion{
+	if err = l.committer.Complete(tx, operation.Outcome{
 		ID:     parent.ID,
 		Result: parent.Result,
 		Frozen: true,
@@ -247,7 +247,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	return parent, l.store.Checkpoint()
 }
 
-func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([]operation.Completion, error) {
+func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([]operation.Outcome, error) {
 	id := step.Input.PriorFence
 	if id == "" {
 		return nil, nil
@@ -331,7 +331,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 			return nil, err
 		}
 		result.Error = "sandbox operation superseded by release"
-		return []operation.Completion{
+		return []operation.Outcome{
 			{
 				ID:     id,
 				Result: result,

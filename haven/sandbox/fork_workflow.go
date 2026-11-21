@@ -384,7 +384,7 @@ func (f *Forks) completeFork(step ForkStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = f.committer.Complete(tx, operation.Completion{
+	if err = f.committer.Complete(tx, operation.Outcome{
 		ID:     step.OperationID,
 		Result: result,
 		Failed: failed,

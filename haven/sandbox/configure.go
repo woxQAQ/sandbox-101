@@ -220,7 +220,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		return empty, noResource, false, err
 	}
 	paused := current.State == "paused"
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if paused {
 		if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
 			SandboxID:    current.ID,
@@ -249,7 +249,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 			return empty, noResource, false, err
 		}
 		accepted.Status = "succeeded"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:          accepted.ID,
 			AdoptResult: true,
 		})
@@ -271,7 +271,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	if err = sb.fault("configure_admission_before_commit"); err != nil {
 		return empty, noResource, false, err
 	}
-	if err = sb.committer.Complete(tx, completed...); err != nil {
+	if err = sb.committer.Complete(tx, outcomes...); err != nil {
 		return empty, noResource, false, err
 	}
 	if err = tx.Commit(); err != nil {

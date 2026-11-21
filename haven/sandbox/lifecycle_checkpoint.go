@@ -233,7 +233,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if err = l.fault("checkpoint_delete_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = l.committer.Complete(tx, operation.Completion{
+	if err = l.committer.Complete(tx, operation.Outcome{
 		ID:     record.ID,
 		Result: record.Result,
 		Frozen: true,
@@ -366,7 +366,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	if err = l.fault("paused_checkpoint_before_commit"); err != nil {
 		return empty, err
 	}
-	if err = l.committer.Complete(tx, operation.Completion{
+	if err = l.committer.Complete(tx, operation.Outcome{
 		ID:     parent.ID,
 		Result: parent.Result,
 		Frozen: true,

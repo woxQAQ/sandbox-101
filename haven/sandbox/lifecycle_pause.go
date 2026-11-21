@@ -208,7 +208,7 @@ func (l *Lifecycle) completePause(step LifecycleStep) error {
 	if err = l.fault("pause_completion_before_commit"); err != nil {
 		return err
 	}
-	if err = l.committer.Complete(tx, operation.Completion{
+	if err = l.committer.Complete(tx, operation.Outcome{
 		ID:          step.OperationID,
 		AdoptResult: true,
 	}); err != nil {

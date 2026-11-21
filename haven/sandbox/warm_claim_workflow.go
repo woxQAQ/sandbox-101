@@ -377,14 +377,14 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 	})); err != nil {
 		return err
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return err
 		}
 		result.Error = "warm claim fallback failed; resource responsibility retained"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
 			Result: result,
 			Failed: true,
@@ -399,7 +399,7 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = wc.committer.Complete(tx, completed...); err != nil {
+	if err = wc.committer.Complete(tx, outcomes...); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -410,7 +410,7 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 
 // RetireSupersededIn joins warm pool/lease retirement to the release transaction.
 // The caller retains transaction, publication and checkpoint ownership.
-func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]operation.Completion, error) {
+func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]operation.Outcome, error) {
 	parent, err := LoadWarmClaim(wc.ctx, tx, release.Input.PriorFence)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -455,14 +455,14 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]o
 	if err != nil {
 		return nil, err
 	}
-	var completed []operation.Completion
+	var outcomes []operation.Outcome
 	if !operation.Terminal(state) {
 		var result operation.Result
 		if err = json.Unmarshal(body, &result); err != nil {
 			return nil, err
 		}
 		result.Error = "warm claim superseded by release"
-		completed = append(completed, operation.Completion{
+		outcomes = append(outcomes, operation.Outcome{
 			ID:     parent.OperationID,
 			Result: result,
 			Failed: true,
@@ -475,5 +475,5 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]o
 	}); err != nil {
 		return nil, err
 	}
-	return completed, nil
+	return outcomes, nil
 }
