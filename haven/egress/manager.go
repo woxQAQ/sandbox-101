@@ -16,7 +16,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/woxQAQ/haven/types"
 )
+
+type closeWriter interface {
+	// CloseWrite sends EOF to the peer while leaving the read side open.
+	CloseWrite() error
+}
 
 var (
 	ErrDenied  = errors.New("egress: destination denied")
@@ -25,20 +32,9 @@ var (
 	ErrAudit   = errors.New("egress: audit persistence failed")
 )
 
-type Policy struct {
-	Mode           string   `json:"mode"`
-	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
-	AllowedCIDRs   []string `json:"allowed_cidrs,omitempty"`
-	MaxConnections int      `json:"max_connections,omitempty"`
-}
+type Policy = types.Policy
 
-// Injection describes where the proxy may substitute a host-held secret.
-// Sandbox settings persist these fields so credentials can be resupplied after restart.
-type Injection struct {
-	Hosts       []string `json:"hosts"`
-	Header      string   `json:"header"`
-	Placeholder string   `json:"placeholder,omitempty"`
-}
+type Injection = types.Injection
 
 // Secret values are never serialized. Hosts are exact names, without wildcards.
 // Value is the complete replacement, e.g. "Bearer sk-real".
@@ -78,7 +74,8 @@ type AuditEvent struct {
 }
 
 type Resolver interface {
-	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
+	// LookupNetIP resolves a hostname for the specified address family before address filtering.
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
 type Options struct {
@@ -402,7 +399,7 @@ type trackedConn struct {
 }
 
 func (c *trackedConn) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := c.Conn.(closeWriter); ok {
 		return half.CloseWrite()
 	}
 	return c.Close()
@@ -463,7 +460,7 @@ func earlierDeadline(explicit time.Time, timeout time.Duration) time.Time {
 }
 
 func (c *idleConn) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := c.Conn.(closeWriter); ok {
 		return half.CloseWrite()
 	}
 	return c.Close()

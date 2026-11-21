@@ -107,4 +107,4 @@ with-env {SANDBOX_RUNTIME_IO_MAX: $env.HAVEN_IO_MAX} {
 
 离线 metadata backup 包含同一点的 SQLite、node key 和 HEAD，不含磁盘与 RAM。restore 必须显式 review，review 不授予重放、数据面或 GC 权限。GC 通过持久 inode 删除意图与原子责任交接退休已经证明可回收的资源。
 
-none/proxy 网络保持 NIC off；direct 在开启前核验绑定实例的 IPv4 CIDR/flow 策略。hostname 过滤和凭据注入需 proxy，host-only secret 在重启后须显式重供。Preview 使用签名 path，没有每 sandbox 独立浏览器 origin。递归文件 watch、跨节点恢复、远端快照归档与 gossip placement 尚未实现。详细边界见[控制契约](docs/haven-control.md)与 [Sandbox 契约](haven/sandbox/api.md)。
+none/proxy 网络保持 NIC off；direct 在开启前核验绑定实例的 IPv4 CIDR/flow 策略。hostname 过滤和凭据注入需 proxy，host-only secret 在重启后须显式重供。Preview 使用签名 path，没有每 sandbox 独立浏览器 origin。递归文件 watch、跨节点恢复、远端快照归档与 gossip placement 尚未实现。详细边界见[控制契约](docs/haven-control.md)与 [Sandbox 契约](docs/sandbox-api.md)。

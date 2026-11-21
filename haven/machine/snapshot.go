@@ -124,7 +124,7 @@ func SnapshotReaders(ctx context.Context, query store.DBTX, id string) (int64, e
 // Backings enumerates explicit retained users. No name or current VM query
 // substitutes for their immutable material and lease handoff proof.
 func (proofs SnapshotProofs) Backings(ctx context.Context, tx *sql.Tx, source SnapshotSource) ([]ResourceStep, error) {
-	holders, err := quota.New(tx).ResourceHolderIDs(ctx, "snapshot", source.Snapshot.ID, "backing")
+	holders, err := quota.ResourceHolderIDs(ctx, tx, "snapshot", source.Snapshot.ID, "backing")
 	if err != nil {
 		return nil, err
 	}
@@ -193,8 +193,7 @@ func PinSnapshotSource(ctx context.Context, tx *sql.Tx, tenant string, lease Sou
 		return err
 	}
 	holder := lease.OperationID + ":" + lease.StepKey
-	responsibilities := quota.New(tx)
-	if err := responsibilities.AddResourceReference(ctx, quota.ResourceReference{
+	if err := quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         lease.SnapshotID,
 		HolderKind: "step",
@@ -202,7 +201,7 @@ func PinSnapshotSource(ctx context.Context, tx *sql.Tx, tenant string, lease Sou
 	}); err != nil {
 		return err
 	}
-	return responsibilities.AddCostReference(ctx, quota.CostReference{
+	return quota.AddCostReference(ctx, tx, quota.CostReference{
 		TenantID:   tenant,
 		Kind:       "snapshot",
 		Key:        lease.SnapshotID,
@@ -222,8 +221,7 @@ func ReleaseSnapshotSource(ctx context.Context, tx *sql.Tx, tenant string, lease
 		return err
 	}
 	holder := lease.OperationID + ":" + lease.StepKey
-	responsibilities := quota.New(tx)
-	if err := responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+	if err := quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         lease.SnapshotID,
 		HolderKind: "step",
@@ -231,7 +229,7 @@ func ReleaseSnapshotSource(ctx context.Context, tx *sql.Tx, tenant string, lease
 	}); err != nil {
 		return err
 	}
-	return responsibilities.RemoveCostReference(ctx, quota.CostReference{
+	return quota.RemoveCostReference(ctx, tx, quota.CostReference{
 		TenantID:   tenant,
 		Kind:       "snapshot",
 		Key:        lease.SnapshotID,

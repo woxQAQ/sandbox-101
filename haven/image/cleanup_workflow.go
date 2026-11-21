@@ -275,7 +275,7 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 		})); err != nil {
 			return err
 		}
-		if err = quota.New(tx).ReleaseMatchingReservation(i.ctx, quota.Reservation{
+		if err = quota.ReleaseMatchingReservation(i.ctx, tx, quota.Reservation{
 			Owner: "cache:" + cache.Witness.Cache.Builder + ":" + cache.Witness.Cache.DiffID,
 			Bytes: cache.Witness.PhysicalBytes,
 		}); err != nil {
@@ -311,7 +311,7 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 			})); err != nil {
 				return err
 			}
-			if err = quota.New(tx).ReleaseMatchingReservation(i.ctx, quota.Reservation{
+			if err = quota.ReleaseMatchingReservation(i.ctx, tx, quota.Reservation{
 				Owner: "import:" + source.OperationID,
 				Bytes: remaining,
 			}); err != nil {

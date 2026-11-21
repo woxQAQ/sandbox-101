@@ -21,6 +21,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
@@ -31,7 +32,7 @@ func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	accepted, err := service.SandboxRequests.Execute(ctx, principal, "auto-renew-stream", operation.Command{
+	accepted, err := service.CommandRouter.Execute(ctx, principal, "auto-renew-stream", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,
@@ -123,13 +124,13 @@ func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
 	defer func() {
 		_ = upstream.Close()
 	}()
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "handoff-new-configuration", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "handoff-new-configuration", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{
 			Mode: "none",
 		},
-		Env: map[string]operation.EnvVar{
+		Env: map[string]types.EnvVar{
 			"VERSION": {
 				Value: "next",
 			},
@@ -203,10 +204,10 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			}
 			switch change {
 			case "configuration":
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "configure", operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "configure", operation.Intent{
 					Action:    "configure",
 					SandboxID: sandboxView.ID,
-					Env: map[string]operation.EnvVar{
+					Env: map[string]types.EnvVar{
 						"REVISION": {
 							Value: "new",
 						},

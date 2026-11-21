@@ -16,12 +16,15 @@ import (
 type DirectBackend interface {
 	InstanceInspector
 
-	Network(context.Context, loom.Resource, bool) error
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 }
 
 type DirectPoliciesGuards interface {
-	Admission() execution.Guard
-	Configuration(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
 }
 
 // DirectPolicies binds teardown to the original activation and instance. The
@@ -50,7 +53,7 @@ func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependenci
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		proofs:     dependencies.Proofs,
 		backend:    dependencies.Backend,
@@ -79,7 +82,7 @@ func (dp *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
 	if operation.Terminal(step.Status) || step.State.Phase != "pending" {
 		return false, nil
 	}
-	guard := dp.guards.Configuration(step.Input.Source.Input.SandboxID)
+	guard := dp.guards.ForSandboxConfiguration(step.Input.Source.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	return true, dp.retireDirect(ctx, id)

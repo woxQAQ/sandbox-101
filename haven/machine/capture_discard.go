@@ -49,7 +49,7 @@ func NewCaptureDiscard(state *store.State, dependencies CaptureDiscardDependenci
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		lifetime:   dependencies.Lifetime,
 		workers:    dependencies.Workers,
@@ -108,7 +108,7 @@ func (cd *CaptureDiscard) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := cd.guards.VM(step.Input.Source.Input.Source.Candidate)
+	guard := cd.guards.ForVMLifecycle(step.Input.Source.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadCaptureDiscard(cd.ctx, cd.store.Database, id)
@@ -297,19 +297,18 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 		return fmt.Errorf("capture discard original cleanup changed")
 	}
 	shape := resource.Input.Resource.Config.Shape
-	if count, err := quota.New(tx).CountMatchingReservation(ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner: "snapshot:" + snapshot.ID,
 		Bytes: (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20,
 	}); err != nil || count != 1 {
 		return fmt.Errorf("capture discard responsibility changed: %v", err)
 	}
-	responsibilities := quota.New(tx)
 	checks := []struct {
 		count func() (int64, error)
 		want  int64
 	}{
 		{func() (int64, error) {
-			return responsibilities.CountMatchingCost(ctx, quota.Cost{
+			return quota.CountMatchingCost(ctx, tx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        request.TenantID,
 					Kind:            "pending_storage",
@@ -320,10 +319,10 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountTenantCostHolders(ctx, request.TenantID, "pending_storage", source.OperationID+":capture")
+			return quota.CountTenantCostHolders(ctx, tx, request.TenantID, "pending_storage", source.OperationID+":capture")
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountCostReference(ctx, quota.CostReference{
+			return quota.CountCostReference(ctx, tx, quota.CostReference{
 				TenantID:   request.TenantID,
 				Kind:       "pending_storage",
 				Key:        source.OperationID + ":capture",
@@ -332,7 +331,7 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         resource.Candidate,
 				HolderKind: "capture",
@@ -340,7 +339,7 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         resource.Input.Resource.Config.Image,
 				HolderKind: "capture",
@@ -348,7 +347,7 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountResourceHolders(ctx, "snapshot", snapshot.ID)
+			return quota.CountResourceHolders(ctx, tx, "snapshot", snapshot.ID)
 		}, 0},
 	}
 	for _, check := range checks {

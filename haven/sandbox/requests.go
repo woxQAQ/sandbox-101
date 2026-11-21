@@ -7,25 +7,20 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/supply"
 )
 
-type SupplyCommands interface {
-	AdmitRefill(context.Context, authorization.Principal, string, operation.Command) (operation.Record, error)
-	AdmitTemplate(context.Context, authorization.Principal, string, operation.Command) (operation.Record, error)
-}
-
-// SandboxRequests routes accepted command kinds to their owning business service.
-// It owns no persistence, execution state, or resource effects.
-type SandboxRequests struct {
+// CommandRouter checks capability scope before dispatching each intent to its admission service.
+type CommandRouter struct {
 	sandboxes  *Sandboxes
 	lifecycle  *Lifecycle
-	supply     SupplyCommands
+	supply     *supply.Supply
 	forks      *Forks
-	operations *operation.Operations
+	operations *operation.Monitor
 }
 
-func NewSandboxRequests(sandboxes *Sandboxes, lifecycle *Lifecycle, supply SupplyCommands, forks *Forks, operations *operation.Operations) *SandboxRequests {
-	return &SandboxRequests{
+func NewCommandRouter(sandboxes *Sandboxes, lifecycle *Lifecycle, supply *supply.Supply, forks *Forks, operations *operation.Monitor) *CommandRouter {
+	return &CommandRouter{
 		sandboxes:  sandboxes,
 		lifecycle:  lifecycle,
 		supply:     supply,
@@ -34,11 +29,11 @@ func NewSandboxRequests(sandboxes *Sandboxes, lifecycle *Lifecycle, supply Suppl
 	}
 }
 
-func (sr *SandboxRequests) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (sr *CommandRouter) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	// A sandbox capability admits only renewal or release of its own sandbox.
 	// This admission boundary covers direct service calls, not only HTTP.
 	if principal.SandboxID != "" && (command.SandboxID != principal.SandboxID || (command.Action != "renew" && command.Action != "release")) {
-		return operation.Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return operation.State{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	switch command.Action {
 	case "claim":
@@ -62,11 +57,11 @@ func (sr *SandboxRequests) Submit(ctx context.Context, principal authorization.P
 	case "release", "checkpoint", "pause":
 		return sr.lifecycle.AdmitLifecycle(ctx, principal, key, command)
 	default:
-		return operation.Record{}, fmt.Errorf("%w: unsupported sandbox action", errs.ErrInvalid)
+		return operation.State{}, fmt.Errorf("%w: unsupported sandbox action", errs.ErrInvalid)
 	}
 }
 
-func (sr *SandboxRequests) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (sr *CommandRouter) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	accepted, err := sr.Submit(ctx, principal, key, command)
 	if err != nil {
 		return accepted, err

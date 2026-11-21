@@ -18,14 +18,14 @@ import (
 // AdmitRelease revokes the logical sandbox and gives cleanup an independent
 // intent. An immutable successful source witness is required; unresolved or
 // failed generation attempts retain their responsibility for review.
-func (d *Deletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.Record, error) {
+func (d *Deletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.State, error) {
 	if d.
 		ownership ==
 		nil || d.handoff ==
 		nil ||
 		d.
 			usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
@@ -33,14 +33,14 @@ func (d *Deletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (op
 	return d.AdmitReleaseForParent(ctx, request, nil)
 }
 
-func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.Record, error) {
+func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseRequest, parent ResourceParent) (operation.State, error) {
 	if d.ownership == nil || d.handoff == nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.SandboxID == "" {
 		return empty, fmt.Errorf("%w: tenant, sandbox and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
@@ -114,7 +114,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if _, err = dbgen.New(tx).CountVMBackings(ctx, record.VMID); err != nil {
 		return empty, err
 	}
-	holders, err := quota.New(tx).CountResourceHolders(ctx, "vm", record.VMID)
+	holders, err := quota.CountResourceHolders(ctx, tx, "vm", record.VMID)
 	if err != nil {
 		return empty, err
 	}
@@ -142,7 +142,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if instances != int64(len(generations)) || versions != int64(len(generations)) || warm != 0 || holders != 1+int64(len(captures)) {
 		return empty, fmt.Errorf("%w: cold release has additional or missing resource responsibilities", errs.ErrManualRecovery)
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -248,7 +248,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		}{"vm_disk", generation.Input.DiskKey})
 	}
 	for _, charge := range charges {
-		if err = quota.New(tx).TransferCostReference(ctx, quota.CostReference{
+		if err = quota.TransferCostReference(ctx, tx, quota.CostReference{
 			TenantID:   record.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -258,7 +258,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 			return empty, err
 		}
 	}
-	if err = quota.New(tx).TransferResourceReference(ctx, quota.ResourceReference{
+	if err = quota.TransferResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         record.VMID,
 		HolderKind: "sandbox",
@@ -273,7 +273,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		})); err != nil {
 			return empty, err
 		}
-		if err = quota.New(tx).RemoveResourceReference(ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "vm",
 			ID:         record.VMID,
 			HolderKind: "capture",
@@ -448,8 +448,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 			expectedBacking++
 		}
 	}
-	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountMatchingReservation(d.ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(d.ctx, tx, quota.Reservation{
 		Owner:     "vm:" + step.Candidate,
 		Bytes:     vmBytes,
 		MemoryMiB: shape.MemoryMiB + 128,
@@ -465,10 +464,10 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceHolders(d.ctx, "vm", step.Candidate)
+			return quota.CountResourceHolders(d.ctx, tx, "vm", step.Candidate)
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(d.ctx, quota.ResourceReference{
+			return quota.CountResourceReference(d.ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         step.Candidate,
 				HolderKind: "cleanup",
@@ -476,7 +475,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(d.ctx, quota.ResourceReference{
+			return quota.CountResourceReference(d.ctx, tx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         step.Input.Resource.Config.Image,
 				HolderKind: "vm",
@@ -484,7 +483,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountMatchingCost(d.ctx, quota.Cost{
+			return quota.CountMatchingCost(d.ctx, tx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        tenant,
 					Kind:            "vm_disk",
@@ -495,7 +494,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountMatchingCost(d.ctx, quota.Cost{
+			return quota.CountMatchingCost(d.ctx, tx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        tenant,
 					Kind:            step.Input.SlotBudget.Kind,
@@ -515,10 +514,10 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 	} {
 		checks = append(checks,
 			func() (int64, error) {
-				return responsibilities.CountTenantCostHolders(d.ctx, tenant, charge.kind, charge.key)
+				return quota.CountTenantCostHolders(d.ctx, tx, tenant, charge.kind, charge.key)
 			},
 			func() (int64, error) {
-				return responsibilities.CountCostReference(d.ctx, quota.CostReference{
+				return quota.CountCostReference(d.ctx, tx, quota.CostReference{
 					TenantID:   tenant,
 					Kind:       charge.kind,
 					Key:        charge.key,

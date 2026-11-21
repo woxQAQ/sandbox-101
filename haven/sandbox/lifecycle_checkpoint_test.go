@@ -38,13 +38,13 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
-				command := operation.Command{
+				command := operation.Intent{
 					Action:    "checkpoint",
 					SandboxID: claim.Result.SandboxID,
 				}
-				var original operation.Record
+				var original operation.State
 				if mode == "paused" {
-					if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+					if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 						Action:    "pause",
 						SandboxID: claim.Result.SandboxID,
 					}); err != nil {
@@ -53,11 +53,11 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				}
 				if mode == "delete" {
 					var err error
-					original, err = service.SandboxRequests.Execute(ctx, principal, "checkpoint", command)
+					original, err = service.CommandRouter.Execute(ctx, principal, "checkpoint", command)
 					if err != nil {
 						t.Fatal(err)
 					}
-					command = operation.Command{
+					command = operation.Intent{
 						Action:       "checkpoint_delete",
 						CheckpointID: original.Result.CheckpointID,
 					}
@@ -79,7 +79,7 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				if _, err := service.State.Database().Exec(trigger); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := service.SandboxRequests.Execute(ctx, principal, "blocked", command); err == nil {
+				if _, err := service.CommandRouter.Execute(ctx, principal, "blocked", command); err == nil {
 					t.Fatal("checkpoint responsibility rejection was reported as success")
 				}
 				var bindings, resources, costs, requests int
@@ -119,7 +119,7 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 					t.Fatal(err)
 				}
 				captures = backend.Count("capture")
-				recovered, err := service.SandboxRequests.Execute(ctx, principal, "blocked", command)
+				recovered, err := service.CommandRouter.Execute(ctx, principal, "blocked", command)
 				if err != nil || recovered.Status != "succeeded" || backend.Count("capture") != captures {
 					t.Fatal("checkpoint replay failed or repeated the capture", recovered, err)
 				}

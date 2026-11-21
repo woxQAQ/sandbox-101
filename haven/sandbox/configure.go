@@ -20,12 +20,12 @@ import (
 // configurationRequest freezes the original command and credential MAC before
 // preparing its replacement settings inside the admission transaction.
 type configurationRequest struct {
-	Command operation.Command
+	Command operation.Intent
 	MAC     string
 }
 
-func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if principal.TenantID == "" || principal.SandboxID != "" || command.Action != "configure" || command.SandboxID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: configure requires tenant authority, sandbox and key", errs.ErrInvalid)
 	}
@@ -33,10 +33,10 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	if err != nil {
 		return empty, err
 	}
-	requestGuard := sb.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
-	mac := sb.commands.Identity.CommandMAC(principal, command)
+	keyGuard := sb.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := sb.identity.CommandMAC(principal, command)
 	retry := &ClaimAdmission{
 		MAC:     mac,
 		Secrets: secrets,
@@ -44,7 +44,7 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	if accepted, found, err := sb.existing(ctx, principal, key, retry); found || err != nil {
 		return accepted, err
 	}
-	guard := sb.guards.Configuration(command.SandboxID)
+	guard := sb.guards.ForSandboxConfiguration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	accepted, resource, paused, admissionErr := sb.admitConfiguration(ctx, principal, key, configurationRequest{
@@ -63,7 +63,7 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	// bounded context, independent of the submitting connection's cancellation.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err = errors.Join(admissionErr, sb.opts.Backend.Network(cleanupCtx, resource, false), sb.activations.RevokeSandbox(command.SandboxID))
+	err = errors.Join(admissionErr, sb.backend.SetNetworkEnabled(cleanupCtx, resource, false), sb.activations.RevokeSandbox(command.SandboxID))
 	if err != nil {
 		step, lookup := LoadActivation(cleanupCtx, sb.store.Database, accepted.ID)
 		if lookup == nil {
@@ -89,9 +89,9 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	return accepted, nil
 }
 
-func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, request configurationRequest) (operation.Record, loom.Resource, bool, error) {
+func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authorization.Principal, key string, request configurationRequest) (operation.State, loom.Resource, bool, error) {
 	command, mac := request.Command, request.MAC
-	var empty operation.Record
+	var empty operation.State
 	var noResource loom.Resource
 	sb.admission.Lock()
 	defer sb.admission.Unlock()
@@ -137,7 +137,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	desired.TTLSeconds = old.TTLSeconds
 	desired.OnExpire = old.OnExpire
 	desired.AutoRenew = old.AutoRenew
-	settings, err := sb.commands.Prepare(desired)
+	settings, err := sb.policy.Prepare(desired)
 	if err != nil {
 		return empty, noResource, false, err
 	}
@@ -149,7 +149,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	}
 	resource := source.Input.Resource
 	if current.State != "paused" {
-		if sb.opts.Guest == nil {
+		if sb.guest == nil {
 			return empty, noResource, false, fmt.Errorf("%w: guest activation effects unavailable", errs.ErrIncompatible)
 		}
 		if source.Input.TenantID != current.TenantID || source.Input.SandboxID != current.ID || source.Status != "succeeded" || source.State.Witness != current.Instance || source.Candidate != current.VMID {
@@ -158,7 +158,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"configure", operation.SanitizedCommand(command)})
 	hash := operation.Digest(frozen)
 	operations := operation.New(tx)
@@ -175,7 +175,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		}
 		return cached, noResource, false, err
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -288,7 +288,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 // saveConfigurationIntent separates accepted revocation from publication of new
 // settings, so a rejected settings write leaves the durable fence and old policy.
 func (a *Activations) saveConfigurationIntent(step *ActivationStep) error {
-	guard := a.guards.Configuration(step.Input.SandboxID)
+	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	a.admission.Lock()

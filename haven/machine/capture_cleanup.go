@@ -48,7 +48,7 @@ func NewCaptureCleanup(state *store.State, dependencies CaptureCleanupDependenci
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		gate:       dependencies.Gate,
 		workers:    dependencies.Workers,
@@ -106,7 +106,7 @@ func (cc *CaptureCleanup) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := cc.guards.VM(step.Input.Capture.Input.Source.Candidate)
+	guard := cc.guards.ForVMLifecycle(step.Input.Capture.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadCaptureCleanup(cc.ctx, cc.store.Database, id)
@@ -174,12 +174,11 @@ func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCl
 	return step, nil
 }
 
-func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupRequest, parent ResourceParent) (operation.Record, error) {
+func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupRequest, parent ResourceParent) (operation.State, error) {
 	if cc.
 		ownership ==
 		nil {
-		return operation.
-				Record{},
+		return operation.State{},
 			fmt.Errorf(
 				"%w: required CaptureCleanup capability port unavailable",
 
@@ -187,7 +186,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 			)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.CaptureOperationID, "op-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: raw capture cleanup requires original capture and stop proof", errs.ErrInvalid)
 	}
@@ -265,7 +264,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 		return empty, fmt.Errorf("%w: raw capture source ownership changed", errs.ErrConflict)
 	}
 	operations := operation.New(tx)
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -385,7 +384,7 @@ func (cc *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) e
 	if owner != step.OperationID || instance != source.State.Witness || vm.Deleting || vm.AgentReady {
 		return fmt.Errorf("raw capture current stopped ownership changed")
 	}
-	count, err := quota.New(tx).CountResourceReference(cc.ctx, quota.ResourceReference{
+	count, err := quota.CountResourceReference(cc.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         source.Candidate,
 		HolderKind: "capture",
@@ -572,8 +571,7 @@ func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loo
 	}
 	capture := step.Input.Capture
 	source := capture.Input.Source
-	responsibilities := quota.New(tx)
-	if err = responsibilities.RemoveResourceReference(cc.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(cc.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         source.Candidate,
 		HolderKind: "capture",
@@ -581,7 +579,7 @@ func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loo
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(cc.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(cc.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "capture",
@@ -644,7 +642,8 @@ func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loo
 // CaptureCleanupParentAuthority verifies a frozen rollback's raw capture and
 // original stop child before resource cleanup admission. It performs no effects.
 type CaptureCleanupParentAuthority interface {
-	VerifyCaptureCleanup(context.Context, *sql.Tx, CaptureStep, string) error
+	// VerifyCaptureCleanup checks the parent's authority over this capture and stop in the caller's transaction.
+	VerifyCaptureCleanup(ctx context.Context, tx *sql.Tx, capture CaptureStep, stopOperationID string) error
 }
 
 // AllocationCleanupFence keeps a detached pool member unavailable to every new

@@ -48,11 +48,10 @@ func Project(ctx context.Context, q store.DBTX, id string) (types.Operation, err
 		// workflows. Their public result is the template or checkpoint below.
 	default:
 		for _, sandboxID := range out.IDs {
-			value, err := sandbox.NewCatalog(q).Get(ctx, authorization.Principal{
+			view, err := sandbox.NewCatalog(q).Get(ctx, authorization.Principal{
 				Root: true,
 			}, sandboxID)
 			if err == nil {
-				view := value.Public()
 				if out.Command.Action == "fork" {
 					out.Result.Sandboxes = append(out.Result.Sandboxes, view)
 				} else {

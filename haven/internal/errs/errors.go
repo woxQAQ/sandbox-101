@@ -7,6 +7,7 @@ import "errors"
 var (
 	ErrInterrupted    = errors.New("accepted Haven intent retained for recovery")
 	ErrNotFound       = errors.New("not found")
+	ErrNotVisible     = errors.New("object outside principal scope")
 	ErrForbidden      = errors.New("root access required")
 	ErrConflict       = errors.New("operation conflicts with current state")
 	ErrInvalid        = errors.New("invalid request")

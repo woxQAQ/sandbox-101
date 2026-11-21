@@ -243,7 +243,7 @@ func (i *Images) completeImageImport(step imageImportStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = quota.New(tx).TransferStorageReservation(i.ctx, "import:"+step.OperationID, "image:"+proof.Manifest.Digest, remaining); err != nil {
+	if err = quota.TransferStorageReservation(i.ctx, tx, "import:"+step.OperationID, "image:"+proof.Manifest.Digest, remaining); err != nil {
 		return err
 	}
 	operations := operation.New(tx)

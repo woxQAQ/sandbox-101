@@ -36,7 +36,7 @@ func (wc *WarmClaims) setWarmClaimPhase(step *WarmClaimStep, phase string) error
 }
 
 func (wc *WarmClaims) seedFallbackActivation(step WarmClaimStep, source machine.ResourceStep) error {
-	guard := wc.guards.Configuration(step.Input.Pool.SandboxID)
+	guard := wc.guards.ForSandboxConfiguration(step.Input.Pool.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	wc.admission.Lock()
@@ -113,7 +113,7 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 		return nil
 	}
 	if step.State.Phase == "selected" {
-		lock := wc.guards.VM(step.Input.Pool.VMID)
+		lock := wc.guards.ForVMLifecycle(step.Input.Pool.VMID)
 		lock.Lock()
 		err := wc.activations.Continue(step.OperationID)
 		lock.Unlock()
@@ -167,7 +167,7 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 		if err = image.VerifyFiles(manifest, filepath.Join(wc.store.Directory, "images", manifest.Digest[7:])); err != nil {
 			return err
 		}
-		source, err := wc.proofs.Snapshots().LoadRestoreSource(wc.ctx, wc.store.Database, template.TenantID, template.SnapshotID)
+		source, err := wc.proofs.Snapshots().LoadSnapshotSource(wc.ctx, wc.store.Database, template.TenantID, template.SnapshotID)
 		if err != nil {
 			return err
 		}
@@ -227,7 +227,7 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 	if err = wc.seedFallbackActivation(step, source); err != nil {
 		return err
 	}
-	lock := wc.guards.VM(source.Candidate)
+	lock := wc.guards.ForVMLifecycle(source.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
 	return wc.activations.Continue(step.OperationID)

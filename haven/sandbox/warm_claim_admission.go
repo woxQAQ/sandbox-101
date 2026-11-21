@@ -28,10 +28,10 @@ type WarmClaimRequest struct {
 
 // Admit borrows the caller's tenant request guard and selects a ready warm
 // allocation atomically. A false found result permits the original cold path.
-func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.Record, bool, error) {
+func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.State, bool, error) {
 	principal, key, admission := request.Principal, request.Key, request.Admission
 	selectedTemplate, restore := request.Template, request.Restore
-	var empty operation.Record
+	var empty operation.State
 	wc.admission.Lock()
 	defer wc.admission.Unlock()
 	if err := wc.gate.Check(); err != nil {
@@ -58,7 +58,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	if !found || err != nil {
 		return empty, false, err
 	}
-	currentRestore, err := wc.proofs.Snapshots().LoadRestoreSource(ctx, tx, selectedTemplate.TenantID, selectedTemplate.SnapshotID)
+	currentRestore, err := wc.proofs.Snapshots().LoadSnapshotSource(ctx, tx, selectedTemplate.TenantID, selectedTemplate.SnapshotID)
 	if err != nil {
 		return empty, false, err
 	}
@@ -69,7 +69,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	if err != nil {
 		return empty, false, err
 	}
-	usage, err := quota.New(tx).Usage(ctx, selectedTemplate.TenantID)
+	usage, err := quota.TenantUsage(ctx, tx, selectedTemplate.TenantID)
 	if err != nil {
 		return empty, false, err
 	}
@@ -84,7 +84,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	if destination.State != "provisioning" || destination.SourceOperation != source.OperationID || destination.Instance != selected.Instance || destination.SlotAssignment != nil {
 		return empty, false, fmt.Errorf("%w: warm allocation current sandbox identity changed", errs.ErrManualRecovery)
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -129,7 +129,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	activationPayload := operation.Encode(activation)
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"claim", admission.Command})
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
@@ -196,7 +196,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	})); err != nil {
 		return empty, false, err
 	}
-	if err = quota.New(tx).ChargeWarmSlot(ctx, selectedTemplate.TenantID, selected.SandboxID, source.Input.SlotOperation); err != nil {
+	if err = quota.ChargeWarmSlot(ctx, tx, selectedTemplate.TenantID, selected.SandboxID, source.Input.SlotOperation); err != nil {
 		return empty, false, err
 	}
 	if err = supply.SelectWarm(ctx, tx, poolID, selected); err != nil {

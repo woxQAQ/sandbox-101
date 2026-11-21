@@ -38,7 +38,7 @@ func (backend *ColdRuntime) Compatibility() string {
 	return "explicit-cold-fixture"
 }
 
-func (backend *ColdRuntime) Check(context.Context, loom.Config) error {
+func (backend *ColdRuntime) ValidateHostConfig(context.Context, loom.Config) error {
 	return nil
 }
 
@@ -177,7 +177,7 @@ func (backend *ColdRuntime) Stop(_ context.Context, resource loom.Resource) erro
 	return nil
 }
 
-func (backend *ColdRuntime) Network(_ context.Context, resource loom.Resource, enabled bool) error {
+func (backend *ColdRuntime) SetNetworkEnabled(_ context.Context, resource loom.Resource, enabled bool) error {
 	if err := backend.Effect("network", resource); err != nil {
 		return err
 	}

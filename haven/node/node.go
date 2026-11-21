@@ -12,9 +12,12 @@ import (
 )
 
 type Metadata interface {
+	// Identity returns the stable identity of the open store.
 	Identity() store.Identity
+	// Reviewed reports whether the store was opened for recovery review.
 	Reviewed() bool
-	Epoch(context.Context) (int64, error)
+	// Epoch reads the current durable store epoch.
+	Epoch(ctx context.Context) (int64, error)
 }
 
 type Service struct {

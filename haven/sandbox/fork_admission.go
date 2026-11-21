@@ -21,22 +21,22 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if command.Count == 0 {
 		command.Count = 1
 	}
 	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") || key == "" || len(key) > 256 || f.opts.Guest == nil {
 		return empty, errs.InvalidInput("fork requires tenant authority, one source, count 1..32 and key")
 	}
-	requestGuard := f.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
+	keyGuard := f.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
 	_, secrets, _, err := SplitEnv(command.Env)
 	if err != nil {
 		return empty, err
 	}
-	mac := f.commands.Identity.CommandMAC(principal, command)
+	mac := f.identity.CommandMAC(principal, command)
 	if acceptedOperation, found, err := f.existing(ctx, principal, key, &ClaimAdmission{
 		MAC:     mac,
 		Secrets: secrets,
@@ -65,7 +65,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 		if err != nil {
 			return empty, err
 		}
-		source, err := f.history.LoadRestoreSource(ctx, f.store.Database, checkpoint.TenantID, checkpoint.SnapshotID)
+		source, err := f.history.LoadSnapshotSource(ctx, f.store.Database, checkpoint.TenantID, checkpoint.SnapshotID)
 		if err != nil {
 			return empty, err
 		}
@@ -101,7 +101,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			command.Policy = settings.Policy
 		}
 		if sandbox.State == "paused" {
-			source, err := f.history.LoadRestoreSource(ctx, f.store.Database, sandbox.TenantID, sandbox.SnapshotID)
+			source, err := f.history.LoadSnapshotSource(ctx, f.store.Database, sandbox.TenantID, sandbox.SnapshotID)
 			if err != nil {
 				return empty, err
 			}
@@ -128,7 +128,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			}
 		}
 	}
-	admission, err := f.commands.Prepare(command)
+	admission, err := f.policy.Prepare(command)
 	if err != nil {
 		return empty, err
 	}
@@ -137,7 +137,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			return empty, err
 		}
 	}
-	if err = f.opts.Backend.Check(ctx, input.Template.Config); err != nil {
+	if err = f.opts.Backend.ValidateHostConfig(ctx, input.Template.Config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, f.store.Database, input.Template.Config.Image)
@@ -147,7 +147,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 	if err = image.VerifyFiles(manifest, filepath.Join(f.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -267,7 +267,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 		}
 	}
 	if input.Snapshot != nil {
-		current, err := admission.history.LoadRestoreSource(ctx, tx, input.OwnerTenantID, input.Snapshot.Snapshot.ID)
+		current, err := admission.history.LoadSnapshotSource(ctx, tx, input.OwnerTenantID, input.Snapshot.Snapshot.ID)
 		if err != nil {
 			return err
 		}
@@ -277,7 +277,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"fork", input.Command})
 	payload := operation.Encode(input)
 	state := ForkState{
@@ -316,7 +316,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 	})); err != nil {
 		return err
 	}
-	if err := quota.New(tx).AddResourceReference(ctx, quota.ResourceReference{
+	if err := quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         input.Template.Config.Image,
 		HolderKind: "step",
@@ -363,8 +363,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 	if err != nil {
 		return err
 	}
-	responsibilities := quota.New(tx)
-	usage, err := responsibilities.Usage(ctx, input.OwnerTenantID)
+	usage, err := quota.TenantUsage(ctx, tx, input.OwnerTenantID)
 	if err != nil {
 		return err
 	}
@@ -377,7 +376,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || int64(len(input.Targets)) > tenant.MaxSandboxes-usage.Slots || usage.StorageMiB > tenant.MaxStorageMiB || budget.Storage+captureStorage > tenant.MaxStorageMiB-usage.StorageMiB {
 		return fmt.Errorf("%w: fork batch exceeds tenant quota", errs.ErrExhausted)
 	}
-	reserved, err := responsibilities.ReservedCapacity(ctx)
+	reserved, err := quota.ReservedCapacity(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -399,7 +398,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 		})); err != nil {
 			return err
 		}
-		if err := responsibilities.AddCost(ctx, quota.Cost{
+		if err := quota.AddCost(ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        target.TenantID,
 				Kind:            "sandbox_slot",
@@ -410,7 +409,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 		}); err != nil {
 			return err
 		}
-		if err := responsibilities.AddCostReference(ctx, quota.CostReference{
+		if err := quota.AddCostReference(ctx, tx, quota.CostReference{
 			TenantID:   target.TenantID,
 			Kind:       "sandbox_slot",
 			Key:        target.ID,
@@ -420,7 +419,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 			return err
 		}
 	}
-	if err := responsibilities.Reserve(ctx, quota.Reservation{
+	if err := quota.Reserve(ctx, tx, quota.Reservation{
 		Owner:     "fork:" + acceptedOperation.ID,
 		Bytes:     budget.Bytes,
 		MemoryMiB: budget.Memory,
@@ -428,7 +427,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 	}); err != nil {
 		return err
 	}
-	if err := responsibilities.AddCost(ctx, quota.Cost{
+	if err := quota.AddCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        input.OwnerTenantID,
 			Kind:            "pending_storage",
@@ -439,7 +438,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 	}); err != nil {
 		return err
 	}
-	return responsibilities.AddCostReference(ctx, quota.CostReference{
+	return quota.AddCostReference(ctx, tx, quota.CostReference{
 		TenantID:   input.OwnerTenantID,
 		Kind:       "pending_storage",
 		Key:        acceptedOperation.ID + ":fork_group",
@@ -452,8 +451,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 // it in this same transaction, so neither storage nor host responsibility lapses.
 func consumeForkForecast(ctx context.Context, tx *sql.Tx, step ForkStep) error {
 	budget := forkFunding(step.Input)
-	responsibilities := quota.New(tx)
-	if err := responsibilities.ReleaseMatchingReservation(ctx, quota.Reservation{
+	if err := quota.ReleaseMatchingReservation(ctx, tx, quota.Reservation{
 		Owner:     "fork:" + step.OperationID,
 		Bytes:     budget.Bytes,
 		MemoryMiB: budget.Memory,
@@ -461,7 +459,7 @@ func consumeForkForecast(ctx context.Context, tx *sql.Tx, step ForkStep) error {
 	}); err != nil {
 		return err
 	}
-	if err := responsibilities.RemoveCostReference(ctx, quota.CostReference{
+	if err := quota.RemoveCostReference(ctx, tx, quota.CostReference{
 		TenantID:   step.Input.OwnerTenantID,
 		Kind:       "pending_storage",
 		Key:        step.OperationID + ":fork_group",
@@ -470,7 +468,7 @@ func consumeForkForecast(ctx context.Context, tx *sql.Tx, step ForkStep) error {
 	}); err != nil {
 		return err
 	}
-	return responsibilities.RetireMatchingCost(ctx, quota.Cost{
+	return quota.RetireMatchingCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        step.Input.OwnerTenantID,
 			Kind:            "pending_storage",
@@ -506,8 +504,7 @@ func retireUnallocatedFork(ctx context.Context, tx *sql.Tx, step ForkStep) error
 		terminated := current
 		terminated.State = "terminated"
 		terminated.OperationID = ""
-		responsibilities := quota.New(tx)
-		if err = responsibilities.RemoveCostReference(ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 			TenantID:   target.TenantID,
 			Kind:       "sandbox_slot",
 			Key:        target.ID,
@@ -516,7 +513,7 @@ func retireUnallocatedFork(ctx context.Context, tx *sql.Tx, step ForkStep) error
 		}); err != nil {
 			return err
 		}
-		if err = responsibilities.RetireMatchingCost(ctx, quota.Cost{
+		if err = quota.RetireMatchingCost(ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        target.TenantID,
 				Kind:            "sandbox_slot",

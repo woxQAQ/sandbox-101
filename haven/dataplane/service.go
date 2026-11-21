@@ -17,19 +17,26 @@ import (
 )
 
 type PlaneBackend interface {
-	Inspect(context.Context, loom.Resource) (loom.Observation, error)
+	// Inspect observes the identified instance and reports uncertainty as an error.
+	Inspect(ctx context.Context, resource loom.Resource) (loom.Observation, error)
 }
 
 type PlaneGuest interface {
+	// Connect opens a raw Workload stream to the admitted instance. The caller owns the connection.
 	Connect(ctx context.Context, resource loom.Resource) (net.Conn, error)
+	// Forward negotiates a TCP forward through the Workload portal and returns the connected stream.
 	Forward(ctx context.Context, resource loom.Resource, port int) (net.Conn, error)
 }
 
 type PlaneGuards interface {
-	Registration() execution.Guard
-	Sandbox(string) execution.Guard
-	Configuration(string) execution.Guard
-	AutoResume(string) execution.Guard
+	// ForServiceAdmission returns the lock shared by drain, shutdown and connection registration.
+	ForServiceAdmission() execution.Guard
+	// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
+	ForSandboxLifecycle(sandboxID string) execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
+	// ForSandboxWakeup returns the lock that coalesces data requests waking the same paused sandbox.
+	ForSandboxWakeup(sandboxID string) execution.Guard
 }
 
 type PlaneOptions struct {
@@ -39,14 +46,14 @@ type PlaneOptions struct {
 }
 
 type PlaneDependencies struct {
-	Guards      PlaneGuards
-	Lifetime    *execution.Lifetime
-	Registry    *ephemeral.Registry
-	Commands    *sandbox.SandboxCommands
-	Sandboxes   *sandbox.Sandboxes
-	Lifecycle   *sandbox.Lifecycle
-	Operations  *operation.Operations
-	Activations *sandbox.Activations
+	Guards          PlaneGuards
+	Lifetime        *execution.Lifetime
+	Registry        *ephemeral.Registry
+	AdmissionPolicy *sandbox.AdmissionPolicy
+	Sandboxes       *sandbox.Sandboxes
+	Lifecycle       *sandbox.Lifecycle
+	Operations      *operation.Monitor
+	Activations     *sandbox.Activations
 }
 
 // Plane owns live admission, tracked socket handoff, lease enforcement and preview
@@ -61,10 +68,10 @@ type Plane struct {
 	epoch       string
 	sign        func(...string) string
 	catalog     *sandbox.Catalog
-	commands    *sandbox.SandboxCommands
+	policy      *sandbox.AdmissionPolicy
 	sandboxes   *sandbox.Sandboxes
 	lifecycle   *sandbox.Lifecycle
-	operations  *operation.Operations
+	operations  *operation.Monitor
 	activations *sandbox.Activations
 	opts        PlaneOptions
 }
@@ -80,12 +87,12 @@ func NewPlane(state *store.State, dependencies PlaneDependencies, options PlaneO
 		ctx:         dependencies.Lifetime.Context(),
 		lifetime:    dependencies.Lifetime,
 		guards:      dependencies.Guards,
-		mu:          dependencies.Guards.Registration(),
+		mu:          dependencies.Guards.ForServiceAdmission(),
 		registry:    dependencies.Registry,
 		epoch:       options.Epoch,
 		sign:        state.Sign,
 		catalog:     sandbox.NewCatalog(state.Database()),
-		commands:    dependencies.Commands,
+		policy:      dependencies.AdmissionPolicy,
 		sandboxes:   dependencies.Sandboxes,
 		lifecycle:   dependencies.Lifecycle,
 		operations:  dependencies.Operations,

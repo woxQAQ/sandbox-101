@@ -114,8 +114,10 @@ impl std::error::Error for Error {}
 
 /// Context closures run only on failure; caller locations require no backtrace.
 pub trait ResultContext<T> {
+    /// Adds caller context when the operation fails, preserving its error code.
     #[track_caller]
     fn or_context(self, context: impl FnOnce() -> String) -> Result<T>;
+    /// Classifies a failure with the supplied code and attaches caller context.
     #[track_caller]
     fn map_code(self, code: ErrorCode, context: impl FnOnce() -> String) -> Result<T>;
 }

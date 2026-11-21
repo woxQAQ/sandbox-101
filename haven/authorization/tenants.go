@@ -11,6 +11,7 @@ import (
 
 // ClosingReader exposes the admission barrier without granting shutdown control.
 type ClosingReader interface {
+	// Closing reports whether shutdown has closed admission to new work.
 	Closing() bool
 }
 

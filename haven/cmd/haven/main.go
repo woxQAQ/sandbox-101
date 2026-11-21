@@ -203,7 +203,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 			Templates:      service.TemplateCatalog,
 			Operations:     service.Operations,
 			Tenants:        service.Tenants,
-			Requests:       service.SandboxRequests,
+			Requests:       service.CommandRouter,
 			Dataplane:      service.Dataplane,
 			Node:           service.Node,
 			Delivery:       service.Delivery,

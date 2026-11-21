@@ -114,15 +114,15 @@ func CheckpointInventory(ctx context.Context, query store.DBTX) ([]Checkpoint, e
 	return out, nil
 }
 
-func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "checkpoint_delete" || command.CheckpointID == "" {
 		return empty, fmt.Errorf("%w: checkpoint deletion requires tenant authority, checkpoint and key", errs.ErrInvalid)
 	}
-	guard := l.guards.TenantRequest(principal.TenantID, key)
-	guard.Lock()
-	defer guard.Unlock()
-	mac := l.commands.Identity.CommandMAC(principal, command)
+	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := l.identity.CommandMAC(principal, command)
 	if cached, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
@@ -155,7 +155,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if err != nil {
 		return empty, err
 	}
-	record := operation.Record{
+	record := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "succeeded",
@@ -167,14 +167,13 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"checkpoint_delete", operation.SanitizedCommand(command)})
 	input := operation.Encode(struct {
 		Checkpoint  Checkpoint
 		Publication machine.SnapshotSource
 	}{checkpoint, publication})
 	operations := operation.New(tx)
-	references := quota.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        record.ID,
 		ScopeKind: "tenant",
@@ -206,7 +205,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	if err = unbindCheckpoint(ctx, tx, checkpoint); err != nil {
 		return empty, err
 	}
-	if err = references.RemoveResourceReference(ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         checkpoint.SnapshotID,
 		HolderKind: "checkpoint_binding",
@@ -214,7 +213,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	}); err != nil {
 		return empty, err
 	}
-	if err = references.RemoveCostReference(ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 		TenantID:   checkpoint.TenantID,
 		Kind:       "snapshot",
 		Key:        checkpoint.SnapshotID,
@@ -250,8 +249,8 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 
 // A paused checkpoint adds a binding to the proven sleep publication. It does
 // not launch, capture or renew the source and cannot infer a missing pause receipt.
-func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.State, input LifecycleInput, mac string) (operation.State, error) {
+	var empty operation.State
 	l.admission.Lock()
 	defer l.admission.Unlock()
 	if err := l.gate.Check(); err != nil {
@@ -293,7 +292,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 		return empty, err
 	}
 	input.PauseOperation = proof
-	snapshot, err := l.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, current.SnapshotID)
+	snapshot, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, tx, input.OwnerTenantID, current.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -310,11 +309,10 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	parent.Result.SnapshotID = cp.SnapshotID
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"checkpoint", input.Command})
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	references := quota.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
@@ -349,7 +347,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	if err = bindCheckpoint(ctx, tx, cp, parent.ID); err != nil {
 		return empty, err
 	}
-	if err = references.AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         cp.SnapshotID,
 		HolderKind: "checkpoint_binding",
@@ -357,7 +355,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	}); err != nil {
 		return empty, err
 	}
-	if err = references.AddCostReference(ctx, quota.CostReference{
+	if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 		TenantID:   cp.TenantID,
 		Kind:       "snapshot",
 		Key:        cp.SnapshotID,

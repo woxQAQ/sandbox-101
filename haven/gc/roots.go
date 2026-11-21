@@ -38,7 +38,7 @@ func (c *Collector) graphFence(ctx context.Context) ([]types.GCItem, error) {
 			Reason: "dangling normalized root reference",
 		})
 	}
-	references, err := quota.New(tx).ResourceReferences(ctx)
+	references, err := quota.ResourceReferences(ctx, tx)
 	if err != nil {
 		return nil, err
 	}

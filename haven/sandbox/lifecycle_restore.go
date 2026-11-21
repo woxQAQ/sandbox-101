@@ -18,13 +18,13 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (p *Provisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.Record, error) {
+func (p *Provisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.State, error) {
 	return p.AdmitRestoreWithParent(ctx, request, nil)
 }
 
-func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.Record, error) {
+func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machine.RestoreRequest, parent machine.ResourceParent) (operation.State, error) {
 	link, _ := parent.(*LifecycleAdmission)
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: restore requires scoped snapshot, stopped instance, stop proof and key", errs.ErrInvalid)
 	}
@@ -39,11 +39,11 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		}
 		return cached, err
 	}
-	source, err := p.proofs.Snapshots().LoadRestoreSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
+	source, err := p.proofs.Snapshots().LoadSnapshotSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
-	if err = p.backend.Check(ctx, source.Snapshot.Manifest.Config); err != nil {
+	if err = p.backend.ValidateHostConfig(ctx, source.Snapshot.Manifest.Config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, p.store.Database, source.Snapshot.Manifest.Config.Image)
@@ -89,7 +89,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if link != nil && (link.Input.Rollback == nil || !reflect.DeepEqual(source, link.Input.Rollback.Source)) {
 		return empty, fmt.Errorf("%w: rollback frozen restore source changed", errs.ErrConflict)
 	}
-	currentSnapshot, err := p.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, request.SnapshotID)
+	currentSnapshot, err := p.proofs.Snapshots().LoadSnapshotSource(ctx, tx, request.TenantID, request.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -139,7 +139,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if !reflect.DeepEqual(currentMachine.Resource.Config.Shape, config.Shape) || currentMachine.Resource.Config.Image != config.Image {
 		return empty, fmt.Errorf("restore target shape/image mismatch")
 	}
-	refs, err := quota.New(tx).CountResourceHolders(ctx, "vm", prior.Candidate)
+	refs, err := quota.CountResourceHolders(ctx, tx, "vm", prior.Candidate)
 	if err != nil {
 		return empty, err
 	}
@@ -158,7 +158,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if err != nil {
 		return empty, err
 	}
-	usage, err := quota.New(tx).FundedUsage(ctx, request.TenantID)
+	usage, err := quota.FundedUsage(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -166,7 +166,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || usage.StorageMiB > tenant.MaxStorageMiB || shape.DiskMiB > tenant.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("restore tenant peak quota exhausted")
 	}
-	held, err := quota.New(tx).ReservedBytes(ctx)
+	held, err := quota.ReservedBytes(ctx, tx)
 	if err != nil {
 		return empty, err
 	}
@@ -174,7 +174,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if held > free || p.capacity.SafetyBytes > free-held || reserve > free-held-p.capacity.SafetyBytes {
 		return empty, fmt.Errorf("restore host peak reservation exhausted")
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -270,14 +270,13 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if err = machine.RetainGenerationIntent(ctx, tx, accepted.ID, currentMachine); err != nil {
 		return empty, err
 	}
-	responsibilities := quota.New(tx)
-	if err = responsibilities.Reserve(ctx, quota.Reservation{
+	if err = quota.Reserve(ctx, tx, quota.Reservation{
 		Owner: "restore:" + accepted.ID,
 		Bytes: reserve,
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddCost(ctx, quota.Cost{
+	if err = quota.AddCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        request.TenantID,
 			Kind:            "pending_storage",
@@ -288,7 +287,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddCostReference(ctx, quota.CostReference{
+	if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 		TenantID:   request.TenantID,
 		Kind:       "pending_storage",
 		Key:        accepted.ID + ":resource",
@@ -304,7 +303,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.TransferResourceReference(ctx, quota.ResourceReference{
+	if err = quota.TransferResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         resource.VMID,
 		HolderKind: "sandbox",
@@ -312,7 +311,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	}, "step", accepted.ID+":resource"); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         resource.Config.Image,
 		HolderKind: "step",

@@ -146,6 +146,7 @@ type RestoreRequest struct {
 
 // A request type fixes the action used by every writer and reader.
 type provisionAction interface {
+	// provisionAction identifies the provision operation encoded by the request.
 	provisionAction() string
 }
 
@@ -154,14 +155,14 @@ type provisionAction interface {
 type provisionRequest[T provisionAction] struct {
 	Action  string
 	Request T
-	Claim   *operation.Command `json:"Claim,omitempty"`
+	Claim   *operation.Intent `json:"Claim,omitempty"`
 }
 
 func (FreshRequest) provisionAction() string   { return "claim" }
 func (CloneRequest) provisionAction() string   { return "clone" }
 func (RestoreRequest) provisionAction() string { return "restore" }
 
-func FreezeProvisionRequest[T provisionAction](request T, claim *operation.Command) []byte {
+func FreezeProvisionRequest[T provisionAction](request T, claim *operation.Intent) []byte {
 	return operation.Encode(provisionRequest[T]{Action: request.provisionAction(), Request: request, Claim: claim})
 }
 
@@ -179,7 +180,7 @@ func DecodeProvisionRequest[T provisionAction](body []byte) (T, error) {
 // ResourceAdmission carries one child's frozen identity through the parent
 // transaction. Its fields are required facts, not optional execution modes.
 type ResourceAdmission struct {
-	Child       operation.Record
+	Child       operation.State
 	Kind        string
 	Candidate   string
 	RequestHash string
@@ -188,7 +189,8 @@ type ResourceAdmission struct {
 // ResourceParent joins a control workflow to a resource admission transaction.
 // Implementations verify their frozen intent; Loom never receives this port.
 type ResourceParent interface {
-	AdmitResource(context.Context, *sql.Tx, ResourceAdmission) error
+	// AdmitResource records the parent handoff in the resource admission transaction.
+	AdmitResource(ctx context.Context, tx *sql.Tx, admission ResourceAdmission) error
 }
 
 func AdmitResourceParent(ctx context.Context, tx *sql.Tx, parent ResourceParent, request ResourceAdmission) error {

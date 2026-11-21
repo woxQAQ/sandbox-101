@@ -2,7 +2,7 @@
 
 默认构建产物为 `bin/haven`、`bin/havenctl`、`bin/loomctl`。Haven 同时持有业务与资源控制事实，只有一份 `haven.db`、node key、HEAD 和 writer lock。Loom 执行明确指定的宿主效果，不打开控制数据库。
 
-旧 Go 控制模块、daemon 与 engine UDS facade 已删除；workspace、CI、VM runner 和部署示例使用单 Haven。业务 API 与配额契约见 [Sandbox API](../haven/sandbox/api.md)，代理契约见 [Egress](../haven/egress/README.md)。既有部署没有切换，旧 state 不自动迁移。业务接口称为 Sandbox API，提供模板、租约、分支和配额操作。宿主上的 VM 生命周期由 `runtime-e2e` 单独验证，旧双 daemon 的运行结果见[历史验证记录](verification-history.md)。
+旧 Go 控制模块、daemon 与 engine UDS facade 已删除；workspace、CI、VM runner 和部署示例使用单 Haven。业务 API 与配额契约见 [Sandbox API](sandbox-api.md)，代理契约见 [Egress](../haven/egress/README.md)。既有部署没有切换，旧 state 不自动迁移。业务接口称为 Sandbox API，提供模板、租约、分支和配额操作。宿主上的 VM 生命周期由 `runtime-e2e` 单独验证，旧双 daemon 的运行结果见[历史验证记录](verification-history.md)。
 
 ```mermaid
 flowchart LR
@@ -49,7 +49,6 @@ JSON 类型位于 [types](../types/types.go)，错误 payload 为 `types.ApiErro
 | 路由 | 用途 |
 |---|---|
 | `GET/HEAD /healthz` | liveness |
-| `GET/HEAD /metrics` | root 指标；保留原指标名 |
 | `GET /v1/status` | root 查询同一 store identity、epoch 与 recovery 状态 |
 | `POST /v1/tenants`、`POST /v1/node/drain` | root 管理 |
 | `GET /v1/sandboxes`、`/v1/templates`、`/v1/checkpoints` | 租户列表 |
@@ -68,7 +67,7 @@ mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键异参返回 409�
 
 HTTP body 上限为 1 MiB，解码拒绝未知字段和多余 JSON 值。业务和本机管理 HTTP 共同选择失败响应的状态、`code` 和公开 `message`。常规分类为 invalid→400、forbidden→403、not_found→404、conflict→409、resource_exhausted→429、incompatible→422、result_unknown/manual_recovery_required→503、internal→500。业务路由 method 不受支持时返回 405/invalid，Upgrade 缺头返回 426/invalid，Preview 上游不可用返回 502/internal。
 
-业务入口在确认公开对象缺失或对当前身份不可见时返回 `ErrNotFound`。内部记录查询遇到未分类的 `sql.ErrNoRows` 只公开 500/internal。服务通过 `errors.Is` 保留原始错误分类。HTTP 边界为每种失败选定公开消息；业务输入校验可通过 `errs.InvalidInput` 显式选择一条固定的纠错提示。包装错误附带的诊断保留在服务内。取消等待与已接纳待恢复都返回 503/result_unknown，消息分别为 `operation wait ended` 与 `accepted operation retained for recovery`。已接纳 operation 的终态失败在同步响应中返回 500，GET operation 返回 200，两者使用同一 `internal/internal service error` payload。
+sandbox catalog 区分对象缺失（`ErrNotFound`）和超出身份范围（`ErrNotVisible`）。HTTP 将两者映射为同一 404 响应。内部记录查询遇到未分类的 `sql.ErrNoRows` 只公开 500/internal。服务通过 `errors.Is` 保留原始错误分类。HTTP 边界为每种失败选定公开消息；业务输入校验可通过 `errs.InvalidInput` 显式选择一条固定的纠错提示。包装错误附带的诊断保留在服务内。取消等待与已接纳待恢复都返回 503/result_unknown，消息分别为 `operation wait ended` 与 `accepted operation retained for recovery`。已接纳 operation 的终态失败在同步响应中返回 500，GET operation 返回 200，两者使用同一 `internal/internal service error` payload。
 
 默认新 lease 为 300 秒。暂停中的 checkpoint 复用原 pause receipt 和睡眠 publication，只增加 checkpoint binding，不唤醒或重新捕获。fork 的 count 为 1–32，省略取 1；支持 running/paused sandbox 或 checkpoint。running 来源只捕获一次供整批分支使用。接纳事务固定全部目标与业务 birth identity，并同时预留整批 slot、磁盘及宿主峰值；资源分配事务将整批 forecast 交给每个真实候选后才 dispatch。失败分支使用原 failed intent 的 discard，成功分支使用正常业务 release；父工作流持久链接各清理子操作，核验回收后才完成失败。各分支原激活结果独立冻结，父结果不会被后来续租或配置覆盖。
 

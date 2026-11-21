@@ -43,7 +43,7 @@ func TestHavenHTTPContractAndIdempotency(t *testing.T) {
 		Method: "GET",
 		Path:   "/metrics",
 		Token:  "transport-token",
-	}, 403)
+	}, 404)
 	controlHTTP(t, endpoint, contractRequest{
 		Method: "GET",
 		Path:   "/v1/sandboxes",

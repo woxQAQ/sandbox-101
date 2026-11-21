@@ -43,7 +43,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 			backend.Mu.Lock()
 			backend.FailBoot = false
 			backend.Mu.Unlock()
-			admit := func(conflict bool) (operation.Record, error) {
+			admit := func(conflict bool) (operation.State, error) {
 				if action == "discard" {
 					request := discardRequest(source)
 					if conflict {

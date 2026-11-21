@@ -174,7 +174,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 		return err
 	}
 	resource := step.Input.Source.Input.Resource
-	if err = dp.backend.Network(ctx, resource, false); err != nil {
+	if err = dp.backend.SetNetworkEnabled(ctx, resource, false); err != nil {
 		return err
 	}
 	backend, ok := dp.backend.(loom.NetworkPolicyBackend)

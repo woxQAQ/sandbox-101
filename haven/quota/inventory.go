@@ -4,10 +4,11 @@ import (
 	"context"
 
 	"github.com/woxQAQ/haven/quota/internal/dbgen"
+	"github.com/woxQAQ/haven/store"
 )
 
-func (r *Repository) ResourceReferences(ctx context.Context) ([]ResourceReference, error) {
-	rows, err := r.queries.ListResourceReferences(ctx)
+func ResourceReferences(ctx context.Context, db store.DBTX) ([]ResourceReference, error) {
+	rows, err := dbgen.New(db).ListResourceReferences(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -25,8 +26,8 @@ func (r *Repository) ResourceReferences(ctx context.Context) ([]ResourceReferenc
 
 // ActiveSnapshotReferences excludes backing and the publication's own checkpoint
 // holder. The caller separately proves publication history and outstanding leases.
-func (r *Repository) ActiveSnapshotReferences(ctx context.Context, id string) (int64, error) {
-	return r.queries.CountActiveSnapshotReferences(ctx, dbgen.CountActiveSnapshotReferencesParams{
+func ActiveSnapshotReferences(ctx context.Context, db store.DBTX, id string) (int64, error) {
+	return dbgen.New(db).CountActiveSnapshotReferences(ctx, dbgen.CountActiveSnapshotReferencesParams{
 		ResourceID: id,
 		HolderID:   id,
 	})

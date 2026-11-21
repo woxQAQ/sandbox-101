@@ -89,34 +89,25 @@ func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templa
 	return record, nil
 }
 
-func (tc *TemplateCatalog) GetTemplate(ctx context.Context, principal authorization.Principal, id string) (operation.TemplateSpec, error) {
+func (tc *TemplateCatalog) GetTemplate(ctx context.Context, principal authorization.Principal, id string) (types.Template, error) {
 	if principal.SandboxID != "" {
-		return operation.TemplateSpec{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return types.Template{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	record, err := LoadTemplate(ctx, tc.database, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return operation.TemplateSpec{}, errs.ErrNotFound
+		return types.Template{}, errs.ErrNotFound
 	}
 	if err != nil {
-		return operation.TemplateSpec{}, err
+		return types.Template{}, err
 	}
 	if !principal.Root && principal.TenantID != record.TenantID {
-		return operation.TemplateSpec{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return types.Template{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	verified, err := tc.Owned(ctx, record.TenantID, id)
 	if err != nil {
-		return operation.TemplateSpec{}, err
+		return types.Template{}, err
 	}
-	return operation.TemplateSpec{
-		ID:         verified.ID,
-		TenantID:   verified.TenantID,
-		Image:      verified.Config.Image,
-		Shape:      verified.Config.Shape,
-		SnapshotID: verified.SnapshotID,
-		State:      verified.State,
-		TargetWarm: verified.TargetWarm,
-		Warmup:     verified.Warmup,
-	}, nil
+	return verified.Public(), nil
 }
 
 func (tc *TemplateCatalog) Templates(ctx context.Context, principal authorization.Principal) ([]types.Template, error) {
@@ -141,14 +132,14 @@ func (tc *TemplateCatalog) Templates(ctx context.Context, principal authorizatio
 	return out, nil
 }
 
-func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Template == nil || (command.Action != "template_put" && command.Action != "template_build") {
 		return empty, fmt.Errorf("%w: template requires tenant authority, specification and key", errs.ErrInvalid)
 	}
-	guard := s.guards.TenantRequest(principal.TenantID, key)
-	guard.Lock()
-	defer guard.Unlock()
+	keyGuard := s.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
 	mac := s.commands.CommandMAC(principal, command)
 	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
@@ -175,12 +166,12 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	}
 	config := loom.Config{
 		Image: spec.Image,
-		Shape: spec.Shape,
+		Shape: loom.Shape(spec.Shape),
 	}
 	if err := host.CheckConfig(&config); err != nil {
 		return empty, err
 	}
-	if err := s.opts.Backend.Check(ctx, config); err != nil {
+	if err := s.opts.Backend.ValidateHostConfig(ctx, config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, s.store.Database, config.Image)
@@ -195,7 +186,7 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	}
 	var source *machine.SnapshotSource
 	if spec.SnapshotID != "" {
-		captured, err := s.proofs.Snapshots().LoadRestoreSource(ctx, s.store.Database, spec.TenantID, spec.SnapshotID)
+		captured, err := s.proofs.Snapshots().LoadSnapshotSource(ctx, s.store.Database, spec.TenantID, spec.SnapshotID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return empty, errs.ErrNotFound
 		}
@@ -218,7 +209,7 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	if previous != nil && previous.TenantID != spec.TenantID {
 		return empty, fmt.Errorf("%w: template owner cannot change", errs.ErrConflict)
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -290,22 +281,22 @@ func (s *Supply) AdmitTemplate(ctx context.Context, principal authorization.Prin
 	return parent, nil
 }
 
-func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
+func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, input SupplyInput, mac string) (operation.State, error) {
 	s.admission.Lock()
 	defer s.admission.Unlock()
 	if err := s.gate.Check(); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	tx, err := s.store.Database.BeginTx(ctx, nil)
 	if err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{input.Command.Action, input.Command})
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
@@ -319,10 +310,10 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, 
 		Status:    "pending",
 		Body:      operation.Encode(parent.Result),
 	}); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
 		OperationID:         parent.ID,
@@ -337,18 +328,18 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, 
 			Phase: "admitted",
 		}),
 	})); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
-	if err = quota.New(tx).AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         input.Template.Config.Image,
 		HolderKind: "step",
 		HolderID:   parent.ID + ":supply",
 	}); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = input.Template.reservePublication(ctx, tx, input.Previous, parent.ID); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	result, err := s.publishTemplate(ctx, tx, SupplyStep{
 		OperationID: parent.ID,
@@ -360,19 +351,19 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.Record, 
 		},
 	}, input.Template.SnapshotID)
 	if err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = s.fault("template_publication_before_commit"); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = s.committer.Complete(tx, operation.Completion{
 		ID:     parent.ID,
 		Result: result,
 	}); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = tx.Commit(); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	parent.Status = "succeeded"
 	parent.Result.SnapshotID = input.Template.SnapshotID
@@ -389,7 +380,6 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	}
 	input := step.Input
 	queries := dbgen.New(tx)
-	references := quota.New(tx)
 	operations := operation.New(tx)
 	intent, err := queries.GetIntent(ctx, input.Template.ID)
 	if err != nil {
@@ -446,7 +436,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	}
 	if previous == nil || previous.SnapshotID != snapshot {
 		if snapshot != "" {
-			if err = references.AddResourceReference(ctx, quota.ResourceReference{
+			if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "snapshot",
 				ID:         snapshot,
 				HolderKind: "template",
@@ -454,7 +444,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 			}); err != nil {
 				return operation.Result{}, err
 			}
-			if err = references.AddCostReference(ctx, quota.CostReference{
+			if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 				TenantID:   desired.TenantID,
 				Kind:       "snapshot",
 				Key:        snapshot,
@@ -465,7 +455,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 			}
 		}
 		if previous != nil && previous.SnapshotID != "" {
-			if err = references.RemoveResourceReference(ctx, quota.ResourceReference{
+			if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "snapshot",
 				ID:         previous.SnapshotID,
 				HolderKind: "template",
@@ -473,7 +463,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 			}); err != nil {
 				return operation.Result{}, err
 			}
-			if err = references.RemoveCostReference(ctx, quota.CostReference{
+			if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 				TenantID:   desired.TenantID,
 				Kind:       "snapshot",
 				Key:        previous.SnapshotID,
@@ -485,7 +475,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 		}
 	}
 	if previous == nil || previous.Config.Image != desired.Config.Image {
-		if err = references.AddResourceReference(ctx, quota.ResourceReference{
+		if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         desired.Config.Image,
 			HolderKind: "template",
@@ -494,7 +484,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 			return operation.Result{}, err
 		}
 		if previous != nil {
-			if err = references.RemoveResourceReference(ctx, quota.ResourceReference{
+			if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         previous.Config.Image,
 				HolderKind: "template",
@@ -504,7 +494,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 			}
 		}
 	} else {
-		count, lookup := references.CountResourceReference(ctx, quota.ResourceReference{
+		count, lookup := quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         desired.Config.Image,
 			HolderKind: "template",
@@ -536,7 +526,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 		SnapshotID: snapshot,
 	})
 	previousState := operation.Encode(step.State)
-	if err = references.RemoveResourceReference(ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         desired.Config.Image,
 		HolderKind: "step",

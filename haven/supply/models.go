@@ -17,7 +17,7 @@ type SupplyInput struct {
 	RequesterRoot   bool                    `json:"requester_root,omitempty"`
 	CreatedAt       time.Time               `json:"created_at"`
 	RequestTenantID string                  `json:"request_tenant_id"`
-	Command         operation.Command       `json:"command"`
+	Command         operation.Intent        `json:"command"`
 	Template        TemplateRecord          `json:"template"`
 	Previous        *TemplateRecord         `json:"previous,omitempty"`
 	Source          *machine.SnapshotSource `json:"source,omitempty"`

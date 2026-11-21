@@ -23,8 +23,8 @@ func TestHavenClaimNetworkModeVocabulary(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	admit := func(key, mode string) (operation.Record, error) {
-		return service.Sandboxes.AdmitClaim(context.Background(), principal, key, operation.Command{
+	admit := func(key, mode string) (operation.State, error) {
+		return service.Sandboxes.AdmitClaim(context.Background(), principal, key, operation.Intent{
 			Action:     "claim",
 			TemplateID: "cold",
 			TTLSeconds: 60,

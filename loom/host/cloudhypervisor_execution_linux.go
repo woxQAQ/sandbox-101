@@ -23,7 +23,7 @@ import (
 var errCHNotFound = errors.New("CH endpoint not found")
 
 func (b *CloudHypervisor) Prepare(ctx context.Context, r Resource) error {
-	if err := b.Check(ctx, r.Config); err != nil {
+	if err := b.ValidateHostConfig(ctx, r.Config); err != nil {
 		return err
 	}
 	var image ImageManifest

@@ -151,7 +151,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	for _, ip := range targets {
 		probe(ip, true)
 	}
-	if err := b.Network(ctx, r, false); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, false); err != nil {
 		t.Logf("actual host links: %s", rootlessCommand(t, "ip", "-j", "link", "show"))
 		t.Logf("actual namespace links: %s", rootlessCommand(t, "ip", "-n", ns, "-j", "link", "show"))
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkDown()
-	if err := b.Network(ctx, r, true); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	probe(targets[0], true)
@@ -194,7 +194,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 		"network-ruleset.json",
 		rootlessCommand(t, "ip", "netns", "exec", ns, "nft", "-j", "-s", "list", "ruleset"),
 	)
-	if err := b.Network(ctx, r, false); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
 	checkDown()
@@ -209,14 +209,14 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	if err := b.InstallNetworkPolicy(ctx, r, broad); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Network(ctx, r, true); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	probe(targets[0], true)
 	probe(targets[1], true)
 	probe(targets[2], false)
 	probe(targets[3], false)
-	if err := b.Network(ctx, r, false); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
 	limited := &api.NetworkPolicy{
@@ -229,7 +229,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	if err := b.InstallNetworkPolicy(ctx, r, limited); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Network(ctx, r, true); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	// Hold two real connections: the kernel can retire completed TCP flows from
@@ -257,7 +257,7 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	if out, err := holder.wait(); err != nil {
 		t.Fatalf("bounded TCP flow holder: %v: %s", err, out)
 	}
-	if err := b.Network(ctx, r, false); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.InstallNetworkPolicy(ctx, r, nil); err != nil {
@@ -266,12 +266,12 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	if err := b.VerifyNetworkPolicy(ctx, r, nil); err != nil {
 		t.Fatal(err)
 	}
-	rootlessWantError(t, b.Network(ctx, r, true), "activation with revoked policy", "direct policy revoked")
+	rootlessWantError(t, b.SetNetworkEnabled(ctx, r, true), "activation with revoked policy", "direct policy revoked")
 	checkDown()
 	// Revocation must also drop real packets if interfaces are accidentally up.
 	links(true)
 	probe(targets[0], false)
-	if err := b.Network(ctx, r, false); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.InstallNetworkPolicy(ctx, r, policy); err != nil {
@@ -280,15 +280,15 @@ func TestHostPolicyRootlessNetwork(t *testing.T) {
 	stale := r
 	stale.Instance = "later-instance"
 	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, stale, policy), "stale instance receipt verification", "network policy receipt does not match")
-	rootlessWantError(t, b.Network(ctx, stale, true), "stale instance activation", "network policy receipt does not match")
+	rootlessWantError(t, b.SetNetworkEnabled(ctx, stale, true), "stale instance activation", "network policy receipt does not match")
 	checkDown()
-	if err := b.Network(ctx, r, true); err != nil {
+	if err := b.SetNetworkEnabled(ctx, r, true); err != nil {
 		t.Fatal(err)
 	}
 	probe(targets[0], true)
 	rootlessNFT(t, ns, "insert rule inet engine_policy forward accept\n")
 	rootlessWantError(t, b.VerifyNetworkPolicy(ctx, r, policy), "kernel ruleset tampering", "namespace rules differ")
-	rootlessWantError(t, b.Network(ctx, r, true), "tampered rules activation", "namespace rules differ")
+	rootlessWantError(t, b.SetNetworkEnabled(ctx, r, true), "tampered rules activation", "namespace rules differ")
 	checkDown()
 	probe(targets[0], false)
 	if err := b.networkRemove(ctx, r); err != nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func GoldenSupplyFixture(t *testing.T, target int) (*application.App, *testfixture.ColdRuntime, *testfixture.WorkloadFixture) {
@@ -28,13 +29,13 @@ func GoldenSupplyFixtureWithFault(t *testing.T, target int, fault func(string) e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	spec := operation.TemplateSpec{
+	spec := types.Template{
 		ID:         "golden",
 		Image:      cold.Image,
 		Shape:      cold.Shape,
 		TargetWarm: target,
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "build", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "build", operation.Intent{
 		Action:   "template_build",
 		Template: &spec,
 	}); err != nil {

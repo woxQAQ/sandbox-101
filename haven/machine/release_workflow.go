@@ -68,7 +68,7 @@ func (d *Deletion) runRelease(step ResourceStep) error {
 			}
 		}
 		for _, generation := range generations {
-			if err := d.backend.Network(d.ctx, generation.Input.Resource, false); err != nil {
+			if err := d.backend.SetNetworkEnabled(d.ctx, generation.Input.Resource, false); err != nil {
 				return err
 			}
 		}
@@ -309,7 +309,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 			storage int64
 		}{input.SlotBudget.Kind, input.SandboxID, input.SlotOperation, input.SlotBudget.Units, 0})
 	} else {
-		if err = quota.New(tx).TransferCostReference(d.ctx, quota.CostReference{
+		if err = quota.TransferCostReference(d.ctx, tx, quota.CostReference{
 			TenantID:   input.TenantID,
 			Kind:       "sandbox_slot",
 			Key:        input.SandboxID,
@@ -329,7 +329,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 		}{"vm_disk", generation.Input.DiskKey, generation.OperationID, 0, generation.Input.Resource.Config.Shape.DiskMiB})
 	}
 	for _, charge := range quotas {
-		if err = quota.New(tx).RemoveCostReference(d.ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(d.ctx, tx, quota.CostReference{
 			TenantID:   input.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -338,7 +338,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 		}); err != nil {
 			return err
 		}
-		if err = quota.New(tx).RetireMatchingCost(d.ctx, quota.Cost{
+		if err = quota.RetireMatchingCost(d.ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        input.TenantID,
 				Kind:            charge.kind,
@@ -351,7 +351,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         step.Candidate,
 		HolderKind: "cleanup",
@@ -359,7 +359,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         input.Resource.Config.Image,
 		HolderKind: "vm",
@@ -368,7 +368,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 		return err
 	}
 	for _, capture := range step.Input.Captures {
-		if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         capture.Input.Source.Input.Resource.Config.Image,
 			HolderKind: "capture",
@@ -391,7 +391,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).ReleaseReservation(d.ctx, "vm:"+step.Candidate); err != nil {
+	if err = quota.ReleaseReservation(d.ctx, tx, "vm:"+step.Candidate); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteStopped(d.ctx, dbgen.DeleteStoppedParams{

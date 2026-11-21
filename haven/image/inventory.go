@@ -40,7 +40,7 @@ func loadImageCache(ctx context.Context, q store.DBTX, builder, diff string) (Ca
 	if !matched {
 		return record, fmt.Errorf("cache catalog lacks original returned witness")
 	}
-	count, err := quota.New(q).CountMatchingReservation(ctx, quota.Reservation{
+	count, err := quota.CountMatchingReservation(ctx, q, quota.Reservation{
 		Owner: "cache:" + builder + ":" + diff,
 		Bytes: record.Witness.PhysicalBytes,
 	})
@@ -182,7 +182,7 @@ func (i *Images) Inventory(ctx context.Context) ([]types.GCRoot, []types.GCItem,
 			})
 			continue
 		}
-		held, err := quota.New(i.database).CountMatchingReservation(ctx, quota.Reservation{
+		held, err := quota.CountMatchingReservation(ctx, i.database, quota.Reservation{
 			Owner: "cache:" + key.Builder + ":" + key.DiffID,
 			Bytes: record.Witness.PhysicalBytes,
 		})

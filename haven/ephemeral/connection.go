@@ -5,6 +5,11 @@ import (
 	"sync"
 )
 
+type closeWriter interface {
+	// CloseWrite sends EOF to the peer while leaving the read side open.
+	CloseWrite() error
+}
+
 // ConnectionIdentity pins the configuration that authorized a socket. Later
 // settings or instances cannot upgrade this socket's original admission.
 type ConnectionIdentity struct {
@@ -44,7 +49,7 @@ func (c *Connection) Close() error {
 }
 
 func (c *Connection) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := c.Conn.(closeWriter); ok {
 		return half.CloseWrite()
 	}
 	return nil

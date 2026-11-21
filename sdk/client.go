@@ -22,6 +22,11 @@ import (
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
+type closeWriter interface {
+	// CloseWrite sends EOF to the peer while leaving the read side open.
+	CloseWrite() error
+}
+
 type Client struct {
 	Endpoint string
 	Token    string
@@ -340,7 +345,7 @@ func (c *bufferedConn) Read(buffer []byte) (int, error) {
 }
 
 func (c *bufferedConn) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := c.Conn.(closeWriter); ok {
 		return half.CloseWrite()
 	}
 	return errors.New("connection does not support half-close")
@@ -439,7 +444,7 @@ func (c *Connection) Receive() (*pb.Frame, error) {
 }
 
 func (c *Connection) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := c.Conn.(closeWriter); ok {
 		return half.CloseWrite()
 	}
 	return errors.New("connection does not support half-close")

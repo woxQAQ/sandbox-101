@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/machine/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
@@ -20,10 +21,10 @@ import (
 // snapshot. Compatibility is an observation; this component performs no effects.
 type SnapshotProofs struct {
 	directory string
-	backend   interface{ Compatibility() string }
+	backend   loom.SnapshotCompatibility
 }
 
-func NewSnapshotProofs(directory string, backend interface{ Compatibility() string }) SnapshotProofs {
+func NewSnapshotProofs(directory string, backend loom.SnapshotCompatibility) SnapshotProofs {
 	return SnapshotProofs{
 		directory: directory,
 		backend:   backend,
@@ -34,7 +35,7 @@ func (proofs SnapshotProofs) ValidateResource(step ResourceStep) error {
 	return ValidateResourceStep(proofs.directory, step)
 }
 
-func (proofs SnapshotProofs) LoadRestoreSource(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotSource, error) {
+func (proofs SnapshotProofs) LoadSnapshotSource(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotSource, error) {
 	var source SnapshotSource
 	row, err := dbgen.New(query).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{
 		ID:       id,

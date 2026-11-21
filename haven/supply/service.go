@@ -17,24 +17,35 @@ import (
 )
 
 type SupplyBackend interface {
-	Inspect(context.Context, loom.Resource) (loom.Observation, error)
-	Network(context.Context, loom.Resource, bool) error
+	// Inspect observes the identified instance and reports uncertainty as an error.
+	Inspect(ctx context.Context, resource loom.Resource) (loom.Observation, error)
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 
-	Check(context.Context, loom.Config) error
+	// ValidateHostConfig validates the requested VM configuration against this host.
+	ValidateHostConfig(ctx context.Context, config loom.Config) error
 }
 
 type SupplyGuest interface {
+	// Info checks that the candidate's Workload portal answers the supported protocol.
 	Info(ctx context.Context, resource loom.Resource) error
+	// Activate delivers sandbox identity, environment and network settings through the Admin portal.
 	Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error
+	// PrepareTemplate requests guest quiescence before capturing a template.
 	PrepareTemplate(ctx context.Context, resource loom.Resource) error
+	// Exec executes or replays the keyed warmup and reports its recorded outcome.
 	Exec(ctx context.Context, resource loom.Resource, execKey, command string) error
 }
 
 type SupplyGuards interface {
-	Admission() execution.Guard
-	TenantRequest(string, string) execution.Guard
-	TemplateWork(string) execution.Guard
-	VM(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
+	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
+	// ForTemplateSupply returns the lock shared by build, refill and cleanup for one template.
+	ForTemplateSupply(templateID string) execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
 }
 
 type SupplyOptions struct {
@@ -94,7 +105,7 @@ func NewSupply(state *store.State, dependencies SupplyDependencies, options Supp
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.Admission(),
+		admission:    dependencies.Guards.ForStoreMutation(),
 		gate:         dependencies.Gate,
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
@@ -119,7 +130,7 @@ func (s *Supply) fault(point string) error {
 	return nil
 }
 
-func (s *Supply) existing(ctx context.Context, principal authorization.Principal, key, mac string) (operation.Record, bool, error) {
+func (s *Supply) existing(ctx context.Context, principal authorization.Principal, key, mac string) (operation.State, bool, error) {
 	accepted, found, err := s.commands.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	})
@@ -150,7 +161,7 @@ func (s *Supply) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := s.guards.TemplateWork(step.Input.Template.ID)
+	lock := s.guards.ForTemplateSupply(step.Input.Template.ID)
 	lock.Lock()
 	defer lock.Unlock()
 	step, err = LoadSupply(s.ctx, s.store.Database, id)

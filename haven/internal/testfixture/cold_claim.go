@@ -11,7 +11,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 )
 
-func ColdClaim(t *testing.T, service *application.App, key string) operation.Record {
+func ColdClaim(t *testing.T, service *application.App, key string) operation.State {
 	t.Helper()
 	acceptedOperation, err := service.Provisioning.AdmitCold(context.Background(), machine.FreshRequest{
 		TenantID:   "tenant",

@@ -13,6 +13,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
@@ -41,11 +42,11 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	}
 	frozen := operation.Encode(original)
 	var releaseID string
-	for _, command := range []operation.Command{
+	for _, command := range []operation.Intent{
 		{
 			Action:    "configure",
 			SandboxID: acceptedRecord.Result.SandboxID,
-			Env: map[string]operation.EnvVar{
+			Env: map[string]types.EnvVar{
 				"VISIBLE": {
 					Value: "new-policy",
 				},
@@ -64,7 +65,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 			SandboxID: acceptedRecord.Result.SandboxID,
 		},
 	} {
-		changed, changeErr := service.SandboxRequests.Execute(ctx, principal, "public-"+command.Action, command)
+		changed, changeErr := service.CommandRouter.Execute(ctx, principal, "public-"+command.Action, command)
 		if changeErr != nil {
 			t.Fatal(command.Action, changeErr)
 		}
@@ -133,8 +134,8 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	if _, err = db.Exec(`CREATE TRIGGER lose_settings AFTER UPDATE ON sandbox_settings BEGIN DELETE FROM sandbox_settings WHERE sandbox_id=NEW.sandbox_id; END`); err != nil {
 		t.Fatal(err)
 	}
-	command := operation.Command{Action: "renew", SandboxID: id, TTLSeconds: 120}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "renew", command); err == nil {
+	command := operation.Intent{Action: "renew", SandboxID: id, TTLSeconds: 120}
+	if _, err = service.CommandRouter.Execute(ctx, principal, "renew", command); err == nil {
 		t.Fatal("renew published success with no settings")
 	}
 	after, err := service.Catalog.Get(ctx, principal, id)
@@ -144,7 +145,7 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	if _, err = db.Exec(`DROP TRIGGER lose_settings`); err != nil {
 		t.Fatal(err)
 	}
-	retried, err := service.SandboxRequests.Execute(ctx, principal, "renew", command)
+	retried, err := service.CommandRouter.Execute(ctx, principal, "renew", command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER reject_public_delivery BEFORE INSERT ON operation_publications BEGIN SELECT RAISE(ABORT,'publication blocked'); END`); err != nil {
 		t.Fatal(err)
 	}
-	configure, err := service.Sandboxes.AdmitConfigure(ctx, principal, "configure-publication-fault", operation.Command{
+	configure, err := service.Sandboxes.AdmitConfigure(ctx, principal, "configure-publication-fault", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{
@@ -199,7 +200,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err = service.State.Database().Exec("DROP TRIGGER reject_public_delivery"); err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := service.SandboxRequests.Execute(ctx, principal, "configure-after-publication-fault", operation.Command{
+	repaired, err := service.CommandRouter.Execute(ctx, principal, "configure-after-publication-fault", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{

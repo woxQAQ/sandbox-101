@@ -25,7 +25,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	command := operation.Command{
+	command := operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,
@@ -33,7 +33,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 			Mode: "none",
 		},
 	}
-	original, err := service.SandboxRequests.Execute(ctx, principal, "before-drain", command)
+	original, err := service.CommandRouter.Execute(ctx, principal, "before-drain", command)
 	if err != nil || original.Status != "succeeded" {
 		t.Fatal(original, err)
 	}
@@ -54,7 +54,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	if err != nil || !status.Draining {
 		t.Fatal("drain decision was not visible to management", status, err)
 	}
-	replayed, err := service.SandboxRequests.Execute(ctx, principal, "before-drain", command)
+	replayed, err := service.CommandRouter.Execute(ctx, principal, "before-drain", command)
 	if err != nil || replayed.ID != original.ID || replayed.Status != original.Status {
 		t.Fatal("drain changed an accepted operation", replayed, err)
 	}

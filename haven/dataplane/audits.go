@@ -12,7 +12,8 @@ import (
 )
 
 type auditLog interface {
-	AppendAudit(context.Context, []byte) error
+	// AppendAudit persists the encoded audit event before credential injection can proceed.
+	AppendAudit(ctx context.Context, event []byte) error
 }
 
 // Audits commits sanitized proxy events before credential substitution.

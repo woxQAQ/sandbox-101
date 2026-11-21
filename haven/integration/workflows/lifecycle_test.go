@@ -43,7 +43,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint", operation.Command{
+	failed, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
 	})
@@ -58,7 +58,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released, err := service.SandboxRequests.Execute(ctx, principal, "release", operation.Command{
+	released, err := service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
 		Action:    "release",
 		SandboxID: claim.Result.SandboxID,
 	})
@@ -99,7 +99,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				runtime.FailBoot = true
 				runtime.Mu.Unlock()
 			}
-			claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "claim", operation.Command{
+			claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "claim", operation.Intent{
 				Action:     "claim",
 				TemplateID: "cold",
 				Policy: egress.Policy{
@@ -114,7 +114,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				t.Fatal(claimErr)
 			}
 			if boundary == "paused" {
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: claim.Result.SandboxID,
 				}); err != nil {
@@ -122,7 +122,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				}
 			}
 			if boundary == "rollback" {
-				checkpoint, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint", operation.Command{
+				checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
 					Action:    "checkpoint",
 					SandboxID: claim.Result.SandboxID,
 				})
@@ -135,7 +135,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 					}
 					return nil
 				}
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "rollback", operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "rollback", operation.Intent{
 					Action:       "rollback",
 					SandboxID:    claim.Result.SandboxID,
 					CheckpointID: checkpoint.Result.CheckpointID,
@@ -143,7 +143,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 					t.Fatal("rollback unexpectedly succeeded")
 				}
 			}
-			released, err := service.SandboxRequests.Execute(ctx, principal, "release", operation.Command{
+			released, err := service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
 				Action:    "release",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -181,7 +181,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			checkpoint, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint", operation.Command{
+			checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
 				Action:    "checkpoint",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -189,7 +189,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 				t.Fatal(err)
 			}
 			if state == "paused" {
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: claim.Result.SandboxID,
 				}); err != nil {
@@ -200,7 +200,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rollback, err := service.SandboxRequests.Execute(ctx, principal, "rollback", operation.Command{
+			rollback, err := service.CommandRouter.Execute(ctx, principal, "rollback", operation.Intent{
 				Action:       "rollback",
 				SandboxID:    before.ID,
 				CheckpointID: checkpoint.Result.CheckpointID,
@@ -243,21 +243,21 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	checkpoint, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint", operation.Command{
+	checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := service.SandboxRequests.Execute(ctx, principal, "tenant-fork", operation.Command{
+	fork, err := service.CommandRouter.Execute(ctx, principal, "tenant-fork", operation.Intent{
 		Action: "fork", CheckpointID: checkpoint.Result.CheckpointID, Policy: egress.Policy{Mode: "none"},
 	})
 	if err != nil {
 		t.Fatal(fork, service.Workers.State(fork.ID).Err, err)
 	}
 	server := httptest.NewServer(api.New(api.Services{
-		Authentication: service.Authentication, Requests: service.SandboxRequests,
+		Authentication: service.Authentication, Requests: service.CommandRouter,
 		Operations: service.Operations, Delivery: service.Delivery,
 	}))
 	t.Cleanup(server.Close)
@@ -275,7 +275,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	}
 	if _, err = service.Forks.AdmitFork(ctx, authorization.Principal{
 		TenantID: "other",
-	}, "fork", operation.Command{
+	}, "fork", operation.Intent{
 		Action:       "fork",
 		CheckpointID: checkpoint.Result.CheckpointID,
 		Policy: egress.Policy{
@@ -292,7 +292,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	if _, err = db.Exec(`UPDATE checkpoint_bindings SET body=json_set(body,'$.snapshot_id','missing') WHERE id=?`, checkpoint.Result.CheckpointID); err != nil {
 		t.Fatal(err)
 	}
-	for _, source := range []operation.Command{
+	for _, source := range []operation.Intent{
 		{Action: "fork", CheckpointID: checkpoint.Result.CheckpointID},
 		{Action: "fork", SandboxID: claim.Result.SandboxID},
 	} {
@@ -325,7 +325,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+			if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 				Action:    "pause",
 				SandboxID: claim.Result.SandboxID,
 			}); err != nil {
@@ -347,7 +347,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 					return nil
 				}
 			}
-			failed, err := service.SandboxRequests.Execute(ctx, principal, "resume", operation.Command{
+			failed, err := service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
 				Action:    "resume",
 				SandboxID: before.ID,
 			})
@@ -394,7 +394,7 @@ func TestHavenDataResumeConverges(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+	if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -437,7 +437,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+	if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -447,7 +447,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := service.SandboxRequests.Execute(ctx, principal, "resume", operation.Command{
+	resumed, err := service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
 		Action:    "resume",
 		SandboxID: before.ID,
 	})
@@ -479,9 +479,9 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			acceptedRecord, err := service.SandboxRequests.Submit(context.Background(), authorization.Principal{
+			acceptedRecord, err := service.CommandRouter.Submit(context.Background(), authorization.Principal{
 				TenantID: "tenant",
-			}, action, operation.Command{
+			}, action, operation.Intent{
 				Action:    action,
 				SandboxID: claim.Result.SandboxID,
 			})

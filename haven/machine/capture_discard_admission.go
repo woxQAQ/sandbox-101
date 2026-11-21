@@ -19,11 +19,11 @@ import (
 
 // AdmitCaptureDiscard keeps the source VM and its disk. The caller explicitly
 // supplies a completed stop operation; cleanup never infers that writers exited.
-func (cd *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request CaptureDiscardRequest) (operation.Record, error) {
+func (cd *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request CaptureDiscardRequest) (operation.State, error) {
 	if cd.
 		ownership ==
 		nil {
-		return operation.Record{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
@@ -31,16 +31,16 @@ func (cd *CaptureDiscard) AdmitCaptureDiscard(ctx context.Context, request Captu
 	return cd.AdmitForParent(ctx, request, nil)
 }
 
-func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDiscardRequest, parent ResourceParent) (operation.Record, error) {
+func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDiscardRequest, parent ResourceParent) (operation.State, error) {
 	if cd.
 		ownership ==
 		nil {
-		return operation.Record{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required CaptureDiscard capability port unavailable",
 
 			errs.ErrManualRecovery)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.FailedOperationID, "op-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: capture discard requires tenant, sandbox, failed capture, stopped instance and key", errs.ErrInvalid)
 	}
@@ -82,7 +82,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 	if err != nil {
 		return empty, err
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -158,7 +158,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 	})); err != nil {
 		return empty, err
 	}
-	if err = quota.New(tx).TransferCostReference(ctx, quota.CostReference{
+	if err = quota.TransferCostReference(ctx, tx, quota.CostReference{
 		TenantID:   request.TenantID,
 		Kind:       "pending_storage",
 		Key:        source.OperationID + ":capture",

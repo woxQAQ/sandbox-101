@@ -106,7 +106,7 @@ func (f *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) err
 	if capture.Status != "succeeded" || capture.State.Phase != "complete" || step.Input.Source == nil || !reflect.DeepEqual(capture.Input.Source, *step.Input.Source) {
 		return fmt.Errorf("%w: fork capture lacks its original completed source", errs.ErrManualRecovery)
 	}
-	source, err := f.history.LoadRestoreSource(f.ctx, f.store.Database, step.Input.OwnerTenantID, capture.Input.Snapshot.ID)
+	source, err := f.history.LoadSnapshotSource(f.ctx, f.store.Database, step.Input.OwnerTenantID, capture.Input.Snapshot.ID)
 	if err != nil {
 		return err
 	}
@@ -350,7 +350,7 @@ func (f *Forks) completeFork(step ForkStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(f.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(f.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         step.Input.Template.Config.Image,
 		HolderKind: "step",
@@ -458,7 +458,7 @@ func (f *Forks) retireForkBranches(step ForkStep) error {
 						TenantID: target.TenantID,
 					},
 					Key: step.OperationID + ":release:" + target.ID,
-					Command: operation.Command{
+					Command: operation.Intent{
 						Action:    "release",
 						SandboxID: target.ID,
 					},

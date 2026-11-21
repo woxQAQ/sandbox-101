@@ -9,31 +9,34 @@ import (
 // acquisition order and duration; the registry never holds its mutex while a
 // caller waits for a guard. Guard implementations and their storage stay private.
 type Guard interface {
+	// Lock waits until the caller owns this serialization domain.
 	Lock()
+	// Unlock releases the domain after the protected work completes.
 	Unlock()
+	// TryLock acquires the domain if immediately available and reports success.
 	TryLock() bool
 }
 
 type guardKind uint8
 
 const (
-	admissionGuard guardKind = iota
-	artifactGuard
+	storeMutationGuard guardKind = iota
+	imageArtifactsGuard
 	gcAdmissionGuard
-	tenantRequestGuard
-	nodeRequestGuard
-	vmGuard
-	configurationGuard
-	sandboxGuard
-	autoResumeGuard
-	templateGuard
+	tenantIdempotencyKeyGuard
+	nodeIdempotencyKeyGuard
+	vmLifecycleGuard
+	sandboxConfigurationGuard
+	sandboxLifecycleGuard
+	sandboxWakeupGuard
+	templateSupplyGuard
 	imageImportGuard
 	imageCleanupGuard
 	gcOperationGuard
 	supplyCleanupGuard
-	forkGroupGuard
-	snapshotGuard
-	registrationGuard
+	forkBatchGuard
+	snapshotDeletionGuard
+	serviceAdmissionGuard
 )
 
 // Separate fields preserve the request scope/key pair without string prefixes
@@ -77,79 +80,93 @@ func (g *Guards) get(kind guardKind, owner, id string) Guard {
 	return guard
 }
 
-// Registration serializes admission checks, data connection registration and
-// shutdown's transition to closing using the same short guard.
-func (g *Guards) Registration() Guard {
-	return g.get(registrationGuard, "", "")
+// ForServiceAdmission returns the lock shared by drain, shutdown and connection registration.
+func (g *Guards) ForServiceAdmission() Guard {
+	return g.get(serviceAdmissionGuard, "", "")
 }
 
-func (g *Guards) Admission() Guard {
-	return g.get(admissionGuard, "", "")
+// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+func (g *Guards) ForStoreMutation() Guard {
+	return g.get(storeMutationGuard, "", "")
 }
 
-func (g *Guards) Artifacts() Guard {
-	return g.get(artifactGuard, "", "")
+// ForImageArtifacts returns the lock shared by image publication, cleanup and GC inventory.
+func (g *Guards) ForImageArtifacts() Guard {
+	return g.get(imageArtifactsGuard, "", "")
 }
 
-func (g *Guards) GarbageCollection() Guard {
+// ForGCAdmission returns the node-wide lock for admitting a collection and taking inventory.
+func (g *Guards) ForGCAdmission() Guard {
 	return g.get(gcAdmissionGuard, "", "")
 }
 
-func (g *Guards) TenantRequest(tenant, key string) Guard {
-	return g.get(tenantRequestGuard, tenant, key)
+// ForTenantIdempotencyKey returns the lock held from replay lookup through admission of a new operation.
+func (g *Guards) ForTenantIdempotencyKey(tenantID, key string) Guard {
+	return g.get(tenantIdempotencyKeyGuard, tenantID, key)
 }
 
-func (g *Guards) NodeRequest(node, key string) Guard {
-	return g.get(nodeRequestGuard, node, key)
+// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
+func (g *Guards) ForNodeIdempotencyKey(nodeID, key string) Guard {
+	return g.get(nodeIdempotencyKeyGuard, nodeID, key)
 }
 
-func (g *Guards) VM(id string) Guard {
-	return g.get(vmGuard, "", id)
+// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+func (g *Guards) ForVMLifecycle(vmID string) Guard {
+	return g.get(vmLifecycleGuard, "", vmID)
 }
 
-func (g *Guards) Configuration(sandbox string) Guard {
-	return g.get(configurationGuard, "", sandbox)
+// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+func (g *Guards) ForSandboxConfiguration(sandboxID string) Guard {
+	return g.get(sandboxConfigurationGuard, "", sandboxID)
 }
 
-func (g *Guards) Sandbox(id string) Guard {
-	return g.get(sandboxGuard, "", id)
+// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
+func (g *Guards) ForSandboxLifecycle(sandboxID string) Guard {
+	return g.get(sandboxLifecycleGuard, "", sandboxID)
 }
 
-func (g *Guards) AutoResume(sandbox string) Guard {
-	return g.get(autoResumeGuard, "", sandbox)
+// ForSandboxWakeup returns the lock that coalesces data requests waking the same paused sandbox.
+func (g *Guards) ForSandboxWakeup(sandboxID string) Guard {
+	return g.get(sandboxWakeupGuard, "", sandboxID)
 }
 
-func (g *Guards) TemplateWork(template string) Guard {
-	return g.get(templateGuard, "", template)
+// ForTemplateSupply returns the lock shared by build, refill and cleanup for one template.
+func (g *Guards) ForTemplateSupply(templateID string) Guard {
+	return g.get(templateSupplyGuard, "", templateID)
 }
 
-func (g *Guards) ImageImport(operation string) Guard {
-	return g.get(imageImportGuard, "", operation)
+// ForImageImport returns the lock for advancing one image import operation.
+func (g *Guards) ForImageImport(operationID string) Guard {
+	return g.get(imageImportGuard, "", operationID)
 }
 
-func (g *Guards) ImageCleanup(operation string) Guard {
-	return g.get(imageCleanupGuard, "", operation)
+// ForImageCleanup returns the lock for advancing one image cleanup operation.
+func (g *Guards) ForImageCleanup(operationID string) Guard {
+	return g.get(imageCleanupGuard, "", operationID)
 }
 
-func (g *Guards) GCOperation(operation string) Guard {
-	return g.get(gcOperationGuard, "", operation)
+// ForGCOperation returns the lock for advancing one admitted collection operation.
+func (g *Guards) ForGCOperation(operationID string) Guard {
+	return g.get(gcOperationGuard, "", operationID)
 }
 
-func (g *Guards) SupplyCleanup(vm string) Guard {
-	return g.get(supplyCleanupGuard, "", vm)
+// ForSupplyCleanup returns the lock for retiring the supply allocation on one candidate VM.
+func (g *Guards) ForSupplyCleanup(vmID string) Guard {
+	return g.get(supplyCleanupGuard, "", vmID)
 }
 
-func (g *Guards) ForkGroup(operation string) Guard {
-	return g.get(forkGroupGuard, "", operation)
+// ForForkBatch returns the lock for advancing the branches of one fork operation.
+func (g *Guards) ForForkBatch(operationID string) Guard {
+	return g.get(forkBatchGuard, "", operationID)
 }
 
-func (g *Guards) Snapshot(id string) Guard {
-	return g.get(snapshotGuard, "", id)
+// ForSnapshotDeletion returns the lock for retiring one snapshot.
+func (g *Guards) ForSnapshotDeletion(snapshotID string) Guard {
+	return g.get(snapshotDeletionGuard, "", snapshotID)
 }
 
-// Capture reserves the process-wide single capture slot until release is called.
-// Cancellation interrupts the wait, not a slot already held by another capture.
-func (g *Guards) Capture(ctx context.Context) (release func(), err error) {
+// AcquireCaptureSlot waits for the process-wide capture slot and returns its release function.
+func (g *Guards) AcquireCaptureSlot(ctx context.Context) (release func(), err error) {
 	select {
 	case g.capture <- struct{}{}:
 		return func() {

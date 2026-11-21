@@ -283,9 +283,8 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	publication := source.Input.Snapshot
 	resource := source.Input.Source
 	body, previousState, completed := operation.Encode(publication), operation.Encode(step.Phase), operation.Encode("complete")
-	responsibilities := quota.New(tx)
 	operations := operation.New(tx)
-	if err = responsibilities.RemoveCostReference(cd.ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(cd.ctx, tx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "pending_storage",
 		Key:        source.OperationID + ":capture",
@@ -294,7 +293,7 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RetireCost(cd.ctx, quota.CostIdentity{
+	if err = quota.RetireCost(cd.ctx, tx, quota.CostIdentity{
 		TenantID:        publication.TenantID,
 		Kind:            "pending_storage",
 		Key:             source.OperationID + ":capture",
@@ -302,10 +301,10 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.ReleaseReservation(cd.ctx, "snapshot:"+publication.ID); err != nil {
+	if err = quota.ReleaseReservation(cd.ctx, tx, "snapshot:"+publication.ID); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(cd.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(cd.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         resource.Candidate,
 		HolderKind: "capture",
@@ -313,7 +312,7 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(cd.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(cd.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         resource.Input.Resource.Config.Image,
 		HolderKind: "capture",

@@ -22,24 +22,33 @@ import (
 )
 
 type ActivationBackend interface {
-	Inspect(context.Context, loom.Resource) (loom.Observation, error)
-	Network(context.Context, loom.Resource, bool) error
+	// Inspect observes the identified instance and reports uncertainty as an error.
+	Inspect(ctx context.Context, resource loom.Resource) (loom.Observation, error)
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 }
 
 type ActivationGuest interface {
+	// Info checks that the candidate's Workload portal answers the supported protocol.
 	Info(ctx context.Context, resource loom.Resource) error
+	// Activate delivers sandbox identity, environment and network settings through the Admin portal.
 	Activate(ctx context.Context, resource loom.Resource, activation guest.Activation) error
 }
 
 type EgressBindings interface {
-	Bind(context.Context, egress.BindingTarget, egress.Policy, map[string]egress.Secret) error
-	Revoke(string) error
+	// Bind activates the egress policy and in-memory credentials for the given target.
+	Bind(ctx context.Context, target egress.BindingTarget, policy egress.Policy, secrets map[string]egress.Secret) error
+	// Revoke retires the sandbox's active egress binding.
+	Revoke(sandboxID string) error
 }
 
 type ActivationGuards interface {
-	VM(string) execution.Guard
-	Admission() execution.Guard
-	Configuration(string) execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
 }
 
 type ActivationOptions struct {
@@ -89,7 +98,7 @@ func NewActivations(state *store.State, dependencies ActivationDependencies, opt
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:        dependencies.Lifetime.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		proofs:     dependencies.Proofs,
 		backend:    options.Backend,
@@ -113,7 +122,7 @@ func (a *Activations) fault(point string) error {
 
 // AdmitIn joins the initial activation and configuration fence to the caller's
 // resource transaction. Secret registration and dispatch follow its commit.
-func (a *Activations) AdmitIn(tx *sql.Tx, record operation.Record, resource machine.ResourceInput, claim ClaimAdmission) error {
+func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machine.ResourceInput, claim ClaimAdmission) error {
 	claim.Settings.Generation = record.ID
 	input := ActivationInput{
 		RequestTenantID:   resource.TenantID,
@@ -165,7 +174,7 @@ func (a *Activations) Resume(operationID string) (bool, error) {
 		if lookup != nil {
 			return false, lookup
 		}
-		guard := a.guards.VM(source.Candidate)
+		guard := a.guards.ForVMLifecycle(source.Candidate)
 		guard.Lock()
 		defer guard.Unlock()
 		return true, a.Continue(operationID)
@@ -179,7 +188,7 @@ func (a *Activations) Resume(operationID string) (bool, error) {
 // blockActivation retains the configuration fence and all resource charges. A
 // superseded worker records only its own failure and cannot revoke a successor.
 func (a *Activations) blockActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := a.guards.Configuration(step.Input.SandboxID)
+	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	return a.BlockGuarded(step, source)
@@ -197,7 +206,7 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 	var cleanupErr error
 	fence, queryErr := LifecycleFence(ctx, a.store.Database, step.Input.SandboxID)
 	if queryErr == nil && fence == step.OperationID {
-		cleanupErr = a.backend.Network(ctx, source.Input.Resource, false)
+		cleanupErr = a.backend.SetNetworkEnabled(ctx, source.Input.Resource, false)
 		cleanupErr = errors.Join(cleanupErr, a.RevokeSandbox(step.Input.SandboxID))
 	}
 	a.admission.Lock()
@@ -278,7 +287,7 @@ func (a *Activations) activationSecrets(step ActivationStep) (map[string]egress.
 }
 
 func (a *Activations) bindActivation(step ActivationStep, source machine.ResourceStep) error {
-	guard := a.guards.Configuration(step.Input.SandboxID)
+	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	if _, err := a.checkActivation(step); err != nil {

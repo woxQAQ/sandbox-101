@@ -12,14 +12,14 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request SnapshotDeleteRequest) (operation.Record, error) {
+func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request SnapshotDeleteRequest) (operation.State, error) {
 	if sd.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required SnapshotDeletion capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required SnapshotDeletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: snapshot delete requires scoped snapshot and key", errs.ErrInvalid)
 	}
@@ -54,7 +54,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	if err != nil {
 		return empty, err
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -109,8 +109,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	})); err != nil {
 		return empty, err
 	}
-	responsibilities := quota.New(tx)
-	if err = responsibilities.TransferResourceReference(ctx, quota.ResourceReference{
+	if err = quota.TransferResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         request.SnapshotID,
 		HolderKind: "checkpoint",
@@ -118,7 +117,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	}, "cleanup", accepted.ID); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.TransferCostReference(ctx, quota.CostReference{
+	if err = quota.TransferCostReference(ctx, tx, quota.CostReference{
 		TenantID:   request.TenantID,
 		Kind:       "snapshot",
 		Key:        request.SnapshotID,

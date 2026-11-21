@@ -14,6 +14,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenConfigureFailureMatrix(t *testing.T) {
@@ -45,7 +46,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			}
 			claim := (testfixture.SandboxClaims{
 				App: service,
-			}).Claim(t, "claim", map[string]operation.EnvVar{
+			}).Claim(t, "claim", map[string]types.EnvVar{
 				"REVISION": {
 					Value: "old",
 				},
@@ -111,10 +112,10 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			command := operation.Command{
+			command := operation.Intent{
 				Action:    "configure",
 				SandboxID: before.ID,
-				Env: map[string]operation.EnvVar{
+				Env: map[string]types.EnvVar{
 					"REVISION": {
 						Value: "new",
 					},
@@ -126,7 +127,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					},
 				},
 			}
-			failed, err := service.SandboxRequests.Execute(ctx, principal, "configure", command)
+			failed, err := service.CommandRouter.Execute(ctx, principal, "configure", command)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("failure changed accepted goal", failed, err)
 			}
@@ -168,14 +169,14 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err = service.SandboxRequests.Execute(ctx, principal, "repair", command); err != nil {
+			if _, err = service.CommandRouter.Execute(ctx, principal, "repair", command); err != nil {
 				t.Fatal("fresh explicit configure did not repair fence", err)
 			}
 			original, err := service.Operations.GetOperation(ctx, "tenant", failed.ID)
 			if err != nil || !reflect.DeepEqual(original, failed) {
 				t.Fatal("repair rewrote original terminal", original, failed, err)
 			}
-			if _, err = service.SandboxRequests.Execute(ctx, principal, "configure", command); err == nil {
+			if _, err = service.CommandRouter.Execute(ctx, principal, "configure", command); err == nil {
 				t.Fatal("failed idempotent configure became success")
 			}
 		})
@@ -204,10 +205,10 @@ func TestHavenConfigureAdmission(t *testing.T) {
 	}
 	first, err := service.Sandboxes.AdmitConfigure(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "blocked-config", operation.Command{
+	}, "blocked-config", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedOperation.Result.SandboxID,
-		Env: map[string]operation.EnvVar{
+		Env: map[string]types.EnvVar{
 			"VALUE": {
 				Value: "old",
 			},
@@ -224,10 +225,10 @@ func TestHavenConfigureAdmission(t *testing.T) {
 	}
 	newer, err := service.Sandboxes.AdmitConfigure(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "new-config", operation.Command{
+	}, "new-config", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedOperation.Result.SandboxID,
-		Env: map[string]operation.EnvVar{
+		Env: map[string]types.EnvVar{
 			"VALUE": {
 				Value: "new",
 			},

@@ -23,9 +23,9 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 	runtime.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	failed, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+	failed, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 		TenantID: "tenant",
-	}, "refill", operation.Command{
+	}, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	})
@@ -88,7 +88,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 		"one",
 		"two",
 	} {
-		if _, err := service.SandboxRequests.Execute(ctx, tenant, key, operation.Command{
+		if _, err := service.CommandRouter.Execute(ctx, tenant, key, operation.Intent{
 			Action:     "refill",
 			TemplateID: "golden",
 		}); err != nil {
@@ -100,7 +100,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	template.TargetWarm = 0
-	if _, err = service.SandboxRequests.Execute(ctx, tenant, "retarget", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, tenant, "retarget", operation.Intent{
 		Action:   "template_put",
 		Template: &template,
 	}); err != nil {

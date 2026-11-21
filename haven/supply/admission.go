@@ -18,7 +18,7 @@ import (
 )
 
 type SupplyAdmission struct {
-	Parent operation.Record
+	Parent operation.State
 	Input  SupplyInput
 	MAC    string
 	Role   string
@@ -70,7 +70,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 		}
 		frozen := operation.Encode(struct {
 			Action  string
-			Request operation.Command
+			Request operation.Intent
 		}{input.Command.Action, input.Command})
 		payload := operation.Encode(input)
 		parent.Result.TemplateID = input.Template.ID
@@ -107,7 +107,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 		})); err != nil {
 			return err
 		}
-		if err = quota.New(tx).AddResourceReference(ctx, quota.ResourceReference{
+		if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         input.Template.Config.Image,
 			HolderKind: "step",

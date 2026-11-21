@@ -13,6 +13,7 @@ import (
 // CapabilityReader resolves a sandbox-scoped principal using the caller's
 // token check. includeRetired extends the search to terminated sandboxes.
 type CapabilityReader interface {
+	// FindSandboxPrincipal returns the first eligible persisted identity accepted by the credential matcher.
 	FindSandboxPrincipal(ctx context.Context, includeRetired bool, matches func(tenantID, sandboxID string) bool) (Principal, error)
 }
 

@@ -28,9 +28,9 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			service, _, _ := testapp.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
-			}, "refill", operation.Command{
+			}, "refill", operation.Intent{
 				Action:     "refill",
 				TemplateID: "golden",
 			})
@@ -69,7 +69,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			if err != nil || status != "cleanup" || !reflect.DeepEqual(reservation, *step.Input.Pool) {
 				t.Fatal("failed collector completion lost pool custody", reservation, status, err)
 			}
-			if count, err := quota.New(service.State.Database()).CountResourceReference(ctx, quota.ResourceReference{
+			if count, err := quota.CountResourceReference(ctx, service.State.Database(), quota.ResourceReference{
 				Kind:       "image",
 				ID:         step.Input.Source.Input.Resource.Config.Image,
 				HolderKind: "step",
@@ -124,9 +124,9 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
-			}, "refill", operation.Command{
+			}, "refill", operation.Intent{
 				Action:     "refill",
 				TemplateID: "golden",
 			})
@@ -182,9 +182,9 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
-			}, "refill", operation.Command{
+			}, "refill", operation.Intent{
 				Action:     "refill",
 				TemplateID: "golden",
 			})

@@ -38,10 +38,10 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	}) {
 		return fmt.Errorf("refill source differs from original pool reservation")
 	}
-	lock := s.guards.VM(source.Candidate)
+	lock := s.guards.ForVMLifecycle(source.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
-	if err = s.opts.Backend.Network(s.ctx, source.Input.Resource, false); err != nil {
+	if err = s.opts.Backend.SetNetworkEnabled(s.ctx, source.Input.Resource, false); err != nil {
 		return err
 	}
 	observed, err := s.opts.Backend.Inspect(s.ctx, source.Input.Resource)
@@ -109,7 +109,6 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	})
 	previous, next := operation.Encode(original), operation.Encode(reservation)
 	previousState := operation.Encode(step.State)
-	references := quota.New(tx)
 	if err = store.RequireOne(queries.InsertWarm(s.ctx, dbgen.InsertWarmParams{
 		VmID:       reservation.VMID,
 		TemplateID: reservation.Template.ID,
@@ -118,7 +117,7 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = references.AddResourceReference(s.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(s.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         reservation.VMID,
 		HolderKind: "warm",
@@ -133,7 +132,7 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = references.RemoveResourceReference(s.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(s.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         reservation.Template.Config.Image,
 		HolderKind: "step",
@@ -168,14 +167,14 @@ func (s *Supply) runRefill(step SupplyStep) error {
 	return s.store.Checkpoint()
 }
 
-func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "refill" || command.TemplateID == "" {
 		return empty, fmt.Errorf("%w: refill requires tenant authority, template and key", errs.ErrInvalid)
 	}
-	guard := s.guards.TenantRequest(principal.TenantID, key)
-	guard.Lock()
-	defer guard.Unlock()
+	keyGuard := s.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
 	mac := s.commands.CommandMAC(principal, command)
 	if accepted, found, err := s.existing(ctx, principal, key, mac); found || err != nil {
 		return accepted, err
@@ -204,14 +203,14 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 	if blocked {
 		return empty, fmt.Errorf("%w: template refill backoff is active", errs.ErrExhausted)
 	}
-	source, err := s.proofs.Snapshots().LoadRestoreSource(ctx, s.store.Database, selected.TenantID, selected.SnapshotID)
+	source, err := s.proofs.Snapshots().LoadSnapshotSource(ctx, s.store.Database, selected.TenantID, selected.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
 	if err = machine.VerifyRestoreSourceFiles(source); err != nil {
 		return empty, err
 	}
-	if err = s.opts.Backend.Check(ctx, selected.Config); err != nil {
+	if err = s.opts.Backend.ValidateHostConfig(ctx, selected.Config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, s.store.Database, selected.Config.Image)
@@ -221,7 +220,7 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 	if err = image.VerifyFiles(manifest, filepath.Join(s.store.Directory, "images", manifest.Digest[7:])); err != nil {
 		return empty, err
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -280,22 +279,22 @@ func (s *Supply) AdmitRefill(ctx context.Context, principal authorization.Princi
 	return parent, nil
 }
 
-func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Record, input SupplyInput, mac string) (operation.Record, error) {
+func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State, input SupplyInput, mac string) (operation.State, error) {
 	s.admission.Lock()
 	defer s.admission.Unlock()
 	if err := s.gate.Check(); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	tx, err := s.store.Database.BeginTx(ctx, nil)
 	if err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"refill", input.Command})
 	payload := operation.Encode(input)
 	parent.Status = "failed"
@@ -311,10 +310,10 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Recor
 		Status:    "failed",
 		Body:      operation.Encode(parent.Result),
 	}); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
 		OperationID:         parent.ID,
@@ -331,7 +330,7 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Recor
 			Error:      parent.Result.Error,
 		}),
 	})); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = s.committer.Complete(tx, operation.Completion{
 		ID:     parent.ID,
@@ -339,10 +338,10 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.Recor
 		Failed: true,
 		Frozen: true,
 	}); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	if err = tx.Commit(); err != nil {
-		return operation.Record{}, err
+		return operation.State{}, err
 	}
 	return parent, s.store.Checkpoint()
 }
@@ -417,7 +416,7 @@ func (s *Supply) RefillReady(ctx context.Context) error {
 		_, err = s.AdmitRefill(ctx, authorization.Principal{
 			Root:     true,
 			TenantID: candidate.TenantID,
-		}, "refill:"+operation.NewID(""), operation.Command{
+		}, "refill:"+operation.NewID(""), operation.Intent{
 			Action:     "refill",
 			TemplateID: candidate.ID,
 		})

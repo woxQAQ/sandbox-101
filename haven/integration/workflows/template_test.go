@@ -15,6 +15,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenRefillConservesPoolOccupation(t *testing.T) {
@@ -25,7 +26,7 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	refill, err := service.SandboxRequests.Execute(ctx, principal, "refill", operation.Command{
+	refill, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	})
@@ -40,7 +41,7 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 	runtime.Mu.Lock()
 	launches := runtime.Counts["launch"]
 	runtime.Mu.Unlock()
-	exhausted, err := service.Supply.AdmitRefill(ctx, principal, "full", operation.Command{
+	exhausted, err := service.Supply.AdmitRefill(ctx, principal, "full", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	})
@@ -54,7 +55,7 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 		t.Fatal("full pool launched another resource")
 	}
 	service = testapp.ReopenCloneService(t, service, service.Options.Backend)
-	if _, err = service.Supply.AdmitRefill(ctx, principal, "backoff", operation.Command{
+	if _, err = service.Supply.AdmitRefill(ctx, principal, "backoff", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	}); err == nil {
@@ -70,9 +71,9 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 	runtime.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+	failed, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 		TenantID: "tenant",
-	}, "refill", operation.Command{
+	}, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	})
@@ -106,7 +107,7 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := operation.TemplateSpec{
+	spec := types.Template{
 		ID:     "golden",
 		Image:  cold.Image,
 		Shape:  cold.Shape,
@@ -114,7 +115,7 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	}
 	acceptedRecord, err := service.Supply.AdmitTemplate(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "build", operation.Command{
+	}, "build", operation.Intent{
 		Action:   "template_build",
 		Template: &spec,
 	})
@@ -160,13 +161,13 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := operation.TemplateSpec{
+	spec := types.Template{
 		ID:     "golden",
 		Image:  cold.Image,
 		Shape:  cold.Shape,
 		Warmup: "printf fixture",
 	}
-	acceptedRecord, err := service.SandboxRequests.Execute(ctx, principal, "build", operation.Command{
+	acceptedRecord, err := service.CommandRouter.Execute(ctx, principal, "build", operation.Intent{
 		Action:   "template_build",
 		Template: &spec,
 	})
@@ -182,7 +183,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&vms, &slots, &storage); err != nil || vms != 0 || slots != 0 || storage != 192 {
 		t.Fatal(vms, slots, storage, err)
 	}
-	claim, err := service.SandboxRequests.Execute(ctx, principal, "golden-claim", operation.Command{
+	claim, err := service.CommandRouter.Execute(ctx, principal, "golden-claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: "golden",
 		Policy: egress.Policy{
@@ -209,19 +210,19 @@ func TestHavenTemplatePutOwnerAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := operation.TemplateSpec{
+	spec := types.Template{
 		ID:    "new-cold",
 		Image: cold.Image,
 		Shape: cold.Shape,
 	}
-	first, err := service.Supply.AdmitTemplate(ctx, principal, "put", operation.Command{
+	first, err := service.Supply.AdmitTemplate(ctx, principal, "put", operation.Intent{
 		Action:   "template_put",
 		Template: &spec,
 	})
 	if err != nil || first.Status != "succeeded" {
 		t.Fatal(first, err)
 	}
-	replay, err := service.Supply.AdmitTemplate(ctx, principal, "put", operation.Command{
+	replay, err := service.Supply.AdmitTemplate(ctx, principal, "put", operation.Intent{
 		Action:   "template_put",
 		Template: &spec,
 	})
@@ -238,7 +239,7 @@ func TestHavenTemplatePutOwnerAndReplay(t *testing.T) {
 	if _, err = service.Supply.AdmitTemplate(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
-	}, "foreign-put", operation.Command{
+	}, "foreign-put", operation.Intent{
 		Action:   "template_put",
 		Template: &foreign,
 	}); err == nil {

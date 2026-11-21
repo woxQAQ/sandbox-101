@@ -54,7 +54,7 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 			t.Fatal("sandbox credential polled foreign operation", id)
 		}
 	}
-	renewal, err := service.Lifecycle.AdmitRenew(ctx, scoped, "renew", operation.Command{
+	renewal, err := service.Lifecycle.AdmitRenew(ctx, scoped, "renew", operation.Intent{
 		Action:     "renew",
 		SandboxID:  record.ID,
 		TTLSeconds: 60,
@@ -65,14 +65,14 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, scoped, renewal.ID); err != nil {
 		t.Fatal("sandbox credential cannot poll its lease operation", err)
 	}
-	checkpoint, err := service.SandboxRequests.Execute(ctx, tenant, "checkpoint", operation.Command{
+	checkpoint, err := service.CommandRouter.Execute(ctx, tenant, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: record.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := service.SandboxRequests.Execute(ctx, tenant, "fork", operation.Command{
+	fork, err := service.CommandRouter.Execute(ctx, tenant, "fork", operation.Intent{
 		Action:       "fork",
 		CheckpointID: checkpoint.Result.CheckpointID,
 		Policy: egress.Policy{

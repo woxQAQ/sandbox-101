@@ -20,10 +20,14 @@ import (
 )
 
 type SupplyCleanupGuards interface {
-	Admission() execution.Guard
-	NodeRequest(string, string) execution.Guard
-	TemplateWork(string) execution.Guard
-	SupplyCleanup(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
+	ForNodeIdempotencyKey(nodeID, key string) execution.Guard
+	// ForTemplateSupply returns the lock shared by build, refill and cleanup for one template.
+	ForTemplateSupply(templateID string) execution.Guard
+	// ForSupplyCleanup returns the lock for retiring the supply allocation on one candidate VM.
+	ForSupplyCleanup(vmID string) execution.Guard
 }
 
 // SupplyCleanup owns an independent collector for failed supply work or an
@@ -66,7 +70,7 @@ func NewSupplyCleanup(state *store.State, dependencies SupplyCleanupDependencies
 		},
 		ctx:        dependencies.Workers.Context(),
 		nodeID:     state.Identity().Identity,
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		gate:       dependencies.Gate,
 		guards:     dependencies.Guards,
 		workers:    dependencies.Workers,
@@ -107,7 +111,7 @@ func (sc *SupplyCleanup) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := sc.guards.SupplyCleanup(step.Input.Source.Candidate)
+	guard := sc.guards.ForSupplyCleanup(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadSupplyCleanup(sc.ctx, sc.store.Database, id)
@@ -144,12 +148,12 @@ func (admission *SupplyCleanupAdmission) AdmitResource(ctx context.Context, tx *
 	}, request)
 }
 
-func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal authorization.Principal, key string, request SupplyCleanupRequest) (operation.Record, error) {
-	var empty operation.Record
+func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal authorization.Principal, key string, request SupplyCleanupRequest) (operation.State, error) {
+	var empty operation.State
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || !loom.ValidResourceID(request.OperationID, "op-") {
 		return empty, fmt.Errorf("%w: supply cleanup requires management authority, original operation and key", errs.ErrInvalid)
 	}
-	requestGuard := sc.guards.NodeRequest(sc.nodeID, key)
+	requestGuard := sc.guards.ForNodeIdempotencyKey(sc.nodeID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	frozen := operation.Encode(struct {
@@ -170,7 +174,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	if err != nil {
 		return empty, err
 	}
-	guard := sc.guards.TemplateWork(original.Input.Template.ID)
+	guard := sc.guards.ForTemplateSupply(original.Input.Template.ID)
 	if !guard.TryLock() {
 		return empty, fmt.Errorf("%w: supply workflow is active", errs.ErrConflict)
 	}
@@ -285,7 +289,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 			})); err != nil {
 				return empty, err
 			}
-			if err = quota.New(tx).RemoveResourceReference(ctx, quota.ResourceReference{
+			if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         reservation.VMID,
 				HolderKind: "warm",
@@ -302,7 +306,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 		}
 		input.Pool = &reservation
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -347,7 +351,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	})); err != nil {
 		return empty, err
 	}
-	if err = quota.New(tx).AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "step",
@@ -447,7 +451,8 @@ func (sc *SupplyCleanup) runResourceLink(parent, role string) (machine.ResourceL
 // sandbox settings. Both reads use the caller's original transaction.
 type CleanupOwnershipReader interface {
 	machine.SandboxOwnershipReader
-	SettingsCount(context.Context, store.DBTX, string) (int64, error)
+	// SettingsCount counts persisted settings for the sandbox during cleanup verification.
+	SettingsCount(ctx context.Context, db store.DBTX, sandboxID string) (int64, error)
 }
 
 func (sc *SupplyCleanup) runSupplyCleanup(step SupplyCleanupStep) error {
@@ -619,7 +624,7 @@ func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
 		}
 	}
 	if original.Status == "failed" {
-		if err = quota.New(tx).RemoveResourceReference(sc.ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(sc.ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         source.Input.Resource.Config.Image,
 			HolderKind: "step",
@@ -635,7 +640,7 @@ func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
 			return err
 		}
 	}
-	if err = quota.New(tx).RemoveResourceReference(sc.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(sc.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "step",

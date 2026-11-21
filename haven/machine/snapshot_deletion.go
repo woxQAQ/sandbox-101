@@ -15,8 +15,10 @@ import (
 )
 
 type SnapshotDeletionGuards interface {
-	Admission() execution.Guard
-	Snapshot(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForSnapshotDeletion returns the lock for retiring one snapshot.
+	ForSnapshotDeletion(snapshotID string) execution.Guard
 }
 
 // SnapshotDeletion coordinates one immutable deletion intent and its retained
@@ -52,7 +54,7 @@ func NewSnapshotDeletion(state *store.State, dependencies SnapshotDeletionDepend
 		proofs:     dependencies.Proofs,
 		usage:      dependencies.Usage,
 		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		lifetime:   dependencies.Lifetime,
 		workers:    dependencies.Workers,
@@ -100,7 +102,7 @@ func (sd *SnapshotDeletion) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := sd.guards.Snapshot(step.Input.Request.SnapshotID)
+	guard := sd.guards.ForSnapshotDeletion(step.Input.Request.SnapshotID)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadSnapshotDelete(sd.ctx, sd.store.Database, id)

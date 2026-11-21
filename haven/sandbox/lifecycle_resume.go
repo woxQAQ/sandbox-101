@@ -22,23 +22,23 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if command.Action != "resume" || command.SandboxID == "" || key == "" || len(key) > 256 || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: resume requires tenant authority, sandbox and key", errs.ErrInvalid)
 	}
 	credentials := l.registry.SandboxSecrets(command.SandboxID)
-	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
-	mac := l.commands.Identity.CommandMAC(principal, command)
+	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := l.identity.CommandMAC(principal, command)
 	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC:     mac,
 		Secrets: credentials,
 	}); found || err != nil {
 		return operation, err
 	}
-	guard := l.guards.Configuration(command.SandboxID)
+	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 
@@ -56,17 +56,17 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 	if !settings.PausedUntil.IsZero() && !time.Now().Before(settings.PausedUntil) {
 		return empty, fmt.Errorf("%w: paused sandbox expired", errs.ErrConflict)
 	}
-	if l.commands.CredentialsMissing(sandboxRecord.ID, settings) {
+	if l.policy.CredentialsMissing(sandboxRecord.ID, settings) {
 		return empty, fmt.Errorf("%w: host credentials must be supplied again before resume", errs.ErrConflict)
 	}
-	source, err := l.proofs.Snapshots().LoadRestoreSource(ctx, l.store.Database, sandboxRecord.TenantID, sandboxRecord.SnapshotID)
+	source, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, l.store.Database, sandboxRecord.TenantID, sandboxRecord.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
 	if err = machine.VerifyRestoreSourceFiles(source); err != nil {
 		return empty, err
 	}
-	if err = l.opts.Backend.Check(ctx, source.Snapshot.Manifest.Config); err != nil {
+	if err = l.opts.Backend.ValidateHostConfig(ctx, source.Snapshot.Manifest.Config); err != nil {
 		return empty, err
 	}
 	prior, err := machine.LoadResourceStep(ctx, l.store.Database, sandboxRecord.SourceOperation)
@@ -92,7 +92,7 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 		},
 		SourceInstance: prior.State.Witness,
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -235,7 +235,7 @@ func (l *Lifecycle) runResume(step LifecycleStep) error {
 	if err = l.restoreActivation(step, child); err != nil {
 		return err
 	}
-	lock := l.guards.VM(child.Candidate)
+	lock := l.guards.ForVMLifecycle(child.Candidate)
 	lock.Lock()
 	err = l.activations.Continue(step.OperationID)
 	lock.Unlock()
@@ -327,7 +327,7 @@ func (l *Lifecycle) compensateResumeCandidate(step LifecycleStep, candidate mach
 	if errors.Is(err, sql.ErrNoRows) {
 		admission := &LifecycleAdmission{
 			History: l.proofs.Snapshots(),
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
@@ -377,7 +377,7 @@ func ResumeDestination(ctx context.Context, tx *sql.Tx, destination *machine.Quo
 	if fence != parent.OperationID {
 		return parent, fmt.Errorf("%w: resume compensation was superseded", errs.ErrConflict)
 	}
-	if refs, err := quota.New(tx).CountResourceReference(ctx, quota.ResourceReference{
+	if refs, err := quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         destination.SnapshotID,
 		HolderKind: "sleep",
@@ -385,7 +385,7 @@ func ResumeDestination(ctx context.Context, tx *sql.Tx, destination *machine.Quo
 	}); err != nil || refs != 1 {
 		return parent, fmt.Errorf("resume original sleep holder missing: %v", err)
 	}
-	if refs, err := quota.New(tx).CountCostReference(ctx, quota.CostReference{
+	if refs, err := quota.CountCostReference(ctx, tx, quota.CostReference{
 		TenantID:   parent.Input.OwnerTenantID,
 		Kind:       "snapshot",
 		Key:        destination.SnapshotID,
@@ -402,7 +402,7 @@ func RestoreResumeSlot(ctx context.Context, tx *sql.Tx, destination *machine.Quo
 	if err != nil {
 		return err
 	}
-	return quota.New(tx).TransferCostReference(ctx, quota.CostReference{
+	return quota.TransferCostReference(ctx, tx, quota.CostReference{
 		TenantID:   parent.Input.OwnerTenantID,
 		Kind:       "sandbox_slot",
 		Key:        destination.ID,

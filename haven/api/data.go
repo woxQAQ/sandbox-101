@@ -19,11 +19,16 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
+type closeWriter interface {
+	// CloseWrite sends EOF to the peer while leaving the read side open.
+	CloseWrite() error
+}
+
 // connectSandbox handles the client HTTP Upgrade to the guest Workload portal.
 // It delivers a raw duplex stream after the 101 response; bytes already read
 // with the headers belong to the upgraded stream. gin's ResponseWriter always
 // exposes Hijacker; a connection that cannot be hijacked fails Hijack itself.
-func (h *handler) connectSandbox(c *gin.Context) {
+func (h *Services) connectSandbox(c *gin.Context) {
 	w := c.Writer
 	r := c.Request
 	id := c.Param("id")
@@ -36,12 +41,12 @@ func (h *handler) connectSandbox(c *gin.Context) {
 		httpwire.NewFailure(http.StatusUnprocessableEntity, types.CodeIncompatible, "HTTP/1.1 Upgrade required").Write(w)
 		return
 	}
-	if _, err := h.services.Dataplane.Ready(r.Context(), owner, id); err != nil {
+	if _, err := h.Dataplane.Ready(r.Context(), owner, id); err != nil {
 		httpwire.Error(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	upstream, err := h.services.Dataplane.Connect(ctx, owner, id)
+	upstream, err := h.Dataplane.Connect(ctx, owner, id)
 	cancel()
 	if err != nil {
 		httpwire.Error(w, err)
@@ -52,7 +57,7 @@ func (h *handler) connectSandbox(c *gin.Context) {
 	}()
 	var raw net.Conn
 	var buffer *bufio.ReadWriter
-	downstream, err := h.services.Dataplane.Attach(r.Context(), owner, dataplane.HandoffRequest{
+	downstream, err := h.Dataplane.Attach(r.Context(), owner, dataplane.HandoffRequest{
 		SandboxID: id,
 		Upstream:  upstream,
 		Accept: func() (net.Conn, error) {
@@ -98,7 +103,7 @@ func relayBytes(left, right net.Conn) {
 	done := make(chan struct{}, 2)
 	copyOne := func(destination, source net.Conn) {
 		_, _ = io.Copy(destination, source)
-		if half, ok := destination.(interface{ CloseWrite() error }); ok {
+		if half, ok := destination.(closeWriter); ok {
 			_ = half.CloseWrite()
 		} else {
 			_ = destination.Close()
@@ -113,7 +118,7 @@ func relayBytes(left, right net.Conn) {
 
 // previewSandbox creates a signed preview URL bounded by a lease. It is a
 // dataplane admission, not an accepted operation, so it takes no idempotency key.
-func (h *handler) previewSandbox(c *gin.Context) {
+func (h *Services) previewSandbox(c *gin.Context) {
 	if _, ok := decode(c, "preview", c.Param("id"), ""); !ok {
 		return
 	}
@@ -122,7 +127,7 @@ func (h *handler) previewSandbox(c *gin.Context) {
 	if ttl == 0 {
 		ttl = 300
 	}
-	path, err := h.services.Dataplane.PreviewURL(c.Request.Context(), principal(c), dataplane.PreviewRequest{
+	path, err := h.Dataplane.PreviewURL(c.Request.Context(), principal(c), dataplane.PreviewRequest{
 		SandboxID: c.Param("id"),
 		Port:      port,
 		TTL:       time.Duration(ttl) * time.Second,
@@ -132,7 +137,7 @@ func (h *handler) previewSandbox(c *gin.Context) {
 	}, err)
 }
 
-func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
+func (h *Services) preview(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/preview/")
 	capability, tail, _ := strings.Cut(path, "/")
 	body, signature, ok := strings.Cut(capability, ".")
@@ -140,19 +145,19 @@ func (h *handler) preview(w http.ResponseWriter, r *http.Request) {
 		httpwire.NotFound().Write(w)
 		return
 	}
-	target, err := h.services.Dataplane.ResolvePreview(r.Context(), body, signature)
+	target, err := h.Dataplane.ResolvePreview(r.Context(), body, signature)
 	if err != nil {
 		httpwire.Error(w, err)
 		return
 	}
-	if _, err = h.services.Dataplane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
+	if _, err = h.Dataplane.Ready(r.Context(), target.Principal, target.SandboxID); err != nil {
 		httpwire.Error(w, err)
 		return
 	}
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return h.services.Dataplane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
+			return h.Dataplane.Forward(ctx, target.Principal, target.SandboxID, target.Port)
 		},
 	}
 	defer transport.CloseIdleConnections()

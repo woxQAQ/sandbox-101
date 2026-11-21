@@ -9,6 +9,7 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 // sandboxClaims borrows the App used by both claim admission and its operation
@@ -17,12 +18,12 @@ type SandboxClaims struct {
 	App *application.App
 }
 
-func (fixture SandboxClaims) Claim(t *testing.T, key string, env map[string]operation.EnvVar, policy egress.Policy) operation.Record {
+func (fixture SandboxClaims) Claim(t *testing.T, key string, env map[string]types.EnvVar, policy egress.Policy) operation.State {
 	service := fixture.App
 	t.Helper()
 	acceptedOperation, err := service.Sandboxes.AdmitClaim(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, key, operation.Command{
+	}, key, operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,

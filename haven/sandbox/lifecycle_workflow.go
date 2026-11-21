@@ -24,10 +24,10 @@ import (
 type LifecycleRequest struct {
 	Principal authorization.Principal
 	Key       string
-	Command   operation.Command
+	Command   operation.Intent
 }
 
-func (l *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
+func (l *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	return l.AdmitForParent(ctx, LifecycleRequest{
 		Principal: principal,
 		Key:       key,
@@ -35,25 +35,25 @@ func (l *Lifecycle) AdmitLifecycle(ctx context.Context, principal authorization.
 	}, nil)
 }
 
-func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest, upper machine.ResourceParent) (operation.Record, error) {
+func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest, upper machine.ResourceParent) (operation.State, error) {
 	principal, key, command := request.Principal, request.Key, request.Command
-	var empty operation.Record
+	var empty operation.State
 	if key == "" || len(key) > 256 || command.SandboxID == "" || principal.TenantID == "" || (principal.SandboxID != "" && (principal.SandboxID != command.SandboxID || command.Action != "release")) {
 		return empty, fmt.Errorf("%w: lifecycle request requires scoped sandbox and key", errs.ErrInvalid)
 	}
 	if command.Action != "release" && command.Action != "checkpoint" && command.Action != "pause" {
 		return empty, fmt.Errorf("%w: unsupported lifecycle action", errs.ErrInvalid)
 	}
-	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
-	mac := l.commands.Identity.CommandMAC(principal, command)
+	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := l.identity.CommandMAC(principal, command)
 	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return operation, err
 	}
-	guard := l.guards.Configuration(command.SandboxID)
+	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 
@@ -117,7 +117,7 @@ func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest
 	if command.Action == "checkpoint" {
 		input.CheckpointID = operation.NewID("cp_")
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -141,7 +141,7 @@ func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest
 	if command.Action == "release" && sandboxRecord.State == "paused" {
 		return l.admitPausedRelease(ctx, admission)
 	}
-	var child operation.Record
+	var child operation.State
 	if command.Action == "release" {
 		admission.Role = "release"
 		if len(input.CaptureFailures) > 0 {
@@ -236,7 +236,7 @@ func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step Lifecyc
 	}
 	var request struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}
 	if err = json.Unmarshal(identity.Request, &request); err != nil {
 		return err
@@ -277,11 +277,10 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 		CreatedAt:  time.Now().UTC(),
 	}
 
-	references := quota.New(tx)
 	if err = bindCheckpoint(l.ctx, tx, cp, step.OperationID); err != nil {
 		return err
 	}
-	if err = references.AddResourceReference(l.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(l.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         cp.SnapshotID,
 		HolderKind: "checkpoint_binding",
@@ -289,7 +288,7 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 	}); err != nil {
 		return err
 	}
-	if err = references.AddCostReference(l.ctx, quota.CostReference{
+	if err = quota.AddCostReference(l.ctx, tx, quota.CostReference{
 		TenantID:   cp.TenantID,
 		Kind:       "snapshot",
 		Key:        cp.SnapshotID,
@@ -555,7 +554,7 @@ func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation Act
 		if snapshot == "" {
 			return fmt.Errorf("%w: resume sleep snapshot missing", errs.ErrManualRecovery)
 		}
-		if err = quota.New(tx).RemoveResourceReference(ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         snapshot,
 			HolderKind: "sleep",
@@ -563,7 +562,7 @@ func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation Act
 		}); err != nil {
 			return err
 		}
-		if err = quota.New(tx).RemoveCostReference(ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 			TenantID:   activation.Input.TenantID,
 			Kind:       "snapshot",
 			Key:        snapshot,

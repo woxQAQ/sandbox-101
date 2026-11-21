@@ -16,63 +16,71 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
+// SandboxBackend contains the Loom effects needed during claim and configure.
 type SandboxBackend interface {
-	Check(context.Context, loom.Config) error
-	Network(context.Context, loom.Resource, bool) error
+	// ValidateHostConfig validates the requested VM configuration against this host.
+	ValidateHostConfig(ctx context.Context, config loom.Config) error
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 }
 
 type SandboxGuards interface {
-	Admission() execution.Guard
-	TenantRequest(string, string) execution.Guard
-	Configuration(string) execution.Guard
-	VM(string) execution.Guard
-}
-
-type SandboxOptions struct {
-	Backend SandboxBackend
-	Guest   ActivationGuest
-	Fault   func(string) error
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
+	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
 }
 
 type SandboxDependencies struct {
-	Guards       SandboxGuards
-	Workers      *execution.Workers
-	Closing      interface{ Closing() bool }
-	Registry     *ephemeral.Registry
-	History      machine.SnapshotProofs
-	Committer    *operation.Committer
-	Commands     *SandboxCommands
-	Availability *execution.Availability
-	Operations   *operation.Operations
-	Activations  *Activations
-	WarmClaims   *WarmClaims
-	Provisioning *Provisioning
-	Policies     *machine.DirectPolicies
+	Backend         SandboxBackend
+	Guest           ActivationGuest
+	Fault           func(string) error
+	Guards          SandboxGuards
+	Workers         *execution.Workers
+	Closing         authorization.ClosingReader
+	Registry        *ephemeral.Registry
+	SnapshotProofs  machine.SnapshotProofs
+	Committer       *operation.Committer
+	CommandIdentity *operation.CommandIdentity
+	AdmissionPolicy *AdmissionPolicy
+	Availability    *execution.Availability
+	Operations      *operation.Monitor
+	Activations     *Activations
+	WarmClaims      *WarmClaims
+	Provisioning    *Provisioning
+	Policies        *machine.DirectPolicies
 }
 
 // Sandboxes owns logical sandbox claim and configuration admission. Resource
 // execution and activation remain in their services with the same shared guards.
 type Sandboxes struct {
-	store        store.Workflow
-	ctx          context.Context
-	admission    execution.Guard
-	guards       SandboxGuards
-	workers      *execution.Workers
-	closing      interface{ Closing() bool }
-	registry     *ephemeral.Registry
-	history      machine.SnapshotProofs
-	commands     *SandboxCommands
-	availability *execution.Availability
-	operations   *operation.Operations
-	activations  *Activations
-	warmClaims   *WarmClaims
-	provisioning *Provisioning
-	policies     *machine.DirectPolicies
-	opts         SandboxOptions
-	committer    *operation.Committer
+	store          store.Workflow
+	ctx            context.Context
+	admission      execution.Guard
+	guards         SandboxGuards
+	workers        *execution.Workers
+	closing        authorization.ClosingReader
+	registry       *ephemeral.Registry
+	snapshotProofs machine.SnapshotProofs
+	identity       *operation.CommandIdentity
+	policy         *AdmissionPolicy
+	availability   *execution.Availability
+	operations     *operation.Monitor
+	activations    *Activations
+	warmClaims     *WarmClaims
+	provisioning   *Provisioning
+	policies       *machine.DirectPolicies
+	backend        SandboxBackend
+	guest          ActivationGuest
+	injectFault    func(string) error
+	committer      *operation.Committer
 }
 
-func NewSandboxes(state *store.State, dependencies SandboxDependencies, options SandboxOptions) *Sandboxes {
+func NewSandboxes(state *store.State, dependencies SandboxDependencies) *Sandboxes {
 	return &Sandboxes{
 		store: store.Workflow{
 			Database:   state.Database(),
@@ -80,34 +88,37 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies, options 
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.Admission(),
-		guards:       dependencies.Guards,
-		workers:      dependencies.Workers,
-		closing:      dependencies.Closing,
-		registry:     dependencies.Registry,
-		history:      dependencies.History,
-		commands:     dependencies.Commands,
-		availability: dependencies.Availability,
-		operations:   dependencies.Operations,
-		activations:  dependencies.Activations,
-		warmClaims:   dependencies.WarmClaims,
-		provisioning: dependencies.Provisioning,
-		policies:     dependencies.Policies,
-		opts:         options,
-		committer:    dependencies.Committer,
+		ctx:            dependencies.Workers.Context(),
+		admission:      dependencies.Guards.ForStoreMutation(),
+		guards:         dependencies.Guards,
+		workers:        dependencies.Workers,
+		closing:        dependencies.Closing,
+		registry:       dependencies.Registry,
+		snapshotProofs: dependencies.SnapshotProofs,
+		identity:       dependencies.CommandIdentity,
+		policy:         dependencies.AdmissionPolicy,
+		availability:   dependencies.Availability,
+		operations:     dependencies.Operations,
+		activations:    dependencies.Activations,
+		warmClaims:     dependencies.WarmClaims,
+		provisioning:   dependencies.Provisioning,
+		policies:       dependencies.Policies,
+		backend:        dependencies.Backend,
+		guest:          dependencies.Guest,
+		injectFault:    dependencies.Fault,
+		committer:      dependencies.Committer,
 	}
 }
 
 func (sb *Sandboxes) fault(point string) error {
-	if sb.opts.Fault != nil {
-		return sb.opts.Fault(point)
+	if sb.injectFault != nil {
+		return sb.injectFault(point)
 	}
 	return nil
 }
 
-func (sb *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := sb.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (sb *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
+	accepted, found, err := sb.identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
@@ -134,7 +145,7 @@ func (sb *Sandboxes) dispatch(id string) {
 			if lookup != nil {
 				return lookup
 			}
-			guard := sb.guards.VM(source.Candidate)
+			guard := sb.guards.ForVMLifecycle(source.Candidate)
 			guard.Lock()
 			defer guard.Unlock()
 			return sb.activations.Continue(id)

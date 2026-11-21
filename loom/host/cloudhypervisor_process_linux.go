@@ -295,7 +295,7 @@ func (b *CloudHypervisor) Launch(ctx context.Context, r Resource, restore bool) 
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := b.Check(ctx, r.Config); err != nil {
+	if err := b.ValidateHostConfig(ctx, r.Config); err != nil {
 		return err
 	}
 	if err := b.setupScope(r, restore); err != nil {

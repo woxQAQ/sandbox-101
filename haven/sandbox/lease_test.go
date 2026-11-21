@@ -42,7 +42,7 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				defer cancel()
 				id := claim.Result.SandboxID
 				if state == "paused" {
-					if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+					if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 						Action:    "pause",
 						SandboxID: id,
 					}); err != nil {
@@ -60,7 +60,7 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				if _, err = service.State.Database().ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_renew BEFORE UPDATE OF body ON sandbox_settings BEGIN SELECT %s; END", raise)); err != nil {
 					t.Fatal(err)
 				}
-				command := operation.Command{
+				command := operation.Intent{
 					Action:     "renew",
 					SandboxID:  id,
 					TTLSeconds: 120,
@@ -119,7 +119,7 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	acceptedRecord, err := service.Lifecycle.AdmitRenew(context.Background(), authorization.Principal{
 		TenantID:  "tenant",
 		SandboxID: id,
-	}, "renew", operation.Command{
+	}, "renew", operation.Intent{
 		Action:     "renew",
 		SandboxID:  id,
 		TTLSeconds: 120,
@@ -134,7 +134,7 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	replay, err := service.Lifecycle.AdmitRenew(context.Background(), authorization.Principal{
 		TenantID:  "tenant",
 		SandboxID: id,
-	}, "renew", operation.Command{
+	}, "renew", operation.Intent{
 		Action:     "renew",
 		SandboxID:  id,
 		TTLSeconds: 120,
@@ -144,13 +144,13 @@ func TestHavenRenewPreservesConfiguration(t *testing.T) {
 	}
 	if _, err = service.Lifecycle.AdmitRenew(context.Background(), authorization.Principal{
 		TenantID: "other",
-	}, "renew", operation.Command{
+	}, "renew", operation.Intent{
 		Action:    "renew",
 		SandboxID: id,
 	}); err == nil {
 		t.Fatal("foreign renew accepted")
 	}
-	if _, err = service.Lifecycle.AdmitLifecycle(context.Background(), principal, "stale-expiration", operation.Command{
+	if _, err = service.Lifecycle.AdmitLifecycle(context.Background(), principal, "stale-expiration", operation.Intent{
 		Action:        "release",
 		SandboxID:     id,
 		LeaseDeadline: before.Deadline,
@@ -169,7 +169,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	principal := authorization.Principal{TenantID: "tenant"}
 	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "claim", nil, egress.Policy{Mode: "none"})
 	id := claim.Result.SandboxID
-	command := operation.Command{
+	command := operation.Intent{
 		Action:     "renew",
 		SandboxID:  id,
 		TTLSeconds: 120,
@@ -180,7 +180,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	}
 
 	// Seed an inconsistent renewal that has an authenticated request but no completion.
-	original := operation.Record{
+	original := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    "renew-pending",
 		Status: "pending",
@@ -188,7 +188,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	}
 	request := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{command.Action, command})
 	operations := operation.New(service.State.Database())
 	if err = operations.Insert(ctx, operation.Admission{
@@ -203,7 +203,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	mac := service.Commands.Identity.CommandMAC(principal, command)
+	mac := service.CommandIdentity.CommandMAC(principal, command)
 	if err = operations.InsertCredential(ctx, original.ID, mac); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if state == "paused" {
-				if _, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+				if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: id,
 				}); err != nil {
@@ -272,7 +272,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), id)); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Command{
+			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Intent{
 				Action:    "renew",
 				SandboxID: id,
 			}); err == nil {

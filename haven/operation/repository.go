@@ -30,7 +30,8 @@ type Result struct {
 	Error         string   `json:"error,omitempty"`
 }
 
-type Record struct {
+// State is the durable status and workflow result of an accepted operation.
+type State struct {
 	ID     string `json:"id"`
 	Key    string `json:"key"`
 	Status string `json:"status"`
@@ -49,19 +50,19 @@ func New(db store.DBTX) *Repository {
 	}
 }
 
-func (r *Repository) Get(ctx context.Context, kind, scope, id string) (Record, error) {
+func (r *Repository) Get(ctx context.Context, kind, scope, id string) (State, error) {
 	row, err := r.queries.GetScopedOperation(ctx, dbgen.GetScopedOperationParams{
 		ID:        id,
 		ScopeKind: kind,
 		ScopeID:   scope,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return Record{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
+		return State{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 	}
 	if err != nil {
-		return Record{}, err
+		return State{}, err
 	}
-	out := Record{
+	out := State{
 		ID:     row.ID,
 		Key:    row.IdemKey,
 		Status: row.Status,
@@ -83,13 +84,13 @@ func (r *Repository) RequestID(ctx context.Context, tenant, key string) (string,
 
 // Cached resolves the original scoped request. A matching key alone cannot
 // authorize replay: both the stored checksum and the requested hash must match.
-func (r *Repository) Cached(ctx context.Context, scope Scope, key, hash string) (Record, bool, error) {
+func (r *Repository) Cached(ctx context.Context, scope Scope, key, hash string) (State, bool, error) {
 	row, err := r.queries.GetScopedRequest(ctx, dbgen.GetScopedRequestParams{
 		ScopeKind: scope.Kind,
 		ScopeID:   scope.ID,
 		IdemKey:   key,
 	})
-	record := Record{
+	record := State{
 		ID:     row.ID,
 		Key:    row.IdemKey,
 		Status: row.Status,

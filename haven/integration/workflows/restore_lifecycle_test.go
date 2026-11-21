@@ -201,7 +201,7 @@ END`); err != nil {
 	}
 }
 
-func cloneFixture(t *testing.T) (*application.App, *testfixture.RestorableRuntime, operation.Record) {
+func cloneFixture(t *testing.T) (*application.App, *testfixture.RestorableRuntime, operation.State) {
 	t.Helper()
 	return testapp.CloneFixtureWithFault(t, nil)
 }

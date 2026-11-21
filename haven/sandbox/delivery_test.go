@@ -10,7 +10,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
-	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenClaimDelivery(t *testing.T) {
@@ -18,7 +18,7 @@ func TestHavenClaimDelivery(t *testing.T) {
 	service, runtime, guest, _ := testapp.SandboxFixture(t)
 	acceptedOperation := (testfixture.SandboxClaims{
 		App: service,
-	}).Claim(t, "claim", map[string]operation.EnvVar{
+	}).Claim(t, "claim", map[string]types.EnvVar{
 		"VISIBLE": {
 			Value: "guest-value",
 		},

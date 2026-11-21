@@ -86,7 +86,7 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 	if _, err = tx.ExecContext(ctx, `INSERT INTO image_intents(digest,operation_id,layout,body) VALUES(?,?,?,?)`, options.Digest, id, options.Materialization, input); err != nil {
 		t.Fatal(err)
 	}
-	if err = quota.New(tx).Reserve(ctx, quota.Reservation{
+	if err = quota.Reserve(ctx, tx, quota.Reservation{
 		Owner: "import:" + id,
 		Bytes: 64 << 20,
 	}); err != nil {

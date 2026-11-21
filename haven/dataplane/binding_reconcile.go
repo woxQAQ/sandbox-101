@@ -9,6 +9,7 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/types"
 )
 
 // ReconcileBindings keeps an already published none policy free of residual
@@ -24,7 +25,7 @@ func (p *Plane) ReconcileBindings() error {
 	}
 	for _, subject := range subjects {
 		id, tenant := subject.ID, subject.TenantID
-		guard := p.guards.Configuration(id)
+		guard := p.guards.ForSandboxConfiguration(id)
 		if !guard.TryLock() {
 			continue
 		}
@@ -46,7 +47,7 @@ func (p *Plane) ReconcileBindings() error {
 		guard.Unlock()
 		if rebind {
 			bindingCtx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
-			_, lookup = p.waitRestartBinding(bindingCtx, sandbox.View{
+			_, lookup = p.waitRestartBinding(bindingCtx, types.Sandbox{
 				ID:       id,
 				TenantID: tenant,
 			}, settings)
@@ -59,16 +60,16 @@ func (p *Plane) ReconcileBindings() error {
 	return nil
 }
 
-func (p *Plane) waitRestartBinding(ctx context.Context, view sandbox.View, settings sandbox.Settings) (operation.Record, error) {
-	env := map[string]operation.EnvVar{}
+func (p *Plane) waitRestartBinding(ctx context.Context, view types.Sandbox, settings sandbox.Settings) (operation.State, error) {
+	env := map[string]types.EnvVar{}
 	for name, value := range settings.Env {
-		env[name] = operation.EnvVar{
+		env[name] = types.EnvVar{
 			Value: value,
 		}
 	}
 	accepted, err := p.sandboxes.AdmitConfigure(ctx, authorization.Principal{
 		TenantID: view.TenantID,
-	}, "rebind:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
+	}, "rebind:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Intent{
 		Action:             "configure",
 		SandboxID:          view.ID,
 		ObservedGeneration: settings.Generation,

@@ -16,11 +16,16 @@ import (
 )
 
 type CollectorGuards interface {
-	Admission() execution.Guard
-	NodeRequest(string, string) execution.Guard
-	GarbageCollection() execution.Guard
-	Artifacts() execution.Guard
-	GCOperation(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
+	ForNodeIdempotencyKey(nodeID, key string) execution.Guard
+	// ForGCAdmission returns the node-wide lock for admitting a collection and taking inventory.
+	ForGCAdmission() execution.Guard
+	// ForImageArtifacts returns the lock shared by image publication, cleanup and GC inventory.
+	ForImageArtifacts() execution.Guard
+	// ForGCOperation returns the lock for advancing one admitted collection operation.
+	ForGCOperation(operationID string) execution.Guard
 }
 
 // Collector inventories retained roots and coordinates independently
@@ -35,7 +40,7 @@ type Collector struct {
 	guards     CollectorGuards
 	workers    *execution.Workers
 	proofs     machine.SnapshotProofs
-	operations *operation.Operations
+	operations *operation.Monitor
 	images     *image.Images
 	supply     *supply.SupplyCleanup
 	snapshots  *machine.SnapshotDeletion
@@ -48,7 +53,7 @@ type CollectorDependencies struct {
 	Gate       execution.AdmissionGate
 	Workers    *execution.Workers
 	Proofs     machine.SnapshotProofs
-	Operations *operation.Operations
+	Operations *operation.Monitor
 	Images     *image.Images
 	Supply     *supply.SupplyCleanup
 	Snapshots  *machine.SnapshotDeletion
@@ -65,7 +70,7 @@ func NewCollector(state *store.State, dependencies CollectorDependencies, fault 
 		},
 		ctx:        dependencies.Workers.Context(),
 		nodeID:     state.Identity().Identity,
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		gate:       dependencies.Gate,
 		guards:     dependencies.Guards,
 		workers:    dependencies.Workers,
@@ -110,7 +115,7 @@ func (c *Collector) Resume(id string) (bool, error) {
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	guard := c.guards.GCOperation(id)
+	guard := c.guards.ForGCOperation(id)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = Load(c.ctx, c.store.Database, id)

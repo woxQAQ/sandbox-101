@@ -57,7 +57,7 @@ var (
 
 func classify(err error) Failure {
 	switch {
-	case errors.Is(err, errs.ErrNotFound):
+	case errors.Is(err, errs.ErrNotFound), errors.Is(err, errs.ErrNotVisible):
 		return NotFound()
 	case errors.Is(err, errs.ErrForbidden):
 		return AdminRequired()

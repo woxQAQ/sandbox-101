@@ -86,7 +86,7 @@ func SelectWarm(ctx context.Context, tx *sql.Tx, id string, reservation PoolRese
 	})); err != nil {
 		return err
 	}
-	if err := quota.New(tx).RemoveResourceReference(ctx, quota.ResourceReference{
+	if err := quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         reservation.VMID,
 		HolderKind: "warm",
@@ -202,16 +202,15 @@ func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql
 	if err != nil || warm != 1 {
 		return reservation, source, fmt.Errorf("warm responsibility incomplete: %v", err)
 	}
-	responsibilities := quota.New(tx)
 	checks := []struct {
 		read func() (int64, error)
 		want int64
 	}{
 		{func() (int64, error) {
-			return responsibilities.CountResourceHolders(ctx, "vm", reservation.VMID)
+			return quota.CountResourceHolders(ctx, tx, "vm", reservation.VMID)
 		}, 2},
 		{func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         reservation.VMID,
 				HolderKind: "warm",
@@ -219,7 +218,7 @@ func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountMatchingCost(ctx, quota.Cost{
+			return quota.CountMatchingCost(ctx, tx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        reservation.Template.TenantID,
 					Kind:            "sandbox_slot",
@@ -229,7 +228,7 @@ func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountCostReference(ctx, quota.CostReference{
+			return quota.CountCostReference(ctx, tx, quota.CostReference{
 				TenantID:   reservation.Template.TenantID,
 				Kind:       "sandbox_slot",
 				Key:        reservation.SandboxID,

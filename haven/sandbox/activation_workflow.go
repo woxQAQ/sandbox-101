@@ -64,7 +64,7 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 	if err = a.actualActivation(source); err != nil {
 		return err
 	}
-	if err = a.backend.Network(a.ctx, resource, false); err != nil {
+	if err = a.backend.SetNetworkEnabled(a.ctx, resource, false); err != nil {
 		return err
 	}
 	if step.Input.PreviousSettings != nil && step.Phase == "admitted" {
@@ -78,7 +78,7 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 		}
 	}
 	if step.Phase == "off_intent" {
-		if err = a.backend.Network(a.ctx, resource, false); err != nil {
+		if err = a.backend.SetNetworkEnabled(a.ctx, resource, false); err != nil {
 			return err
 		}
 		observation, err := a.backend.Inspect(a.ctx, resource)
@@ -162,7 +162,7 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 			}
 		}
 	}
-	guard := a.guards.Configuration(step.Input.SandboxID)
+	guard := a.guards.ForSandboxConfiguration(step.Input.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	if _, err = a.checkActivation(step); err != nil {
@@ -183,7 +183,7 @@ func (a *Activations) Continue(acceptedOperation string) (runErr error) {
 		if err = backend.VerifyNetworkPolicy(a.ctx, resource, policy); err != nil {
 			return err
 		}
-		if err = a.backend.Network(a.ctx, resource, true); err != nil {
+		if err = a.backend.SetNetworkEnabled(a.ctx, resource, true); err != nil {
 			return err
 		}
 		observation, err := a.backend.Inspect(a.ctx, resource)

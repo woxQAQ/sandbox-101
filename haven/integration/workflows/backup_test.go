@@ -54,7 +54,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	pending, err := service.Sandboxes.AdmitClaim(ctx, principal, "pending", operation.Command{
+	pending, err := service.Sandboxes.AdmitClaim(ctx, principal, "pending", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,
@@ -103,7 +103,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	t.Cleanup(func() {
 		_ = reviewed.Close(context.Background())
 	})
-	for _, acceptedOperation := range []operation.Record{
+	for _, acceptedOperation := range []operation.State{
 		running,
 		pending,
 	} {
@@ -122,7 +122,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	if err = reviewed.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner LIKE 'vm:%'").Scan(&count); err != nil || count != 2 {
 		t.Fatal("resource responsibility missing from unified backup", count, err)
 	}
-	if _, err = reviewed.Sandboxes.AdmitClaim(ctx, principal, "new", operation.Command{
+	if _, err = reviewed.Sandboxes.AdmitClaim(ctx, principal, "new", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,

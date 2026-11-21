@@ -399,8 +399,8 @@ type snapshotDeletionFixture struct {
 	Service *application.App
 	Backend loom.Backend
 	Runtime *testfixture.ColdRuntime
-	Capture operation.Record
-	Clones  []operation.Record
+	Capture operation.State
+	Clones  []operation.State
 }
 
 func snapshotDeleteFixture(t *testing.T, clones int) *snapshotDeletionFixture {
@@ -476,7 +476,7 @@ func snapshotDeleteCost(t *testing.T, fixture *snapshotDeletionFixture, want int
 	}
 }
 
-func admitSnapshotDeleteFixture(t *testing.T, fixture *snapshotDeletionFixture) operation.Record {
+func admitSnapshotDeleteFixture(t *testing.T, fixture *snapshotDeletionFixture) operation.State {
 	t.Helper()
 	acceptedOperation, err := fixture.Service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{
 		TenantID:   "tenant",

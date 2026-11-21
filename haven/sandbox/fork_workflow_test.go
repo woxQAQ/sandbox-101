@@ -19,6 +19,7 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
@@ -29,7 +30,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 	}
 	source := (testfixture.SandboxClaims{
 		App: service,
-	}).Claim(t, "source", map[string]operation.EnvVar{
+	}).Claim(t, "source", map[string]types.EnvVar{
 		"SOURCE_ONLY": {
 			Value: "not-inherited",
 		},
@@ -46,13 +47,13 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			command := operation.Command{
+			command := operation.Intent{
 				Action:    "fork",
 				SandboxID: source.Result.SandboxID,
 				Count:     3,
 			}
 			if kind == "paused" {
-				if _, err := service.SandboxRequests.Execute(ctx, principal, "pause-source", operation.Command{
+				if _, err := service.CommandRouter.Execute(ctx, principal, "pause-source", operation.Intent{
 					Action:    "pause",
 					SandboxID: source.Result.SandboxID,
 				}); err != nil {
@@ -61,7 +62,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 			}
 			if kind == "checkpoint" {
 				captures, launches := runtime.Count("capture"), runtime.Count("launch")
-				checkpoint, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint-source", operation.Command{
+				checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint-source", operation.Intent{
 					Action:    "checkpoint",
 					SandboxID: source.Result.SandboxID,
 				})
@@ -78,7 +79,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				}
 			}
 			before := runtime.Count("capture")
-			acceptedOperation, err := service.SandboxRequests.Execute(ctx, principal, "fork-batch:"+kind, command)
+			acceptedOperation, err := service.CommandRouter.Execute(ctx, principal, "fork-batch:"+kind, command)
 			if err != nil {
 				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal(acceptedOperation, err, reason)
@@ -113,7 +114,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				t.Fatal(slots, err)
 			}
 			for _, id := range acceptedOperation.Result.SandboxIDs {
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "retire:"+id, operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "retire:"+id, operation.Intent{
 					Action:    "release",
 					SandboxID: id,
 				}); err != nil {
@@ -147,7 +148,7 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 		}
 		return nil
 	}
-	acceptedOperation, err := service.SandboxRequests.Execute(ctx, principal, "failed-batch", operation.Command{
+	acceptedOperation, err := service.CommandRouter.Execute(ctx, principal, "failed-batch", operation.Intent{
 		Action:    "fork",
 		SandboxID: source.Result.SandboxID,
 		Count:     2,
@@ -183,7 +184,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
-	checkpoint, err := service.SandboxRequests.Execute(context.Background(), principal, "checkpoint", operation.Command{
+	checkpoint, err := service.CommandRouter.Execute(context.Background(), principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: source.Result.SandboxID,
 	})
@@ -209,7 +210,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 				}
 				return nil
 			})
-			command := operation.Command{
+			command := operation.Intent{
 				Action:       "fork",
 				CheckpointID: checkpoint.Result.CheckpointID,
 				Count:        2,
@@ -246,7 +247,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 					t.Fatal(child, err)
 				}
 				originalDeadline = child.Result.Sandbox.Deadline
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "renew-before-group-completion", operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "renew-before-group-completion", operation.Intent{
 					Action:     "renew",
 					SandboxID:  expected[0],
 					TTLSeconds: 120,
@@ -269,7 +270,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 				t.Fatal("parent recomputed a historical branch from the renewed lease")
 			}
 			for _, id := range expected {
-				if _, err = service.SandboxRequests.Execute(ctx, principal, "retire:"+id, operation.Command{
+				if _, err = service.CommandRouter.Execute(ctx, principal, "retire:"+id, operation.Intent{
 					Action:    "release",
 					SandboxID: id,
 				}); err != nil {
@@ -298,7 +299,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			checkpoint, err := service.SandboxRequests.Execute(ctx, principal, "checkpoint", operation.Command{
+			checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
 				Action:    "checkpoint",
 				SandboxID: source.Result.SandboxID,
 			})
@@ -312,7 +313,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_fork_completion BEFORE UPDATE OF status ON operation_steps WHEN OLD.step_key='fork_group' AND NEW.status='succeeded' BEGIN SELECT %s; END", raise)); err != nil {
 				t.Fatal(err)
 			}
-			command := operation.Command{
+			command := operation.Intent{
 				Action:       "fork",
 				CheckpointID: checkpoint.Result.CheckpointID,
 				Count:        2,
@@ -343,7 +344,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().ExecContext(ctx, "DROP TRIGGER reject_fork_completion"); err != nil {
 				t.Fatal(err)
 			}
-			replayed, err := service.SandboxRequests.Execute(ctx, principal, "fork-held", command)
+			replayed, err := service.CommandRouter.Execute(ctx, principal, "fork-held", command)
 			if err != nil || replayed.ID != accepted.ID || replayed.Status != "succeeded" {
 				t.Fatal("repaired group did not complete original admission", replayed, err)
 			}

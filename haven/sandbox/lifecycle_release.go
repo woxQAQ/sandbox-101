@@ -53,9 +53,9 @@ func pausedReceipt(ctx context.Context, q store.DBTX, current ownership.Sandbox,
 	return "", fmt.Errorf("%w: paused sandbox lacks original successful VM deletion proof", errs.ErrManualRecovery)
 }
 
-func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.Record, error) {
+func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *LifecycleAdmission) (operation.State, error) {
 	parent, input, mac, upper := admission.Parent, admission.Input, admission.MAC, admission.Upper
-	var empty operation.Record
+	var empty operation.State
 	l.admission.Lock()
 	defer l.admission.Unlock()
 	if err := l.gate.Check(); err != nil {
@@ -115,7 +115,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	parent.Result.SnapshotID = current.SnapshotID
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"release", input.Command})
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
@@ -150,8 +150,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	})); err != nil {
 		return empty, err
 	}
-	responsibilities := quota.New(tx)
-	if err = responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         current.SnapshotID,
 		HolderKind: "sleep",
@@ -159,7 +158,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.RemoveCostReference(ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 		TenantID:   input.OwnerTenantID,
 		Kind:       "snapshot",
 		Key:        current.SnapshotID,
@@ -168,7 +167,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.RemoveCostReference(ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 		TenantID:   input.OwnerTenantID,
 		Kind:       "sandbox_slot",
 		Key:        current.ID,
@@ -177,7 +176,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.RetireMatchingCost(ctx, quota.Cost{
+	if err = quota.RetireMatchingCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        input.OwnerTenantID,
 			Kind:            "sandbox_slot",
@@ -278,7 +277,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 		if err != nil {
 			return nil, err
 		}
-		if err = quota.New(tx).RemoveResourceReference(l.ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(l.ctx, tx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         sleepSnapshot,
 			HolderKind: "sleep",
@@ -286,7 +285,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 		}); err != nil {
 			return nil, err
 		}
-		if err = quota.New(tx).RemoveCostReference(l.ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(l.ctx, tx, quota.CostReference{
 			TenantID:   step.Input.OwnerTenantID,
 			Kind:       "snapshot",
 			Key:        sleepSnapshot,
@@ -353,7 +352,7 @@ func (l *Lifecycle) runReleaseCaptures(step LifecycleStep) error {
 		if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
 			link := &LifecycleAdmission{
 				History: l.proofs.Snapshots(),
-				Parent: operation.Record{
+				Parent: operation.State{
 					ID: step.OperationID,
 				},
 				Input: step.Input,
@@ -381,7 +380,7 @@ func (l *Lifecycle) runReleaseCaptures(step LifecycleStep) error {
 	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
 		link := &LifecycleAdmission{
 			History: l.proofs.Snapshots(),
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
@@ -495,7 +494,7 @@ func ValidateReleaseSlotDestination(ctx context.Context, tx *sql.Tx, resource ma
 	if link.ChildID != resource.OperationID {
 		return fmt.Errorf("release slot handoff child changed")
 	}
-	if count, err := quota.New(tx).CountResourceReference(ctx, quota.ResourceReference{
+	if count, err := quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         destination.SnapshotID,
 		HolderKind: "sleep",
@@ -503,7 +502,7 @@ func ValidateReleaseSlotDestination(ctx context.Context, tx *sql.Tx, resource ma
 	}); err != nil || count != 1 {
 		return fmt.Errorf("pause sleep holder missing: %v", err)
 	}
-	if count, err := quota.New(tx).CountCostReference(ctx, quota.CostReference{
+	if count, err := quota.CountCostReference(ctx, tx, quota.CostReference{
 		TenantID:   resource.Input.TenantID,
 		Kind:       "snapshot",
 		Key:        destination.SnapshotID,

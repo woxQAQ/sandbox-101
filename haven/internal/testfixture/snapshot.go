@@ -12,7 +12,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 )
 
-func CaptureReady(t *testing.T, service *application.App, key string) (operation.Record, machine.CaptureRequest) {
+func CaptureReady(t *testing.T, service *application.App, key string) (operation.State, machine.CaptureRequest) {
 	t.Helper()
 	claim := ColdClaim(t, service, "source-"+key)
 	source := testutil.AwaitColdWorker(t, service, claim.ID)

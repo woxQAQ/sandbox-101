@@ -1,8 +1,8 @@
 # Sandbox 业务责任
 
-业务 HTTP、令牌、SDK 与配额责任见 [Sandbox API 契约](api.md)。
+业务 HTTP、令牌、SDK 与配额责任见 [Sandbox API 契约](../../docs/sandbox-api.md)。
 
-sandbox 拥有 claim/configuration、activation、生命周期、checkpoint binding、warm claim、fork、业务投递与 provisioning coordinator。物理 generation、capture、stop 和删除由 machine 执行，模板与 pool 由 supply 持有。SandboxRequests 保留原 action 路由；SupplyCommands 只暴露模板/refill 接纳，不引入总 Service 回指。
+sandbox 拥有 claim/configuration、activation、生命周期、checkpoint binding、warm claim、fork、业务投递与 provisioning coordinator。物理 generation、capture、stop 和删除由 machine 执行，模板与 pool 由 supply 持有。`CommandRouter` 在分派前校验 sandbox token 的目标与动作，HTTP 和进程内提交共用这项检查。模板和 refill 的接纳由 `supply.Supply` 执行。
 
 ## 证明与原子交接
 
@@ -22,7 +22,7 @@ warm claim 原子选择 ready pool、接管 slot、settings 与 activation；fal
 
 ## 命令、secret 与投递
 
-operation.CommandIdentity 负责原角色 MAC、幂等凭据匹配及 accepted operation 的内存 secret 恢复。SandboxCommands 验证环境、policy、TTL，分离 guest 值、host secret 与描述；只有净化后的命令进入 SQLite。完整 secret 仅留在共享 ephemeral.Registry，publication 不保留凭据。
+operation.CommandIdentity 负责原角色 MAC、幂等凭据匹配及 accepted operation 的内存 secret 恢复。AdmissionPolicy 验证环境、policy、TTL，分离 guest 值、host secret 与描述；只有净化后的命令进入 SQLite。完整 secret 仅留在共享 ephemeral.Registry，publication 不保留凭据。
 
 OperationDelivery 组合通用 operation 结果与 sandbox 授权。DirectBindings 核验业务设置和原 activation，再借 machine 执行物理 policy；回收闭包固定原实例与原 operation。配置失败和持久完成失败继续保留 fence，不能误撤后继实例。
 

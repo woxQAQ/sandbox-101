@@ -19,7 +19,7 @@ import (
 
 type Services struct {
 	Node          *node.Service
-	Operations    *operation.Operations
+	Operations    *operation.Monitor
 	Images        *image.Images
 	GC            *gc.Collector
 	SupplyCleanup *supply.SupplyCleanup
@@ -62,7 +62,7 @@ func (s Services) manage(w http.ResponseWriter, r *http.Request, principal autho
 		return
 	}
 	ctx := r.Context()
-	var accepted operation.Record
+	var accepted operation.State
 	var err error
 	switch request.Action {
 	case types.ManagementActionImport:
@@ -104,7 +104,7 @@ func (s Services) manage(w http.ResponseWriter, r *http.Request, principal autho
 		return
 	}
 	result, err := s.Operations.WaitManagement(ctx, principal, accepted.ID)
-	if result.SettledFailure(err) {
+	if result.IsTerminalFailure(err) {
 		httpwire.InternalFailure().Write(w)
 		return
 	}
@@ -112,7 +112,7 @@ func (s Services) manage(w http.ResponseWriter, r *http.Request, principal autho
 	httpwire.Respond(w, types.ManagementResponse{Operation: &view}, err)
 }
 
-func operationView(value operation.Record) types.ManagementOperation {
+func operationView(value operation.State) types.ManagementOperation {
 	return types.ManagementOperation{
 		ID:     value.ID,
 		Key:    value.Key,

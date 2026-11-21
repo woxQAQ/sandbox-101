@@ -59,16 +59,16 @@ func RenewActivityLease(ctx context.Context, query store.DBTX, id string, previo
 	return next.Deadline, err
 }
 
-func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if command.Action != "renew" || command.SandboxID == "" || principal.TenantID == "" || key == "" || len(key) > 256 || (principal.SandboxID != "" && principal.SandboxID != command.SandboxID) {
 		return empty, fmt.Errorf("%w: renew requires scoped sandbox and key", errs.ErrInvalid)
 	}
-	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
-	mac := l.commands.Identity.CommandMAC(principal, command)
-	previous, found, err := l.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := l.identity.CommandMAC(principal, command)
+	previous, found, err := l.identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	})
 	if err != nil {
@@ -80,7 +80,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 		}
 		return previous, nil
 	}
-	guard := l.guards.Configuration(command.SandboxID)
+	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	l.admission.Lock()
@@ -141,7 +141,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	default:
 		return empty, fmt.Errorf("%w: sandbox state cannot renew", errs.ErrConflict)
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "succeeded",
@@ -152,7 +152,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	}
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{"renew", operation.SanitizedCommand(command)})
 	input := operation.Encode(struct {
 		Sandbox ownership.Sandbox
@@ -242,7 +242,7 @@ func (l *Lifecycle) Reap(ctx context.Context) error {
 	for _, item := range pending {
 		_, err := l.AdmitLifecycle(ctx, authorization.Principal{
 			TenantID: item.tenant,
-		}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), operation.Command{
+		}, "expire:"+item.id+":"+item.deadline.Format(time.RFC3339Nano), operation.Intent{
 			Action:        item.action,
 			SandboxID:     item.id,
 			LeaseDeadline: item.deadline,

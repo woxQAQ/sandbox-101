@@ -222,7 +222,7 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 		if !observation.Alive || observation.Paused {
 			return c.failCapture(&step, fmt.Errorf("capture requires unpaused source"))
 		}
-		releaseCapture, err := c.guards.Capture(c.ctx)
+		releaseCapture, err := c.guards.AcquireCaptureSlot(c.ctx)
 		if err != nil {
 			return err
 		}
@@ -233,7 +233,8 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 				return err
 			}
 			if backend, ok := c.backend.(interface {
-				PrepareCaptureWriter(loom.Resource, string) error
+				// PrepareCaptureWriter grants the VMM access to its capture directory.
+				PrepareCaptureWriter(resource loom.Resource, directory string) error
 			}); ok {
 				if err = backend.PrepareCaptureWriter(r, filepath.Join(boundary.Path, "ch")); err != nil {
 					return err
@@ -445,7 +446,6 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	body, previousBody := operation.Encode(publication), operation.Encode(step.Input.Snapshot)
 	completed, previousState, cleanupBody := operation.Encode(next), operation.Encode(step.State), operation.Encode(step.Input)
 
-	responsibilities := quota.New(tx)
 	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).PublishSnapshot(c.ctx, dbgen.PublishSnapshotParams{
 		ID:           publication.ID,
@@ -462,7 +462,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCost(c.ctx, quota.Cost{
+	if err = quota.AddCost(c.ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        publication.TenantID,
 			Kind:            "snapshot",
@@ -473,7 +473,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCostReference(c.ctx, quota.CostReference{
+	if err = quota.AddCostReference(c.ctx, tx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "snapshot",
 		Key:        publication.ID,
@@ -482,7 +482,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveCostReference(c.ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(c.ctx, tx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "pending_storage",
 		Key:        step.OperationID + ":capture",
@@ -491,7 +491,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RetireCost(c.ctx, quota.CostIdentity{
+	if err = quota.RetireCost(c.ctx, tx, quota.CostIdentity{
 		TenantID:        publication.TenantID,
 		Kind:            "pending_storage",
 		Key:             step.OperationID + ":capture",
@@ -499,7 +499,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(c.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(c.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         publication.ID,
 		HolderKind: "checkpoint",
@@ -507,7 +507,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(c.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(c.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         manifest.Config.Image,
 		HolderKind: "snapshot",
@@ -560,7 +560,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 }
 
 func FailedCaptureReferences(ctx context.Context, database store.DBTX, source ResourceStep) ([]ownership.GenerationRef, error) {
-	ids, err := quota.New(database).ResourceHolderIDs(ctx, "vm", source.Candidate, "capture")
+	ids, err := quota.ResourceHolderIDs(ctx, database, "vm", source.Candidate, "capture")
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +587,7 @@ func FailedCaptureReferences(ctx context.Context, database store.DBTX, source Re
 }
 
 func PendingPublishedCaptures(ctx context.Context, database store.DBTX, source ResourceStep) ([]ownership.GenerationRef, error) {
-	ids, err := quota.New(database).ResourceHolderIDs(ctx, "vm", source.Candidate, "capture")
+	ids, err := quota.ResourceHolderIDs(ctx, database, "vm", source.Candidate, "capture")
 	if err != nil {
 		return nil, err
 	}

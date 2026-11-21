@@ -36,7 +36,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	})
 	accepted, err := service.Sandboxes.AdmitClaim(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "wait-custody", operation.Command{
+	}, "wait-custody", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,

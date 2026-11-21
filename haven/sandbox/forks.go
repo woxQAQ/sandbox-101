@@ -23,13 +23,17 @@ import (
 )
 
 type ForkBackend interface {
-	Check(context.Context, loom.Config) error
+	// ValidateHostConfig validates the requested VM configuration against this host.
+	ValidateHostConfig(ctx context.Context, config loom.Config) error
 }
 
 type ForkGuards interface {
-	Admission() execution.Guard
-	TenantRequest(string, string) execution.Guard
-	ForkGroup(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
+	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
+	// ForForkBatch returns the lock for advancing the branches of one fork operation.
+	ForForkBatch(operationID string) execution.Guard
 }
 
 type ForkOptions struct {
@@ -40,21 +44,22 @@ type ForkOptions struct {
 }
 
 type ForkDependencies struct {
-	Guards       ForkGuards
-	Gate         execution.AdmissionGate
-	Workers      *execution.Workers
-	Registry     *ephemeral.Registry
-	History      machine.SnapshotProofs
-	Committer    *operation.Committer
-	Commands     *SandboxCommands
-	Availability *execution.Availability
-	Operations   *operation.Operations
-	Provisioning *Provisioning
-	Captures     *machine.Captures
-	Deletion     *machine.Deletion
-	Lifecycle    *Lifecycle
-	Policies     *machine.DirectPolicies
-	Links        *machine.ResourceLinks
+	Guards          ForkGuards
+	Gate            execution.AdmissionGate
+	Workers         *execution.Workers
+	Registry        *ephemeral.Registry
+	History         machine.SnapshotProofs
+	Committer       *operation.Committer
+	CommandIdentity *operation.CommandIdentity
+	AdmissionPolicy *AdmissionPolicy
+	Availability    *execution.Availability
+	Operations      *operation.Monitor
+	Provisioning    *Provisioning
+	Captures        *machine.Captures
+	Deletion        *machine.Deletion
+	Lifecycle       *Lifecycle
+	Policies        *machine.DirectPolicies
+	Links           *machine.ResourceLinks
 }
 
 // Forks owns batch placement and compensation. Every target and reservation is
@@ -69,9 +74,10 @@ type Forks struct {
 	registry     *ephemeral.Registry
 	history      machine.SnapshotProofs
 	catalog      *Catalog
-	commands     *SandboxCommands
+	identity     *operation.CommandIdentity
+	policy       *AdmissionPolicy
 	availability *execution.Availability
-	operations   *operation.Operations
+	operations   *operation.Monitor
 	provisioning *Provisioning
 	captures     *machine.Captures
 	deletion     *machine.Deletion
@@ -91,14 +97,15 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.Admission(),
+		admission:    dependencies.Guards.ForStoreMutation(),
 		gate:         dependencies.Gate,
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
 		registry:     dependencies.Registry,
 		history:      dependencies.History,
 		catalog:      NewCatalog(state.Database()),
-		commands:     dependencies.Commands,
+		identity:     dependencies.CommandIdentity,
+		policy:       dependencies.AdmissionPolicy,
 		availability: dependencies.Availability,
 		operations:   dependencies.Operations,
 		provisioning: dependencies.Provisioning,
@@ -119,8 +126,8 @@ func (f *Forks) fault(point string) error {
 	return nil
 }
 
-func (f *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := f.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (f *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
+	accepted, found, err := f.identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
@@ -166,7 +173,7 @@ func (f *Forks) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := f.guards.ForkGroup(id)
+	guard := f.guards.ForForkBatch(id)
 	guard.Lock()
 	defer guard.Unlock()
 	group, err = LoadFork(f.ctx, f.store.Database, id)
@@ -208,7 +215,7 @@ func (f *Forks) runResourceLink(parent, role string) (machine.ResourceLink, erro
 type ForkInput struct {
 	RequestTenantID string                  `json:"request_tenant_id"`
 	OwnerTenantID   string                  `json:"owner_tenant_id"`
-	Command         operation.Command       `json:"command"`
+	Command         operation.Intent        `json:"command"`
 	Template        supply.TemplateRecord   `json:"template"`
 	Settings        Settings                `json:"settings"`
 	Targets         []ownership.Sandbox     `json:"targets"`
@@ -284,7 +291,7 @@ type forkAdmission struct {
 	gate     execution.AdmissionGate
 	history  machine.SnapshotProofs
 	capacity ProvisionCapacity
-	Parent   operation.Record
+	Parent   operation.State
 	Input    ForkInput
 	MAC      string
 	Free     int64

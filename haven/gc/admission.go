@@ -41,7 +41,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 	if options.Batch < 1 || options.Batch > 1024 || options.Budget <= 0 {
 		return empty, fmt.Errorf("%w: invalid GC batch or budget", errs.ErrInvalid)
 	}
-	requestGuard := c.guards.NodeRequest(c.nodeID, key)
+	requestGuard := c.guards.ForNodeIdempotencyKey(c.nodeID, key)
 	requestGuard.Lock()
 	defer requestGuard.Unlock()
 	request := operation.Encode(struct {
@@ -68,7 +68,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 	}
 	budgetCtx, cancel := context.WithTimeout(ctx, options.Budget)
 	defer cancel()
-	if !c.guards.GarbageCollection().TryLock() {
+	if !c.guards.ForGCAdmission().TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -79,8 +79,8 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 			},
 		}, nil
 	}
-	defer c.guards.GarbageCollection().Unlock()
-	if !c.guards.Artifacts().TryLock() {
+	defer c.guards.ForGCAdmission().Unlock()
+	if !c.guards.ForImageArtifacts().TryLock() {
 		return types.GCReport{
 			DryRun: options.DryRun,
 			Deferred: []types.GCItem{
@@ -92,7 +92,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		}, nil
 	}
 	report, err := c.inventory(budgetCtx)
-	c.guards.Artifacts().Unlock()
+	c.guards.ForImageArtifacts().Unlock()
 	report.DryRun = options.DryRun
 	if err != nil {
 		return report, err
@@ -117,7 +117,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		return report, err
 	}
 	deadline, _ := budgetCtx.Deadline()
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",

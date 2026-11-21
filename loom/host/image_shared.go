@@ -322,7 +322,10 @@ func (i metadataInfo) Sys() any {
 }
 
 func (i metadataInfo) DataRange() []erofs.DataRange {
-	if r, ok := i.FileInfo.(interface{ DataRange() []erofs.DataRange }); ok {
+	if r, ok := i.FileInfo.(interface {
+		// DataRange returns the backing extents of the source file.
+		DataRange() []erofs.DataRange
+	}); ok {
 		return r.DataRange()
 	}
 	return nil

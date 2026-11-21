@@ -21,10 +21,14 @@ import (
 )
 
 type WarmClaimGuards interface {
-	Admission() execution.Guard
-	Configuration(string) execution.Guard
-	Sandbox(string) execution.Guard
-	VM(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
+	// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
+	ForSandboxLifecycle(sandboxID string) execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
 }
 
 type WarmClaimDependencies struct {
@@ -70,7 +74,7 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:          dependencies.Workers.Context(),
-		admission:    dependencies.Guards.Admission(),
+		admission:    dependencies.Guards.ForStoreMutation(),
 		gate:         dependencies.Gate,
 		guards:       dependencies.Guards,
 		workers:      dependencies.Workers,
@@ -117,7 +121,7 @@ func (wc *WarmClaims) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := wc.guards.Sandbox(step.Input.Pool.SandboxID)
+	lock := wc.guards.ForSandboxLifecycle(step.Input.Pool.SandboxID)
 	lock.Lock()
 	defer lock.Unlock()
 	step, err = LoadWarmClaim(wc.ctx, wc.store.Database, id)
@@ -151,7 +155,7 @@ func (wc *WarmClaims) runResource(link machine.ResourceLink) error {
 
 type WarmClaimInput struct {
 	RequestTenantID string                 `json:"request_tenant_id"`
-	Command         operation.Command      `json:"command"`
+	Command         operation.Intent       `json:"command"`
 	PoolID          string                 `json:"pool_id"`
 	Pool            supply.PoolReservation `json:"pool"`
 	Source          machine.ResourceStep   `json:"source"`

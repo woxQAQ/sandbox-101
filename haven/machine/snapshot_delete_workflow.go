@@ -87,7 +87,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 		physicalHolderKind = "checkpoint"
 		physicalHolderID = snapshot.ID
 	}
-	if count, err := quota.New(tx).CountMatchingReservation(ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner: "snapshot:" + snapshot.ID,
 		Bytes: (2*snapshot.Manifest.Config.Shape.MemoryMiB + snapshot.Manifest.Config.Shape.DiskMiB + 224) << 20,
 	}); err != nil || count != 1 {
@@ -119,11 +119,10 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 			return nil, fmt.Errorf("snapshot delete parent identity changed")
 		}
 	}
-	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountCost(ctx, "snapshot", snapshot.ID); err != nil || count != 1 {
+	if count, err := quota.CountCost(ctx, tx, "snapshot", snapshot.ID); err != nil || count != 1 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	if count, err := responsibilities.CountMatchingCost(ctx, quota.Cost{
+	if count, err := quota.CountMatchingCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        snapshot.TenantID,
 			Kind:            "snapshot",
@@ -134,10 +133,10 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 	}); err != nil || count != 1 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	if count, err := responsibilities.CountCostHolders(ctx, "snapshot", snapshot.ID); err != nil || count != int64(len(backings)+1) {
+	if count, err := quota.CountCostHolders(ctx, tx, "snapshot", snapshot.ID); err != nil || count != int64(len(backings)+1) {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	if count, err := responsibilities.CountCostReference(ctx, quota.CostReference{
+	if count, err := quota.CountCostReference(ctx, tx, quota.CostReference{
 		TenantID:   snapshot.TenantID,
 		Kind:       "snapshot",
 		Key:        snapshot.ID,
@@ -146,7 +145,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 	}); err != nil || count != 1 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	if count, err := responsibilities.CountResourceHolders(ctx, "snapshot", snapshot.ID); err != nil || count != int64(len(backings)+1) {
+	if count, err := quota.CountResourceHolders(ctx, tx, "snapshot", snapshot.ID); err != nil || count != int64(len(backings)+1) {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
 	for _, reference := range []quota.ResourceReference{
@@ -163,7 +162,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 			HolderID:   snapshot.ID,
 		},
 	} {
-		if count, err := responsibilities.CountResourceReference(ctx, reference); err != nil || count != 1 {
+		if count, err := quota.CountResourceReference(ctx, tx, reference); err != nil || count != 1 {
 			return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 		}
 	}
@@ -417,7 +416,6 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	publication := step.Input.Source.Snapshot
 	body, previousState, completed := operation.Encode(publication), operation.Encode(step.Phase), operation.Encode("complete")
 
-	responsibilities := quota.New(tx)
 	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).DeleteCheckpoint(sd.ctx, dbgen.DeleteCheckpointParams{
 		ID:     publication.ID,
@@ -426,7 +424,7 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(sd.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(sd.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         publication.ID,
 		HolderKind: "cleanup",
@@ -434,7 +432,7 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveCostReference(sd.ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(sd.ctx, tx, quota.CostReference{
 		TenantID:   publication.TenantID,
 		Kind:       "snapshot",
 		Key:        publication.ID,
@@ -443,7 +441,7 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.ReleaseReservation(sd.ctx, "snapshot:"+publication.ID); err != nil {
+	if err = quota.ReleaseReservation(sd.ctx, tx, "snapshot:"+publication.ID); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshot(sd.ctx, dbgen.DeleteSnapshotParams{

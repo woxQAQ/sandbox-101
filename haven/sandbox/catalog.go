@@ -9,6 +9,7 @@ import (
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
@@ -33,40 +34,39 @@ func (c *Catalog) OwnedRecord(ctx context.Context, principal authorization.Princ
 	tenant, err := sandboxOwner(ctx, c.database, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ownership.Sandbox{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+			return ownership.Sandbox{}, errs.ErrNotFound
 		}
 		return ownership.Sandbox{}, err
 	}
-	record, err := LoadSandbox(ctx, c.database, id, tenant)
-	if err != nil {
-		return record, err
+	// Foreign and absent objects have the same public response. Check visibility
+	// before decoding any private state belonging to the owner.
+	if !principal.Visible(tenant, id) {
+		return ownership.Sandbox{}, errs.ErrNotVisible
 	}
-	if !principal.Visible(record.TenantID, record.ID) {
-		return ownership.Sandbox{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
-	}
-	return record, nil
+	return LoadSandbox(ctx, c.database, id, tenant)
 }
 
-func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id string) (View, error) {
+func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id string) (types.Sandbox, error) {
 	record, err := c.OwnedRecord(ctx, principal, id)
 	if err != nil {
-		return View{}, err
+		return types.Sandbox{}, err
 	}
 	if record.Identity.TemplateID == "" || record.Identity.Epoch == "" || record.Identity.CreatedAt.IsZero() {
-		return View{}, fmt.Errorf("%w: sandbox birth identity is incomplete", errs.ErrManualRecovery)
+		return types.Sandbox{}, fmt.Errorf("%w: sandbox birth identity is incomplete", errs.ErrManualRecovery)
 	}
 	settings, err := LoadSettings(ctx, c.database, id)
 	if err != nil {
-		return View{}, err
+		return types.Sandbox{}, err
 	}
 	state, operationID := record.State, record.OperationID
 	fence, fenceErr := LifecycleFence(ctx, c.database, id)
 	if fenceErr != nil && !errors.Is(fenceErr, sql.ErrNoRows) {
-		return View{}, fenceErr
+		return types.Sandbox{}, fenceErr
 	}
 	if fenceErr == nil {
-		lifecycle, lookup := LoadLifecycleStep(ctx, c.database, fence)
-		if lookup == nil && lifecycle.IsComplete() && lifecycle.Input.OwnerTenantID == record.TenantID && lifecycle.Input.Sandbox.ID == id {
+		// Configure also holds this fence. Only a live lifecycle step changes the displayed state.
+		lifecycle, err := LoadLifecycleStep(ctx, c.database, fence)
+		if err == nil && !operation.Terminal(lifecycle.Status) && lifecycle.Input.OwnerTenantID == record.TenantID && lifecycle.Input.Sandbox.ID == id {
 			switch lifecycle.Input.Command.Action {
 			case "rollback":
 				state = "rolling_back"
@@ -78,11 +78,11 @@ func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id
 				state = "terminated"
 			}
 			operationID = fence
-		} else if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
-			return View{}, lookup
+		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return types.Sandbox{}, err
 		}
 	}
-	return View{
+	return types.Sandbox{
 		Epoch:           record.Identity.Epoch,
 		CreatedAt:       record.Identity.CreatedAt,
 		ProvisionSource: record.Identity.ProvisionSource,
@@ -94,13 +94,12 @@ func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id
 		Instance:        record.Instance,
 		SnapshotID:      record.SnapshotID,
 		TemplateID:      record.Identity.TemplateID,
-		Shape:           record.Identity.Shape,
+		Shape:           types.Shape(record.Identity.Shape),
 		Deadline:        settings.Deadline,
 		PausedUntil:     settings.PausedUntil,
 		TTLSeconds:      settings.TTLSeconds,
 		OnExpire:        settings.OnExpire,
 		AutoRenew:       settings.AutoRenew,
-		Env:             settings.Env,
 		Policy:          settings.Policy,
 		RequiresSecrets: len(settings.Secrets) > 0,
 		OperationID:     operationID,
@@ -124,7 +123,7 @@ func (c *Catalog) List(ctx context.Context, principal authorization.Principal) (
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, value.Public())
+		out = append(out, value)
 	}
 	return out, nil
 }
@@ -138,7 +137,7 @@ func (c *Catalog) GetCheckpoint(ctx context.Context, principal authorization.Pri
 		return checkpoint, err
 	}
 	if principal.SandboxID != "" || (!principal.Root && checkpoint.TenantID != principal.TenantID) {
-		return Checkpoint{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return Checkpoint{}, errs.ErrNotVisible
 	}
 	return checkpoint, nil
 }
@@ -192,23 +191,12 @@ func (c *Catalog) Unfenced(ctx context.Context, id string) error {
 
 // ResourceForData verifies persisted source and instance readiness for an
 // authorized view. Callers separately check the lease and live runtime state.
-func (c *Catalog) ResourceForData(ctx context.Context, view View) (machine.ResourceStep, error) {
+func (c *Catalog) ResourceForData(ctx context.Context, view types.Sandbox) (machine.ResourceStep, error) {
 	record, err := LoadSandbox(ctx, c.database, view.ID, view.TenantID)
 	if err != nil {
 		return machine.ResourceStep{}, err
 	}
-	source, err := machine.LoadResourceStep(ctx, c.database, record.SourceOperation)
-	if err != nil {
-		return source, err
-	}
-	resource, current, owner, err := machine.LoadVM(ctx, c.database, source)
-	if err != nil {
-		return source, err
-	}
-	if source.Status != "succeeded" || source.State.Witness != view.Instance || current != view.Instance || owner != "" || !resource.Verified || !resource.AgentReady || resource.Deleting {
-		return source, fmt.Errorf("%w: sandbox instance is not verified ready", errs.ErrConflict)
-	}
-	return source, nil
+	return machine.LoadReadyInstance(ctx, c.database, record.SourceOperation, view.Instance)
 }
 
 type CapabilityLookup struct {

@@ -14,6 +14,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
@@ -34,7 +35,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			paused, err := service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+			paused, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 				Action:    "pause",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -59,11 +60,11 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().Exec("CREATE TRIGGER reject_activation_completion BEFORE UPDATE OF status ON operation_steps WHEN OLD.action='activate' AND NEW.status='succeeded' BEGIN SELECT RAISE(" + rejection + "); END"); err != nil {
 				t.Fatal(err)
 			}
-			command := operation.Command{
+			command := operation.Intent{
 				Action:    "resume",
 				SandboxID: before.ID,
 			}
-			failed, err := service.SandboxRequests.Execute(ctx, principal, "resume", command)
+			failed, err := service.CommandRouter.Execute(ctx, principal, "resume", command)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("activation succeeded without its final handoff", failed, err)
 			}
@@ -79,7 +80,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER reject_activation_completion"); err != nil {
 				t.Fatal(err)
 			}
-			repaired, err := service.SandboxRequests.Execute(ctx, principal, "repair", command)
+			repaired, err := service.CommandRouter.Execute(ctx, principal, "repair", command)
 			if err != nil || repaired.Status != "succeeded" {
 				t.Fatal("explicit resume could not reuse retained sleep source", repaired, err)
 			}
@@ -87,7 +88,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if _, err = service.Dataplane.Ready(ctx, principal, before.ID); err != nil {
 				t.Fatal("successful activation did not publish data readiness", err)
 			}
-			for _, original := range []operation.Record{
+			for _, original := range []operation.State{
 				paused,
 				failed,
 			} {
@@ -105,7 +106,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	service, runtime, guest, manager := testapp.SandboxFixture(t)
 	secretFlag := false
 	const secret = "fixture-host-value-never-a-real-credential"
-	env := map[string]operation.EnvVar{
+	env := map[string]types.EnvVar{
 		"TOKEN": {
 			Value: secret,
 			Guest: &secretFlag,
@@ -168,7 +169,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	}
 	configured, err := restarted.Sandboxes.AdmitConfigure(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "resupply", operation.Command{
+	}, "resupply", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedOperation.Result.SandboxID,
 		Env:       env,
@@ -196,7 +197,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	env["TOKEN"] = changed
 	if _, err = restarted.Sandboxes.AdmitConfigure(ctx, authorization.Principal{
 		TenantID: "tenant",
-	}, "resupply", operation.Command{
+	}, "resupply", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedOperation.Result.SandboxID,
 		Env:       env,

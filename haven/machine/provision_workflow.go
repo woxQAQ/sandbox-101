@@ -86,7 +86,7 @@ func (p *Provisioning) startCandidate(step ResourceStep, restore bool) error {
 		return err
 	}
 	if observation.Network {
-		if err = p.backend.Network(p.ctx, r, false); err != nil {
+		if err = p.backend.SetNetworkEnabled(p.ctx, r, false); err != nil {
 			return err
 		}
 	}
@@ -94,7 +94,7 @@ func (p *Provisioning) startCandidate(step ResourceStep, restore bool) error {
 		if step.State.Phase != "launch_intent" {
 			return p.failStep(step, fmt.Errorf("%w: previous candidate exited; refusing another launch", errs.ErrUnknown))
 		}
-		if err = p.backend.Network(p.ctx, r, false); err != nil {
+		if err = p.backend.SetNetworkEnabled(p.ctx, r, false); err != nil {
 			return p.failStep(step, err)
 		}
 		if err = p.backend.Launch(p.ctx, r, restore); err != nil {
@@ -118,7 +118,7 @@ func (p *Provisioning) startCandidate(step ResourceStep, restore bool) error {
 		}
 	}
 	if err = p.backend.Agent(p.ctx, r, restore); err != nil {
-		networkErr := p.backend.Network(p.ctx, r, false)
+		networkErr := p.backend.SetNetworkEnabled(p.ctx, r, false)
 		stopErr := p.backend.Stop(p.ctx, r)
 		return p.failStep(step, errors.Join(err, networkErr, stopErr))
 	}
@@ -377,7 +377,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	if err = p.handoff.PublishInstance(p.ctx, tx, record, r.Instance); err != nil {
 		return err
 	}
-	if err = quota.New(tx).AddCost(p.ctx, quota.Cost{
+	if err = quota.AddCost(p.ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        record.TenantID,
 			Kind:            "vm_disk",
@@ -388,7 +388,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).AddCostReference(p.ctx, quota.CostReference{
+	if err = quota.AddCostReference(p.ctx, tx, quota.CostReference{
 		TenantID:   record.TenantID,
 		Kind:       "vm_disk",
 		Key:        current.Input.DiskKey,
@@ -397,7 +397,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RemoveCostReference(p.ctx, quota.CostReference{
+	if err = quota.RemoveCostReference(p.ctx, tx, quota.CostReference{
 		TenantID:   record.TenantID,
 		Kind:       "pending_storage",
 		Key:        step.OperationID + ":resource",
@@ -406,7 +406,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	}); err != nil {
 		return err
 	}
-	if err = quota.New(tx).RetireCostAtKey(p.ctx, record.TenantID, "pending_storage", step.OperationID+":resource"); err != nil {
+	if err = quota.RetireCostAtKey(p.ctx, tx, record.TenantID, "pending_storage", step.OperationID+":resource"); err != nil {
 		return err
 	}
 	for _, reference := range []struct {
@@ -419,7 +419,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 		{"image", r.Config.Image, "vm", r.VMID},
 	} {
 		if current.Action != "restore" || reference.kind != "image" {
-			if err = quota.New(tx).AddResourceReference(p.ctx, quota.ResourceReference{
+			if err = quota.AddResourceReference(p.ctx, tx, quota.ResourceReference{
 				Kind:       reference.kind,
 				ID:         reference.id,
 				HolderKind: reference.holderKind,
@@ -428,7 +428,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 				return err
 			}
 		}
-		if err = quota.New(tx).RemoveResourceReference(p.ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(p.ctx, tx, quota.ResourceReference{
 			Kind:       reference.kind,
 			ID:         reference.id,
 			HolderKind: "step",

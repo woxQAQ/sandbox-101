@@ -40,7 +40,7 @@ func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
 	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM operations").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	acceptedOperation, err := service.Forks.AdmitFork(context.Background(), principal, "too-many", operation.Command{
+	acceptedOperation, err := service.Forks.AdmitFork(context.Background(), principal, "too-many", operation.Intent{
 		Action:    "fork",
 		SandboxID: source.Result.SandboxID,
 		Count:     2,

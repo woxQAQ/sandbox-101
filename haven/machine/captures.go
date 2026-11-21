@@ -19,16 +19,20 @@ import (
 type CaptureBackend interface {
 	InstanceInspector
 
-	Compatibility() string
-	Pause(context.Context, loom.Resource) error
-	Resume(context.Context, loom.Resource) error
-	Capture(context.Context, loom.Resource, string) error
+	loom.SnapshotCompatibility
+	// Pause suspends guest execution before capture.
+	Pause(ctx context.Context, resource loom.Resource) error
+	// Resume continues guest execution after a pause.
+	Resume(ctx context.Context, resource loom.Resource) error
+	// Capture writes the paused VM state to the supplied directory.
+	Capture(ctx context.Context, resource loom.Resource, directory string) error
 }
 
 type CapturesGuards interface {
 	VMGuards
 
-	Capture(context.Context) (func(), error)
+	// AcquireCaptureSlot waits for the process-wide capture slot and returns its release function.
+	AcquireCaptureSlot(ctx context.Context) (func(), error)
 }
 
 // Captures freezes source custody and peak responsibility before pausing, then
@@ -68,7 +72,7 @@ func NewCaptures(state *store.State, dependencies CapturesDependencies, options 
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:         dependencies.Workers.Context(),
-		admission:   dependencies.Guards.Admission(),
+		admission:   dependencies.Guards.ForStoreMutation(),
 		guards:      dependencies.Guards,
 		lifetime:    dependencies.Lifetime,
 		workers:     dependencies.Workers,
@@ -127,7 +131,7 @@ func (c *Captures) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := c.guards.VM(step.Input.Source.Candidate)
+	guard := c.guards.ForVMLifecycle(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadCapture(c.ctx, c.store.Database, id)

@@ -16,12 +16,11 @@ import (
 
 // AdmitStop is an internal resource boundary for an undelivered sandbox. Running
 // Activated sessions require their separate deactivation/pause workflow.
-func (s *Stops) AdmitStop(ctx context.Context, request StopRequest) (operation.Record, error) {
+func (s *Stops) AdmitStop(ctx context.Context, request StopRequest) (operation.State, error) {
 	if s.
 		ownership ==
 		nil {
-		return operation.
-				Record{},
+		return operation.State{},
 			fmt.Errorf(
 				"%w: required Stops capability port unavailable",
 
@@ -31,12 +30,11 @@ func (s *Stops) AdmitStop(ctx context.Context, request StopRequest) (operation.R
 	return s.AdmitForParent(ctx, request, nil)
 }
 
-func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent ResourceParent) (operation.Record, error) {
+func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent ResourceParent) (operation.State, error) {
 	if s.
 		ownership ==
 		nil {
-		return operation.
-				Record{},
+		return operation.State{},
 			fmt.Errorf(
 				"%w: required Stops capability port unavailable",
 
@@ -47,7 +45,7 @@ func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent 
 	if authority, ok := parent.(StopParentAuthority); ok {
 		lifecycle, allowRunning = authority.StopLifecycle()
 	}
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.SandboxID == "" || request.ExpectedInstance == "" || request.Key == "" || len(request.Key) > 256 {
 		return empty, fmt.Errorf("stop requires scoped sandbox, instance and key")
 	}
@@ -106,7 +104,7 @@ func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent 
 		return empty, fmt.Errorf("stop current ownership changed")
 	}
 	operations := operation.New(tx)
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -278,7 +276,7 @@ func (s *Stops) runStop(step StopStep) error {
 	if observation.Alive {
 		return fmt.Errorf("stop exit unconfirmed")
 	}
-	if err = s.backend.Network(s.ctx, r, false); err != nil {
+	if err = s.backend.SetNetworkEnabled(s.ctx, r, false); err != nil {
 		return err
 	}
 	observation, err = s.backend.Inspect(s.ctx, r)

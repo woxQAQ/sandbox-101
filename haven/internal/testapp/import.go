@@ -14,7 +14,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 )
 
-func FailedCachedImport(t *testing.T, fault func(string) error) (*application.App, operation.Record) {
+func FailedCachedImport(t *testing.T, fault func(string) error) (*application.App, operation.State) {
 	t.Helper()
 	options := testfixture.PrivateOCIImport(t)
 	var abort atomic.Bool

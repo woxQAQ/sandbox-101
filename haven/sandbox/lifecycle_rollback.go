@@ -17,21 +17,21 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
 	if command.Action != "rollback" || command.SandboxID == "" || command.CheckpointID == "" || principal.SandboxID != "" || principal.TenantID == "" || key == "" || len(key) > 256 {
 		return empty, fmt.Errorf("%w: rollback requires tenant authority, sandbox, checkpoint and key", errs.ErrInvalid)
 	}
-	requestGuard := l.guards.TenantRequest(principal.TenantID, key)
-	requestGuard.Lock()
-	defer requestGuard.Unlock()
-	mac := l.commands.Identity.CommandMAC(principal, command)
+	keyGuard := l.guards.ForTenantIdempotencyKey(principal.TenantID, key)
+	keyGuard.Lock()
+	defer keyGuard.Unlock()
+	mac := l.identity.CommandMAC(principal, command)
 	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
 		MAC: mac,
 	}); found || err != nil {
 		return accepted, err
 	}
-	guard := l.guards.Configuration(command.SandboxID)
+	guard := l.guards.ForSandboxConfiguration(command.SandboxID)
 	guard.Lock()
 	defer guard.Unlock()
 	current, err := l.catalog.OwnedRecord(ctx, principal, command.SandboxID)
@@ -48,7 +48,7 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	if checkpoint.SandboxID != current.ID || checkpoint.TenantID != current.TenantID {
 		return empty, fmt.Errorf("%w: rollback checkpoint differs from sandbox owner", errs.ErrConflict)
 	}
-	snapshot, err := l.proofs.Snapshots().LoadRestoreSource(ctx, l.store.Database, current.TenantID, checkpoint.SnapshotID)
+	snapshot, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, l.store.Database, current.TenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -66,14 +66,14 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	if string(operation.Encode(source.Input.Resource.Config)) != string(operation.Encode(snapshot.Snapshot.Manifest.Config)) {
 		return empty, fmt.Errorf("%w: rollback shape/image differs from sandbox", errs.ErrConflict)
 	}
-	if current.State == "running" && l.commands.CredentialsMissing(current.ID, settings) {
+	if current.State == "running" && l.policy.CredentialsMissing(current.ID, settings) {
 		return empty, fmt.Errorf("%w: host credentials must be supplied again before rollback", errs.ErrConflict)
 	}
 	rawCaptures, err := machine.PendingPublishedCaptures(ctx, l.store.Database, source)
 	if err != nil {
 		return empty, err
 	}
-	parent := operation.Record{
+	parent := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -133,8 +133,8 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	return parent, nil
 }
 
-func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Record, input LifecycleInput, mac string) (operation.Record, error) {
-	var empty operation.Record
+func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.State, input LifecycleInput, mac string) (operation.State, error) {
+	var empty operation.State
 	l.admission.Lock()
 	defer l.admission.Unlock()
 	if err := l.gate.Check(); err != nil {
@@ -172,7 +172,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 	if !reflect.DeepEqual(checkpoint, input.Rollback.Checkpoint) {
 		return empty, fmt.Errorf("%w: paused rollback checkpoint changed", errs.ErrConflict)
 	}
-	source, err := l.proofs.Snapshots().LoadRestoreSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
+	source, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return empty, err
 	}
@@ -185,7 +185,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 	desired.Generation = parent.ID
 	frozen := operation.Encode(struct {
 		Action  string
-		Request operation.Command
+		Request operation.Intent
 	}{input.Command.Action, input.Command})
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
@@ -236,8 +236,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 		return empty, err
 	}
 	if current.SnapshotID != checkpoint.SnapshotID {
-		responsibilities := quota.New(tx)
-		if err = responsibilities.AddResourceReference(ctx, quota.ResourceReference{
+		if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         checkpoint.SnapshotID,
 			HolderKind: "sleep",
@@ -245,7 +244,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 		}); err != nil {
 			return empty, err
 		}
-		if err = responsibilities.AddCostReference(ctx, quota.CostReference{
+		if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 			TenantID:   input.OwnerTenantID,
 			Kind:       "snapshot",
 			Key:        checkpoint.SnapshotID,
@@ -254,7 +253,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 		}); err != nil {
 			return empty, err
 		}
-		if err = responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         current.SnapshotID,
 			HolderKind: "sleep",
@@ -262,7 +261,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.Re
 		}); err != nil {
 			return empty, err
 		}
-		if err = responsibilities.RemoveCostReference(ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
 			TenantID:   input.OwnerTenantID,
 			Kind:       "snapshot",
 			Key:        current.SnapshotID,
@@ -293,7 +292,7 @@ func (l *Lifecycle) runRollback(step LifecycleStep) error {
 	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "restore"); errors.Is(lookup, sql.ErrNoRows) {
 		link := &LifecycleAdmission{
 			History: l.proofs.Snapshots(),
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
@@ -324,7 +323,7 @@ func (l *Lifecycle) runRollback(step LifecycleStep) error {
 	if err = l.restoreActivation(step, child); err != nil {
 		return err
 	}
-	lock := l.guards.VM(child.Candidate)
+	lock := l.guards.ForVMLifecycle(child.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
 	return l.activations.Continue(step.OperationID)
@@ -336,7 +335,7 @@ func (l *Lifecycle) cleanupRollbackCaptures(step LifecycleStep, stop string) err
 		if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, role); errors.Is(lookup, sql.ErrNoRows) {
 			link := &LifecycleAdmission{
 				History: l.proofs.Snapshots(),
-				Parent: operation.Record{
+				Parent: operation.State{
 					ID: step.OperationID,
 				},
 				Input: step.Input,
@@ -372,7 +371,7 @@ func (admission *LifecycleAdmission) admitRollbackLease(ctx context.Context, tx 
 	if !reflect.DeepEqual(checkpoint, input.Rollback.Checkpoint) || checkpoint.SandboxID != input.Sandbox.ID {
 		return fmt.Errorf("%w: rollback checkpoint binding changed", errs.ErrConflict)
 	}
-	source, err := proofs.LoadRestoreSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
+	source, err := proofs.LoadSnapshotSource(ctx, tx, input.OwnerTenantID, checkpoint.SnapshotID)
 	if err != nil {
 		return err
 	}

@@ -116,7 +116,7 @@ func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx,
 	if !instance.Verified || !instance.AgentReady || !reflect.DeepEqual(instance.Resource, source.Input.Resource) || !reflect.DeepEqual(instance.Observation, source.State.Observation) {
 		return fmt.Errorf("retained instance birth proof changed")
 	}
-	count, err := quota.New(tx).CountStorageCostReference(ctx, quota.CostIdentity{
+	count, err := quota.CountStorageCostReference(ctx, tx, quota.CostIdentity{
 		TenantID:        source.Input.TenantID,
 		Kind:            "vm_disk",
 		Key:             source.Input.DiskKey,
@@ -191,7 +191,8 @@ func ValidateResourceStep(stateDirectory string, step ResourceStep) error {
 }
 
 type InstanceInspector interface {
-	Inspect(context.Context, loom.Resource) (loom.Observation, error)
+	// Inspect observes the identified instance and reports uncertainty as an error.
+	Inspect(ctx context.Context, resource loom.Resource) (loom.Observation, error)
 }
 
 func InspectStoppedGenerations(ctx context.Context, inspector InstanceInspector, generations []ResourceStep) error {
@@ -205,6 +206,22 @@ func InspectStoppedGenerations(ctx context.Context, inspector InstanceInspector,
 		}
 	}
 	return nil
+}
+
+// LoadReadyInstance verifies the provision witness and current VM ownership for data admission.
+func LoadReadyInstance(ctx context.Context, db store.DBTX, sourceOperation, instance string) (ResourceStep, error) {
+	source, err := LoadResourceStep(ctx, db, sourceOperation)
+	if err != nil {
+		return source, err
+	}
+	vm, current, owner, err := LoadVM(ctx, db, source)
+	if err != nil {
+		return source, err
+	}
+	if instance == "" || source.Status != "succeeded" || source.State.Witness != instance || current != instance || owner != "" || !vm.Verified || !vm.AgentReady || vm.Deleting {
+		return source, fmt.Errorf("%w: sandbox instance is not verified ready", errs.ErrConflict)
+	}
+	return source, nil
 }
 
 func LoadVM(ctx context.Context, database store.DBTX, step ResourceStep) (VMRecord, string, string, error) {

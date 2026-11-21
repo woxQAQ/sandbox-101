@@ -19,8 +19,8 @@ import (
 	"github.com/woxQAQ/haven/store"
 )
 
-func (i *Images) AdmitImport(ctx context.Context, principal authorization.Principal, key string, options imageimport.ImageImportOptions) (operation.Record, error) {
-	var empty operation.Record
+func (i *Images) AdmitImport(ctx context.Context, principal authorization.Principal, key string, options imageimport.ImageImportOptions) (operation.State, error) {
+	var empty operation.State
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
@@ -34,7 +34,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 	if err != nil {
 		return empty, err
 	}
-	guard := i.guards.NodeRequest(i.nodeID, key)
+	guard := i.guards.ForNodeIdempotencyKey(i.nodeID, key)
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := operation.Encode(struct {
@@ -51,8 +51,8 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		}
 		return cached, err
 	}
-	i.guards.Artifacts().Lock()
-	defer i.guards.Artifacts().Unlock()
+	i.guards.ForImageArtifacts().Lock()
+	defer i.guards.ForImageArtifacts().Unlock()
 	if err = ctx.Err(); err != nil {
 		return empty, err
 	}
@@ -95,7 +95,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",
@@ -105,7 +105,6 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		Phase: "admitted",
 	}
 	catalog := dbgen.New(tx)
-	responsibilities := quota.New(tx)
 	if input.Existing != nil {
 		current, err := LoadManifest(ctx, tx,
 
@@ -127,7 +126,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		if count != 0 {
 			return empty, fmt.Errorf("%w: image digest retains another import intent", errs.ErrConflict)
 		}
-		reserved, err := responsibilities.ReservedBytes(ctx)
+		reserved, err := quota.ReservedBytes(ctx, tx)
 		if err != nil {
 			return empty, err
 		}
@@ -182,7 +181,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		})); err != nil {
 			return empty, err
 		}
-		if err = responsibilities.Reserve(ctx, quota.Reservation{
+		if err = quota.Reserve(ctx, tx, quota.Reservation{
 			Owner: "import:" + accepted.ID,
 			Bytes: input.Reservation,
 		}); err != nil {

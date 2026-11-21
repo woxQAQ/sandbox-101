@@ -17,7 +17,7 @@ import (
 type LifecycleAdmission struct {
 	History machine.SnapshotProofs
 	Upper   machine.ResourceParent
-	Parent  operation.Record
+	Parent  operation.State
 	Input   LifecycleInput
 	MAC     string
 	Role    string
@@ -110,7 +110,7 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 		}
 		frozen := operation.Encode(struct {
 			Action  string
-			Request operation.Command
+			Request operation.Intent
 		}{input.Command.Action, input.Command})
 		payload := operation.Encode(input)
 		parent.Result.SandboxID = current.ID

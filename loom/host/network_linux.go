@@ -138,7 +138,7 @@ func (b *CloudHypervisor) networkPrepare(ctx context.Context, r Resource) error 
 		return e
 	}
 	// Gateway routes require UP next-hop devices and disappear when those
-	// devices go down. Network(enable) installs them before opening the TAP.
+	// devices go down. SetNetworkEnabled(enable) installs them before opening the TAP.
 	st, e := os.Stat("/run/netns/" + ns)
 	if e != nil {
 		return e
@@ -274,7 +274,7 @@ func ensureNetworkRoute(ctx context.Context, ns string, route networkRoute) erro
 	return err
 }
 
-func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) (result error) {
+func (b *CloudHypervisor) SetNetworkEnabled(ctx context.Context, r Resource, enable bool) (result error) {
 	ns, host, peer, mapped, hostIP, peerIP := netNames(r)
 	if _, x := os.Stat(filepath.Join(r.Dir, "network-removing.json")); x == nil {
 		if enable {
@@ -298,7 +298,7 @@ func (b *CloudHypervisor) Network(ctx context.Context, r Resource, enable bool) 
 		// failure also closes links that were already active before this call.
 		defer func() {
 			if result != nil {
-				result = errors.Join(result, b.Network(context.WithoutCancel(ctx), r, false))
+				result = errors.Join(result, b.SetNetworkEnabled(context.WithoutCancel(ctx), r, false))
 			}
 		}()
 		if err = b.checkHostPolicy(ctx); err != nil {
@@ -413,7 +413,7 @@ func (b *CloudHypervisor) networkRemove(ctx context.Context, r Resource) error {
 		if _, err = b.networkInspect(ctx, r); err != nil {
 			return err
 		}
-		if err = b.Network(ctx, r, false); err != nil {
+		if err = b.SetNetworkEnabled(ctx, r, false); err != nil {
 			return err
 		}
 		if err = writeJSON(marker, receipt); err != nil {

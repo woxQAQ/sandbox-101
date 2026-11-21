@@ -17,11 +17,11 @@ import (
 // while reading the original frozen operation view.
 type OperationDelivery struct {
 	database       *store.Database
-	operations     *operation.Operations
+	operations     *operation.Monitor
 	authentication *authorization.Authentication
 }
 
-func NewOperationDelivery(database *store.Database, operations *operation.Operations, authentication *authorization.Authentication) *OperationDelivery {
+func NewOperationDelivery(database *store.Database, operations *operation.Monitor, authentication *authorization.Authentication) *OperationDelivery {
 	return &OperationDelivery{
 		database:       database,
 		operations:     operations,

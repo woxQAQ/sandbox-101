@@ -21,15 +21,21 @@ import (
 )
 
 type LifecycleBackend interface {
-	Check(context.Context, loom.Config) error
+	// ValidateHostConfig validates the requested VM configuration against this host.
+	ValidateHostConfig(ctx context.Context, config loom.Config) error
 }
 
 type LifecycleGuards interface {
-	Admission() execution.Guard
-	TenantRequest(string, string) execution.Guard
-	Configuration(string) execution.Guard
-	Sandbox(string) execution.Guard
-	VM(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForTenantIdempotencyKey returns the lock shared by admissions using this tenant's key.
+	ForTenantIdempotencyKey(tenantID, key string) execution.Guard
+	// ForSandboxConfiguration returns the lock shared by settings changes, revocation and final data admission.
+	ForSandboxConfiguration(sandboxID string) execution.Guard
+	// ForSandboxLifecycle returns the lock for lifecycle transitions and readiness checks across VM generations.
+	ForSandboxLifecycle(sandboxID string) execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
 }
 
 type LifecycleOptions struct {
@@ -40,23 +46,24 @@ type LifecycleOptions struct {
 }
 
 type LifecycleDependencies struct {
-	Guards         LifecycleGuards
-	Gate           execution.AdmissionGate
-	Workers        *execution.Workers
-	Registry       *ephemeral.Registry
-	Proofs         machine.ResourceProofs
-	Committer      *operation.Committer
-	Commands       *SandboxCommands
-	Activations    *Activations
-	WarmClaims     *WarmClaims
-	Provisioning   *Provisioning
-	Captures       *machine.Captures
-	Stops          *machine.Stops
-	Deletion       *machine.Deletion
-	CaptureDiscard *machine.CaptureDiscard
-	CaptureCleanup *machine.CaptureCleanup
-	Policies       *machine.DirectPolicies
-	Links          *machine.ResourceLinks
+	Guards          LifecycleGuards
+	Gate            execution.AdmissionGate
+	Workers         *execution.Workers
+	Registry        *ephemeral.Registry
+	Proofs          machine.ResourceProofs
+	Committer       *operation.Committer
+	CommandIdentity *operation.CommandIdentity
+	AdmissionPolicy *AdmissionPolicy
+	Activations     *Activations
+	WarmClaims      *WarmClaims
+	Provisioning    *Provisioning
+	Captures        *machine.Captures
+	Stops           *machine.Stops
+	Deletion        *machine.Deletion
+	CaptureDiscard  *machine.CaptureDiscard
+	CaptureCleanup  *machine.CaptureCleanup
+	Policies        *machine.DirectPolicies
+	Links           *machine.ResourceLinks
 }
 
 // Lifecycle owns sandbox pause/resume, rollback, release and checkpoint custody.
@@ -72,7 +79,8 @@ type Lifecycle struct {
 	registry       *ephemeral.Registry
 	proofs         machine.ResourceProofs
 	catalog        *Catalog
-	commands       *SandboxCommands
+	identity       *operation.CommandIdentity
+	policy         *AdmissionPolicy
 	activations    *Activations
 	warmClaims     *WarmClaims
 	provisioning   *Provisioning
@@ -96,14 +104,15 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:            dependencies.Workers.Context(),
-		admission:      dependencies.Guards.Admission(),
+		admission:      dependencies.Guards.ForStoreMutation(),
 		gate:           dependencies.Gate,
 		guards:         dependencies.Guards,
 		workers:        dependencies.Workers,
 		registry:       dependencies.Registry,
 		proofs:         dependencies.Proofs,
 		catalog:        NewCatalog(state.Database()),
-		commands:       dependencies.Commands,
+		identity:       dependencies.CommandIdentity,
+		policy:         dependencies.AdmissionPolicy,
 		activations:    dependencies.Activations,
 		warmClaims:     dependencies.WarmClaims,
 		provisioning:   dependencies.Provisioning,
@@ -126,8 +135,8 @@ func (l *Lifecycle) fault(point string) error {
 	return nil
 }
 
-func (l *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.Record, bool, error) {
-	accepted, found, err := l.commands.Identity.Existing(ctx, principal, key, operation.CommandCredentials{
+func (l *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
+	accepted, found, err := l.identity.Existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     admission.MAC,
 		Secrets: admission.Secrets,
 	})
@@ -161,7 +170,7 @@ func (l *Lifecycle) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lock := l.guards.Sandbox(step.Input.Sandbox.ID)
+	lock := l.guards.ForSandboxLifecycle(step.Input.Sandbox.ID)
 	lock.Lock()
 	defer lock.Unlock()
 	step, err = LoadLifecycleStep(l.ctx, l.store.Database, id)
@@ -214,7 +223,7 @@ type LifecycleInput struct {
 	CheckpointID    string                    `json:"checkpoint_id,omitempty"`
 	RequestTenantID string                    `json:"request_tenant_id"`
 	OwnerTenantID   string                    `json:"owner_tenant_id"`
-	Command         operation.Command         `json:"command"`
+	Command         operation.Intent          `json:"command"`
 	Sandbox         ownership.Sandbox         `json:"sandbox"`
 	Settings        Settings                  `json:"settings"`
 	Source          ownership.GenerationRef   `json:"source"`
@@ -237,10 +246,6 @@ type LifecycleStep struct {
 	Status      string
 	Input       LifecycleInput
 	State       LifecycleState
-}
-
-func (step LifecycleStep) IsComplete() bool {
-	return step.Status != "succeeded" && step.Status != "failed"
 }
 
 func LoadLifecycleStep(ctx context.Context, database store.DBTX, id string) (LifecycleStep, error) {

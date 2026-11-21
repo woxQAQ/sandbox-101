@@ -20,9 +20,9 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	runtime.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if acceptedRecord, err := service.SandboxRequests.Execute(ctx, authorization.Principal{
+	if acceptedRecord, err := service.CommandRouter.Execute(ctx, authorization.Principal{
 		TenantID: "tenant",
-	}, "refill", operation.Command{
+	}, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	}); err == nil || acceptedRecord.Status != "failed" {

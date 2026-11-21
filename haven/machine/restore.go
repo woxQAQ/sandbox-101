@@ -201,7 +201,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 			return fmt.Errorf("backing transfer lacks complete material proof")
 		}
 	} else {
-		current, err := proofs.LoadRestoreSource(ctx, tx, step.Input.TenantID, source.Snapshot.ID)
+		current, err := proofs.LoadSnapshotSource(ctx, tx, step.Input.TenantID, source.Snapshot.ID)
 		if err != nil {
 			return err
 		}
@@ -210,7 +210,6 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 		}
 	}
 
-	responsibilities := quota.New(tx)
 	count, err := dbgen.New(tx).CountCaptureOwner(ctx, dbgen.CountCaptureOwnerParams{
 		SnapshotID:        source.Snapshot.ID,
 		TenantID:          step.Input.TenantID,
@@ -221,7 +220,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 		return fmt.Errorf("restore dependency responsibility changed: %v", err)
 	}
 	shape := step.Input.Resource.Config.Shape
-	count, err = responsibilities.CountMatchingCost(ctx, quota.Cost{
+	count, err = quota.CountMatchingCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        step.Input.TenantID,
 			Kind:            "snapshot",
@@ -233,7 +232,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 	if err != nil || count != 1 {
 		return fmt.Errorf("restore dependency responsibility changed: %v", err)
 	}
-	count, err = responsibilities.CountMatchingReservation(ctx, quota.Reservation{
+	count, err = quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner: "restore:" + step.OperationID,
 		Bytes: (shape.MemoryMiB + shape.DiskMiB + 64) << 20,
 	})
@@ -261,7 +260,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 		if err != nil || count != 1 {
 			return fmt.Errorf("restore dependency responsibility changed: %v", err)
 		}
-		count, err = responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+		count, err = quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       "snapshot",
 			ID:         source.Snapshot.ID,
 			HolderKind: "backing",
@@ -286,7 +285,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 			return fmt.Errorf("restore dependency responsibility changed: %v", err)
 		}
 	}
-	count, err = responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+	count, err = quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         source.Snapshot.ID,
 		HolderKind: "step",
@@ -296,7 +295,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 		return fmt.Errorf("restore dependency responsibility changed: %v", err)
 	}
 	if step.State.BackingReady {
-		count, err = responsibilities.CountCostReference(ctx, quota.CostReference{
+		count, err = quota.CountCostReference(ctx, tx, quota.CostReference{
 			TenantID:   step.Input.TenantID,
 			Kind:       "snapshot",
 			Key:        source.Snapshot.ID,
@@ -307,7 +306,7 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 			return fmt.Errorf("restore dependency responsibility changed: %v", err)
 		}
 	}
-	count, err = responsibilities.CountCostReference(ctx, quota.CostReference{
+	count, err = quota.CountCostReference(ctx, tx, quota.CostReference{
 		TenantID:   step.Input.TenantID,
 		Kind:       "snapshot",
 		Key:        source.Snapshot.ID,
@@ -391,7 +390,6 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	next.BackingReady = true
 	next.Phase = "restore_resources_ready"
 
-	responsibilities := quota.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).InsertBacking(p.ctx, dbgen.InsertBackingParams{
 		Path:   filepath.Join(step.Input.Resource.RestoreDir, "memory-ranges"),
 		VmID:   step.Candidate,
@@ -399,7 +397,7 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = responsibilities.AddResourceReference(p.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(p.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         source.ID,
 		HolderKind: "backing",
@@ -407,7 +405,7 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(p.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(p.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         source.ID,
 		HolderKind: "step",
@@ -415,7 +413,7 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.TransferCostReference(p.ctx, quota.CostReference{
+	if err = quota.TransferCostReference(p.ctx, tx, quota.CostReference{
 		TenantID:   step.Input.TenantID,
 		Kind:       "snapshot",
 		Key:        source.ID,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
@@ -55,7 +56,7 @@ type App struct {
 	Availability     *execution.Availability
 	Catalog          *sandbox.Catalog
 	TemplateCatalog  *supply.TemplateCatalog
-	Operations       *operation.Operations
+	Operations       *operation.Monitor
 	Delivery         *sandbox.OperationDelivery
 	Tenants          *authorization.Tenants
 	SnapshotDeletion *machine.SnapshotDeletion
@@ -76,15 +77,16 @@ type App struct {
 	Audits           *dataplane.Audits
 	ProxySockets     *dataplane.ProxySockets
 	Node             *node.Service
-	SandboxRequests  *sandbox.SandboxRequests
+	CommandRouter    *sandbox.CommandRouter
 	Reconcile        *reconcile.Coordinator
 
-	WarmClaims     *sandbox.WarmClaims
-	ResourceLinks  *machine.ResourceLinks
-	Commands       *sandbox.SandboxCommands
-	Activations    *sandbox.Activations
-	Images         *image.Images
-	CaptureCleanup *machine.CaptureCleanup
+	WarmClaims      *sandbox.WarmClaims
+	ResourceLinks   *machine.ResourceLinks
+	CommandIdentity *operation.CommandIdentity
+	AdmissionPolicy *sandbox.AdmissionPolicy
+	Activations     *sandbox.Activations
+	Images          *image.Images
+	CaptureCleanup  *machine.CaptureCleanup
 
 	guards    *execution.Guards
 	Ephemeral *ephemeral.Registry
@@ -129,19 +131,20 @@ func Open(opts Options) (*App, error) {
 	lifetime := execution.NewLifetime(parent)
 	workers := execution.NewWorkers(lifetime)
 	guards := execution.NewGuards()
-	admission := guards.Admission()
-	admissionGate := execution.NewAdmissionGate(guards.Registration(), lifetime, state.Reviewed())
+	admission := guards.ForStoreMutation()
+	admissionGate := execution.NewAdmissionGate(guards.ForServiceAdmission(), lifetime, state.Reviewed())
 	snapshotProofs := machine.NewSnapshotProofs(state.Directory(), opts.Backend)
 	resourceProofs := machine.NewResourceProofs(snapshotProofs, sandbox.ActivationHistory{})
 	authentication := authorization.NewAuthentication(opts.AdminToken, authorization.New(state.Database()), sandbox.NewCapabilityLookup(state.Database()), state.Sign)
-	operations := operation.NewOperations(state.Database(), workers, state.Identity().Identity)
+	operations := operation.NewMonitor(state.Database(), workers, state.Identity().Identity)
 	registry := ephemeral.New()
 	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.New(state.Database()), operations, registry, state.Sign)
 	service := &App{
 		Authentication:  authentication,
-		Availability:    execution.NewAvailability(guards.Registration()),
-		mu:              guards.Registration(),
-		Commands:        sandbox.NewSandboxCommands(opts.MaxTTL, commandIdentity, registry),
+		Availability:    execution.NewAvailability(guards.ForServiceAdmission()),
+		mu:              guards.ForServiceAdmission(),
+		CommandIdentity: commandIdentity,
+		AdmissionPolicy: sandbox.NewAdmissionPolicy(opts.MaxTTL, registry),
 		Catalog:         sandbox.NewCatalog(state.Database()),
 		TemplateCatalog: supply.NewTemplateCatalog(state.Database()),
 		Operations:      operations,
@@ -343,23 +346,24 @@ func Open(opts Options) (*App, error) {
 		Links:        service.ResourceLinks,
 	}, opts.Fault)
 	service.Lifecycle = sandbox.NewLifecycle(state, sandbox.LifecycleDependencies{
-		Guards:         guards,
-		Gate:           admissionGate,
-		Workers:        workers,
-		Registry:       registry,
-		Proofs:         resourceProofs,
-		Committer:      committer,
-		Commands:       service.Commands,
-		Activations:    service.Activations,
-		WarmClaims:     service.WarmClaims,
-		Provisioning:   service.Provisioning,
-		Captures:       service.Captures,
-		Stops:          service.Stops,
-		Deletion:       service.Deletion,
-		CaptureDiscard: service.CaptureDiscard,
-		CaptureCleanup: service.CaptureCleanup,
-		Policies:       service.DirectPolicies,
-		Links:          service.ResourceLinks,
+		Guards:          guards,
+		Gate:            admissionGate,
+		Workers:         workers,
+		Registry:        registry,
+		Proofs:          resourceProofs,
+		Committer:       committer,
+		CommandIdentity: commandIdentity,
+		AdmissionPolicy: service.AdmissionPolicy,
+		Activations:     service.Activations,
+		WarmClaims:      service.WarmClaims,
+		Provisioning:    service.Provisioning,
+		Captures:        service.Captures,
+		Stops:           service.Stops,
+		Deletion:        service.Deletion,
+		CaptureDiscard:  service.CaptureDiscard,
+		CaptureCleanup:  service.CaptureCleanup,
+		Policies:        service.DirectPolicies,
+		Links:           service.ResourceLinks,
 	}, sandbox.LifecycleOptions{
 		Backend:   opts.Backend,
 		MaxTTL:    opts.MaxTTL,
@@ -367,40 +371,41 @@ func Open(opts Options) (*App, error) {
 		Fault:     opts.Fault,
 	})
 	service.Sandboxes = sandbox.NewSandboxes(state, sandbox.SandboxDependencies{
-		Guards:       guards,
-		Workers:      workers,
-		Closing:      lifetime,
-		Registry:     registry,
-		History:      snapshotProofs,
-		Committer:    committer,
-		Commands:     service.Commands,
-		Availability: service.Availability,
-		Operations:   service.Operations,
-		Activations:  service.Activations,
-		WarmClaims:   service.WarmClaims,
-		Provisioning: service.Provisioning,
-		Policies:     service.DirectPolicies,
-	}, sandbox.SandboxOptions{
-		Backend: opts.Backend,
-		Guest:   opts.Guest,
-		Fault:   opts.Fault,
+		Guards:          guards,
+		Workers:         workers,
+		Closing:         lifetime,
+		Registry:        registry,
+		SnapshotProofs:  snapshotProofs,
+		Committer:       committer,
+		CommandIdentity: commandIdentity,
+		AdmissionPolicy: service.AdmissionPolicy,
+		Availability:    service.Availability,
+		Operations:      service.Operations,
+		Activations:     service.Activations,
+		WarmClaims:      service.WarmClaims,
+		Provisioning:    service.Provisioning,
+		Policies:        service.DirectPolicies,
+		Backend:         opts.Backend,
+		Guest:           opts.Guest,
+		Fault:           opts.Fault,
 	})
 	service.Forks = sandbox.NewForks(state, sandbox.ForkDependencies{
-		Guards:       guards,
-		Gate:         admissionGate,
-		Workers:      workers,
-		Registry:     registry,
-		History:      snapshotProofs,
-		Committer:    committer,
-		Commands:     service.Commands,
-		Availability: service.Availability,
-		Operations:   service.Operations,
-		Provisioning: service.Provisioning,
-		Captures:     service.Captures,
-		Deletion:     service.Deletion,
-		Lifecycle:    service.Lifecycle,
-		Policies:     service.DirectPolicies,
-		Links:        service.ResourceLinks,
+		Guards:          guards,
+		Gate:            admissionGate,
+		Workers:         workers,
+		Registry:        registry,
+		History:         snapshotProofs,
+		Committer:       committer,
+		CommandIdentity: commandIdentity,
+		AdmissionPolicy: service.AdmissionPolicy,
+		Availability:    service.Availability,
+		Operations:      service.Operations,
+		Provisioning:    service.Provisioning,
+		Captures:        service.Captures,
+		Deletion:        service.Deletion,
+		Lifecycle:       service.Lifecycle,
+		Policies:        service.DirectPolicies,
+		Links:           service.ResourceLinks,
 	}, sandbox.ForkOptions{
 		Backend: opts.Backend,
 		Guest:   opts.Guest,
@@ -412,21 +417,21 @@ func Open(opts Options) (*App, error) {
 		Fault: opts.Fault,
 	})
 	service.Dataplane = dataplane.NewPlane(state, dataplane.PlaneDependencies{
-		Guards:      guards,
-		Lifetime:    lifetime,
-		Registry:    registry,
-		Commands:    service.Commands,
-		Sandboxes:   service.Sandboxes,
-		Lifecycle:   service.Lifecycle,
-		Operations:  service.Operations,
-		Activations: service.Activations,
+		Guards:          guards,
+		Lifetime:        lifetime,
+		Registry:        registry,
+		AdmissionPolicy: service.AdmissionPolicy,
+		Sandboxes:       service.Sandboxes,
+		Lifecycle:       service.Lifecycle,
+		Operations:      service.Operations,
+		Activations:     service.Activations,
 	}, dataplane.PlaneOptions{
 		Backend: opts.Backend,
 		Guest:   opts.Guest,
 		Epoch:   registry.Epoch(),
 	})
 	service.Node = node.New(state, service.Availability)
-	service.SandboxRequests = sandbox.NewSandboxRequests(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
+	service.CommandRouter = sandbox.NewCommandRouter(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
 	policies := service.DirectPolicies
 	deletion := service.Deletion
 	service.Reconcile = reconcile.New(state, reconcile.Dependencies{
@@ -482,7 +487,7 @@ func (a *App) Close(ctx context.Context) error {
 		}
 		a.Admission.Lock()
 		defer a.Admission.Unlock()
-		if closer, ok := a.Options.Backend.(interface{ Close() error }); ok {
+		if closer, ok := a.Options.Backend.(io.Closer); ok {
 			err = errors.Join(err, closer.Close())
 		}
 		return errors.Join(err, a.State.Close())

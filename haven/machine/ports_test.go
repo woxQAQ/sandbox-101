@@ -40,7 +40,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = quota.New(state.Database()).Reserve(ctx, quota.Reservation{
+	if err = quota.Reserve(ctx, state.Database(), quota.Reservation{
 		Owner: "snapshot:retained",
 		Bytes: 4096,
 	}); err != nil {
@@ -73,7 +73,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	}, nil)
 	provision := machine.NewProvisioning(state, machine.ProvisioningDependencies{
 		Context:   ctx,
-		Admission: guards.Admission(),
+		Admission: guards.ForStoreMutation(),
 	}, nil)
 	for _, scenario := range []struct {
 		name string
@@ -135,7 +135,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	if err = state.Database().QueryRowContext(ctx, "SELECT status FROM operations WHERE id='retained'").Scan(&status); err != nil || status != "pending" {
 		t.Fatal(status, err)
 	}
-	capacity, err := quota.New(state.Database()).ReservedCapacity(ctx)
+	capacity, err := quota.ReservedCapacity(ctx, state.Database())
 	if err != nil || capacity.Bytes != 4096 {
 		t.Fatal("missing port retired responsibility", capacity, err)
 	}

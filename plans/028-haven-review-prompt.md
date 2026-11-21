@@ -2,7 +2,7 @@
 
 你在 `woxQAQ/sandbox-101` 实施基于 `c658c77` 的 review 意见。目标是让读代码的人能从路由看出业务能力，从包和方法名看出依赖与生命周期。交付代码、同步后的当前契约、行为测试结果，以及下面 16 个编号的完成情况。编号对应原 review，本文件包含执行所需的结论。
 
-先读根 `AGENTS.md`，核对当前 HEAD 和已有工作区改动。用 `rg` 找定义、调用者和测试；基准提交的路径是定位线索。HTTP 依据 `docs/haven-control.md` 和 `haven/sandbox/api.md`，guest 依据 `guest/README.md`、`protocol/README.md`，出网语义依据 `haven/egress/README.md`。路由改动开始前列出旧 method/path、使用方、目标 method/path、对应业务命令，盘点 SDK、CLI、脚本、测试和当前文档。然后按以下顺序实施。
+先读根 `AGENTS.md`，核对当前 HEAD 和已有工作区改动。用 `rg` 找定义、调用者和测试；基准提交的路径是定位线索。HTTP 依据 `docs/haven-control.md` 和 `docs/sandbox-api.md`，guest 依据 `guest/README.md`、`protocol/README.md`，出网语义依据 `haven/egress/README.md`。路由改动开始前列出旧 method/path、使用方、目标 method/path、对应业务命令，盘点 SDK、CLI、脚本、测试和当前文档。然后按以下顺序实施。
 
 ## 一、澄清身份、后端和 guest 接口（2、4、9、10、11）
 

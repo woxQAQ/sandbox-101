@@ -9,7 +9,7 @@ import (
 	"github.com/woxQAQ/haven/operation"
 )
 
-func CloneFixtureWithFault(t *testing.T, fault func(string) error) (*application.App, *testfixture.RestorableRuntime, operation.Record) {
+func CloneFixtureWithFault(t *testing.T, fault func(string) error) (*application.App, *testfixture.RestorableRuntime, operation.State) {
 	t.Helper()
 	service, _ := ColdServiceWithBackend(t, fault, testfixture.RestorableBackend)
 	backend := service.Options.Backend.(*testfixture.RestorableRuntime)

@@ -16,6 +16,7 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
@@ -38,9 +39,9 @@ func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := service.SandboxRequests.Execute(ctx, principal, "failed-build", operation.Command{
+	original, err := service.CommandRouter.Execute(ctx, principal, "failed-build", operation.Intent{
 		Action: "template_build",
-		Template: &operation.TemplateSpec{
+		Template: &types.Template{
 			ID:         "failed-build",
 			Image:      cold.Image,
 			Shape:      cold.Shape,

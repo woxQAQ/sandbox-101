@@ -16,66 +16,64 @@ import (
 
 var errFailed = fmt.Errorf("%w: operation failed", errs.ErrConflict)
 
-// SettledFailure reports whether the wait confirmed this operation's terminal
+// IsTerminalFailure reports whether the wait confirmed this operation's terminal
 // failure after the worker released custody. A child worker can also fail
 // while its parent operation is still pending.
-func (r Record) SettledFailure(waitErr error) bool {
+func (r State) IsTerminalFailure(waitErr error) bool {
 	return r.Status == "failed" && errors.Is(waitErr, errFailed)
 }
 
 // WorkerReader observes process-local completion without granting dispatch or
 // shutdown authority. Durable status remains owned by the operation repository.
 type WorkerReader interface {
-	State(string) execution.WorkerState
+	// State reports process-local worker custody and the last execution error.
+	State(operationID string) execution.WorkerState
 }
 
-// Operations authorizes operation reads and waits for accepted work to settle.
-// It does not submit effects or own worker lifetime. Terminal business views are
-// read from immutable publications, with capabilities derived only on delivery.
-type Operations struct {
-	database   *store.Database
+// Monitor authorizes scoped reads and observes accepted operations until their
+// durable result is terminal and the worker has released custody.
+type Monitor struct {
 	repository *Repository
 	workers    WorkerReader
 	nodeID     string
 }
 
-func NewOperations(database *store.Database, workers WorkerReader, nodeID string) *Operations {
-	return &Operations{
-		database:   database,
+func NewMonitor(database *store.Database, workers WorkerReader, nodeID string) *Monitor {
+	return &Monitor{
 		repository: New(database),
 		workers:    workers,
 		nodeID:     nodeID,
 	}
 }
 
-func (o *Operations) GetOperation(ctx context.Context, tenant, id string) (Record, error) {
+func (o *Monitor) GetOperation(ctx context.Context, tenant, id string) (State, error) {
 	return o.repository.Get(ctx, "tenant", tenant, id)
 }
 
-func (o *Operations) GetManagementOperation(ctx context.Context, principal authorization.Principal, id string) (Record, error) {
+func (o *Monitor) GetManagementOperation(ctx context.Context, principal authorization.Principal, id string) (State, error) {
 	if !principal.Root || principal.SandboxID != "" {
-		return Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return State{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	return o.repository.Get(ctx, "node", o.nodeID, id)
 }
 
-func (o *Operations) Operation(ctx context.Context, principal authorization.Principal, id string) (Record, error) {
+func (o *Monitor) Operation(ctx context.Context, principal authorization.Principal, id string) (State, error) {
 	record, _, err := o.authorized(ctx, principal, id)
 	return record, err
 }
 
 // authorized resolves root reads to the immutable tenant scope and preserves
 // root-only command credentials and sandbox capability confinement.
-func (o *Operations) authorized(ctx context.Context, principal authorization.Principal, id string) (Record, string, error) {
+func (o *Monitor) authorized(ctx context.Context, principal authorization.Principal, id string) (State, string, error) {
 	tenant := principal.TenantID
 	if principal.Root {
 		var err error
 		tenant, err = o.repository.TenantScope(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return Record{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
+			return State{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 		}
 		if err != nil {
-			return Record{}, "", err
+			return State{}, "", err
 		}
 	}
 	record, err := o.GetOperation(ctx, tenant, id)
@@ -84,21 +82,21 @@ func (o *Operations) authorized(ctx context.Context, principal authorization.Pri
 	}
 	mac, lookup := o.repository.CredentialMAC(ctx, id)
 	if lookup == nil && strings.HasPrefix(mac, "root:") && !principal.Root {
-		return Record{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
+		return State{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 	}
 	if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
-		return Record{}, "", lookup
+		return State{}, "", lookup
 	}
 	if principal.SandboxID != "" && record.Result.SandboxID != principal.SandboxID {
-		return Record{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
+		return State{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 	}
 	return record, tenant, nil
 }
 
-func (o *Operations) Wait(ctx context.Context, principal authorization.Principal, id string) (Record, error) {
+func (o *Monitor) Wait(ctx context.Context, principal authorization.Principal, id string) (State, error) {
 	_, tenant, err := o.authorized(ctx, principal, id)
 	if err != nil {
-		return Record{}, err
+		return State{}, err
 	}
 	return o.wait(ctx, Scope{
 		Kind: "tenant",
@@ -109,16 +107,16 @@ func (o *Operations) Wait(ctx context.Context, principal authorization.Principal
 // WaitAccepted waits for an already accepted tenant operation during workflow
 // orchestration. Its caller must separately verify frozen parent/child authority;
 // observing completion here does not grant permission to hand off responsibility.
-func (o *Operations) WaitAccepted(ctx context.Context, tenant, id string) (Record, error) {
+func (o *Monitor) WaitAccepted(ctx context.Context, tenant, id string) (State, error) {
 	return o.wait(ctx, Scope{
 		Kind: "tenant",
 		ID:   tenant,
 	}, id, "")
 }
 
-func (o *Operations) WaitManagement(ctx context.Context, principal authorization.Principal, id string) (Record, error) {
+func (o *Monitor) WaitManagement(ctx context.Context, principal authorization.Principal, id string) (State, error) {
 	if !principal.Root || principal.SandboxID != "" {
-		return Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return State{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	return o.wait(ctx, Scope{
 		Kind: "node",
@@ -126,14 +124,16 @@ func (o *Operations) WaitManagement(ctx context.Context, principal authorization
 	}, id, "")
 }
 
-func (o *Operations) wait(ctx context.Context, scope Scope, id, sandbox string) (Record, error) {
+// wait observes the durable result and process-local worker custody. Recovery and
+// dispatch are owned by the workflow that admitted the operation.
+func (o *Monitor) wait(ctx context.Context, scope Scope, id, sandbox string) (State, error) {
 	for {
 		record, err := o.repository.Get(ctx, scope.Kind, scope.ID, id)
 		if err != nil {
 			return record, err
 		}
 		if sandbox != "" && record.Result.SandboxID != sandbox {
-			return Record{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
+			return State{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 		}
 		worker := o.workers.State(id)
 		terminal := record.Status == "succeeded" || record.Status == "failed"

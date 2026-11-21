@@ -83,8 +83,8 @@ func imageCleanupFence(ctx context.Context, q store.DBTX, kind, id string) error
 	return nil
 }
 
-func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Principal, key string, request ImageCleanupRequest) (operation.Record, error) {
-	var empty operation.Record
+func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Principal, key string, request ImageCleanupRequest) (operation.State, error) {
+	var empty operation.State
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
@@ -93,7 +93,7 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 	if key == "" || len(key) > 256 || work == cache || (work && (request.CacheBuilder != "" || request.CacheDiffID != "")) {
 		return empty, fmt.Errorf("%w: image cleanup requires one exact import or cache", errs.ErrInvalid)
 	}
-	guard := i.guards.NodeRequest(i.nodeID, key)
+	guard := i.guards.ForNodeIdempotencyKey(i.nodeID, key)
 	guard.Lock()
 	defer guard.Unlock()
 	frozen := operation.Encode(struct {
@@ -110,10 +110,10 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 		}
 		return cached, err
 	}
-	if !i.guards.Artifacts().TryLock() {
+	if !i.guards.ForImageArtifacts().TryLock() {
 		return empty, fmt.Errorf("%w: artifact producer or collector active", errs.ErrConflict)
 	}
-	defer i.guards.Artifacts().Unlock()
+	defer i.guards.ForImageArtifacts().Unlock()
 	input := imageCleanupInput{
 		RequestTenantID: principal.TenantID,
 	}
@@ -187,7 +187,7 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 			return empty, fmt.Errorf("%w: image cache has live consumers", errs.ErrConflict)
 		}
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
 		Status: "pending",

@@ -70,12 +70,12 @@ func (r *Repository) ReplaceLiveBody(ctx context.Context, id string, body []byte
 type CommandIdentity struct {
 	ctx        context.Context
 	operations *Repository
-	view       *Operations
+	view       *Monitor
 	registry   *ephemeral.Registry
 	sign       func(...string) string
 }
 
-func NewCommandIdentity(ctx context.Context, operations *Repository, view *Operations, registry *ephemeral.Registry, sign func(...string) string) *CommandIdentity {
+func NewCommandIdentity(ctx context.Context, operations *Repository, view *Monitor, registry *ephemeral.Registry, sign func(...string) string) *CommandIdentity {
 	return &CommandIdentity{
 		ctx:        ctx,
 		operations: operations,
@@ -85,7 +85,7 @@ func NewCommandIdentity(ctx context.Context, operations *Repository, view *Opera
 	}
 }
 
-func (ci *CommandIdentity) CommandMAC(principal authorization.Principal, command Command) string {
+func (ci *CommandIdentity) CommandMAC(principal authorization.Principal, command Intent) string {
 	role := "tenant"
 	if principal.Root {
 		role = "root"
@@ -104,13 +104,13 @@ type CommandCredentials struct {
 
 // Existing preserves scoped publication and original credential matching before
 // restoring the accepted request's in-memory secrets.
-func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (Record, bool, error) {
+func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (State, bool, error) {
 	id, err := ci.operations.RequestID(ctx, principal.TenantID, key)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Record{}, false, nil
+		return State{}, false, nil
 	}
 	if err != nil {
-		return Record{}, false, err
+		return State{}, false, err
 	}
 	accepted, err := ci.view.Operation(ctx, principal, id)
 	if err != nil {

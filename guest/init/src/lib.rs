@@ -65,6 +65,7 @@ init_error_from!(std::num::ParseIntError);
 init_error_from!(std::net::AddrParseError);
 
 trait InitContext<T> {
+    /// Attaches initialization context when the underlying operation fails.
     #[track_caller]
     fn or_context(self, context: impl FnOnce() -> String) -> Result<T>;
 }

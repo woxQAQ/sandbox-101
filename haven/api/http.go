@@ -2,11 +2,8 @@
 package api
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -22,36 +19,21 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-// SandboxSubmitter admits sandbox commands on behalf of the HTTP handler.
-type SandboxSubmitter interface {
-	Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Command) (operation.Record, error)
-}
-
 // Services names the business capabilities exposed by the public protocol.
 // The handler receives no application lifecycle, runtime or database authority.
 type Services struct {
 	Authentication *authorization.Authentication
 	Catalog        *sandbox.Catalog
 	Templates      *supply.TemplateCatalog
-	Operations     *operation.Operations
+	Operations     *operation.Monitor
 	Delivery       *sandbox.OperationDelivery
 	Tenants        *authorization.Tenants
-	Requests       SandboxSubmitter
+	Requests       *sandbox.CommandRouter
 	Dataplane      *dataplane.Plane
 	Node           *node.Service
 }
 
-// handler owns exactly the assembled business capabilities. The application
-// keeps the writer lock, egress callback binding, startup recovery and final
-// shutdown outside this package.
-type handler struct {
-	services Services
-}
-
-func New(services Services) http.Handler {
-	h := &handler{
-		services: services,
-	}
+func New(h Services) http.Handler {
 	router := gin.New()
 	router.RedirectTrailingSlash = false
 	router.RedirectFixedPath = false
@@ -84,10 +66,6 @@ func New(services Services) http.Handler {
 			"status": "ok",
 		})
 	})
-	router.Match([]string{
-		http.MethodGet,
-		http.MethodHead,
-	}, "/metrics", h.authenticate, h.metrics)
 
 	v1 := router.Group("/v1", h.authenticate)
 	{
@@ -100,7 +78,7 @@ func New(services Services) http.Handler {
 		v1.DELETE("/sandboxes/:id", h.sandboxAction("release"))
 		// Lifecycle actions on an admitted sandbox. Each gets an explicit route so the
 		// URL decides command and target; the request body only supplies parameters.
-		var sandboxActions = []string{
+		sandboxActions := []string{
 			"configure",
 			"renew",
 			"checkpoint",
@@ -133,7 +111,7 @@ func principal(c *gin.Context) authorization.Principal {
 	return c.MustGet("principal").(authorization.Principal)
 }
 
-func (h *handler) authenticate(c *gin.Context) {
+func (h *Services) authenticate(c *gin.Context) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
 		httpwire.NotFound().Write(c.Writer)
@@ -141,9 +119,9 @@ func (h *handler) authenticate(c *gin.Context) {
 		return
 	}
 	token := strings.TrimPrefix(header, "Bearer ")
-	value, err := h.services.Authentication.Authenticate(c.Request.Context(), token)
+	value, err := h.Authentication.Authenticate(c.Request.Context(), token)
 	if err != nil && c.Request.Method == http.MethodGet && c.FullPath() == "/v1/operations/:id" {
-		value, err = h.services.Authentication.AuthenticateOperation(c.Request.Context(), token)
+		value, err = h.Authentication.AuthenticateOperation(c.Request.Context(), token)
 	}
 	if err != nil {
 		httpwire.Error(c.Writer, err)
@@ -157,7 +135,7 @@ func (h *handler) authenticate(c *gin.Context) {
 }
 
 // handlers
-func (h *handler) putTenant(c *gin.Context) {
+func (h *Services) putTenant(c *gin.Context) {
 	owner := principal(c)
 	if !owner.Root {
 		httpwire.AdminRequired().Write(c.Writer)
@@ -180,7 +158,7 @@ func (h *handler) putTenant(c *gin.Context) {
 		}
 		value.Token = "tenant_" + hex.EncodeToString(entropy[:])
 	}
-	_, err := h.services.Tenants.PutTenant(c.Request.Context(), owner, value)
+	_, err := h.Tenants.PutTenant(c.Request.Context(), owner, value)
 	if err != nil {
 		httpwire.Error(c.Writer, err)
 		return
@@ -188,13 +166,13 @@ func (h *handler) putTenant(c *gin.Context) {
 	httpwire.JSON(c.Writer, 201, value)
 }
 
-func (h *handler) status(c *gin.Context) {
-	value, err := h.services.Node.Status(c.Request.Context(), principal(c))
+func (h *Services) status(c *gin.Context) {
+	value, err := h.Node.Status(c.Request.Context(), principal(c))
 	httpwire.Respond(c.Writer, value, err)
 }
 
-func (h *handler) drainNode(c *gin.Context) {
-	if err := h.services.Node.Drain(principal(c)); err != nil {
+func (h *Services) drainNode(c *gin.Context) {
+	if err := h.Node.Drain(principal(c)); err != nil {
 		httpwire.Error(c.Writer, err)
 		return
 	}
@@ -203,17 +181,17 @@ func (h *handler) drainNode(c *gin.Context) {
 	})
 }
 
-func (h *handler) listSandboxes(c *gin.Context) {
-	value, err := h.services.Catalog.List(c.Request.Context(), principal(c))
+func (h *Services) listSandboxes(c *gin.Context) {
+	value, err := h.Catalog.List(c.Request.Context(), principal(c))
 	httpwire.Respond(c.Writer, value, err)
 }
 
-func (h *handler) getSandbox(c *gin.Context) {
-	value, err := h.services.Catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
+func (h *Services) getSandbox(c *gin.Context) {
+	value, err := h.Catalog.Get(c.Request.Context(), principal(c), c.Param("id"))
 	httpwire.Respond(c.Writer, value, err)
 }
 
-func (h *handler) claimSandbox(c *gin.Context) {
+func (h *Services) claimSandbox(c *gin.Context) {
 	command, ok := decode(c, "claim", "", "")
 	if !ok {
 		return
@@ -223,7 +201,7 @@ func (h *handler) claimSandbox(c *gin.Context) {
 
 // sandboxAction registers one lifecycle command explicitly. The route fixes
 // action and sandbox; the body only carries parameters.
-func (h *handler) sandboxAction(action string) gin.HandlerFunc {
+func (h *Services) sandboxAction(action string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		command, ok := decode(c, action, c.Param("id"), "")
 		if !ok {
@@ -237,17 +215,17 @@ func (h *handler) sandboxAction(action string) gin.HandlerFunc {
 	}
 }
 
-func (h *handler) getOperation(c *gin.Context) {
-	view, err := h.services.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
+func (h *Services) getOperation(c *gin.Context) {
+	view, err := h.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
 	httpwire.Respond(c.Writer, operationView(view), err)
 }
 
-func (h *handler) listTemplates(c *gin.Context) {
-	value, err := h.services.Templates.Templates(c.Request.Context(), principal(c))
+func (h *Services) listTemplates(c *gin.Context) {
+	value, err := h.Templates.Templates(c.Request.Context(), principal(c))
 	httpwire.Respond(c.Writer, value, err)
 }
 
-func (h *handler) registerTemplate(c *gin.Context) {
+func (h *Services) registerTemplate(c *gin.Context) {
 	command, ok := decode(c, "template_put", "", "")
 	if !ok {
 		return
@@ -255,7 +233,7 @@ func (h *handler) registerTemplate(c *gin.Context) {
 	h.submit(c, command)
 }
 
-func (h *handler) buildTemplate(c *gin.Context) {
+func (h *Services) buildTemplate(c *gin.Context) {
 	command, ok := decode(c, "template_build", "", "")
 	if !ok {
 		return
@@ -274,12 +252,12 @@ func (h *handler) buildTemplate(c *gin.Context) {
 	h.submit(c, command)
 }
 
-func (h *handler) listCheckpoints(c *gin.Context) {
-	value, err := h.services.Catalog.Checkpoints(c.Request.Context(), principal(c))
+func (h *Services) listCheckpoints(c *gin.Context) {
+	value, err := h.Catalog.Checkpoints(c.Request.Context(), principal(c))
 	httpwire.Respond(c.Writer, value, err)
 }
 
-func (h *handler) deleteCheckpoint(c *gin.Context) {
+func (h *Services) deleteCheckpoint(c *gin.Context) {
 	h.submit(c, types.Command{
 		// Clients use the public "delete_checkpoint" spelling; the stored
 		// action is "checkpoint_delete". The reverse translation lives in
@@ -289,7 +267,7 @@ func (h *handler) deleteCheckpoint(c *gin.Context) {
 	})
 }
 
-func (h *handler) forkCheckpoint(c *gin.Context) {
+func (h *Services) forkCheckpoint(c *gin.Context) {
 	command, ok := decode(c, "fork", "", c.Param("id"))
 	if !ok {
 		return
@@ -336,30 +314,20 @@ func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Comma
 // submit accepts one business command and delivers the accepted operation
 // synchronously or as an asynchronous pointer. All routes share this single
 // submit, wait and response behavior.
-func (h *handler) submit(c *gin.Context, command types.Command) {
+func (h *Services) submit(c *gin.Context, command types.Command) {
 	request := c.Request
 	key := request.Header.Get("Idempotency-Key")
 	if len(key) < 1 || len(key) > 256 {
 		httpwire.InvalidRequest("Idempotency-Key required (max 256 bytes)").Write(c.Writer)
 		return
 	}
-	payload, err := json.Marshal(command)
-	if err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	var intent operation.Command
-	if err = json.Unmarshal(payload, &intent); err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	accepted, err := h.services.Requests.Submit(request.Context(), principal(c), key, intent)
+	accepted, err := h.Requests.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
 	if err != nil {
 		httpwire.Error(c.Writer, err)
 		return
 	}
 	if strings.Contains(request.Header.Get("Prefer"), "respond-async") {
-		view, err := h.services.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
+		view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
 		if err != nil {
 			httpwire.Error(c.Writer, err)
 			return
@@ -368,12 +336,12 @@ func (h *handler) submit(c *gin.Context, command types.Command) {
 		httpwire.JSON(c.Writer, 202, operationView(view))
 		return
 	}
-	accepted, err = h.services.Operations.Wait(request.Context(), principal(c), accepted.ID)
-	if err != nil && !accepted.SettledFailure(err) {
+	accepted, err = h.Operations.Wait(request.Context(), principal(c), accepted.ID)
+	if err != nil && !accepted.IsTerminalFailure(err) {
 		httpwire.Error(c.Writer, err)
 		return
 	}
-	view, err := h.services.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
+	view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
 	if err != nil {
 		httpwire.Error(c.Writer, err)
 		return
@@ -395,34 +363,4 @@ func operationView(view types.Operation) types.Operation {
 		view.Error = &failure.Payload
 	}
 	return view
-}
-
-func (h *handler) metrics(c *gin.Context) {
-	if !principal(c).Root {
-		httpwire.AdminRequired().Write(c.Writer)
-		return
-	}
-	sandboxes, err := h.services.Catalog.List(c.Request.Context(), principal(c))
-	if err != nil {
-		httpwire.Error(c.Writer, err)
-		return
-	}
-	counts := map[string]int{}
-	for _, sandbox := range sandboxes {
-		counts[sandbox.State]++
-	}
-	c.Header("Content-Type", "text/plain; version=0.0.4")
-	for _, state := range []string{
-		"provisioning",
-		"running",
-		"pausing",
-		"paused",
-		"resuming",
-		"failed",
-		"terminated",
-	} {
-		if _, err = fmt.Fprintf(c.Writer, "sandboxd_sandboxes{state=%q} %d\n", state, counts[state]); err != nil {
-			return
-		}
-	}
 }

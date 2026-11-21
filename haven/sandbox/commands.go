@@ -10,25 +10,24 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
-// SandboxCommands validates host command policy and keeps complete credentials
-// bound to the original authenticated role while persistence receives redaction.
-type SandboxCommands struct {
-	Identity *operation.CommandIdentity
+// AdmissionPolicy validates lease, network and environment settings and checks
+// that host-only credentials are available for the active configuration.
+type AdmissionPolicy struct {
 	registry *ephemeral.Registry
 	maxTTL   time.Duration
 }
 
-func NewSandboxCommands(maxTTL time.Duration, identity *operation.CommandIdentity, registry *ephemeral.Registry) *SandboxCommands {
-	return &SandboxCommands{
-		Identity: identity,
+func NewAdmissionPolicy(maxTTL time.Duration, registry *ephemeral.Registry) *AdmissionPolicy {
+	return &AdmissionPolicy{
 		registry: registry,
 		maxTTL:   maxTTL,
 	}
 }
 
-func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, error) {
+func (sc *AdmissionPolicy) Prepare(command operation.Intent) (*ClaimAdmission, error) {
 	env, secrets, descriptors, err := SplitEnv(command.Env)
 	if err != nil {
 		return nil, err
@@ -76,7 +75,7 @@ func (sc *SandboxCommands) Prepare(command operation.Command) (*ClaimAdmission, 
 	}, nil
 }
 
-func (sc *SandboxCommands) CredentialsMissing(id string, settings Settings) bool {
+func (sc *AdmissionPolicy) CredentialsMissing(id string, settings Settings) bool {
 	if len(settings.Secrets) == 0 {
 		return false
 	}
@@ -90,7 +89,7 @@ func (sc *SandboxCommands) CredentialsMissing(id string, settings Settings) bool
 	return false
 }
 
-func SplitEnv(env map[string]operation.EnvVar) (map[string]string, map[string]egress.Secret, map[string]egress.Injection, error) {
+func SplitEnv(env map[string]types.EnvVar) (map[string]string, map[string]egress.Secret, map[string]egress.Injection, error) {
 	visible := map[string]string{}
 	secrets := map[string]egress.Secret{}
 	descriptors := map[string]egress.Injection{}

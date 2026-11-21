@@ -78,30 +78,30 @@ func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (Dis
 
 // AdmitDiscard is an explicit sandbox-scoped cleanup of one fixed failed intent.
 // It never upgrades that failure to a successful generation or invents a witness.
-func (d *Deletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.Record, error) {
+func (d *Deletion) AdmitDiscard(ctx context.Context, request DiscardRequest) (operation.State, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
 
 	return d.AdmitDiscardForParent(ctx, request, nil)
 }
 
-func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.Record, error) {
+func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardRequest, parent ResourceParent) (operation.State, error) {
 	if d.
 		ownership ==
 		nil || d.
 		handoff ==
 		nil || d.usage == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Deletion capability port unavailable",
+		return operation.State{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.FailedOperationID, "op-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") {
 		return empty, fmt.Errorf("%w: discard requires sandbox, failed operation, candidate instance and key", errs.ErrInvalid)
 	}
@@ -171,7 +171,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	if _, err = d.proofs.GenerationHistory(ctx, tx, source); err != nil {
 		return empty, err
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -263,7 +263,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		{"vm", source.Candidate},
 		{"image", source.Input.Resource.Config.Image},
 	} {
-		if err = quota.New(tx).TransferResourceReference(ctx, quota.ResourceReference{
+		if err = quota.TransferResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       reference.kind,
 			ID:         reference.id,
 			HolderKind: "step",
@@ -281,7 +281,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		{"pending_storage", source.OperationID + ":resource", "engine_dependency", source.OperationID + ":resource"},
 		{source.Input.SlotBudget.Kind, record.ID, "active_use", "sandbox:" + record.ID},
 	} {
-		if err = quota.New(tx).TransferCostReference(ctx, quota.CostReference{
+		if err = quota.TransferCostReference(ctx, tx, quota.CostReference{
 			TenantID:   request.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -296,7 +296,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		if err != nil {
 			return empty, err
 		}
-		if err = quota.New(tx).TransferCostReference(ctx, quota.CostReference{
+		if err = quota.TransferCostReference(ctx, tx, quota.CostReference{
 			TenantID:   request.TenantID,
 			Kind:       "vm_disk",
 			Key:        prior.Input.DiskKey,
@@ -523,8 +523,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 			expectedBacking++
 		}
 	}
-	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountMatchingReservation(ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner:     "vm:" + source.Candidate,
 		Bytes:     vmBytes,
 		MemoryMiB: shape.MemoryMiB + 128,
@@ -538,10 +537,10 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 	}
 	checks := []countCheck{
 		{func() (int64, error) {
-			return responsibilities.CountResourceHolders(ctx, "vm", source.Candidate)
+			return quota.CountResourceHolders(ctx, tx, "vm", source.Candidate)
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         source.Candidate,
 				HolderKind: "cleanup",
@@ -549,7 +548,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 			})
 		}, 1},
 		{func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         source.Input.Resource.Config.Image,
 				HolderKind: "cleanup",
@@ -585,13 +584,13 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 	} {
 		checks = append(checks,
 			countCheck{func() (int64, error) {
-				return responsibilities.CountMatchingCost(ctx, cost)
+				return quota.CountMatchingCost(ctx, tx, cost)
 			}, 1},
 			countCheck{func() (int64, error) {
-				return responsibilities.CountTenantCostHolders(ctx, cost.TenantID, cost.Kind, cost.Key)
+				return quota.CountTenantCostHolders(ctx, tx, cost.TenantID, cost.Kind, cost.Key)
 			}, 1},
 			countCheck{func() (int64, error) {
-				return responsibilities.CountCostReference(ctx, quota.CostReference{
+				return quota.CountCostReference(ctx, tx, quota.CostReference{
 					TenantID:   cost.TenantID,
 					Kind:       cost.Kind,
 					Key:        cost.Key,

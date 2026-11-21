@@ -12,6 +12,7 @@ import (
 	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/types"
 )
 
 func (p *Plane) beginCall() error {
@@ -23,15 +24,15 @@ func (p *Plane) beginCall() error {
 
 // Ready verifies actual resource collaboration outside the short publication
 // guard, then repeats lease/fence/generation checks before local admission.
-func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id string) (sandbox.View, error) {
+func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id string) (types.Sandbox, error) {
 	if err := p.beginCall(); err != nil {
-		return sandbox.View{}, err
+		return types.Sandbox{}, err
 	}
 	defer p.lifetime.End()
 	if err := p.ensureResume(ctx, principal, id); err != nil {
-		return sandbox.View{}, err
+		return types.Sandbox{}, err
 	}
-	lock := p.guards.Sandbox(id)
+	lock := p.guards.ForSandboxLifecycle(id)
 	lock.Lock()
 	defer lock.Unlock()
 	view, err := p.catalog.Get(ctx, principal, id)
@@ -49,7 +50,7 @@ func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id
 	if err != nil {
 		return view, err
 	}
-	if p.commands.CredentialsMissing(id, settings) {
+	if p.policy.CredentialsMissing(id, settings) {
 		return view, fmt.Errorf("%w: host credentials must be supplied again after restart", errs.ErrConflict)
 	}
 	if settings.ActiveEpoch != p.epoch {
@@ -95,7 +96,7 @@ func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id
 			return view, err
 		}
 	}
-	guard := p.guards.Configuration(id)
+	guard := p.guards.ForSandboxConfiguration(id)
 	guard.Lock()
 	defer guard.Unlock()
 	view, settings, err = p.finalAdmission(ctx, principal, ephemeral.ConnectionIdentity{
@@ -106,20 +107,21 @@ func (p *Plane) Ready(ctx context.Context, principal authorization.Principal, id
 	if err != nil {
 		return view, err
 	}
+	view.Env = settings.Env
 	return p.renewLease(ctx, id, view, settings)
 }
 
 // finalAdmission verifies the original connection identity under the
 // configuration guard. Verification never renews a lease during socket handoff
 // or periodic connection enforcement.
-func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Principal, identity ephemeral.ConnectionIdentity) (sandbox.View, sandbox.Settings, error) {
+func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Principal, identity ephemeral.ConnectionIdentity) (types.Sandbox, sandbox.Settings, error) {
 	id, instance, generation := identity.SandboxID, identity.Instance, identity.Generation
 	closed := p.lifetime.Closing() || p.store.Reviewed
 	if closed {
-		return sandbox.View{}, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission is closed", errs.ErrConflict)
+		return types.Sandbox{}, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission is closed", errs.ErrConflict)
 	}
 	if err := p.catalog.Unfenced(ctx, id); err != nil {
-		return sandbox.View{}, sandbox.Settings{}, err
+		return types.Sandbox{}, sandbox.Settings{}, err
 	}
 	view, err := p.catalog.Get(ctx, principal, id)
 	if err != nil {
@@ -134,7 +136,7 @@ func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Prin
 	closing := p.lifetime.Closing() || p.store.Reviewed
 	bound := p.registry.Binding(id)
 	p.mu.Unlock()
-	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != p.epoch || !time.Now().Before(settings.Deadline) || p.commands.CredentialsMissing(id, settings) {
+	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != p.epoch || !time.Now().Before(settings.Deadline) || p.policy.CredentialsMissing(id, settings) {
 		return view, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission changed", errs.ErrConflict)
 	}
 	source, err := p.catalog.ResourceForData(ctx, view)
@@ -157,7 +159,7 @@ func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Prin
 
 // renewLease runs only for a fresh readiness admission while the same
 // configuration guard still protects the verified generation and lease.
-func (p *Plane) renewLease(ctx context.Context, id string, view sandbox.View, settings sandbox.Settings) (sandbox.View, error) {
+func (p *Plane) renewLease(ctx context.Context, id string, view types.Sandbox, settings sandbox.Settings) (types.Sandbox, error) {
 	if settings.AutoRenew {
 		deadline, err := sandbox.RenewActivityLease(ctx, p.store.Database, id, settings)
 		if err != nil {
@@ -205,7 +207,7 @@ func (p *Plane) open(ctx context.Context, principal authorization.Principal, id 
 		Instance:   view.Instance,
 		Generation: settings.Generation,
 	}
-	guard := p.guards.Configuration(id)
+	guard := p.guards.ForSandboxConfiguration(id)
 	guard.Lock()
 	if _, _, err = p.finalAdmission(ctx, principal, identity); err != nil {
 		guard.Unlock()
@@ -250,7 +252,7 @@ func (p *Plane) Attach(ctx context.Context, principal authorization.Principal, r
 	if !ok || !up.BelongsTo(p.registry) || up.Identity().SandboxID != id {
 		return nil, fmt.Errorf("%w: connection belongs to another admission", errs.ErrInvalid)
 	}
-	guard := p.guards.Configuration(id)
+	guard := p.guards.ForSandboxConfiguration(id)
 	guard.Lock()
 	defer guard.Unlock()
 	select {
@@ -304,7 +306,7 @@ func (p *Plane) enforceLease(conn *ephemeral.Connection, principal authorization
 		case <-conn.Done():
 			return
 		case <-ticker.C:
-			guard := p.guards.Configuration(identity.SandboxID)
+			guard := p.guards.ForSandboxConfiguration(identity.SandboxID)
 			guard.Lock()
 			_, _, err := p.finalAdmission(p.ctx, principal, identity)
 			guard.Unlock()

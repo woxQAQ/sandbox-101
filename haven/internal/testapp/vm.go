@@ -14,6 +14,7 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/types"
 )
 
 func ColdServiceWithOptions(t *testing.T, options application.Options, factory func(*testfixture.ColdRuntime) loom.Backend) (*application.App, *testfixture.ColdRuntime) {
@@ -76,12 +77,12 @@ func ColdServiceWithOptions(t *testing.T, options application.Options, factory f
 	service.Options.Fault = nil
 	_, err = service.Supply.AdmitTemplate(context.Background(), authorization.Principal{
 		TenantID: "tenant",
-	}, "publish-cold", operation.Command{
+	}, "publish-cold", operation.Intent{
 		Action: "template_put",
-		Template: &operation.TemplateSpec{
+		Template: &types.Template{
 			ID:    "cold",
 			Image: manifest.Digest,
-			Shape: loom.Shape{
+			Shape: types.Shape{
 				VCPUs:     1,
 				MemoryMiB: 128,
 				DiskMiB:   64,

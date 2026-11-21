@@ -13,7 +13,7 @@ import (
 // ensureResume serializes only selection of a durable attempt. It does not
 // hold the sandbox lifecycle lock while a worker must acquire that same lock.
 func (p *Plane) ensureResume(ctx context.Context, principal authorization.Principal, id string) error {
-	guard := p.guards.AutoResume(id)
+	guard := p.guards.ForSandboxWakeup(id)
 	guard.Lock()
 	defer guard.Unlock()
 	view, err := p.catalog.Get(ctx, principal, id)
@@ -31,7 +31,7 @@ func (p *Plane) ensureResume(ctx context.Context, principal authorization.Princi
 		}
 		accepted, err := p.lifecycle.AdmitResume(ctx, authorization.Principal{
 			TenantID: view.TenantID,
-		}, "auto-resume:"+id+":"+view.SnapshotID+":"+settings.Generation, operation.Command{
+		}, "auto-resume:"+id+":"+view.SnapshotID+":"+settings.Generation, operation.Intent{
 			Action:    "resume",
 			SandboxID: id,
 		})

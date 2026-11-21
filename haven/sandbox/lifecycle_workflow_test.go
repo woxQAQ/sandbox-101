@@ -37,11 +37,11 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			command := operation.Command{
+			command := operation.Intent{
 				Action:    "checkpoint",
 				SandboxID: claim.Result.SandboxID,
 			}
-			accepted, err := service.SandboxRequests.Submit(context.Background(), principal, "checkpoint", command)
+			accepted, err := service.CommandRouter.Submit(context.Background(), principal, "checkpoint", command)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_link_completion"); err != nil {
 				t.Fatal(err)
 			}
-			replay, err := service.SandboxRequests.Submit(context.Background(), principal, "checkpoint", command)
+			replay, err := service.CommandRouter.Submit(context.Background(), principal, "checkpoint", command)
 			if err != nil || replay.ID != accepted.ID {
 				t.Fatal("replay changed parent identity", replay, err)
 			}

@@ -46,6 +46,11 @@ import (
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
 )
 
+type closeWriter interface {
+	// CloseWrite sends EOF to the peer while leaving the read side open.
+	CloseWrite() error
+}
+
 func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	service, client, principal, id := transportFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -150,7 +155,7 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	}, nil); err == nil {
 		t.Fatal("tenant stream exposed host administration")
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "release", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
 		Action:    "release",
 		SandboxID: id,
 	}); err != nil {
@@ -334,7 +339,7 @@ func (backend *transportRuntime) Compatibility() string {
 	return "rust-transport-host-fixture"
 }
 
-func (backend *transportRuntime) Check(_ context.Context, config loom.Config) error {
+func (backend *transportRuntime) ValidateHostConfig(_ context.Context, config loom.Config) error {
 	return host.CheckConfig(&config)
 }
 
@@ -485,7 +490,7 @@ func (backend *transportRuntime) Agent(ctx context.Context, _ loom.Resource, _ b
 	return ctx.Err()
 }
 
-func (backend *transportRuntime) Network(ctx context.Context, resource loom.Resource, enabled bool) error {
+func (backend *transportRuntime) SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -561,7 +566,7 @@ func (transportGuest) PrepareTemplate(context.Context, loom.Resource) error {
 }
 
 func closeWrite(conn net.Conn) {
-	if half, ok := conn.(interface{ CloseWrite() error }); ok {
+	if half, ok := conn.(closeWriter); ok {
 		_ = half.CloseWrite()
 	}
 }
@@ -765,12 +770,12 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	principal := authorization.Principal{
 		TenantID: "transport",
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "template", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "template", operation.Intent{
 		Action: "template_put",
-		Template: &operation.TemplateSpec{
+		Template: &types.Template{
 			ID:    "fixture",
 			Image: image,
-			Shape: loom.Shape{
+			Shape: types.Shape{
 				VCPUs:     1,
 				MemoryMiB: 128,
 				DiskMiB:   64,
@@ -779,7 +784,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	}); err != nil {
 		t.Fatal(err)
 	}
-	acceptedRecord, err := service.SandboxRequests.Execute(ctx, principal, "claim", operation.Command{
+	acceptedRecord, err := service.CommandRouter.Execute(ctx, principal, "claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: "fixture",
 		Policy: egress.Policy{
@@ -799,7 +804,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		Templates:      service.TemplateCatalog,
 		Operations:     service.Operations,
 		Tenants:        service.Tenants,
-		Requests:       service.SandboxRequests,
+		Requests:       service.CommandRouter,
 		Dataplane:      service.Dataplane,
 		Node:           service.Node,
 		Delivery:       service.Delivery,

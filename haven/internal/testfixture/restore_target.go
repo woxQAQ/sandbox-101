@@ -84,7 +84,7 @@ func (backend *GenerationRuntime) Stop(_ context.Context, r loom.Resource) error
 	return nil
 }
 
-func (backend *GenerationRuntime) Network(_ context.Context, r loom.Resource, on bool) error {
+func (backend *GenerationRuntime) SetNetworkEnabled(_ context.Context, r loom.Resource, on bool) error {
 	if err := backend.Effect("network", r); err != nil {
 		return err
 	}

@@ -1,10 +1,10 @@
 # Haven Sandbox API 与生命周期
 
-当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module。入口与配置见 [Haven control](../../docs/haven-control.md)，宿主部署见 [Host](../../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/api/`；业务和资源工作流共享 `haven` 的唯一 store。包内职责与事务边界见 [Sandbox 业务责任](README.md)。
+当前实现为 `haven/` 下的 `github.com/woxQAQ/haven` module。入口与配置见 [Haven control](haven-control.md)，宿主部署见 [Host](../deploy/host/README.md)。公开 DTO 在 `types/`，SDK 在 `sdk/`，HTTP adapter 在 `haven/api/`；业务和资源工作流共享 `haven` 的唯一 store。包内职责与事务边界见 [Sandbox 业务责任](../haven/sandbox/README.md)。
 
 ## Tokens、幂等和错误
 
-HTTP 使用 `Authorization: Bearer TOKEN`。root 管理 tenant/metrics/node status；tenant 管理自身模板、sandbox/checkpoint；sandbox token 仅访问自身。root 修改 owner-scoped 模板或 fork 时，使用 `X-Tenant-ID` 明确选择 owner。外来与缺失对象均返回同一 404。
+HTTP 使用 `Authorization: Bearer TOKEN`。root 管理 tenant/node status；tenant 管理自身模板、sandbox/checkpoint；sandbox token 仅访问自身。root 修改 owner-scoped 模板或 fork 时，使用 `X-Tenant-ID` 明确选择 owner。外来与缺失对象均返回同一 404。
 
 mutation 使用 1–256 字节稳定 `Idempotency-Key`。同键同参数返回原 operation/冻结 result，包括失败；异参冲突。认证 role/scope 和 secret-safe HMAC 参与请求身份。取消 HTTP 只结束等待。`Prefer: respond-async` 返回 202、operation 与 Location，由同一 authority 查询。sandbox token 只能查询自己的 renew/release operation；终止后仅能读取对应历史，不能进入资源/数据路由。
 
@@ -31,7 +31,6 @@ HTTP 错误及 `Operation.Error` 使用 `types.ApiError` 数据，JSON 为 `{"co
 | Route | 行为 |
 |---|---|
 | GET /healthz | 公开进程健康 |
-| GET /metrics | root 状态计数；保留既有 metric wire 名称 |
 | GET /v1/status | root store identity/schema/epoch |
 | POST /v1/tenants | root tenant/quota/token 管理 |
 | GET、POST /v1/templates | 列表、template_put 登记 |
@@ -75,7 +74,7 @@ rollback 保留逻辑 sandbox 身份，但回滚 guest ledger；跨 rollback 的
 
 ## Raw protocol and SDK
 
-使用 `Connection: Upgrade` / `Upgrade: sandbox-v1`。101 后为有界背压的双向原始流，保留预读字节与 half-close；宿主不解释 Workload frame。System 2047、Admin 2046 不对租户开放，Workload 固定 2048。协议为四字节 big-endian 长度前缀 protobuf，frame 最大 8 MiB、chunk 64 KiB；port_forward 必须是新连接的首请求，ready 后完全 raw duplex，无最终 protobuf frame。详细方法见 [Protocol](../../protocol/README.md) 与 [Guest](../../guest/README.md)。
+使用 `Connection: Upgrade` / `Upgrade: sandbox-v1`。101 后为有界背压的双向原始流，保留预读字节与 half-close；宿主不解释 Workload frame。System 2047、Admin 2046 不对租户开放，Workload 固定 2048。协议为四字节 big-endian 长度前缀 protobuf，frame 最大 8 MiB、chunk 64 KiB；port_forward 必须是新连接的首请求，ready 后完全 raw duplex，无最终 protobuf frame。详细方法见 [Protocol](../protocol/README.md) 与 [Guest](../guest/README.md)。
 
 ```go
 import (
@@ -129,10 +128,10 @@ D=64、M=128 时，cold=64，checkpoint/resume peak=256，running 单 branch for
 
 ## Egress、配置与 Preview
 
-proxy 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/proxy NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
+proxy 规则、DNS/TLS/HTTP、secret 注入和审计详见 [Egress](../haven/egress/README.md)。secret 真值只在内存，guest 只收 harmless placeholders，注入前需 durable sanitized audit；重启必须显式重供。none/proxy NIC off。direct 为 canonical IPv4 CIDR/flow（默认 256），拒绝 hostname 与 host-only secret；空 CIDRs deny all，`0.0.0.0/0` 仍受 reserved deny。宿主 bandwidth/conntrack 限额由部署承担。
 
 configure admission 持久 fence 并撤销旧数据/proxy，之后才保存新 settings。runtime/guest/bind/SQL 失败保留阻断；自动 rebind/reconcile 不清 fence。最终 running/result/settings/fence retirement 原子提交，失败撤销新 binding。迟到 worker 或旧 direct callback 不影响后继实例。
 
 数据 setup、最终 downstream Hijack 和上下游连接均参与配置 guard、revocation registry 与 shutdown。Preview 绑定 tenant/sandbox/epoch/port/expiry，期限不超 lease；移除 Authorization/Cookie，强制 no-referrer。当前没有每 sandbox 浏览器 origin。
 
-当前 schema 见 [Haven control](../../docs/haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。各运行场景的输入见[测试入口](../../scripts/README.md)，历史源码与材料见[验证记录](../../docs/verification-history.md)。
+当前 schema 见 [Haven control](haven-control.md)，旧双库和早期原型明确拒绝，无自动迁移。各运行场景的输入见[测试入口](../scripts/README.md)，历史源码与材料见[验证记录](verification-history.md)。

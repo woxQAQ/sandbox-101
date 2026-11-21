@@ -49,7 +49,7 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 	// that row, while the worker reader still reports custody.
 	ctx, cancel := context.WithCancel(peer)
 	defer cancel()
-	services.Operations = operation.NewOperations(app.State.Database(), cancelDuringCustody{cancel}, app.State.Identity().Identity)
+	services.Operations = operation.NewMonitor(app.State.Database(), cancelDuringCustody{cancel}, app.State.Identity().Identity)
 	post(ctx, 503, types.CodeUnknown, "operation wait ended")
 
 	recorder := httptest.NewRecorder()

@@ -118,7 +118,7 @@ func (b *CloudHypervisor) checkHostPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (b *CloudHypervisor) Check(ctx context.Context, c api.Config) error {
+func (b *CloudHypervisor) ValidateHostConfig(ctx context.Context, c api.Config) error {
 	if err := CheckConfig(&c); err != nil {
 		return err
 	}

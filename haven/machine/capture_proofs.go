@@ -51,7 +51,7 @@ func CaptureCleanupProof(ctx context.Context, tx *sql.Tx, step CaptureStep, targ
 	if string(body) != string(operation.Encode(step.Input)) {
 		return fmt.Errorf("raw capture cleanup input changed")
 	}
-	count, err := quota.New(tx).CountResourceReference(ctx, quota.ResourceReference{
+	count, err := quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         r.Config.Image,
 		HolderKind: "capture",
@@ -64,7 +64,7 @@ func CaptureCleanupProof(ctx context.Context, tx *sql.Tx, step CaptureStep, targ
 }
 
 func ReleaseCaptures(ctx context.Context, tx *sql.Tx, vm, instance string) ([]CaptureStep, error) {
-	ids, err := quota.New(tx).ResourceHolderIDs(ctx, "vm", vm, "capture")
+	ids, err := quota.ResourceHolderIDs(ctx, tx, "vm", vm, "capture")
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +221,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 		return currentMachine, fmt.Errorf("capture source image publication changed: %v", err)
 	}
 	shape := currentMachine.Resource.Config.Shape
-	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountMatchingReservation(ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner: "snapshot:" + publication.ID,
 		Bytes: (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20,
 	}); err != nil || count != 1 {
@@ -230,7 +229,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 	}
 	checks := []func() (int64, error){
 		func() (int64, error) {
-			return responsibilities.CountStorageCost(ctx, quota.CostIdentity{
+			return quota.CountStorageCost(ctx, tx, quota.CostIdentity{
 				TenantID:        publication.TenantID,
 				Kind:            "vm_disk",
 				Key:             source.Candidate,
@@ -238,7 +237,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 			}, shape.DiskMiB)
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         source.Candidate,
 				HolderKind: "sandbox",
@@ -246,7 +245,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountMatchingCost(ctx, quota.Cost{
+			return quota.CountMatchingCost(ctx, tx, quota.Cost{
 				CostIdentity: quota.CostIdentity{
 					TenantID:        publication.TenantID,
 					Kind:            "pending_storage",
@@ -257,7 +256,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountCostReference(ctx, quota.CostReference{
+			return quota.CountCostReference(ctx, tx, quota.CostReference{
 				TenantID:   publication.TenantID,
 				Kind:       "pending_storage",
 				Key:        step.OperationID + ":capture",
@@ -266,7 +265,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "vm",
 				ID:         source.Candidate,
 				HolderKind: "capture",
@@ -274,7 +273,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 			})
 		},
 		func() (int64, error) {
-			return responsibilities.CountResourceReference(ctx, quota.ResourceReference{
+			return quota.CountResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "image",
 				ID:         currentMachine.Resource.Config.Image,
 				HolderKind: "capture",

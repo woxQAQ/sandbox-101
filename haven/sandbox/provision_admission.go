@@ -23,8 +23,8 @@ import (
 
 // AdmitCold freezes a tenant-owned template and all resource identities with its
 // slot, disk budget and source reference. Delivery remains separately fenced.
-func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.Record, error) {
-	var empty operation.Record
+func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshRequest) (operation.State, error) {
+	var empty operation.State
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.TemplateID == "" {
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
@@ -46,7 +46,7 @@ func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshReque
 	if err = host.CheckConfig(&selected.Config); err != nil {
 		return empty, err
 	}
-	if err = p.backend.Check(ctx, selected.Config); err != nil {
+	if err = p.backend.ValidateHostConfig(ctx, selected.Config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, p.store.Database, selected.Config.Image)
@@ -67,8 +67,8 @@ func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshReque
 	})
 }
 
-func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.Record, error) {
-	var empty operation.Record
+func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequest) (operation.State, error) {
+	var empty operation.State
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
 	}
@@ -83,7 +83,7 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 		}
 		return cached, err
 	}
-	source, err := p.proofs.Snapshots().LoadRestoreSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
+	source, err := p.proofs.Snapshots().LoadSnapshotSource(ctx, p.store.Database, request.TenantID, request.SnapshotID)
 	if err == sql.ErrNoRows {
 		return empty, fmt.Errorf("%w: snapshot not found", errs.ErrNotFound)
 	}
@@ -94,7 +94,7 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 	if err = host.CheckConfig(&config); err != nil {
 		return empty, err
 	}
-	if err = p.backend.Check(ctx, config); err != nil {
+	if err = p.backend.ValidateHostConfig(ctx, config); err != nil {
 		return empty, err
 	}
 	manifest, err := image.LoadManifest(ctx, p.store.Database, config.Image)
@@ -126,8 +126,8 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 	})
 }
 
-func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.Record, error) {
-	var empty operation.Record
+func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) (operation.State, error) {
+	var empty operation.State
 	request, claim := admission.Request, admission.Claim
 	tenantID, key := request.TenantID, request.Key
 	hash := operation.Digest(request.Frozen)
@@ -240,7 +240,7 @@ func (p *Provisioning) verifyProvisionSources(ctx context.Context, tx *sql.Tx, a
 			return fmt.Errorf("%w: template publication changed during preflight", errs.ErrConflict)
 		}
 	} else if restore != nil {
-		current, err := p.proofs.Snapshots().LoadRestoreSource(ctx, tx, request.TenantID, restore.Snapshot.ID)
+		current, err := p.proofs.Snapshots().LoadSnapshotSource(ctx, tx, request.TenantID, restore.Snapshot.ID)
 		if err != nil {
 			return err
 		}
@@ -274,7 +274,7 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 	if err != nil {
 		return empty, err
 	}
-	usage, err := quota.New(tx).Usage(ctx, request.TenantID)
+	usage, err := quota.TenantUsage(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -302,7 +302,7 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 	if usage.Slots > tenant.MaxSandboxes || newSlots > tenant.MaxSandboxes-usage.Slots || usage.StorageMiB > tenant.MaxStorageMiB || shape.DiskMiB > tenant.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("%w: tenant quota exhausted", errs.ErrExhausted)
 	}
-	reserved, err := quota.New(tx).ReservedCapacity(ctx)
+	reserved, err := quota.ReservedCapacity(ctx, tx)
 	if err != nil {
 		return empty, err
 	}
@@ -417,8 +417,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 	}
 	shape := currentMachine.Resource.Config.Shape
 	vmBytes := step.Input.RuntimeBytes
-	responsibilities := quota.New(tx)
-	if count, err := responsibilities.CountMatchingReservation(ctx, quota.Reservation{
+	if count, err := quota.CountMatchingReservation(ctx, tx, quota.Reservation{
 		Owner:     "vm:" + step.Candidate,
 		Bytes:     vmBytes,
 		MemoryMiB: shape.MemoryMiB + 128,
@@ -450,10 +449,10 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 			Slots: step.Input.SlotBudget.Units,
 		}, "active_use", "sandbox:" + record.ID},
 	} {
-		if count, err := responsibilities.CountMatchingCost(ctx, charge.cost); err != nil || count != 1 {
+		if count, err := quota.CountMatchingCost(ctx, tx, charge.cost); err != nil || count != 1 {
 			return currentMachine, record, result, fmt.Errorf("cold responsibility proof missing: %v", err)
 		}
-		if count, err := responsibilities.CountCostReference(ctx, quota.CostReference{
+		if count, err := quota.CountCostReference(ctx, tx, quota.CostReference{
 			TenantID:   charge.cost.TenantID,
 			Kind:       charge.cost.Kind,
 			Key:        charge.cost.Key,
@@ -477,7 +476,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 			HolderID:   step.OperationID + ":resource",
 		},
 	} {
-		if count, err := responsibilities.CountResourceReference(ctx, reference); err != nil || count != 1 {
+		if count, err := quota.CountResourceReference(ctx, tx, reference); err != nil || count != 1 {
 			return currentMachine, record, result, fmt.Errorf("cold responsibility proof missing: %v", err)
 		}
 	}

@@ -56,8 +56,8 @@ func (ProvisionHandoff) BlockActivation(ctx context.Context, tx *sql.Tx, id stri
 
 // AdmitIn joins resource intent and all charges to the caller's transaction.
 // A batch commits every destination before dispatching any effect.
-func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.Record, error) {
-	var empty operation.Record
+func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (operation.State, error) {
+	var empty operation.State
 	request := admission.Request
 	tenantID, frozen := request.TenantID, request.Frozen
 	hash := operation.Digest(frozen)
@@ -77,7 +77,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 	if err != nil {
 		return empty, err
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -139,7 +139,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		if err != nil {
 			return empty, err
 		}
-		count, lookup := quota.New(tx).CountMatchingCost(ctx, quota.Cost{
+		count, lookup := quota.CountMatchingCost(ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        tenantID,
 				Kind:            "sandbox_slot",
@@ -228,7 +228,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		})); err != nil {
 			return empty, err
 		}
-		if err = quota.New(tx).MoveCostReference(ctx, quota.CostReference{
+		if err = quota.MoveCostReference(ctx, tx, quota.CostReference{
 			TenantID:   tenantID,
 			Kind:       "sandbox_slot",
 			Key:        destination.ID,
@@ -251,7 +251,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 	if err = machine.AdmitCandidate(ctx, tx, accepted.ID, currentMachine); err != nil {
 		return empty, err
 	}
-	if err = quota.New(tx).Reserve(ctx, quota.Reservation{
+	if err = quota.Reserve(ctx, tx, quota.Reservation{
 		Owner:     "vm:" + resource.VMID,
 		Bytes:     vmBytes,
 		MemoryMiB: shape.MemoryMiB + 128,
@@ -273,7 +273,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		if reuseSlot && charge.kind == budget.Kind {
 			continue
 		}
-		if err = quota.New(tx).AddCost(ctx, quota.Cost{
+		if err = quota.AddCost(ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        request.TenantID,
 				Kind:            charge.kind,
@@ -285,7 +285,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		}); err != nil {
 			return empty, err
 		}
-		if err = quota.New(tx).AddCostReference(ctx, quota.CostReference{
+		if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 			TenantID:   request.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -302,7 +302,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		{"vm", resource.VMID},
 		{"image", resource.Config.Image},
 	} {
-		if err = quota.New(tx).AddResourceReference(ctx, quota.ResourceReference{
+		if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 			Kind:       reference.kind,
 			ID:         reference.id,
 			HolderKind: "step",
@@ -312,7 +312,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		}
 	}
 	if restore != nil {
-		if err = quota.New(tx).Reserve(ctx, quota.Reservation{
+		if err = quota.Reserve(ctx, tx, quota.Reservation{
 			Owner: "restore:" + accepted.ID,
 			Bytes: restoreBytes,
 		}); err != nil {

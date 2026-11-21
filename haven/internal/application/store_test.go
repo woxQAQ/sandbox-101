@@ -94,13 +94,13 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := service.SandboxRequests.Execute(ctx, principal, "refill", operation.Command{
+	if _, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "warm", operation.Command{
+	claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "warm", operation.Intent{
 		Action:     "claim",
 		TemplateID: "golden",
 		Policy: egress.Policy{

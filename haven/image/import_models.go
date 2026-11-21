@@ -98,7 +98,6 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 		return err
 	}
 	catalog := dbgen.New(tx)
-	responsibilities := quota.New(tx)
 	for _, layer := range step.State.Layers {
 		if layer.Cache == nil {
 			continue
@@ -116,7 +115,7 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 			if !reflect.DeepEqual(record.Witness, *cache) {
 				return fmt.Errorf("%w: image cache immutable ownership changed", errs.ErrManualRecovery)
 			}
-			owned, err := responsibilities.CountMatchingReservation(i.ctx, quota.Reservation{
+			owned, err := quota.CountMatchingReservation(i.ctx, tx, quota.Reservation{
 				Owner: "cache:" + cache.Cache.Builder + ":" + cache.Cache.DiffID,
 				Bytes: cache.PhysicalBytes,
 			})
@@ -131,10 +130,10 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 				return fmt.Errorf("%w: image cache lacks physical charge", errs.ErrIncompatible)
 			}
 			owner := "cache:" + cache.Cache.Builder + ":" + cache.Cache.DiffID
-			if err = responsibilities.DeductReservationBytes(i.ctx, "import:"+step.OperationID, cache.PhysicalBytes); err != nil {
+			if err = quota.DeductReservationBytes(i.ctx, tx, "import:"+step.OperationID, cache.PhysicalBytes); err != nil {
 				return err
 			}
-			if err = responsibilities.Reserve(i.ctx, quota.Reservation{
+			if err = quota.Reserve(i.ctx, tx, quota.Reservation{
 				Owner: owner,
 				Bytes: cache.PhysicalBytes,
 			}); err != nil {
@@ -190,7 +189,7 @@ func importRemainingCharge(ctx context.Context, q store.DBTX, source imageImport
 		if !reflect.DeepEqual(record.Witness, *layer.Cache) {
 			return 0, fmt.Errorf("import cache historical ownership changed")
 		}
-		count, err := quota.New(q).CountMatchingReservation(ctx, quota.Reservation{
+		count, err := quota.CountMatchingReservation(ctx, q, quota.Reservation{
 			Owner: "cache:" + record.Witness.Cache.Builder + ":" + record.Witness.Cache.DiffID,
 			Bytes: record.Witness.PhysicalBytes,
 		})

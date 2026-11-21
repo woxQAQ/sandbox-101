@@ -32,6 +32,8 @@ type ProvisionRequest struct {
 // BareProvisioner retains the shared admission transaction and VM guard domain.
 // Supply owns its template parent; the resource coordinator owns child execution.
 type BareProvisioner interface {
-	AdmitBare(context.Context, ProvisionRequest, BareTarget) (operation.Record, error)
-	Continue(string) error
+	// AdmitBare admits the provision request for the parent's supply target.
+	AdmitBare(ctx context.Context, request ProvisionRequest, target BareTarget) (operation.State, error)
+	// Continue advances an already admitted provision operation.
+	Continue(operationID string) error
 }

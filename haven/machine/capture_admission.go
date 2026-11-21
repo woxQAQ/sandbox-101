@@ -20,20 +20,20 @@ import (
 
 // AdmitCapture fixes the source instance, destination, authorization and peak
 // responsibility before any pause. Sandbox checkpoint/pause publication is separate.
-func (c *Captures) AdmitCapture(ctx context.Context, request CaptureRequest) (operation.Record, error) {
+func (c *Captures) AdmitCapture(ctx context.Context, request CaptureRequest) (operation.State, error) {
 	if c.ownership == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
+		return operation.State{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
 	return c.AdmitForParent(ctx, request, nil)
 }
 
-func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, parent ResourceParent) (operation.Record, error) {
+func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, parent ResourceParent) (operation.State, error) {
 	if c.ownership == nil {
-		return operation.Record{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
+		return operation.State{}, fmt.Errorf("%w: required Captures capability port unavailable", errs.ErrManualRecovery)
 	}
 
-	var empty operation.Record
+	var empty operation.State
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.ExpectedInstance, "run-") {
 		return empty, fmt.Errorf("%w: capture requires tenant, sandbox, key and expected instance", errs.ErrInvalid)
 	}
@@ -114,15 +114,14 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	}
 	shape := currentMachine.Resource.Config.Shape
 	cost := shape.MemoryMiB + shape.DiskMiB
-	responsibilities := quota.New(tx)
-	usage, err := responsibilities.Usage(ctx, request.TenantID)
+	usage, err := quota.TenantUsage(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
 	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || usage.StorageMiB > tenant.MaxStorageMiB || cost > tenant.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("%w: capture tenant quota exhausted", errs.ErrExhausted)
 	}
-	held, err := responsibilities.ReservedBytes(ctx)
+	held, err := quota.ReservedBytes(ctx, tx)
 	if err != nil {
 		return empty, err
 	}
@@ -130,7 +129,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if held > free || c.safetyBytes > free-held || reserve > free-held-c.safetyBytes {
 		return empty, fmt.Errorf("%w: capture host peak reservation exhausted", errs.ErrExhausted)
 	}
-	accepted := operation.Record{
+	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    request.Key,
 		Status: "pending",
@@ -197,13 +196,13 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if err = admitCapturePublication(ctx, tx, publication); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.Reserve(ctx, quota.Reservation{
+	if err = quota.Reserve(ctx, tx, quota.Reservation{
 		Owner: "snapshot:" + publication.ID,
 		Bytes: reserve,
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddCost(ctx, quota.Cost{
+	if err = quota.AddCost(ctx, tx, quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        request.TenantID,
 			Kind:            "pending_storage",
@@ -214,7 +213,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddCostReference(ctx, quota.CostReference{
+	if err = quota.AddCostReference(ctx, tx, quota.CostReference{
 		TenantID:   request.TenantID,
 		Kind:       "pending_storage",
 		Key:        accepted.ID + ":capture",
@@ -223,7 +222,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         sandbox.VMID,
 		HolderKind: "capture",
@@ -231,7 +230,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	}); err != nil {
 		return empty, err
 	}
-	if err = responsibilities.AddResourceReference(ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         currentMachine.Resource.Config.Image,
 		HolderKind: "capture",

@@ -23,6 +23,7 @@ type RestorableRuntime struct {
 func RestorableBackend(runtime *ColdRuntime) loom.Backend {
 	return &RestorableRuntime{runtime}
 }
+
 func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, directory string) error {
 	if err := backend.ColdRuntime.Capture(ctx, r, directory); err != nil {
 		return err
@@ -68,7 +69,8 @@ func (backend *RestorableRuntime) Capture(ctx context.Context, r loom.Resource, 
 	truncateErr := file.Truncate(size)
 	return errors.Join(truncateErr, file.Close())
 }
-func AdmitCloneFixture(t *testing.T, service *application.App, snapshot, key string) operation.Record {
+
+func AdmitCloneFixture(t *testing.T, service *application.App, snapshot, key string) operation.State {
 	t.Helper()
 	acceptedOperation, err := service.Provisioning.AdmitClone(context.Background(), machine.CloneRequest{
 		TenantID:   "tenant",

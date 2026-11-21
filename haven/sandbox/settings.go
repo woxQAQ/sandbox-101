@@ -58,6 +58,8 @@ func LoadSettings(ctx context.Context, query store.DBTX, id string) (Settings, e
 	return settings, err
 }
 
+// LifecycleFence returns the operation ID that currently blocks data and configuration
+// admission for this sandbox. sql.ErrNoRows means no operation holds the fence.
 func LifecycleFence(ctx context.Context, query store.DBTX, id string) (string, error) {
 	return dbgen.New(query).GetFence(ctx, id)
 }

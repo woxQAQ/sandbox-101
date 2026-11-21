@@ -18,8 +18,10 @@ import (
 type StopBackend interface {
 	InstanceInspector
 
-	Stop(context.Context, loom.Resource) error
-	Network(context.Context, loom.Resource, bool) error
+	// Stop stops the process identified by the resource receipt.
+	Stop(ctx context.Context, resource loom.Resource) error
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
 }
 
 // Stops retains the original generation and funding proof while confirming
@@ -55,7 +57,7 @@ func NewVMStops(state *store.State, dependencies VMStopsDependencies, fault func
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		lifetime:   dependencies.Lifetime,
 		workers:    dependencies.Workers,
@@ -114,7 +116,7 @@ func (s *Stops) Resume(id string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	guard := s.guards.VM(source.Candidate)
+	guard := s.guards.ForVMLifecycle(source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadStop(s.ctx, s.store.Database, id)

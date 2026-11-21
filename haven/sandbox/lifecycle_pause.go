@@ -39,8 +39,7 @@ func (l *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.Captu
 		Phase:      "captured",
 		SnapshotID: snapshot.ID,
 	}
-	responsibilities := quota.New(tx)
-	if err = responsibilities.AddResourceReference(l.ctx, quota.ResourceReference{
+	if err = quota.AddResourceReference(l.ctx, tx, quota.ResourceReference{
 		Kind:       "snapshot",
 		ID:         snapshot.ID,
 		HolderKind: "sleep",
@@ -48,7 +47,7 @@ func (l *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.Captu
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.AddCostReference(l.ctx, quota.CostReference{
+	if err = quota.AddCostReference(l.ctx, tx, quota.CostReference{
 		TenantID:   step.Input.OwnerTenantID,
 		Kind:       "snapshot",
 		Key:        snapshot.ID,
@@ -101,7 +100,7 @@ func (l *Lifecycle) runPause(step LifecycleStep) error {
 	if _, _, lookup := machine.LoadResourceLink(l.ctx, l.store.Database, step.OperationID, "release"); lookup == sql.ErrNoRows {
 		admission := &LifecycleAdmission{
 			History: l.proofs.Snapshots(),
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,

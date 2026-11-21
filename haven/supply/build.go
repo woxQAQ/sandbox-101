@@ -120,7 +120,7 @@ func (s *Supply) runBuild(step SupplyStep) error {
 		if err = s.supplyCandidate(step, source); err != nil {
 			return err
 		}
-		if err = s.opts.Backend.Network(s.ctx, source.Input.Resource, false); err != nil {
+		if err = s.opts.Backend.SetNetworkEnabled(s.ctx, source.Input.Resource, false); err != nil {
 			return err
 		}
 		observed, err := s.opts.Backend.Inspect(s.ctx, source.Input.Resource)
@@ -156,7 +156,7 @@ func (s *Supply) runBuild(step SupplyStep) error {
 			return fmt.Errorf("build capture outside prepared phase")
 		}
 		parent := &SupplyAdmission{
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,
@@ -184,7 +184,7 @@ func (s *Supply) runBuild(step SupplyStep) error {
 	}
 	if _, _, lookup := machine.LoadResourceLink(s.ctx, s.store.Database, step.OperationID, "release"); errors.Is(lookup, sql.ErrNoRows) {
 		parent := &SupplyAdmission{
-			Parent: operation.Record{
+			Parent: operation.State{
 				ID: step.OperationID,
 			},
 			Input: step.Input,

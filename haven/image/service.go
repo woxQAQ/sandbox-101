@@ -16,11 +16,16 @@ import (
 
 // ImageGuards exposes the existing lock domains used by image producers and collectors.
 type ImageGuards interface {
-	Admission() execution.Guard
-	Artifacts() execution.Guard
-	NodeRequest(string, string) execution.Guard
-	ImageImport(string) execution.Guard
-	ImageCleanup(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForImageArtifacts returns the lock shared by image publication, cleanup and GC inventory.
+	ForImageArtifacts() execution.Guard
+	// ForNodeIdempotencyKey returns the lock shared by admissions using this node's key.
+	ForNodeIdempotencyKey(nodeID, key string) execution.Guard
+	// ForImageImport returns the lock for advancing one image import operation.
+	ForImageImport(operationID string) execution.Guard
+	// ForImageCleanup returns the lock for advancing one image cleanup operation.
+	ForImageCleanup(operationID string) execution.Guard
 }
 
 type ImageOptions struct {
@@ -62,7 +67,7 @@ func NewImages(state *store.State, dependencies ImageDependencies, options Image
 		faultPoint:  options.Fault,
 		ctx:         dependencies.Workers.Context(),
 		guards:      dependencies.Guards,
-		admission:   dependencies.Guards.Admission(),
+		admission:   dependencies.Guards.ForStoreMutation(),
 		gate:        dependencies.Gate,
 		workers:     dependencies.Workers,
 	}
@@ -99,7 +104,7 @@ func (i *Images) Resume(id string) (bool, error) {
 	}
 	cleanup, err := loadImageCleanup(i.ctx, i.database, id)
 	if err == nil {
-		guard := i.guards.ImageCleanup(id)
+		guard := i.guards.ForImageCleanup(id)
 		guard.Lock()
 		defer guard.Unlock()
 		cleanup, err = loadImageCleanup(i.ctx, i.database, id)
@@ -109,8 +114,8 @@ func (i *Images) Resume(id string) (bool, error) {
 		if operation.Terminal(cleanup.Status) {
 			return true, nil
 		}
-		i.guards.Artifacts().Lock()
-		defer i.guards.Artifacts().Unlock()
+		i.guards.ForImageArtifacts().Lock()
+		defer i.guards.ForImageArtifacts().Unlock()
 		return true, i.runImageCleanup(cleanup)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -123,7 +128,7 @@ func (i *Images) Resume(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := i.guards.ImageImport(id)
+	guard := i.guards.ForImageImport(id)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = loadImageImport(i.ctx, i.database, id)
@@ -133,8 +138,8 @@ func (i *Images) Resume(id string) (bool, error) {
 	if operation.Terminal(step.Status) {
 		return true, nil
 	}
-	i.guards.Artifacts().Lock()
-	defer i.guards.Artifacts().Unlock()
+	i.guards.ForImageArtifacts().Lock()
+	defer i.guards.ForImageArtifacts().Unlock()
 	return true, i.runImageImport(step)
 }
 
@@ -150,9 +155,9 @@ func ValidateImageCleanup(ctx context.Context, database store.DBTX, id string) e
 
 // CollectCandidate rechecks the artifact proof frozen by the GC parent before
 // admitting a separately owned collector. Admission repeats current custody checks.
-func (i *Images) CollectCandidate(ctx context.Context, principal authorization.Principal, key string, item types.GCItem) (operation.Record, error) {
+func (i *Images) CollectCandidate(ctx context.Context, principal authorization.Principal, key string, item types.GCItem) (operation.State, error) {
 	if !principal.Root || principal.TenantID == "" || principal.SandboxID != "" {
-		return operation.Record{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
+		return operation.State{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
 	request := ImageCleanupRequest{
 		ImportOperationID: item.ID,
@@ -161,10 +166,10 @@ func (i *Images) CollectCandidate(ctx context.Context, principal authorization.P
 	case "image_cache":
 		record, err := loadImageCache(ctx, i.database, item.CacheBuilder, item.CacheDiffID)
 		if err != nil {
-			return operation.Record{}, err
+			return operation.State{}, err
 		}
 		if operation.Digest(operation.Encode(record)) != item.Proof {
-			return operation.Record{}, fmt.Errorf("%w: GC frozen cache ownership changed", errs.ErrManualRecovery)
+			return operation.State{}, fmt.Errorf("%w: GC frozen cache ownership changed", errs.ErrManualRecovery)
 		}
 		request = ImageCleanupRequest{
 			CacheBuilder: item.CacheBuilder,
@@ -173,13 +178,13 @@ func (i *Images) CollectCandidate(ctx context.Context, principal authorization.P
 	case "image_work":
 		source, err := loadImageImport(ctx, i.database, item.ID)
 		if err != nil {
-			return operation.Record{}, err
+			return operation.State{}, err
 		}
 		if source.Hash != item.Proof {
-			return operation.Record{}, fmt.Errorf("%w: GC frozen import ownership changed", errs.ErrManualRecovery)
+			return operation.State{}, fmt.Errorf("%w: GC frozen import ownership changed", errs.ErrManualRecovery)
 		}
 	default:
-		return operation.Record{}, fmt.Errorf("%w: unknown image collection kind", errs.ErrInvalid)
+		return operation.State{}, fmt.Errorf("%w: unknown image collection kind", errs.ErrInvalid)
 	}
 	return i.AdmitCleanup(ctx, principal, key, request)
 }

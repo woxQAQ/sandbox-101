@@ -15,7 +15,7 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCItem) (operation.Record, string, error) {
+func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCItem) (operation.State, string, error) {
 	key := parent.OperationID + ":" + item.Kind + ":" + item.ID
 	switch item.Kind {
 	case "image_work", "image_cache":
@@ -27,10 +27,10 @@ func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCIt
 	case "supply":
 		source, err := supply.LoadSupply(ctx, c.store.Database, item.ID)
 		if err != nil {
-			return operation.Record{}, "", err
+			return operation.State{}, "", err
 		}
 		if source.Hash != item.Proof {
-			return operation.Record{}, "", fmt.Errorf("%w: GC frozen supply input changed", errs.ErrManualRecovery)
+			return operation.State{}, "", fmt.Errorf("%w: GC frozen supply input changed", errs.ErrManualRecovery)
 		}
 		result, err := c.supply.AdmitSupplyCleanup(ctx, authorization.Principal{
 			Root:     true,
@@ -42,17 +42,17 @@ func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCIt
 	case "snapshot":
 		source, err := c.proofs.SnapshotPublication(ctx, c.store.Database, item.TenantID, item.ID)
 		if err != nil {
-			return operation.Record{}, "", err
+			return operation.State{}, "", err
 		}
 		if operation.Digest(operation.Encode(source.Snapshot)) != item.Proof {
-			return operation.Record{}, "", fmt.Errorf("%w: GC frozen snapshot input changed", errs.ErrManualRecovery)
+			return operation.State{}, "", fmt.Errorf("%w: GC frozen snapshot input changed", errs.ErrManualRecovery)
 		}
 		eligible, _, err := c.snapshotCandidate(ctx, source.Snapshot)
 		if err != nil {
-			return operation.Record{}, "", err
+			return operation.State{}, "", err
 		}
 		if !eligible {
-			return operation.Record{}, "", fmt.Errorf("%w: snapshot gained an active consumer", errs.ErrConflict)
+			return operation.State{}, "", fmt.Errorf("%w: snapshot gained an active consumer", errs.ErrConflict)
 		}
 		result, err := c.snapshots.AdmitSnapshotDelete(ctx, machine.SnapshotDeleteRequest{
 			TenantID:   item.TenantID,
@@ -63,10 +63,10 @@ func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCIt
 	case "raw_capture":
 		capture, err := machine.LoadCapture(ctx, c.store.Database, item.ID)
 		if err != nil {
-			return operation.Record{}, "", err
+			return operation.State{}, "", err
 		}
 		if capture.Hash != item.Proof {
-			return operation.Record{}, "", fmt.Errorf("%w: GC frozen raw capture changed", errs.ErrManualRecovery)
+			return operation.State{}, "", fmt.Errorf("%w: GC frozen raw capture changed", errs.ErrManualRecovery)
 		}
 		result, err := c.raw.Admit(ctx, machine.CaptureCleanupRequest{
 			TenantID:           item.TenantID,
@@ -76,7 +76,7 @@ func (c *Collector) admitChild(ctx context.Context, parent Step, item types.GCIt
 		}, nil)
 		return result, item.TenantID, err
 	default:
-		return operation.Record{}, "", fmt.Errorf("%w: unsupported GC candidate", errs.ErrInvalid)
+		return operation.State{}, "", fmt.Errorf("%w: unsupported GC candidate", errs.ErrInvalid)
 	}
 }
 
@@ -86,14 +86,14 @@ func (c *Collector) run(step Step) error {
 	}
 	ctx, cancel := context.WithDeadline(c.ctx, step.Input.Deadline)
 	defer cancel()
-	if !c.guards.Artifacts().TryLock() {
+	if !c.guards.ForImageArtifacts().TryLock() {
 		step.State.Report.Deferred = append(step.State.Report.Deferred, types.GCItem{
 			Kind:   "busy",
 			Reason: "artifact publication active",
 		})
 		step.State.Next = len(step.Input.Report.Candidates)
 	} else {
-		c.guards.Artifacts().Unlock()
+		c.guards.ForImageArtifacts().Unlock()
 		for step.State.Next < len(step.Input.Report.Candidates) {
 			item := step.Input.Report.Candidates[step.State.Next]
 			if ctx.Err() != nil {

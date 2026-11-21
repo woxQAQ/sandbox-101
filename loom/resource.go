@@ -51,30 +51,49 @@ type Observation struct {
 	Network    bool
 }
 
+// SnapshotCompatibility identifies the host format used to capture and restore VM state.
+type SnapshotCompatibility interface {
+	// Compatibility returns the host compatibility identifier recorded with each snapshot.
+	Compatibility() string
+}
+
 // Backend is the explicit host-effects boundary. Implementations must make
 // effects inspectable under Resource.Instance and reject uncertain identities.
 // Success verifies only the effect; it does not commit a control-plane step.
 type Backend interface {
-	Compatibility() string
-	Check(context.Context, Config) error
-	Prepare(context.Context, Resource) error
-	Inspect(context.Context, Resource) (Observation, error)
-	Launch(context.Context, Resource, bool) error
-	Boot(context.Context, Resource, bool) error
-	Agent(context.Context, Resource, bool) error
+	SnapshotCompatibility
+	// ValidateHostConfig validates the requested VM configuration against this host.
+	ValidateHostConfig(ctx context.Context, config Config) error
+	// Prepare prepares the candidate's private execution files before launch.
+	Prepare(ctx context.Context, resource Resource) error
+	// Inspect observes the identified instance and reports uncertainty as an error.
+	Inspect(ctx context.Context, resource Resource) (Observation, error)
+	// Launch starts the VMM process for the candidate generation.
+	Launch(ctx context.Context, resource Resource, restore bool) error
+	// Boot boots the prepared VM or resumes its restored state.
+	Boot(ctx context.Context, resource Resource, restore bool) error
+	// Agent performs System portal initialization for the booted instance.
+	Agent(ctx context.Context, resource Resource, restore bool) error
 	// Stop proves this exact process before signaling; sibling inventory is
 	// verified separately by Inspect before resource removal.
-	Stop(context.Context, Resource) error
-	Pause(context.Context, Resource) error
-	Capture(context.Context, Resource, string) error
-	Resume(context.Context, Resource) error
-	Network(context.Context, Resource, bool) error
-	Remove(context.Context, Resource) error
+	Stop(ctx context.Context, resource Resource) error
+	// Pause suspends guest execution before capture.
+	Pause(ctx context.Context, resource Resource) error
+	// Capture writes the paused VM state to the supplied directory.
+	Capture(ctx context.Context, resource Resource, directory string) error
+	// Resume continues guest execution after a pause.
+	Resume(ctx context.Context, resource Resource) error
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource Resource, enabled bool) error
+	// Remove removes the stopped instance's runtime resources.
+	Remove(ctx context.Context, resource Resource) error
 }
 
 // NetworkPolicyBackend installs and verifies instance-bound kernel rules.
 // Installation requires all interfaces down; nil revokes direct permission.
 type NetworkPolicyBackend interface {
-	InstallNetworkPolicy(context.Context, Resource, *NetworkPolicy) error
-	VerifyNetworkPolicy(context.Context, Resource, *NetworkPolicy) error
+	// InstallNetworkPolicy installs instance-bound rules with links down. A nil policy revokes permission.
+	InstallNetworkPolicy(ctx context.Context, resource Resource, policy *NetworkPolicy) error
+	// VerifyNetworkPolicy checks the live rules against the expected instance policy.
+	VerifyNetworkPolicy(ctx context.Context, resource Resource, policy *NetworkPolicy) error
 }

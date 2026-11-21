@@ -21,7 +21,6 @@ import (
 // catalog alone. Legacy private fixtures without that receipt remain charged.
 func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSource, history SnapshotProofs) error {
 	operations := operation.New(tx)
-	responsibilities := quota.New(tx)
 	cleanup, err := dbgen.New(tx).GetRetainedCleanup(ctx, dbgen.GetRetainedCleanupParams{
 		ResourceKind: "snapshot",
 		ResourceID:   source.Snapshot.ID,
@@ -65,11 +64,11 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if operation.Digest(parent.Request) != parent.RequestHash || parent.Status != "succeeded" || parent.ScopeKind != "tenant" || parent.ScopeID != publication.TenantID || request.Action != "snapshot_delete" || request.Request != input.Request || result.SnapshotID != publication.ID {
 		return fmt.Errorf("snapshot retained deletion parent changed")
 	}
-	refs, err := responsibilities.CountResourceHolders(ctx, "snapshot", publication.ID)
+	refs, err := quota.CountResourceHolders(ctx, tx, "snapshot", publication.ID)
 	if err != nil {
 		return err
 	}
-	fees, err := responsibilities.CountCostHolders(ctx, "snapshot", publication.ID)
+	fees, err := quota.CountCostHolders(ctx, tx, "snapshot", publication.ID)
 	if err != nil {
 		return err
 	}
@@ -114,7 +113,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil || count != 0 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
-	count, err = responsibilities.CountReservation(ctx, "snapshot:"+publication.ID)
+	count, err = quota.CountReservation(ctx, tx, "snapshot:"+publication.ID)
 	if err != nil || count != 0 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
@@ -127,7 +126,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil || count != 1 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
-	count, err = responsibilities.CountCost(ctx, "snapshot", publication.ID)
+	count, err = quota.CountCost(ctx, tx, "snapshot", publication.ID)
 	if err != nil || count != 1 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
@@ -137,7 +136,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 		Key:             publication.ID,
 		SourceOperation: source.CaptureOperation,
 	}
-	count, err = responsibilities.CountMatchingCost(ctx, quota.Cost{
+	count, err = quota.CountMatchingCost(ctx, tx, quota.Cost{
 		CostIdentity: cost,
 		StorageMiB:   publication.Manifest.Config.Shape.DiskMiB + publication.Manifest.Config.Shape.MemoryMiB,
 	})
@@ -162,7 +161,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil || count != 1 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
-	if err = responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         publication.Manifest.Config.Image,
 		HolderKind: "snapshot",
@@ -170,7 +169,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RetireCost(ctx, cost); err != nil {
+	if err = quota.RetireCost(ctx, tx, cost); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).RetireDeletionReceipt(ctx, dbgen.RetireDeletionReceiptParams{

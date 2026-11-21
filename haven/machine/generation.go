@@ -128,7 +128,6 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 	if generation.Input.Restore != nil {
 		source := generation.Input.Restore.Snapshot
 
-		responsibilities := quota.New(tx)
 		if generation.State.BackingReady {
 			if err := store.RequireOne(dbgen.New(tx).DeleteBacking(ctx, dbgen.DeleteBackingParams{
 				Path:   filepath.Join(generation.Input.Resource.RestoreDir, "memory-ranges"),
@@ -137,7 +136,7 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 			})); err != nil {
 				return err
 			}
-			if err := responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+			if err := quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "snapshot",
 				ID:         source.ID,
 				HolderKind: "backing",
@@ -145,7 +144,7 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 			}); err != nil {
 				return err
 			}
-			if err := responsibilities.RemoveCostReference(ctx, quota.CostReference{
+			if err := quota.RemoveCostReference(ctx, tx, quota.CostReference{
 				TenantID:   generation.Input.TenantID,
 				Kind:       "snapshot",
 				Key:        source.ID,
@@ -162,7 +161,7 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 			})); err != nil {
 				return err
 			}
-			if err := responsibilities.RemoveResourceReference(ctx, quota.ResourceReference{
+			if err := quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 				Kind:       "snapshot",
 				ID:         source.ID,
 				HolderKind: "step",
@@ -170,7 +169,7 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 			}); err != nil {
 				return err
 			}
-			if err := responsibilities.RemoveCostReference(ctx, quota.CostReference{
+			if err := quota.RemoveCostReference(ctx, tx, quota.CostReference{
 				TenantID:   generation.Input.TenantID,
 				Kind:       "snapshot",
 				Key:        source.ID,
@@ -180,7 +179,7 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 				return err
 			}
 		}
-		if err := responsibilities.ReleaseReservation(ctx, "restore:"+generation.OperationID); err != nil {
+		if err := quota.ReleaseReservation(ctx, tx, "restore:"+generation.OperationID); err != nil {
 			return err
 		}
 		if err := RetireDeletedSnapshot(ctx, tx, *generation.Input.Restore, history); err != nil {

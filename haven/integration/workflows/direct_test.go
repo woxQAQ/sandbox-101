@@ -20,6 +20,7 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
@@ -58,7 +59,7 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
+	if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -71,7 +72,7 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	if err != nil || old.Status != "succeeded" {
 		t.Fatal(old, err)
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "direct", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "direct", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy:    direct,
@@ -124,7 +125,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	runtime.PolicyMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
+	failed, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -168,7 +169,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	if _, err = service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID); err == nil {
 		t.Fatal("retirement removed failed configuration fence")
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "repair", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -233,7 +234,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 			"8.8.4.4/32",
 		},
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "newer", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "newer", operation.Intent{
 		Action:    "configure",
 		SandboxID: before.ID,
 		Policy:    newerPolicy,
@@ -243,7 +244,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	runtime.PolicyMu.Lock()
 	count := len(runtime.Events)
 	runtime.PolicyMu.Unlock()
-	if _, err = service.Sandboxes.AdmitConfigure(ctx, principal, "stale-observer", operation.Command{
+	if _, err = service.Sandboxes.AdmitConfigure(ctx, principal, "stale-observer", operation.Intent{
 		Action:             "configure",
 		SandboxID:          before.ID,
 		ObservedGeneration: settings.Generation,
@@ -285,7 +286,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	testutil.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
+	if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -321,7 +322,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "repair", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -350,14 +351,14 @@ func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 					"8.8.8.8/32",
 				},
 			}
-			var env map[string]operation.EnvVar
+			var env map[string]types.EnvVar
 			if kind == "hostname" {
 				policy.AllowedHosts = []string{
 					"unused.invalid",
 				}
 			} else {
 				guest := false
-				env = map[string]operation.EnvVar{
+				env = map[string]types.EnvVar{
 					"PRIVATE": {
 						Value: "unused-fixture-value",
 						Guest: &guest,
@@ -373,7 +374,7 @@ func TestHavenDirectAdmissionRejectsHostnameAndHostCredentials(t *testing.T) {
 			}
 			if _, err := service.Sandboxes.AdmitClaim(context.Background(), authorization.Principal{
 				TenantID: "tenant",
-			}, "claim", operation.Command{
+			}, "claim", operation.Intent{
 				Action:     "claim",
 				TemplateID: "cold",
 				Env:        env,
@@ -412,13 +413,13 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 	manager.CleanupMu.Lock()
 	oldCleanup := manager.Cleanups[before.ID]
 	manager.CleanupMu.Unlock()
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "pause", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: before.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, principal, "resume", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
 		Action:    "resume",
 		SandboxID: before.ID,
 	}); err != nil {
@@ -470,7 +471,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if _, err := service.SandboxRequests.Execute(ctx, principal, "none", operation.Command{
+			if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
 				Action:    "configure",
 				SandboxID: claim.Result.SandboxID,
 				Policy: egress.Policy{
@@ -509,7 +510,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			if err != nil || done.Status != "succeeded" || done.Hash != retirement.Hash || !reflect.DeepEqual(done.Input, retirement.Input) {
 				t.Fatal("retirement recovery changed original proof", done, err)
 			}
-			if _, err = service.SandboxRequests.Execute(ctx, principal, "repair", operation.Command{
+			if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
 				Action:    "configure",
 				SandboxID: claim.Result.SandboxID,
 				Policy: egress.Policy{
@@ -541,13 +542,13 @@ func (runtime *directRuntime) record(event string) {
 	runtime.PolicyMu.Unlock()
 }
 
-func (runtime *directRuntime) Network(ctx context.Context, resource loom.Resource, enabled bool) error {
+func (runtime *directRuntime) SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error {
 	event := "off"
 	if enabled {
 		event = "on"
 	}
 	runtime.record(event)
-	return runtime.ColdRuntime.Network(ctx, resource, enabled)
+	return runtime.ColdRuntime.SetNetworkEnabled(ctx, resource, enabled)
 }
 
 func (runtime *directRuntime) InstallNetworkPolicy(_ context.Context, resource loom.Resource, policy *loom.NetworkPolicy) error {

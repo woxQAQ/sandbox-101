@@ -439,7 +439,7 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 	}
 }
 
-func coldResponsibility(t *testing.T, service *application.App, acceptedOperation operation.Record, witness bool) {
+func coldResponsibility(t *testing.T, service *application.App, acceptedOperation operation.State, witness bool) {
 	t.Helper()
 	var slots, storage, pending, disks int64
 	if err := service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='vm_disk'),0) FROM quota_resources WHERE source_operation_id=?", acceptedOperation.ID).Scan(&slots, &storage, &pending, &disks); err != nil {

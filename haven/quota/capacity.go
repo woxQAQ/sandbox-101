@@ -1,6 +1,11 @@
 package quota
 
-import "context"
+import (
+	"context"
+
+	"github.com/woxQAQ/haven/quota/internal/dbgen"
+	"github.com/woxQAQ/haven/store"
+)
 
 // CapacityUsage sums node reservations without assigning them to a new owner.
 type CapacityUsage struct {
@@ -9,8 +14,8 @@ type CapacityUsage struct {
 	CPUs      int64
 }
 
-func (r *Repository) ReservedCapacity(ctx context.Context) (CapacityUsage, error) {
-	row, err := r.queries.ReservedCapacity(ctx)
+func ReservedCapacity(ctx context.Context, db store.DBTX) (CapacityUsage, error) {
+	row, err := dbgen.New(db).ReservedCapacity(ctx)
 	return CapacityUsage{
 		Bytes:     row.Bytes,
 		MemoryMiB: row.Memory,

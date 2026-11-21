@@ -18,8 +18,10 @@ import (
 )
 
 type ProvisionGuards interface {
-	Admission() execution.Guard
-	VM(string) execution.Guard
+	// ForStoreMutation returns the node-wide lock for durable admission, state publication and final store close.
+	ForStoreMutation() execution.Guard
+	// ForVMLifecycle returns the lock for host effects and completion checks on one logical VM.
+	ForVMLifecycle(vmID string) execution.Guard
 }
 
 // ProvisionOptions freezes the runtime effects and node capacity at construction.
@@ -75,7 +77,7 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 		},
 		ctx:         dependencies.Lifetime.Context(),
 		lifetime:    dependencies.Lifetime,
-		admission:   dependencies.Guards.Admission(),
+		admission:   dependencies.Guards.ForStoreMutation(),
 		guards:      dependencies.Guards,
 		proofs:      dependencies.Proofs,
 		gate:        dependencies.Gate,
@@ -109,7 +111,7 @@ func (p *Provisioning) Continue(id string) error {
 	if err = machine.ValidateResourceStep(p.store.Directory, step); err != nil {
 		return err
 	}
-	lock := p.guards.VM(step.Candidate)
+	lock := p.guards.ForVMLifecycle(step.Candidate)
 	lock.Lock()
 	defer lock.Unlock()
 	step, err = machine.LoadResourceStep(p.ctx, p.store.Database, id)
@@ -131,7 +133,7 @@ func (p *Provisioning) Continue(id string) error {
 // ClaimAdmission carries the sanitized command/settings and ephemeral host
 // credentials. Only the explicit frozen inputs and credential MAC are persisted.
 type ClaimAdmission struct {
-	Command  operation.Command
+	Command  operation.Intent
 	Settings Settings
 	MAC      string
 	Secrets  map[string]egress.Secret
@@ -165,6 +167,7 @@ type ProvisionCapacity struct {
 }
 
 type provisionalTemplateParent interface {
+	// ProvisioningTemplate returns the parent-authorized template when provisioning precedes publication.
 	ProvisioningTemplate() (supply.TemplateRecord, bool)
 }
 
@@ -184,7 +187,8 @@ type ProvisionSlotClaim struct {
 }
 
 type ProvisionTargetValidator interface {
-	ValidateProvisionTarget(context.Context, *sql.Tx, ProvisionSlotClaim) (*machine.QuotaDestination, error)
+	// ValidateProvisionTarget verifies the slot claim and resolves its authorized destination in the admission transaction.
+	ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error)
 }
 
 func (admission *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, _ *sql.Tx, claim ProvisionSlotClaim) (*machine.QuotaDestination, error) {
@@ -202,7 +206,7 @@ func (admission *LifecycleAdmission) ValidateProvisionTarget(_ context.Context, 
 
 // AdmitBare exposes only the undelivered build/refill subset of resource admission.
 // It shares the original transaction, gate, workers and continuous VM guard.
-func (p *Provisioning) AdmitBare(ctx context.Context, request supply.ProvisionRequest, target supply.BareTarget) (operation.Record, error) {
+func (p *Provisioning) AdmitBare(ctx context.Context, request supply.ProvisionRequest, target supply.BareTarget) (operation.State, error) {
 	return p.Admit(ctx, ProvisionAdmission{
 		Request: request,
 		Target: &ProvisionTarget{

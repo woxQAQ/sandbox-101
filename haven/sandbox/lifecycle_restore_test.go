@@ -23,7 +23,7 @@ func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
 	// An independently retained charge places the tenant one unit above the
 	// exact integer range of float64. Admission must retain that last unit.
 	const total int64 = 1<<53 + 1
-	if err := quota.New(service.State.Database()).AddCost(ctx, quota.Cost{
+	if err := quota.AddCost(ctx, service.State.Database(), quota.Cost{
 		CostIdentity: quota.CostIdentity{
 			TenantID:        request.TenantID,
 			Kind:            "pending_storage",

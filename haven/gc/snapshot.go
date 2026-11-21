@@ -77,7 +77,7 @@ func (c *Collector) snapshotCandidate(ctx context.Context, record machine.Snapsh
 	if readers != 0 {
 		return false, "source lease retained", nil
 	}
-	readers, err = quota.New(c.store.Database).ActiveSnapshotReferences(ctx, record.ID)
+	readers, err = quota.ActiveSnapshotReferences(ctx, c.store.Database, record.ID)
 	if err != nil {
 		return false, "", err
 	}

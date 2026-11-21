@@ -32,11 +32,11 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	spec := original
 	spec.ID = "managed"
 	spec.TenantID = "tenant"
-	command := operation.Command{
+	command := operation.Intent{
 		Action:   "template_put",
 		Template: &spec,
 	}
-	publication, err := service.SandboxRequests.Execute(ctx, root, "create", command)
+	publication, err := service.CommandRouter.Execute(ctx, root, "create", command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	if err != nil || current.TenantID != "tenant" {
 		t.Fatal("root publication lost permanent resource owner", current, err)
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, tenant, "claim", operation.Command{
+	if _, err = service.CommandRouter.Execute(ctx, tenant, "claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: spec.ID,
 	}); err != nil {
@@ -69,7 +69,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	}
 	missing := spec
 	missing.TenantID = ""
-	if _, err = service.Supply.AdmitTemplate(ctx, root, "missing-owner", operation.Command{
+	if _, err = service.Supply.AdmitTemplate(ctx, root, "missing-owner", operation.Intent{
 		Action:   "template_put",
 		Template: &missing,
 	}); err == nil {
@@ -77,13 +77,13 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	}
 	changed := spec
 	changed.TenantID = "other"
-	if _, err = service.Supply.AdmitTemplate(ctx, root, "changed-owner", operation.Command{
+	if _, err = service.Supply.AdmitTemplate(ctx, root, "changed-owner", operation.Intent{
 		Action:   "template_put",
 		Template: &changed,
 	}); err == nil {
 		t.Fatal("root changed permanent owner")
 	}
-	if _, err = service.SandboxRequests.Execute(ctx, root, "update", command); err != nil {
+	if _, err = service.CommandRouter.Execute(ctx, root, "update", command); err != nil {
 		t.Fatal(err)
 	}
 	record, err := supply.NewTemplateCatalog(service.State.Database()).Owned(ctx, "tenant", spec.ID)
@@ -99,7 +99,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	if _, err = service.TemplateCatalog.GetTemplate(ctx, tenant, spec.ID); err == nil {
 		t.Fatal("catalog acquired authority without original publication")
 	}
-	if _, err = service.Sandboxes.AdmitClaim(ctx, tenant, "corrupt", operation.Command{
+	if _, err = service.Sandboxes.AdmitClaim(ctx, tenant, "corrupt", operation.Intent{
 		Action:     "claim",
 		TemplateID: spec.ID,
 	}); err == nil {

@@ -27,7 +27,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			refill, err := service.SandboxRequests.Execute(ctx, principal, "refill", operation.Command{
+			refill, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
 				Action:     "refill",
 				TemplateID: "golden",
 			})
@@ -45,7 +45,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 					return nil
 				}
 			}
-			claimed, err := service.SandboxRequests.Execute(ctx, principal, "claim", operation.Command{
+			claimed, err := service.CommandRouter.Execute(ctx, principal, "claim", operation.Intent{
 				Action:     "claim",
 				TemplateID: "golden",
 				Policy: egress.Policy{
@@ -74,7 +74,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM warm),(SELECT COUNT(*) FROM source_leases)").Scan(&slots, &storage, &pool, &warm, &leases); err != nil || slots != 1 || storage != 256 || pool != 0 || warm != 0 || leases != 0 {
 				t.Fatal(slots, storage, pool, warm, leases, err)
 			}
-			released, err := service.SandboxRequests.Execute(ctx, principal, "release", operation.Command{
+			released, err := service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
 				Action:    "release",
 				SandboxID: sandbox.ID,
 			})

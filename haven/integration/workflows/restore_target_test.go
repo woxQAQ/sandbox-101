@@ -323,7 +323,7 @@ func TestHavenRestoreStoppedTarget(t *testing.T) {
 	}
 }
 
-func targetFixture(t *testing.T) (*application.App, *testfixture.GenerationRuntime, operation.Record, machine.ResourceStep) {
+func targetFixture(t *testing.T) (*application.App, *testfixture.GenerationRuntime, operation.State, machine.ResourceStep) {
 	t.Helper()
 	service, backend, request, _ := testapp.TargetSetup(t)
 	restored, err := service.Provisioning.AdmitRestore(context.Background(), request)

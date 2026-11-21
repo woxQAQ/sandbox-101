@@ -136,7 +136,7 @@ func (d *Deletion) runDiscard(step DiscardStep) error {
 			return fmt.Errorf("%w: discard cannot prove candidate exit", errs.ErrUnknown)
 		}
 		for _, generation := range generations {
-			if err = d.backend.Network(d.ctx, generation.Input.Resource, false); err != nil {
+			if err = d.backend.SetNetworkEnabled(d.ctx, generation.Input.Resource, false); err != nil {
 				return err
 			}
 		}
@@ -359,7 +359,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 			}
 			continue
 		}
-		if err = quota.New(tx).RemoveCostReference(d.ctx, quota.CostReference{
+		if err = quota.RemoveCostReference(d.ctx, tx, quota.CostReference{
 			TenantID:   input.Request.TenantID,
 			Kind:       charge.kind,
 			Key:        charge.key,
@@ -368,7 +368,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 		}); err != nil {
 			return err
 		}
-		if err = quota.New(tx).RetireMatchingCost(d.ctx, quota.Cost{
+		if err = quota.RetireMatchingCost(d.ctx, tx, quota.Cost{
 			CostIdentity: quota.CostIdentity{
 				TenantID:        input.Request.TenantID,
 				Kind:            charge.kind,
@@ -390,7 +390,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 		}
 	}
 	if len(source.Input.Ancestors) > 0 {
-		if err = quota.New(tx).RemoveResourceReference(d.ctx, quota.ResourceReference{
+		if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 			Kind:       "image",
 			ID:         source.Input.Resource.Config.Image,
 			HolderKind: "vm",
@@ -402,8 +402,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 	next := DiscardState{
 		Phase: "complete",
 	}
-	responsibilities := quota.New(tx)
-	if err = responsibilities.RemoveResourceReference(d.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         source.Candidate,
 		HolderKind: "cleanup",
@@ -411,7 +410,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.RemoveResourceReference(d.ctx, quota.ResourceReference{
+	if err = quota.RemoveResourceReference(d.ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         source.Input.Resource.Config.Image,
 		HolderKind: "cleanup",
@@ -419,7 +418,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = responsibilities.ReleaseReservation(d.ctx, "vm:"+source.Candidate); err != nil {
+	if err = quota.ReleaseReservation(d.ctx, tx, "vm:"+source.Candidate); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteStopped(d.ctx, dbgen.DeleteStoppedParams{

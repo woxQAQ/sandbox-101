@@ -33,6 +33,11 @@ type EnvVar struct {
 	Inject *Injection `json:"inject,omitempty"`
 }
 
+// IsSecret reports whether the value is reserved for host-side injection.
+func (value EnvVar) IsSecret() bool {
+	return value.Guest != nil && !*value.Guest
+}
+
 // Template publishes a tenant-owned image and shape, optionally with a golden snapshot.
 type Template struct {
 	ID         string `json:"id"`

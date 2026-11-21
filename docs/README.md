@@ -18,7 +18,7 @@
 
 | 任务 | 文档 |
 |---|---|
-| Sandbox HTTP、令牌、SDK、配额责任、Preview | [Sandbox API](../haven/sandbox/api.md) |
+| Sandbox HTTP、令牌、SDK、配额责任、Preview | [Sandbox API](sandbox-api.md) |
 | Relay、CONNECT、SOCKS、凭据与代理资源限制 | [Egress](../haven/egress/README.md) |
 | RPC 编码、方法与权限门户 | [Protocol](../protocol/README.md) |
 | Guest 构建、根切换、exec ledger 与树传输 | [Guest](../guest/README.md) |

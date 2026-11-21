@@ -12,9 +12,10 @@ import (
 	"github.com/woxQAQ/haven/machine"
 	operation "github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/sandbox"
+	"github.com/woxQAQ/haven/types"
 )
 
-func (p *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View, settings sandbox.Settings, source machine.ResourceStep) error {
+func (p *Plane) verifyDirectNetwork(ctx context.Context, view types.Sandbox, settings sandbox.Settings, source machine.ResourceStep) error {
 	expected, err := machine.DirectNetworkPolicy(settings.Policy)
 	if err != nil {
 		return err
@@ -43,10 +44,10 @@ func (p *Plane) verifyDirectNetwork(ctx context.Context, view sandbox.View, sett
 
 // repairDataNetwork submits the saved configuration with an observed generation.
 // A stale verification cannot revoke or overwrite a newer admitted policy.
-func (p *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) error {
-	env := map[string]operation.EnvVar{}
+func (p *Plane) repairDataNetwork(view types.Sandbox, settings sandbox.Settings) error {
+	env := map[string]types.EnvVar{}
 	for name, value := range settings.Env {
-		env[name] = operation.EnvVar{
+		env[name] = types.EnvVar{
 			Value: value,
 		}
 	}
@@ -59,7 +60,7 @@ func (p *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) 
 		guest := false
 		injection := descriptor
 		injection.Hosts = append([]string(nil), descriptor.Hosts...)
-		env[name] = operation.EnvVar{
+		env[name] = types.EnvVar{
 			Value:  value.Value,
 			Guest:  &guest,
 			Inject: &injection,
@@ -69,7 +70,7 @@ func (p *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) 
 	defer cancel()
 	accepted, err := p.sandboxes.AdmitConfigure(ctx, authorization.Principal{
 		TenantID: view.TenantID,
-	}, "network-revalidate:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Command{
+	}, "network-revalidate:"+p.epoch+":"+view.ID+":"+settings.Generation, operation.Intent{
 		Action:             "configure",
 		SandboxID:          view.ID,
 		ObservedGeneration: settings.Generation,
@@ -85,6 +86,6 @@ func (p *Plane) repairDataNetwork(view sandbox.View, settings sandbox.Settings) 
 	return nil
 }
 
-func (p *Plane) rejectNetwork(view sandbox.View, settings sandbox.Settings, cause error) error {
+func (p *Plane) rejectNetwork(view types.Sandbox, settings sandbox.Settings, cause error) error {
 	return errors.Join(cause, p.repairDataNetwork(view, settings))
 }

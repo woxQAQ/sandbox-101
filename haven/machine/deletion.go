@@ -17,7 +17,8 @@ import (
 type DeletionBackend interface {
 	StopBackend
 
-	Remove(context.Context, loom.Resource) error
+	// Remove removes the stopped instance's runtime resources.
+	Remove(ctx context.Context, resource loom.Resource) error
 }
 
 // Deletion reclaims retained successful or failed generations using their
@@ -60,7 +61,7 @@ func NewVMDeletion(state *store.State, dependencies VMDeletionDependencies, faul
 			Checkpoint: state.Checkpoint,
 		},
 		ctx:        dependencies.Workers.Context(),
-		admission:  dependencies.Guards.Admission(),
+		admission:  dependencies.Guards.ForStoreMutation(),
 		guards:     dependencies.Guards,
 		lifetime:   dependencies.Lifetime,
 		workers:    dependencies.Workers,
@@ -127,7 +128,7 @@ func (d *Deletion) ResumeDiscard(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	guard := d.guards.VM(step.Input.Source.Candidate)
+	guard := d.guards.ForVMLifecycle(step.Input.Source.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadDiscard(d.ctx, d.store.Database, id)
@@ -164,7 +165,7 @@ func (d *Deletion) ResumeRelease(id string) (bool, error) {
 	if err = d.validateStep(step); err != nil {
 		return true, err
 	}
-	guard := d.guards.VM(step.Candidate)
+	guard := d.guards.ForVMLifecycle(step.Candidate)
 	guard.Lock()
 	defer guard.Unlock()
 	step, err = LoadResourceStep(d.ctx, d.store.Database, id)

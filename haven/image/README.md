@@ -10,7 +10,7 @@
 
 ## Images 用例
 
-`image.Images` 负责接纳、导入、发布、失败留责、独立清理及 image GC 候选核验。它从唯一 store 借用数据库、不可变 origin 和 checkpoint 能力；通过 `ImageGuards` 借用既有 Admission、Artifacts、NodeRequest、ImageImport 和 ImageCleanup 锁域，并复用同一份 Workers。它没有根 Service/App 回指，也不拥有 writer 或 worker 生命周期。
+`image.Images` 负责接纳、导入、发布、失败留责、独立清理及 image GC 候选核验。它从唯一 store 借用数据库、不可变 origin 和 checkpoint 能力；通过 `ImageGuards` 为持久状态变更、镜像文件、节点幂等键及单次导入或清理操作取得对应的共享锁，并复用同一份 Workers。它没有根 Service/App 回指，也不拥有 writer 或 worker 生命周期。
 
 `ImageOptions` 仅包含宿主空间安全余量和构造时注入的故障 hook。测试切换故障阶段时控制注入端的状态，不修改生产服务的配置快照。`Resume` 按已有冻结 step 选择 cleanup、import，保持原优先级、重新加载和 guard 范围；启动只读校验使用同一组 loader。幂等 hash 冲突直接返回，不派发原 operation；匹配的请求才恢复其冻结工作。
 
