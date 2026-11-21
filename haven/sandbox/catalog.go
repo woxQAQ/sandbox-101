@@ -54,10 +54,12 @@ func (c *Catalog) Get(ctx context.Context, principal authorization.Principal, id
 	if record.Identity.TemplateID == "" || record.Identity.Epoch == "" || record.Identity.CreatedAt.IsZero() {
 		return types.Sandbox{}, fmt.Errorf("%w: sandbox birth identity is incomplete", errs.ErrManualRecovery)
 	}
+
 	settings, err := LoadSettings(ctx, c.database, id)
 	if err != nil {
 		return types.Sandbox{}, err
 	}
+
 	state, operationID := record.State, record.OperationID
 	fence, fenceErr := LifecycleFence(ctx, c.database, id)
 	if fenceErr != nil && !errors.Is(fenceErr, sql.ErrNoRows) {
