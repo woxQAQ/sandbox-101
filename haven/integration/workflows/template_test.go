@@ -26,7 +26,7 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	refill, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
+	refill, err := service.CommandAdmission.Execute(ctx, principal, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	})
@@ -71,7 +71,7 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 	runtime.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+	failed, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, "refill", operation.Intent{
 		Action:     "refill",
@@ -167,7 +167,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 		Shape:  cold.Shape,
 		Warmup: "printf fixture",
 	}
-	acceptedRecord, err := service.CommandRouter.Execute(ctx, principal, "build", operation.Intent{
+	acceptedRecord, err := service.CommandAdmission.Execute(ctx, principal, "build", operation.Intent{
 		Action:   "template_build",
 		Template: &spec,
 	})
@@ -183,7 +183,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&vms, &slots, &storage); err != nil || vms != 0 || slots != 0 || storage != 192 {
 		t.Fatal(vms, slots, storage, err)
 	}
-	claim, err := service.CommandRouter.Execute(ctx, principal, "golden-claim", operation.Intent{
+	claim, err := service.CommandAdmission.Execute(ctx, principal, "golden-claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: "golden",
 		Policy: egress.Policy{

@@ -155,7 +155,7 @@ func TestRustAgentThroughSandboxRelay(t *testing.T) {
 	}, nil); err == nil {
 		t.Fatal("tenant stream exposed host administration")
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "release", operation.Intent{
 		Action:    "release",
 		SandboxID: id,
 	}); err != nil {
@@ -770,7 +770,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	principal := authorization.Principal{
 		TenantID: "transport",
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "template", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "template", operation.Intent{
 		Action: "template_put",
 		Template: &types.Template{
 			ID:    "fixture",
@@ -784,7 +784,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	}); err != nil {
 		t.Fatal(err)
 	}
-	acceptedRecord, err := service.CommandRouter.Execute(ctx, principal, "claim", operation.Intent{
+	acceptedRecord, err := service.CommandAdmission.Execute(ctx, principal, "claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: "fixture",
 		Policy: egress.Policy{
@@ -799,15 +799,15 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		t.Fatal(result, err)
 	}
 	server := httptest.NewServer(api.New(api.Services{
-		Authentication: service.Authentication,
-		Catalog:        service.Catalog,
-		Templates:      service.TemplateCatalog,
-		Operations:     service.Operations,
-		Tenants:        service.Tenants,
-		Requests:       service.CommandRouter,
-		Dataplane:      service.Dataplane,
-		Node:           service.Node,
-		Delivery:       service.Delivery,
+		Authentication:   service.Authentication,
+		Catalog:          service.Catalog,
+		Templates:        service.TemplateCatalog,
+		Operations:       service.Operations,
+		Tenants:          service.Tenants,
+		CommandAdmission: service.CommandAdmission,
+		Dataplane:        service.Dataplane,
+		Node:             service.Node,
+		Delivery:         service.Delivery,
 	}))
 	t.Cleanup(server.Close)
 	return service, sdk.New(server.URL, result.Result.Tokens[result.Result.Sandbox.ID]), principal, result.Result.Sandbox.ID

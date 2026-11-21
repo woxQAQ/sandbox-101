@@ -28,7 +28,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			service, _, _ := testapp.GoldenSupplyFixture(t, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+			original, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
 			}, "refill", operation.Intent{
 				Action:     "refill",
@@ -124,7 +124,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+			original, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
 			}, "refill", operation.Intent{
 				Action:     "refill",
@@ -182,7 +182,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+			original, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
 			}, "refill", operation.Intent{
 				Action:     "refill",

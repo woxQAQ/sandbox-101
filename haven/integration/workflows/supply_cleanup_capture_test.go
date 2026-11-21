@@ -39,7 +39,7 @@ func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := service.CommandRouter.Execute(ctx, principal, "failed-build", operation.Intent{
+	original, err := service.CommandAdmission.Execute(ctx, principal, "failed-build", operation.Intent{
 		Action: "template_build",
 		Template: &types.Template{
 			ID:         "failed-build",

@@ -2,7 +2,7 @@
 
 业务 HTTP、令牌、SDK 与配额责任见 [Sandbox API 契约](../../docs/sandbox-api.md)。
 
-sandbox 拥有 claim/configuration、activation、生命周期、checkpoint binding、warm claim、fork、业务投递与 provisioning coordinator。物理 generation、capture、stop 和删除由 machine 执行，模板与 pool 由 supply 持有。`CommandRouter` 在分派前校验 sandbox token 的目标与动作，HTTP 和进程内提交共用这项检查。模板和 refill 的接纳由 `supply.Supply` 执行。
+sandbox 拥有 claim/configuration、activation、生命周期、checkpoint binding、warm claim、fork、业务投递与 provisioning coordinator。物理 generation、capture、stop 和删除由 machine 执行，模板与 pool 由 supply 持有。`CommandAdmission` 在分派前校验 sandbox token 的目标与动作，HTTP 和进程内提交共用这项检查。模板和 refill 的接纳由 `supply.Supply` 执行。
 
 ## 证明与原子交接
 

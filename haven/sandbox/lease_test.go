@@ -42,7 +42,7 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				defer cancel()
 				id := claim.Result.SandboxID
 				if state == "paused" {
-					if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+					if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 						Action:    "pause",
 						SandboxID: id,
 					}); err != nil {
@@ -260,7 +260,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if state == "paused" {
-				if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+				if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: id,
 				}); err != nil {

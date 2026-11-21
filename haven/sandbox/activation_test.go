@@ -35,7 +35,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			paused, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+			paused, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 				Action:    "pause",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -64,7 +64,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 				Action:    "resume",
 				SandboxID: before.ID,
 			}
-			failed, err := service.CommandRouter.Execute(ctx, principal, "resume", command)
+			failed, err := service.CommandAdmission.Execute(ctx, principal, "resume", command)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("activation succeeded without its final handoff", failed, err)
 			}
@@ -80,7 +80,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().Exec("DROP TRIGGER reject_activation_completion"); err != nil {
 				t.Fatal(err)
 			}
-			repaired, err := service.CommandRouter.Execute(ctx, principal, "repair", command)
+			repaired, err := service.CommandAdmission.Execute(ctx, principal, "repair", command)
 			if err != nil || repaired.Status != "succeeded" {
 				t.Fatal("explicit resume could not reuse retained sleep source", repaired, err)
 			}

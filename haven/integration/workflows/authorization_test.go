@@ -65,14 +65,14 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, scoped, renewal.ID); err != nil {
 		t.Fatal("sandbox credential cannot poll its lease operation", err)
 	}
-	checkpoint, err := service.CommandRouter.Execute(ctx, tenant, "checkpoint", operation.Intent{
+	checkpoint, err := service.CommandAdmission.Execute(ctx, tenant, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: record.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := service.CommandRouter.Execute(ctx, tenant, "fork", operation.Intent{
+	fork, err := service.CommandAdmission.Execute(ctx, tenant, "fork", operation.Intent{
 		Action:       "fork",
 		CheckpointID: checkpoint.Result.CheckpointID,
 		Policy: egress.Policy{

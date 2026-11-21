@@ -43,7 +43,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+	failed, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
 	})
@@ -58,7 +58,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released, err := service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
+	released, err := service.CommandAdmission.Execute(ctx, principal, "release", operation.Intent{
 		Action:    "release",
 		SandboxID: claim.Result.SandboxID,
 	})
@@ -114,7 +114,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				t.Fatal(claimErr)
 			}
 			if boundary == "paused" {
-				if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: claim.Result.SandboxID,
 				}); err != nil {
@@ -122,7 +122,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 				}
 			}
 			if boundary == "rollback" {
-				checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+				checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 					Action:    "checkpoint",
 					SandboxID: claim.Result.SandboxID,
 				})
@@ -135,7 +135,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 					}
 					return nil
 				}
-				if _, err = service.CommandRouter.Execute(ctx, principal, "rollback", operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "rollback", operation.Intent{
 					Action:       "rollback",
 					SandboxID:    claim.Result.SandboxID,
 					CheckpointID: checkpoint.Result.CheckpointID,
@@ -143,7 +143,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 					t.Fatal("rollback unexpectedly succeeded")
 				}
 			}
-			released, err := service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
+			released, err := service.CommandAdmission.Execute(ctx, principal, "release", operation.Intent{
 				Action:    "release",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -181,7 +181,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+			checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 				Action:    "checkpoint",
 				SandboxID: claim.Result.SandboxID,
 			})
@@ -189,7 +189,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 				t.Fatal(err)
 			}
 			if state == "paused" {
-				if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 					Action:    "pause",
 					SandboxID: claim.Result.SandboxID,
 				}); err != nil {
@@ -200,7 +200,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rollback, err := service.CommandRouter.Execute(ctx, principal, "rollback", operation.Intent{
+			rollback, err := service.CommandAdmission.Execute(ctx, principal, "rollback", operation.Intent{
 				Action:       "rollback",
 				SandboxID:    before.ID,
 				CheckpointID: checkpoint.Result.CheckpointID,
@@ -243,14 +243,14 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+	checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := service.CommandRouter.Execute(ctx, principal, "tenant-fork", operation.Intent{
+	fork, err := service.CommandAdmission.Execute(ctx, principal, "tenant-fork", operation.Intent{
 		Action:       "fork",
 		CheckpointID: checkpoint.Result.CheckpointID,
 		Policy: egress.Policy{
@@ -261,10 +261,10 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		t.Fatal(fork, service.Workers.State(fork.ID).Err, err)
 	}
 	server := httptest.NewServer(api.New(api.Services{
-		Authentication: service.Authentication,
-		Requests:       service.CommandRouter,
-		Operations:     service.Operations,
-		Delivery:       service.Delivery,
+		Authentication:   service.Authentication,
+		CommandAdmission: service.CommandAdmission,
+		Operations:       service.Operations,
+		Delivery:         service.Delivery,
 	}))
 	t.Cleanup(server.Close)
 	admin := sdk.New(server.URL, service.Options.AdminToken)
@@ -347,7 +347,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+			if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 				Action:    "pause",
 				SandboxID: claim.Result.SandboxID,
 			}); err != nil {
@@ -369,7 +369,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 					return nil
 				}
 			}
-			failed, err := service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
+			failed, err := service.CommandAdmission.Execute(ctx, principal, "resume", operation.Intent{
 				Action:    "resume",
 				SandboxID: before.ID,
 			})
@@ -416,7 +416,7 @@ func TestHavenDataResumeConverges(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -459,7 +459,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -469,7 +469,7 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
+	resumed, err := service.CommandAdmission.Execute(ctx, principal, "resume", operation.Intent{
 		Action:    "resume",
 		SandboxID: before.ID,
 	})
@@ -501,7 +501,7 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 			}).Claim(t, "claim", nil, egress.Policy{
 				Mode: "none",
 			})
-			acceptedRecord, err := service.CommandRouter.Submit(context.Background(), authorization.Principal{
+			acceptedRecord, err := service.CommandAdmission.Submit(context.Background(), authorization.Principal{
 				TenantID: "tenant",
 			}, action, operation.Intent{
 				Action:    action,

@@ -30,7 +30,7 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
-			refill, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
+			refill, err := service.CommandAdmission.Execute(ctx, principal, "refill", operation.Intent{
 				Action:     "refill",
 				TemplateID: "golden",
 			})
@@ -63,7 +63,7 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 					Mode: "none",
 				},
 			}
-			if _, err = service.CommandRouter.Execute(ctx, principal, "claim", command); err == nil {
+			if _, err = service.CommandAdmission.Execute(ctx, principal, "claim", command); err == nil {
 				t.Fatal("claim accepted without acquiring the selected pool reservation")
 			}
 			var retained []byte
@@ -83,7 +83,7 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().ExecContext(ctx, "DROP TRIGGER reject_pool_selection"); err != nil {
 				t.Fatal(err)
 			}
-			claimed, err := service.CommandRouter.Execute(ctx, principal, "claim", command)
+			claimed, err := service.CommandAdmission.Execute(ctx, principal, "claim", command)
 			if err != nil || claimed.Result.VMID != refill.Result.VMID || runtime.Count("launch") != launches {
 				t.Fatal("retry did not reuse the original warm resource", claimed, err)
 			}

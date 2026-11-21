@@ -65,7 +65,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 			SandboxID: acceptedRecord.Result.SandboxID,
 		},
 	} {
-		changed, changeErr := service.CommandRouter.Execute(ctx, principal, "public-"+command.Action, command)
+		changed, changeErr := service.CommandAdmission.Execute(ctx, principal, "public-"+command.Action, command)
 		if changeErr != nil {
 			t.Fatal(command.Action, changeErr)
 		}
@@ -145,7 +145,7 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 		SandboxID:  id,
 		TTLSeconds: 120,
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "renew", command); err == nil {
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "renew", command); err == nil {
 		t.Fatal("renew published success with no settings")
 	}
 	after, err := service.Catalog.Get(ctx, principal, id)
@@ -155,7 +155,7 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	if _, err = db.Exec(`DROP TRIGGER lose_settings`); err != nil {
 		t.Fatal(err)
 	}
-	retried, err := service.CommandRouter.Execute(ctx, principal, "renew", command)
+	retried, err := service.CommandAdmission.Execute(ctx, principal, "renew", command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err = service.State.Database().Exec("DROP TRIGGER reject_public_delivery"); err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := service.CommandRouter.Execute(ctx, principal, "configure-after-publication-fault", operation.Intent{
+	repaired, err := service.CommandAdmission.Execute(ctx, principal, "configure-after-publication-fault", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{

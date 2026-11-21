@@ -45,10 +45,10 @@ func TestClaimReplayDuringDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := api.New(api.Services{
-		Authentication: app.Authentication,
-		Requests:       app.CommandRouter,
-		Operations:     app.Operations,
-		Delivery:       app.Delivery,
+		Authentication:   app.Authentication,
+		CommandAdmission: app.CommandAdmission,
+		Operations:       app.Operations,
+		Delivery:         app.Delivery,
 	})
 	const body = `{"template_id":"cold","ttl_seconds":60,"env":{"TOKEN":{"guest":false,"value":"fixture-value","inject":{"hosts":["example.test"],"header":"Authorization"}}}}`
 	post := func(key, payload string, status int) []byte {

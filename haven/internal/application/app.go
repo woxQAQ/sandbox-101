@@ -77,7 +77,7 @@ type App struct {
 	Audits           *dataplane.Audits
 	ProxySockets     *dataplane.ProxySockets
 	Node             *node.Service
-	CommandRouter    *sandbox.CommandRouter
+	CommandAdmission *sandbox.CommandAdmission
 	Reconcile        *reconcile.Coordinator
 
 	WarmClaims      *sandbox.WarmClaims
@@ -431,7 +431,7 @@ func Open(opts Options) (*App, error) {
 		Epoch:   registry.Epoch(),
 	})
 	service.Node = node.New(state, service.Availability)
-	service.CommandRouter = sandbox.NewCommandRouter(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
+	service.CommandAdmission = sandbox.NewCommandAdmission(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
 	policies := service.DirectPolicies
 	deletion := service.Deletion
 	service.Reconcile = reconcile.New(state, reconcile.Dependencies{

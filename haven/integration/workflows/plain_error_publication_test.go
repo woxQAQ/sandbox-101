@@ -38,7 +38,7 @@ func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	acceptedRecord, err := service.CommandRouter.Execute(ctx, principal, "plain-host-failure", operation.Intent{
+	acceptedRecord, err := service.CommandAdmission.Execute(ctx, principal, "plain-host-failure", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		Policy: egress.Policy{

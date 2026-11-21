@@ -59,7 +59,7 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -72,7 +72,7 @@ func TestHavenDirectActivationAndExactRetirement(t *testing.T) {
 	if err != nil || old.Status != "succeeded" {
 		t.Fatal(old, err)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "direct", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "direct", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy:    direct,
@@ -125,7 +125,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	runtime.PolicyMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	failed, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
+	failed, err := service.CommandAdmission.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -169,7 +169,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	if _, err = service.Dataplane.Ready(ctx, principal, claim.Result.SandboxID); err == nil {
 		t.Fatal("retirement removed failed configuration fence")
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "repair", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -234,7 +234,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 			"8.8.4.4/32",
 		},
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "newer", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "newer", operation.Intent{
 		Action:    "configure",
 		SandboxID: before.ID,
 		Policy:    newerPolicy,
@@ -286,7 +286,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	testutil.WaitFixtureWorker(t, service, claim.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "none", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -322,7 +322,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "repair", operation.Intent{
 		Action:    "configure",
 		SandboxID: claim.Result.SandboxID,
 		Policy: egress.Policy{
@@ -413,13 +413,13 @@ func TestHavenDirectOldBindingCannotRevokeResumedInstance(t *testing.T) {
 	manager.CleanupMu.Lock()
 	oldCleanup := manager.Cleanups[before.ID]
 	manager.CleanupMu.Unlock()
-	if _, err = service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: before.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "resume", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "resume", operation.Intent{
 		Action:    "resume",
 		SandboxID: before.ID,
 	}); err != nil {
@@ -471,7 +471,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if _, err := service.CommandRouter.Execute(ctx, principal, "none", operation.Intent{
+			if _, err := service.CommandAdmission.Execute(ctx, principal, "none", operation.Intent{
 				Action:    "configure",
 				SandboxID: claim.Result.SandboxID,
 				Policy: egress.Policy{
@@ -510,7 +510,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			if err != nil || done.Status != "succeeded" || done.Hash != retirement.Hash || !reflect.DeepEqual(done.Input, retirement.Input) {
 				t.Fatal("retirement recovery changed original proof", done, err)
 			}
-			if _, err = service.CommandRouter.Execute(ctx, principal, "repair", operation.Intent{
+			if _, err = service.CommandAdmission.Execute(ctx, principal, "repair", operation.Intent{
 				Action:    "configure",
 				SandboxID: claim.Result.SandboxID,
 				Policy: egress.Policy{

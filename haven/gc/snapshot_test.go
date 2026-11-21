@@ -27,7 +27,7 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "pause", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "pause", operation.Intent{
 		Action:    "pause",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -47,7 +47,7 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 	if err != nil || len(protected.Candidates) != 0 {
 		t.Fatal(protected, err)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "release", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "release", operation.Intent{
 		Action:    "release",
 		SandboxID: paused.ID,
 	}); err != nil {

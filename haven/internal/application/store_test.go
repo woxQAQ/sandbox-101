@@ -94,7 +94,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := service.CommandRouter.Execute(ctx, principal, "refill", operation.Intent{
+	if _, err := service.CommandAdmission.Execute(ctx, principal, "refill", operation.Intent{
 		Action:     "refill",
 		TemplateID: "golden",
 	}); err != nil {

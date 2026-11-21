@@ -28,14 +28,14 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+	checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := service.CommandRouter.Execute(ctx, principal, "fork", operation.Intent{
+	fork, err := service.CommandAdmission.Execute(ctx, principal, "fork", operation.Intent{
 		Action:       "fork",
 		CheckpointID: checkpoint.Result.CheckpointID,
 		TTLSeconds:   60,
@@ -54,14 +54,14 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	}); err == nil {
 		t.Fatal("foreign checkpoint deletion accepted")
 	}
-	deleted, err := service.CommandRouter.Execute(ctx, principal, "delete", operation.Intent{
+	deleted, err := service.CommandAdmission.Execute(ctx, principal, "delete", operation.Intent{
 		Action:       "checkpoint_delete",
 		CheckpointID: checkpoint.Result.CheckpointID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := service.CommandRouter.Execute(ctx, principal, "delete", operation.Intent{
+	replay, err := service.CommandAdmission.Execute(ctx, principal, "delete", operation.Intent{
 		Action:       "checkpoint_delete",
 		CheckpointID: checkpoint.Result.CheckpointID,
 	})
@@ -71,7 +71,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	if _, err = service.Catalog.GetCheckpoint(ctx, principal, checkpoint.Result.CheckpointID); err == nil {
 		t.Fatal("checkpoint binding remained published")
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "source-release", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "source-release", operation.Intent{
 		Action:    "release",
 		SandboxID: claim.Result.SandboxID,
 	}); err != nil {
@@ -93,7 +93,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	if _, err = service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID); err != nil {
 		t.Fatal("checkpoint deletion invalidated independent fork", err)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "fork-release", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "fork-release", operation.Intent{
 		Action:    "release",
 		SandboxID: fork.Result.SandboxID,
 	}); err != nil {

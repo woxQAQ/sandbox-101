@@ -36,7 +36,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 		Action:   "template_put",
 		Template: &spec,
 	}
-	publication, err := service.CommandRouter.Execute(ctx, root, "create", command)
+	publication, err := service.CommandAdmission.Execute(ctx, root, "create", command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	if err != nil || current.TenantID != "tenant" {
 		t.Fatal("root publication lost permanent resource owner", current, err)
 	}
-	if _, err = service.CommandRouter.Execute(ctx, tenant, "claim", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, tenant, "claim", operation.Intent{
 		Action:     "claim",
 		TemplateID: spec.ID,
 	}); err != nil {
@@ -83,7 +83,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	}); err == nil {
 		t.Fatal("root changed permanent owner")
 	}
-	if _, err = service.CommandRouter.Execute(ctx, root, "update", command); err != nil {
+	if _, err = service.CommandAdmission.Execute(ctx, root, "update", command); err != nil {
 		t.Fatal(err)
 	}
 	record, err := supply.NewTemplateCatalog(service.State.Database()).Owned(ctx, "tenant", spec.ID)

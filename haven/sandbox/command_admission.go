@@ -10,8 +10,8 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-// CommandRouter checks capability scope before dispatching each intent to its admission service.
-type CommandRouter struct {
+// CommandAdmission checks capability scope before dispatching each intent to its admission service.
+type CommandAdmission struct {
 	sandboxes  *Sandboxes
 	lifecycle  *Lifecycle
 	supply     *supply.Supply
@@ -19,8 +19,8 @@ type CommandRouter struct {
 	operations *operation.Monitor
 }
 
-func NewCommandRouter(sandboxes *Sandboxes, lifecycle *Lifecycle, supply *supply.Supply, forks *Forks, operations *operation.Monitor) *CommandRouter {
-	return &CommandRouter{
+func NewCommandAdmission(sandboxes *Sandboxes, lifecycle *Lifecycle, supply *supply.Supply, forks *Forks, operations *operation.Monitor) *CommandAdmission {
+	return &CommandAdmission{
 		sandboxes:  sandboxes,
 		lifecycle:  lifecycle,
 		supply:     supply,
@@ -29,7 +29,7 @@ func NewCommandRouter(sandboxes *Sandboxes, lifecycle *Lifecycle, supply *supply
 	}
 }
 
-func (sr *CommandRouter) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+func (sr *CommandAdmission) Submit(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	// A sandbox capability admits only renewal or release of its own sandbox.
 	// This admission boundary covers direct service calls, not only HTTP.
 	if principal.SandboxID != "" && (command.SandboxID != principal.SandboxID || (command.Action != "renew" && command.Action != "release")) {
@@ -61,7 +61,7 @@ func (sr *CommandRouter) Submit(ctx context.Context, principal authorization.Pri
 	}
 }
 
-func (sr *CommandRouter) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+func (sr *CommandAdmission) Execute(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	accepted, err := sr.Submit(ctx, principal, key, command)
 	if err != nil {
 		return accepted, err

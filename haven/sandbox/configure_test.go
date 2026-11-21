@@ -127,7 +127,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					},
 				},
 			}
-			failed, err := service.CommandRouter.Execute(ctx, principal, "configure", command)
+			failed, err := service.CommandAdmission.Execute(ctx, principal, "configure", command)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("failure changed accepted goal", failed, err)
 			}
@@ -169,14 +169,14 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err = service.CommandRouter.Execute(ctx, principal, "repair", command); err != nil {
+			if _, err = service.CommandAdmission.Execute(ctx, principal, "repair", command); err != nil {
 				t.Fatal("fresh explicit configure did not repair fence", err)
 			}
 			original, err := service.Operations.GetOperation(ctx, "tenant", failed.ID)
 			if err != nil || !reflect.DeepEqual(original, failed) {
 				t.Fatal("repair rewrote original terminal", original, failed, err)
 			}
-			if _, err = service.CommandRouter.Execute(ctx, principal, "configure", command); err == nil {
+			if _, err = service.CommandAdmission.Execute(ctx, principal, "configure", command); err == nil {
 				t.Fatal("failed idempotent configure became success")
 			}
 		})

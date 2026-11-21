@@ -33,7 +33,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 			Mode: "none",
 		},
 	}
-	original, err := service.CommandRouter.Execute(ctx, principal, "before-drain", command)
+	original, err := service.CommandAdmission.Execute(ctx, principal, "before-drain", command)
 	if err != nil || original.Status != "succeeded" {
 		t.Fatal(original, err)
 	}
@@ -63,7 +63,7 @@ func TestHavenDrainPreservesReplayAndRunningAdmission(t *testing.T) {
 	if err != nil || !status.Draining {
 		t.Fatal("drain decision was not visible to management", status, err)
 	}
-	replayed, err := service.CommandRouter.Execute(ctx, principal, "before-drain", command)
+	replayed, err := service.CommandAdmission.Execute(ctx, principal, "before-drain", command)
 	if err != nil || replayed.ID != original.ID || replayed.Status != original.Status {
 		t.Fatal("drain changed an accepted operation", replayed, err)
 	}

@@ -21,15 +21,15 @@ import (
 // Services names the business capabilities exposed by the public protocol.
 // The handler receives no application lifecycle, runtime or database authority.
 type Services struct {
-	Authentication *authorization.Authentication
-	Catalog        *sandbox.Catalog
-	Templates      *supply.TemplateCatalog
-	Operations     *operation.Monitor
-	Delivery       *sandbox.OperationDelivery
-	Tenants        *authorization.Tenants
-	Requests       *sandbox.CommandRouter
-	Dataplane      *dataplane.Plane
-	Node           *node.Service
+	Authentication   *authorization.Authentication
+	Catalog          *sandbox.Catalog
+	Templates        *supply.TemplateCatalog
+	Operations       *operation.Monitor
+	Delivery         *sandbox.OperationDelivery
+	Tenants          *authorization.Tenants
+	CommandAdmission *sandbox.CommandAdmission
+	Dataplane        *dataplane.Plane
+	Node             *node.Service
 }
 
 func New(h Services) http.Handler {
@@ -349,7 +349,7 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 		invalidRequest(c, "Idempotency-Key required (max 256 bytes)")
 		return
 	}
-	accepted, err := h.Requests.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
+	accepted, err := h.CommandAdmission.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
 	if err != nil {
 		writeError(c, err)
 		return

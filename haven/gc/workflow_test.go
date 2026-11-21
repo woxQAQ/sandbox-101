@@ -180,7 +180,7 @@ func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
 			runtime.Mu.Lock()
 			runtime.FailBoot = true
 			runtime.Mu.Unlock()
-			original, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+			original, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 				TenantID: "tenant",
 			}, "failed-refill", operation.Intent{
 				Action:     "refill",

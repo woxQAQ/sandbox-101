@@ -53,7 +53,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				Count:     3,
 			}
 			if kind == "paused" {
-				if _, err := service.CommandRouter.Execute(ctx, principal, "pause-source", operation.Intent{
+				if _, err := service.CommandAdmission.Execute(ctx, principal, "pause-source", operation.Intent{
 					Action:    "pause",
 					SandboxID: source.Result.SandboxID,
 				}); err != nil {
@@ -62,7 +62,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 			}
 			if kind == "checkpoint" {
 				captures, launches := runtime.Count("capture"), runtime.Count("launch")
-				checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint-source", operation.Intent{
+				checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint-source", operation.Intent{
 					Action:    "checkpoint",
 					SandboxID: source.Result.SandboxID,
 				})
@@ -79,7 +79,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				}
 			}
 			before := runtime.Count("capture")
-			acceptedOperation, err := service.CommandRouter.Execute(ctx, principal, "fork-batch:"+kind, command)
+			acceptedOperation, err := service.CommandAdmission.Execute(ctx, principal, "fork-batch:"+kind, command)
 			if err != nil {
 				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal(acceptedOperation, err, reason)
@@ -114,7 +114,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				t.Fatal(slots, err)
 			}
 			for _, id := range acceptedOperation.Result.SandboxIDs {
-				if _, err = service.CommandRouter.Execute(ctx, principal, "retire:"+id, operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "retire:"+id, operation.Intent{
 					Action:    "release",
 					SandboxID: id,
 				}); err != nil {
@@ -148,7 +148,7 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 		}
 		return nil
 	}
-	acceptedOperation, err := service.CommandRouter.Execute(ctx, principal, "failed-batch", operation.Intent{
+	acceptedOperation, err := service.CommandAdmission.Execute(ctx, principal, "failed-batch", operation.Intent{
 		Action:    "fork",
 		SandboxID: source.Result.SandboxID,
 		Count:     2,
@@ -184,7 +184,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 	}).Claim(t, "source", nil, egress.Policy{
 		Mode: "none",
 	})
-	checkpoint, err := service.CommandRouter.Execute(context.Background(), principal, "checkpoint", operation.Intent{
+	checkpoint, err := service.CommandAdmission.Execute(context.Background(), principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: source.Result.SandboxID,
 	})
@@ -247,7 +247,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 					t.Fatal(child, err)
 				}
 				originalDeadline = child.Result.Sandbox.Deadline
-				if _, err = service.CommandRouter.Execute(ctx, principal, "renew-before-group-completion", operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "renew-before-group-completion", operation.Intent{
 					Action:     "renew",
 					SandboxID:  expected[0],
 					TTLSeconds: 120,
@@ -270,7 +270,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 				t.Fatal("parent recomputed a historical branch from the renewed lease")
 			}
 			for _, id := range expected {
-				if _, err = service.CommandRouter.Execute(ctx, principal, "retire:"+id, operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "retire:"+id, operation.Intent{
 					Action:    "release",
 					SandboxID: id,
 				}); err != nil {
@@ -299,7 +299,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			checkpoint, err := service.CommandRouter.Execute(ctx, principal, "checkpoint", operation.Intent{
+			checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 				Action:    "checkpoint",
 				SandboxID: source.Result.SandboxID,
 			})
@@ -344,7 +344,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			if _, err = service.State.Database().ExecContext(ctx, "DROP TRIGGER reject_fork_completion"); err != nil {
 				t.Fatal(err)
 			}
-			replayed, err := service.CommandRouter.Execute(ctx, principal, "fork-held", command)
+			replayed, err := service.CommandAdmission.Execute(ctx, principal, "fork-held", command)
 			if err != nil || replayed.ID != accepted.ID || replayed.Status != "succeeded" {
 				t.Fatal("repaired group did not complete original admission", replayed, err)
 			}

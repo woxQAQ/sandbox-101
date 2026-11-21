@@ -20,7 +20,7 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	runtime.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if acceptedRecord, err := service.CommandRouter.Execute(ctx, authorization.Principal{
+	if acceptedRecord, err := service.CommandAdmission.Execute(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, "refill", operation.Intent{
 		Action:     "refill",

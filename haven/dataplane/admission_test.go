@@ -32,7 +32,7 @@ func TestHavenDataReadinessRenewsWithoutRenewingAttachedStreams(t *testing.T) {
 	principal := authorization.Principal{
 		TenantID: "tenant",
 	}
-	accepted, err := service.CommandRouter.Execute(ctx, principal, "auto-renew-stream", operation.Intent{
+	accepted, err := service.CommandAdmission.Execute(ctx, principal, "auto-renew-stream", operation.Intent{
 		Action:     "claim",
 		TemplateID: "cold",
 		TTLSeconds: 60,
@@ -124,7 +124,7 @@ func TestHavenDownstreamHandoffRetainsOriginalConfiguration(t *testing.T) {
 	defer func() {
 		_ = upstream.Close()
 	}()
-	if _, err = service.CommandRouter.Execute(ctx, principal, "handoff-new-configuration", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "handoff-new-configuration", operation.Intent{
 		Action:    "configure",
 		SandboxID: acceptedRecord.Result.SandboxID,
 		Policy: egress.Policy{
@@ -204,7 +204,7 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 			}
 			switch change {
 			case "configuration":
-				if _, err = service.CommandRouter.Execute(ctx, principal, "configure", operation.Intent{
+				if _, err = service.CommandAdmission.Execute(ctx, principal, "configure", operation.Intent{
 					Action:    "configure",
 					SandboxID: sandboxView.ID,
 					Env: map[string]types.EnvVar{

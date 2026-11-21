@@ -35,7 +35,7 @@ func GoldenSupplyFixtureWithFault(t *testing.T, target int, fault func(string) e
 		Shape:      cold.Shape,
 		TargetWarm: target,
 	}
-	if _, err = service.CommandRouter.Execute(ctx, principal, "build", operation.Intent{
+	if _, err = service.CommandAdmission.Execute(ctx, principal, "build", operation.Intent{
 		Action:   "template_build",
 		Template: &spec,
 	}); err != nil {
