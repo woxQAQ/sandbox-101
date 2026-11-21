@@ -14,5 +14,8 @@ type requestKey struct {
 }
 
 func (locks *IdempotencyLocks) Lock(ownerID, key string) func() {
-	return locks.keys.Lock(requestKey{owner: ownerID, key: key})
+	return locks.keys.Lock(requestKey{
+		owner: ownerID,
+		key:   key,
+	})
 }

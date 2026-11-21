@@ -19,12 +19,7 @@ import (
 // intent. An immutable successful source witness is required; unresolved or
 // failed generation attempts retain their responsibility for review.
 func (d *Deletion) AdmitRelease(ctx context.Context, request ReleaseRequest) (operation.State, error) {
-	if d.
-		ownership ==
-		nil || d.handoff ==
-		nil ||
-		d.
-			usage == nil {
+	if d.ownership == nil || d.handoff == nil || d.usage == nil {
 		return operation.State{}, fmt.Errorf("%w: required Deletion capability port unavailable",
 			errs.ErrManualRecovery,
 		)

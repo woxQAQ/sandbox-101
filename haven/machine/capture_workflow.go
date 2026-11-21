@@ -224,7 +224,9 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 		}
 		select {
 		case c.captureSlot <- struct{}{}:
-			defer func() { <-c.captureSlot }()
+			defer func() {
+				<-c.captureSlot
+			}()
 		case <-c.ctx.Done():
 			return c.ctx.Err()
 		}

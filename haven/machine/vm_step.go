@@ -24,7 +24,11 @@ type vmSteps[S vmStep] struct {
 }
 
 func newVMSteps[S vmStep](database store.DBTX, vmLifecycleLocks *execution.KeyedLocks[string], load func(context.Context, store.DBTX, string) (S, error)) vmSteps[S] {
-	return vmSteps[S]{database: database, vmLifecycleLocks: vmLifecycleLocks, load: load}
+	return vmSteps[S]{
+		database:         database,
+		vmLifecycleLocks: vmLifecycleLocks,
+		load:             load,
+	}
 }
 
 // The first read routes recovery. Only the step reloaded under the VM lock may

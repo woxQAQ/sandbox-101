@@ -28,7 +28,9 @@ type lockEntry struct {
 func (locks *KeyedLocks[K]) Lock(key K) func() {
 	entry := locks.retain(key)
 	entry.mu.Lock()
-	return func() { locks.unlock(key, entry) }
+	return func() {
+		locks.unlock(key, entry)
+	}
 }
 
 // TryLock returns a release function on success and nil when key is busy.
@@ -38,7 +40,9 @@ func (locks *KeyedLocks[K]) TryLock(key K) func() {
 		locks.drop(key, entry)
 		return nil
 	}
-	return func() { locks.unlock(key, entry) }
+	return func() {
+		locks.unlock(key, entry)
+	}
 }
 
 // With holds key through the synchronous callback, including its cleanup.

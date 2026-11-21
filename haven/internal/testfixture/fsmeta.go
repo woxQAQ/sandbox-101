@@ -245,7 +245,7 @@ func LayeredOCILayout(t *testing.T) (string, []OCILayerFixture, string) {
 		FileEntry("shared.bin", strings.Repeat("shared-content", 8192)),
 		HardEntry("hard.bin", "shared.bin"),
 	)
-	base[len(base)-2].Header.Xattrs = map[string]string{
+	base[len(base)-2].Header.PAXRecords = map[string]string{
 		"user.fixture": "retained",
 	}
 	base[len(base)-2].Header.Format = tar.FormatPAX

@@ -155,7 +155,10 @@ func Open(opts Options) (*App, error) {
 	storeWriteMu := new(sync.Mutex)
 	registrationMu := new(sync.Mutex)
 	imageArtifactsMu := new(sync.Mutex)
-	vmGuards := machine.VMGuards{StoreWriteMu: storeWriteMu, LifecycleLocks: new(execution.KeyedLocks[string])}
+	vmGuards := machine.VMGuards{
+		StoreWriteMu:   storeWriteMu,
+		LifecycleLocks: new(execution.KeyedLocks[string]),
+	}
 	sandboxConfigLocks := new(execution.KeyedLocks[string])
 	sandboxLifecycleLocks := new(execution.KeyedLocks[string])
 	templateSupplyLocks := new(execution.KeyedLocks[string])

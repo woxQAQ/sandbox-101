@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
-
 	"github.com/woxQAQ/haven/internal/application"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
@@ -28,10 +27,15 @@ import (
 
 func TestVMActivationSerializesCompetingEffects(t *testing.T) {
 	testutil.ParallelLifecycle(t)
-	for _, action := range []string{"stop", "release"} {
+	for _, action := range []string{
+		"stop",
+		"release",
+	} {
 		t.Run(action, func(t *testing.T) {
 			entered, release := make(chan struct{}), make(chan struct{})
-			unblock := sync.OnceFunc(func() { close(release) })
+			unblock := sync.OnceFunc(func() {
+				close(release)
+			})
 			var firstActivation atomic.Bool
 			service, backend, _, _ := testapp.SandboxFixtureWithFault(t, func(point string) error {
 				if point == "activation_admin_effect" && firstActivation.CompareAndSwap(false, true) {
@@ -44,8 +48,14 @@ func TestVMActivationSerializesCompetingEffects(t *testing.T) {
 			t.Cleanup(unblock)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			principal := authorization.Principal{TenantID: "tenant"}
-			command := operation.Intent{Action: "claim", TemplateID: "cold", TTLSeconds: 60}
+			principal := authorization.Principal{
+				TenantID: "tenant",
+			}
+			command := operation.Intent{
+				Action:     "claim",
+				TemplateID: "cold",
+				TTLSeconds: 60,
+			}
 			claim, err := service.Sandboxes.AdmitClaim(ctx, principal, "claim", command)
 			if err != nil {
 				t.Fatal(err)

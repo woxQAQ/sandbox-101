@@ -20,7 +20,10 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 	var err error
 	lifetime := execution.NewLifetime(ctx)
 	workers := execution.NewWorkers(lifetime)
-	guards := machine.VMGuards{StoreWriteMu: new(sync.Mutex), LifecycleLocks: new(execution.KeyedLocks[string])}
+	guards := machine.VMGuards{
+		StoreWriteMu:   new(sync.Mutex),
+		LifecycleLocks: new(execution.KeyedLocks[string]),
+	}
 	defer func() {
 		if err := lifetime.Close(ctx, func() {}, func() error {
 			return nil
