@@ -348,12 +348,6 @@ func (state *State) validate(database *sql.DB) error {
 	if err := validateMetadata(database, state.identity); err != nil {
 		return err
 	}
-	for _, table := range epochTables {
-		var found int
-		if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&found); err != nil || found != 1 {
-			return fmt.Errorf("required table missing: %s: %v", table, err)
-		}
-	}
 	// The schema carries no triggers; any present one is foreign tampering.
 	var triggers int
 	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'").Scan(&triggers); err != nil || triggers != 0 {
