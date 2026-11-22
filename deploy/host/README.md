@@ -1,6 +1,6 @@
 # Haven 宿主部署
 
-本目录提供专用 Linux KVM 宿主的部署示例。一个 `haven` 进程独占控制 store，提供业务 HTTP 和私有管理 UDS；`havenctl`、`loomctl` 只调用协议。配置与离线恢复见 [Haven 控制契约](../../docs/haven-control.md)，业务 API 与配额见 [Sandbox 契约](../../docs/sandbox-api.md)。本次源码迁移没有停止或切换既有部署；旧 state 不自动合并、发现或接管。
+本目录提供专用 Linux KVM 宿主的部署示例。一个 `haven` 进程独占控制 store，提供业务 HTTP 和私有管理 UDS；`havenctl` 通过这两个协议访问 Haven。配置与离线恢复见 [Haven 控制契约](../../docs/haven-control.md)，业务 API 与配额见 [Sandbox 契约](../../docs/sandbox-api.md)。本次源码迁移没有停止或切换既有部署；旧 state 不自动合并、发现或接管。
 
 ## 宿主、VMM 与材料
 
@@ -40,7 +40,7 @@ Haven 按 off → 安装并核验策略 → Admin/Workload ready → on → 最�
 
 ## 安装和首次启动
 
-构建 `just build`，安装 `bin/haven`、`bin/havenctl`、`bin/loomctl`。审查 [配置示例](haven.example.yaml) 和 [service](haven.service)，预置私有 `/etc/haven`、token、host policy、cgroup、firewall 与可信 VMM 材料。token 至少 32 个 trimmed 字符、文件仅管理员可读。环境文件 `/etc/haven/haven.env` 使用 `HAVEN_IO_MAX`、`HAVEN_VMM_UID`、`HAVEN_VMM_GID` 等新前缀；旧前缀不参与配置。
+构建 `just build`，安装 `bin/haven` 和 `bin/havenctl`。审查 [配置示例](haven.example.yaml) 和 [service](haven.service)，预置私有 `/etc/haven`、token、host policy、cgroup、firewall 与可信 VMM 材料。token 至少 32 个 trimmed 字符、文件仅管理员可读。环境文件 `/etc/haven/haven.env` 使用 `HAVEN_IO_MAX`、`HAVEN_VMM_UID`、`HAVEN_VMM_GID` 等新前缀；旧前缀不参与配置。
 
 首次手动启动：
 
@@ -50,10 +50,10 @@ haven --config /etc/haven/config.yaml --init
 
 它是前台服务；完成初始化后正常终止，再由 service 启动同一配置。service 不包含 `--init`。配置优先级为显式 flags > `HAVEN_*` > 显式 file > defaults；文件不自动发现。TLS cert/key 成对提供。HTTP 默认 loopback；网关须保留 HTTP/1.1 Upgrade、streaming 与长连接。
 
-管理 socket 为 0600，父目录须受控且私有；Linux `SO_PEERCRED` 仅允许 daemon UID/root。不要向租户开放此 socket。`loomctl status` 和 root 业务 `/v1/status` 应给出相同 store identity。在线导入通过管理端完成：
+管理 socket 为 0600，父目录须受控且私有；Linux `SO_PEERCRED` 仅允许 daemon UID/root。不要向租户开放此 socket。`havenctl admin status` 和 root 业务 `/v1/status` 应给出相同 store identity。在线导入通过管理端完成：
 
 ```nu
-loomctl --key import-reviewed-image --oci-layout /private/oci --digest 'sha256:REPLACE_WITH_MANIFEST_HEX' import
+havenctl admin import --key import-reviewed-image --oci-layout /private/oci --digest 'sha256:REPLACE_WITH_MANIFEST_HEX'
 ```
 
 `--materialization merged-oci-erofs-v1` 显式选择兼容布局。CLI flag 放在 command 前。root 管理租户的模板/分支时，`havenctl --tenant OWNER` 明确指定 owner。

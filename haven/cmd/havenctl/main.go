@@ -1,4 +1,4 @@
-// havenctl is a protocol client for the business API and guest streams.
+// havenctl accesses Haven's business HTTP API and local management socket.
 package main
 
 import (
@@ -25,6 +25,9 @@ func main() {
 }
 
 func run(arguments []string) error {
+	if len(arguments) > 0 && arguments[0] == "admin" {
+		return runAdmin(arguments[1:])
+	}
 	cfg, args, err := parseConfig(arguments)
 	if errors.Is(err, pflag.ErrHelp) {
 		return nil
@@ -33,7 +36,7 @@ func run(arguments []string) error {
 		return err
 	}
 	if len(args) == 0 || cfg.TokenFile == "" {
-		return errors.New("usage: havenctl --token-file FILE [--key KEY] {status|tenant|list|templates|checkpoints|get ID|operation ID|claim|template|change ID|fork-checkpoint ID|exec ID COMMAND...}; intents require --request-file FILE")
+		return errors.New(businessUsage)
 	}
 	if cfg.RequestFile != "" && args[0] != "tenant" && args[0] != "claim" && args[0] != "template" && args[0] != "change" && args[0] != "fork-checkpoint" {
 		return errors.New("--request-file is only valid for tenant, claim, template, change or fork-checkpoint")

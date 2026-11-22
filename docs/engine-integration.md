@@ -1,6 +1,6 @@
 # Haven 资源集成契约
 
-宿主 module 位于 `haven/`，路径为 `github.com/woxQAQ/haven`。`haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [types](../types/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../types/management.go)、管理 UDS 与 `loomctl`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
+宿主 module 位于 `haven/`，路径为 `github.com/woxQAQ/haven`。`haven` 是唯一持久控制权威；`loom`、`loom/host`、`loom/imageimport` 是同进程显式效果库。业务消费者使用 [types](../types/types.go)、[sdk](../sdk/client.go) 和 HTTP；宿主管理使用 [management DTO](../types/management.go)、管理 UDS 与 `havenctl admin`。没有独立 engine daemon、资源 CRUD UDS 或跨库 Submit/Find/Wait/adopt facade。
 
 配置、鉴权、CLI、统一离线备份与恢复命令见 [Haven control](haven-control.md)，业务资源和配额见 [Sandbox](sandbox-api.md)。本文维护资源协议与责任边界；[架构](architecture.md) 说明职责和锁，镜像格式见 [镜像物化](image-materialization.md)。
 
@@ -62,7 +62,7 @@ snapshot 的 D+M 费用与 catalog/路径是不同事实。显式 snapshot delet
 
 ## Reference-aware garbage collection
 
-节点 GC 通过 `loomctl --key KEY gc` 进入同一 Haven。`--dry-run` 只读 inventory，不改变 epoch、fence、费用或删除 journal；`--gc-batch`、`--gc-budget` 限定一次处理预算。background maintenance 使用同一资格检查。
+节点 GC 通过 `havenctl admin gc --key KEY` 进入同一 Haven。`--dry-run` 只读 inventory，不改变 epoch、fence、费用或删除 journal；`--gc-batch`、`--gc-budget` 限定一次处理预算。background maintenance 使用同一资格检查。
 
 根包括 published image/snapshot、current VM、generation/backing、live/在途使用、未解决 step、source lease、pool 与独立 cleanup。规范化引用与原 step 关系必须完整。损坏/未知根保守阻断；未知目录与 cache child 只报告，不因名称、年龄、内容 hash 而接管。
 

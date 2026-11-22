@@ -1,13 +1,13 @@
 # Haven 启动、协议与管理入口
 
-默认构建产物为 `bin/haven`、`bin/havenctl`、`bin/loomctl`。Haven 同时持有业务与资源控制事实，只有一份 `haven.db`、node key、HEAD 和 writer lock。Loom 执行明确指定的宿主效果，不打开控制数据库。
+默认构建产物为 `bin/haven` 和 `bin/havenctl`。Haven 同时持有业务与资源控制事实，只有一份 `haven.db`、node key、HEAD 和 writer lock。Loom 执行明确指定的宿主效果，不打开控制数据库。
 
 旧 Go 控制模块、daemon 与 engine UDS facade 已删除；workspace、CI、VM runner 和部署示例使用单 Haven。业务 API 与配额契约见 [Sandbox API](sandbox-api.md)，代理契约见 [Egress](../haven/egress/README.md)。既有部署没有切换，旧 state 不自动迁移。业务接口称为 Sandbox API，提供模板、租约、分支和配额操作。宿主上的 VM 生命周期由 `runtime-e2e` 单独验证，旧双 daemon 的运行结果见[历史验证记录](verification-history.md)。
 
 ```mermaid
 flowchart LR
     B[havenctl / Go SDK / HTTP client] --> A[业务 HTTP adapter]
-    M[loomctl] --> U[私有管理 UDS adapter]
+    M[havenctl admin] --> U[私有管理 UDS adapter]
     A --> H[Haven 工作流与接纳]
     U --> H
     H --> D[(唯一 SQLite / key / HEAD)]
@@ -18,17 +18,17 @@ flowchart LR
 
 ## 启动与配置
 
-字段和默认值以 [daemon 配置](../haven/config/daemon.go)、[daemon flags](../haven/cmd/haven/config.go)、[业务 CLI](../haven/cmd/havenctl/config.go) 和 [Loom CLI 配置](../loom/config/cli.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
+字段和默认值以 [daemon 配置](../haven/config/daemon.go)、[daemon flags](../haven/cmd/haven/config.go)、[业务 CLI](../haven/cmd/havenctl/config.go) 和 [管理 CLI](../haven/cmd/havenctl/admin_config.go) 为准。配置文件只接受已声明的平面、连字符 key；YAML、JSON、TOML 均可。优先级为显式 flag → 对应前缀的环境变量 → 显式文件 → 默认值。没有隐式文件发现、热更新或旧品牌变量代理。未知 key、null、非整数预算、溢出及不完整 TLS 配置会拒绝启动。
 
 | 程序 | 环境前缀 | 文件选择 | 示例 |
 |---|---|---|---|
 | `haven` | `HAVEN_` | `HAVEN_CONFIG` / `--config` | `HAVEN_STATE_DIR`、`HAVEN_LISTEN`、`HAVEN_IO_MAX` |
 | `havenctl` | `HAVENCTL_` | `HAVENCTL_CONFIG` / `--config` | `HAVENCTL_ENDPOINT`、`HAVENCTL_TOKEN_FILE` |
-| `loomctl` | `LOOMCTL_` | `LOOMCTL_CONFIG` / `--config` | `LOOMCTL_SOCKET`、`LOOMCTL_KEY` |
+| `havenctl admin` | `HAVENCTL_ADMIN_` | `HAVENCTL_ADMIN_CONFIG` / `--config` | `HAVENCTL_ADMIN_SOCKET`、`HAVENCTL_ADMIN_KEY` |
 
-`ENGINE_`、`SANDBOXD_`、`SANDBOXCTL_` 不参与新入口的配置；`--engine-socket` 等旧 flag 明确拒绝。CLI 配置 flag 放在命令之前，避免解释 guest 命令自己的参数。
+`ENGINE_`、`SANDBOXD_`、`SANDBOXCTL_` 不参与新入口的配置；`--engine-socket` 等旧 flag 明确拒绝。业务 CLI 的配置 flag 放在命令之前，`exec` 后的 guest 参数原样传递。`havenctl admin` 要求 `admin` 为第一个参数，随后解析独立的管理配置。原 `loomctl` 调用迁至 `havenctl admin`，环境变量前缀从 `LOOMCTL_` 改为 `HAVENCTL_ADMIN_`，原管理配置文件可继续用 `--config` 指定。
 
-daemon 的 `--log-level` 接受 debug/info/warn/error，`--log-format` 接受 text/json，默认 info/text。两者遵循相同配置优先级，日志写 stderr；`common/logging` 只初始化标准 slog handler。CLI flags 的注册与解析分别位于各自 `cmd`，通用文件/env/flag 解码在 `common/config`。
+daemon 的 `--log-level` 接受 debug/info/warn/error，`--log-format` 接受 text/json，默认 info/text。两者遵循相同配置优先级，日志写 stderr；`common/logging` 只初始化标准 slog handler。CLI flags 的注册与解析位于 `haven/cmd/havenctl`，通用文件/env/flag 解码在 `common/config`。
 
 首次启动只对新的空私有 state 目录使用 `--init`：
 
@@ -86,14 +86,14 @@ havenctl --endpoint http://127.0.0.1:7777 --token-file /private/sandbox.token ex
 
 [管理 adapter](../haven/api/management/http.go) 只提供 `GET /v1/status`、`POST /v1/manage`、`GET /v1/operations/:id`。请求类型见 [management DTO](../types/management.go)；操作属于稳定 store identity 的 node scope，不出现在 tenant operation scope。业务与管理的 status 可核对同一个 store ID/epoch。
 
-`loomctl` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID`、`fork-checkpoint ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
+`havenctl admin` 只依赖配置、DTO 和 UDS HTTP 客户端，不能依赖 Haven 控制实现、Loom 或 SQLite。支持 `status`、`operation ID`、`import`、`gc`、`supply-cleanup`、`image-cleanup`、`request`。除只读 GC 外必须显式提供稳定 key；`request` 使用 `--request-file FILE` 显式读取一个管理 intent，不读取 stdin。业务 `tenant`、`claim`、`template`、`change ID`、`fork-checkpoint ID` 也使用此 flag；文件必须是普通文件，严格 JSON 上限 1 MiB，拒绝未知字段和多个值。
 
 ```nu
-loomctl --socket /private/haven-run/management.sock status
-loomctl --socket /private/haven-run/management.sock --dry-run gc
-loomctl --socket /private/haven-run/management.sock --key gc-001 gc
-loomctl --socket /private/haven-run/management.sock --key import-001 --oci-layout /private/oci --digest 'sha256:<manifest-digest>' import
-loomctl --socket /private/haven-run/management.sock --key cleanup-001 --source-operation original_operation_id supply-cleanup
+havenctl admin status --socket /private/haven-run/management.sock
+havenctl admin gc --socket /private/haven-run/management.sock --dry-run
+havenctl admin gc --socket /private/haven-run/management.sock --key gc-001
+havenctl admin import --socket /private/haven-run/management.sock --key import-001 --oci-layout /private/oci --digest 'sha256:<manifest-digest>'
+havenctl admin supply-cleanup --socket /private/haven-run/management.sock --key cleanup-001 --source-operation original_operation_id
 ```
 
 GC dry-run 不接纳 operation、不改变 epoch。import/cleanup/GC 的持久意图、冻结材料、删除证明和费用均仍由 Haven 工作流处理。`loom/unixsocket` 使用已打开父目录上的 descriptor path 执行 bind/dial，支持长物理 runtime 路径；绑定身份和 teardown 仍使用原 canonical path/inode，不将临时 descriptor path 当作持久归属。
@@ -117,4 +117,4 @@ Haven 发布前的 store schema 版本固定为 **0**，表结构直接维护在
 
 `just integration` 显式使用 `integration` build tag 和刚构建的 Rust Unix fixture；缺少 fixture 环境是 FAIL。fixture 仅替代 VM/System/Admin 效果，并离线预置私有不可变输入镜像；不插入操作、成功结果、witness 或费用记录。所有接纳、终态、权限与资源责任使用真实 Haven/SQLite，Workload RPC 使用真实 Rust dispatcher。原四项 transport 断言保留，另测 HTTP 契约和长 runtime 路径。
 
-`just smoke` 只启动一个真实 Haven，验证两个 CLI、配置优先级/更名拒绝、writer 排他、重启幂等、GC dry-run 的 epoch 和同一份离线 backup。它不启动 VM。当前源码的命令、结果与未运行项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；[阶段 E 证据](../plans/evidence/024-stage-e-entrypoints.md) 只绑定 E 完成树。
+`just smoke` 只启动一个真实 Haven，验证业务与本机管理命令、配置优先级/更名拒绝、writer 排他、重启幂等、GC dry-run 的 epoch 和同一份离线 backup。它不启动 VM。当前源码的命令、结果与未运行项见 [计划 024](../plans/024-haven-loom-single-control-design.md)；[阶段 E 证据](../plans/evidence/024-stage-e-entrypoints.md) 只绑定 E 完成树。

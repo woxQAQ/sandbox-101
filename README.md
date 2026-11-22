@@ -4,7 +4,7 @@
 
 A single-host microVM engine and sandbox service implementing the [resource architecture](docs/architecture.md) and [sandbox architecture](docs/sandbox-architecture.md). Start with the [documentation index](docs/README.md) for contracts and deployment. [Unfinished plans](plans/README.md) and [historical evidence](.agents/archive/README.md) are maintained separately.
 
-Haven owns tenant and resource workflows in one SQLite store: templates, warm pools, leases, hibernation, checkpoints, fork, images, VM generations, cleanup and accounting. Loom performs explicit Cloud Hypervisor, Linux and filesystem effects without a control database. `havenctl` uses the business HTTP API; `loomctl` uses the same daemon's private management socket. The Rust guest separates System, Admin and unprivileged Workload RPC; a small Rust PID 1 mounts the EROFS/ext4/OverlayFS root and execs systemd.
+Haven owns tenant and resource workflows in one SQLite store: templates, warm pools, leases, hibernation, checkpoints, fork, images, VM generations, cleanup and accounting. Loom performs explicit Cloud Hypervisor, Linux and filesystem effects without a control database. `havenctl` uses the business HTTP API; `havenctl admin` uses the same daemon's private management socket. The Rust guest separates System, Admin and unprivileged Workload RPC; a small Rust PID 1 mounts the EROFS/ext4/OverlayFS root and execs systemd.
 
 ## Workspace
 
@@ -13,7 +13,7 @@ The repository root contains `go.work`; each component owns its module. Haven's 
 | Directory | Responsibility |
 |---|---|
 | `haven/` | Durable control service, HTTP adapters, daemon settings, `cmd/haven` and `cmd/havenctl` |
-| `loom/` | Explicit host effects, management-client settings and `cmd/loomctl` |
+| `loom/` | Explicit host effects |
 | `sdk/` | Business and management clients, guest RPC |
 | `types/` | Shared wire data, including sanitized error payloads |
 | `common/` | Shared CLI file I/O, configuration loading and logging initialization |
@@ -21,7 +21,7 @@ The repository root contains `go.work`; each component owns its module. Haven's 
 | `protocol/gen/` | Generated Go guest-protocol bindings |
 | `operator/` | Kubernetes integration |
 
-Modules use local replacements for standalone `GOWORK=off` checks. The workspace connects them for navigation and workspace lint. CLI flag parsing lives beside each command; `haven/config` and `loom/config` contain their respective settings. Logging initialization in `common/logging` selects a standard `slog` handler.
+Modules use local replacements for standalone `GOWORK=off` checks. The workspace connects them for navigation and workspace lint. CLI settings and flag parsing live in `haven/cmd/havenctl`. Daemon settings live in `haven/config`. Logging initialization in `common/logging` selects a standard `slog` handler.
 
 ## Build and local verification
 
@@ -35,7 +35,7 @@ just integration
 just smoke
 ```
 
-Binaries go to `bin/{haven,havenctl,loomctl}`. Test, vet and race recipes cover Haven, Loom, SDK, types, common, tools and protocol modules; workspace lint also includes operator. `just test-race` retains the 10-minute per-package timeout. `just integration` builds the actual Rust Unix fixture and tests Haven/SQLite, HTTP and guest RPC. `just smoke` starts one real daemon in private state and checks both CLIs, writer exclusion, configuration, restart, GC and offline backup. Neither boots a VM.
+Binaries go to `bin/{haven,havenctl}`. Test, vet and race recipes cover Haven, Loom, SDK, types, common, tools and protocol modules; workspace lint also includes operator. `just test-race` retains the 10-minute per-package timeout. `just integration` builds the actual Rust Unix fixture and tests Haven/SQLite, HTTP and guest RPC. `just smoke` starts one real daemon in private state and checks both CLI entry points, writer exclusion, configuration, restart, GC and offline backup. Neither boots a VM.
 
 `just check-funcparams` runs the pinned Go function parameter detector from the tools module. It reports functions with at least five parameters across the workspace, including operator and tests, while excluding generated protobuf and sqlc code. Findings exit with status 1; scan errors exit with status 2. This is an independent check; extra detector flags can be passed as `just check-funcparams -min 8 -output json`.
 
@@ -52,7 +52,7 @@ Required tools include matching mkfs/fsck.erofs >=1.9.4 and <2, dump.erofs, umoc
 
 ## HTTP and configuration
 
-Haven serves business HTTP and a private management UDS. Files selected with `--config FILE` accept flat, hyphenated YAML/JSON/TOML keys. Precedence is explicit flags → prefixed environment → selected file → defaults. Prefixes are `HAVEN_`, `HAVENCTL_` and `LOOMCTL_`; `_CONFIG` selects a file. Unknown/null keys, invalid numeric bounds, incomplete TLS and retired flags are rejected.
+Haven serves business HTTP and a private management UDS. Files selected with `--config FILE` accept flat, hyphenated YAML/JSON/TOML keys. Precedence is explicit flags → prefixed environment → selected file → defaults. Prefixes are `HAVEN_`, `HAVENCTL_` and `HAVENCTL_ADMIN_`; `_CONFIG` selects a file. Unknown/null keys, invalid numeric bounds, incomplete TLS and retired flags are rejected.
 
 ```nu
 haven --config /private/haven.yaml
@@ -60,12 +60,12 @@ with-env {HAVEN_LISTEN: "127.0.0.1:8888", HAVEN_LOG_FORMAT: "json"} {
     haven --config /private/haven.yaml
 }
 havenctl --config /private/havenctl.yaml --key claim-001 --request-file /private/claim.json claim
-loomctl --config /private/loomctl.yaml --dry-run gc
+havenctl admin gc --config /private/havenctl-admin.yaml --dry-run
 ```
 
 Business intents (`tenant`, `claim`, `template`, `change ID`) and generic management `request` use an explicit `--request-file FILE`. Each file must contain one JSON value, at most 1 MiB, with no unknown fields. Stdin is never read. Simple management commands use named flags. Keep tokens and secret-bearing request files private. Daemon logs go to stderr; `--log-level` accepts debug/info/warn/error and `--log-format` accepts text/json.
 
-Use `--init` only for the first start in a new empty private state directory. Full startup, HTTP, management and recovery contracts are in [Haven control](docs/haven-control.md). Deployment examples: [daemon](deploy/host/haven.example.yaml), [service](deploy/host/haven.service), [havenctl](deploy/client/havenctl.example.yaml), [loomctl](deploy/client/loomctl.example.yaml).
+Use `--init` only for the first start in a new empty private state directory. Full startup, HTTP, management and recovery contracts are in [Haven control](docs/haven-control.md). Deployment examples: [daemon](deploy/host/haven.example.yaml), [service](deploy/host/haven.service), [havenctl](deploy/client/havenctl.example.yaml), [havenctl admin](deploy/client/havenctl-admin.example.yaml).
 
 ## Static guest and image
 
@@ -75,7 +75,7 @@ just GUEST_TARGET=x86_64-unknown-linux-musl guest
 just GUEST_ARTIFACT_DIR=/absolute/path/to/static-binaries guest
 ```
 
-Guest builds need Rust musl support, SQLite build dependencies, readelf and GNU cpio. Packaging rejects dynamic executables and produces `build/guest/{sandbox-agent,sandbox-init,initramfs}`. See the [guest contract](guest/README.md). With a kernel and matching `build/kernel.config` satisfying [built-in driver requirements](image/kernel.config), `just image` builds the systemd guest image. Import its exported OCI layout using `loomctl --key KEY --oci-layout PATH --digest DIGEST import`.
+Guest builds need Rust musl support, SQLite build dependencies, readelf and GNU cpio. Packaging rejects dynamic executables and produces `build/guest/{sandbox-agent,sandbox-init,initramfs}`. See the [guest contract](guest/README.md). With a kernel and matching `build/kernel.config` satisfying [built-in driver requirements](image/kernel.config), `just image` builds the systemd guest image. Import its exported OCI layout using `havenctl admin import --key KEY --oci-layout PATH --digest DIGEST`.
 
 Default `layered-erofs-v1` shares immutable layer payloads. Explicit `merged-oci-erofs-v1` uses an isolated umoci materializer. Published digest/materialization identity is fixed; invalid data never silently falls back to another profile.
 

@@ -54,7 +54,7 @@ root 创建 tenant：`{"id":"team","max_sandboxes":20,"max_storage_mib":65536}`�
 {"action":"template_put","template":{"id":"python","image":"sha256:REPLACE_WITH_IMPORTED_MANIFEST_HEX","shape":{"vcpus":1,"memory_mib":512,"disk_mib":512},"target_warm":0}}
 ```
 
-镜像先通过 `loomctl import` 进入同一 store。模板首次接纳永久绑定 owner，失败保留占位，滚动 build 继续服务旧版本；published catalog 必须匹配原 immutable publication step。snapshot published 不授予访问权，`snapshot_owners` 是永久 authorization provenance。root 外部 golden grant 必须明确 tenant，不能转移已有 owner。
+镜像先通过 `havenctl admin import` 进入同一 store。模板首次接纳永久绑定 owner，失败保留占位，滚动 build 继续服务旧版本；published catalog 必须匹配原 immutable publication step。snapshot published 不授予访问权，`snapshot_owners` 是永久 authorization provenance。root 外部 golden grant 必须明确 tenant，不能转移已有 owner。
 
 `template_build` 固定 build slot/D/D+M，运行一次确定性 keyed warmup，Admin prepare_template 后 capture golden，实际回收 build VM 后发布。unknown warmup 不重放，build 网络保持 off。prepare_template 不通用清理应用内存、RNG 或外部注册。ordinary 首次 target=0、后续保持发布 target；root 选 owner 才能改。refill 使用 owner 的有限普通预算，unknown/pending/cleanup 继续占 target。
 

@@ -1,4 +1,0 @@
-# loomctl --config /private/loomctl.yaml status
-# Explicit flags > LOOMCTL_* environment > this file > defaults.
-socket: /run/haven/management.sock
-key: ""

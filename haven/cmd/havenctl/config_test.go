@@ -8,19 +8,28 @@ import (
 )
 
 func TestFlagsMatchSettings(t *testing.T) {
-	remaining := map[string]bool{}
-	newFlagSet().VisitAll(func(flag *pflag.Flag) {
-		remaining[flag.Name] = true
-	})
-	typ := reflect.TypeFor[settings]()
-	for field := range typ.Fields() {
-		tag := field.Tag.Get("mapstructure")
-		if !remaining[tag] {
-			t.Errorf("settings field %q has no registered flag", tag)
-		}
-		delete(remaining, tag)
-	}
-	for name := range remaining {
-		t.Errorf("flag %q has no settings field", name)
+	for _, tt := range []struct {
+		flags *pflag.FlagSet
+		typ   reflect.Type
+	}{
+		{newFlagSet(), reflect.TypeFor[settings]()},
+		{adminFlagSet(), reflect.TypeFor[adminSettings]()},
+	} {
+		t.Run(tt.flags.Name(), func(t *testing.T) {
+			remaining := map[string]bool{}
+			tt.flags.VisitAll(func(flag *pflag.Flag) {
+				remaining[flag.Name] = true
+			})
+			for field := range tt.typ.Fields() {
+				tag := field.Tag.Get("mapstructure")
+				if !remaining[tag] {
+					t.Errorf("settings field %q has no registered flag", tag)
+				}
+				delete(remaining, tag)
+			}
+			for name := range remaining {
+				t.Errorf("flag %q has no settings field", name)
+			}
+		})
 	}
 }

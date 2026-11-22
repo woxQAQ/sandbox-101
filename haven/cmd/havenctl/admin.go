@@ -1,4 +1,3 @@
-// loomctl is a protocol client. Haven owns its workflows and database.
 package main
 
 import (
@@ -16,15 +15,8 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func run(arguments []string) error {
-	cfg, args, err := parseConfig(arguments)
+func runAdmin(arguments []string) error {
+	cfg, args, err := parseAdminConfig(arguments)
 	if errors.Is(err, pflag.ErrHelp) {
 		return nil
 	}
@@ -32,7 +24,7 @@ func run(arguments []string) error {
 		return err
 	}
 	if len(args) == 0 {
-		return errors.New("usage: loomctl [--socket PATH] [--key KEY] {status|operation ID|import|gc|supply-cleanup|image-cleanup|request}")
+		return errors.New(adminUsage)
 	}
 	if cfg.RequestFile != "" && args[0] != "request" {
 		return errors.New("--request-file is only valid for request")
@@ -54,7 +46,7 @@ func run(arguments []string) error {
 		value, err = client.Operation(ctx, args[1])
 	case "import", "gc", "supply-cleanup", "image-cleanup", "request":
 		if len(args) != 1 {
-			return errors.New("management commands take options before the command")
+			return fmt.Errorf("%s takes no positional arguments", args[0])
 		}
 		request := types.ManagementRequest{
 			Key: cfg.Key,
@@ -100,10 +92,7 @@ func run(arguments []string) error {
 		}
 		value, err = client.Manage(ctx, request)
 	default:
-		if len(args) != 1 {
-			return errors.New("management commands take options before the command")
-		}
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown admin command %q", args[0])
 	}
 	if err != nil {
 		return err

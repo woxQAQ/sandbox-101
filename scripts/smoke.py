@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise one real Haven daemon and both protocol CLIs in private state.
+"""Exercise both havenctl protocols against one real Haven daemon in private state.
 
 It checks writer exclusion, restart, GC and offline metadata backup without booting a VM.
 """
@@ -46,8 +46,8 @@ def main():
         client_config.write_text(json.dumps({
             "endpoint": "http://127.0.0.1:1", "token-file": str(token_file),
         }))
-        loom_config = directory / "loomctl.json"
-        loom_config.write_text(json.dumps({"socket": str(directory / "unused.sock")}))
+        admin_config = directory / "havenctl-admin.json"
+        admin_config.write_text(json.dumps({"socket": str(directory / "unused.sock")}))
         processes = []
         logs = open(directory / "haven.log", "w+")
         daemon = None
@@ -112,7 +112,7 @@ def main():
             processes.remove(process)
 
         haven_args = ["--config", str(client_config), "--endpoint", endpoint]
-        loom_args = ["--config", str(loom_config), "--socket", str(management)]
+        admin_args = ["admin", "--config", str(admin_config), "--socket", str(management)]
         try:
             invalid = directory / "invalid.json"
             for settings, reason in [
@@ -136,8 +136,8 @@ def main():
             ready()
             business = command("havenctl", [*haven_args, "status"],
                                {"HAVENCTL_ENDPOINT": "http://127.0.0.1:2"})
-            local = command("loomctl", [*loom_args, "status"],
-                            {"LOOMCTL_SOCKET": str(directory / "wrong.sock")})
+            local = command("havenctl", [*admin_args, "status"],
+                            {"HAVENCTL_ADMIN_SOCKET": str(directory / "wrong.sock")})
             assert business == local
             assert local["format"] == "haven-single-control" and local["version"] == 0
             assert command("havenctl", [*haven_args, "list"]) == []
@@ -167,7 +167,7 @@ def main():
             tenant = command("havenctl", [*haven_args, "--request-file", str(tenant_file), "tenant"])
             assert tenant["id"] == "smoke" and tenant["token"]
             assert request("/v1/sandboxes", bearer=tenant["token"]) == []
-            print("PASS: one Haven, both protocol CLIs, same store identity and tenant request file")
+            print("PASS: one Haven, both havenctl protocols, same store identity and tenant request file")
             malformed = directory / "malformed.json"
             for payload in ('{"unknown":true}', '{} {}', 'x' * ((1 << 20) + 1)):
                 malformed.write_text(payload)
@@ -194,40 +194,42 @@ def main():
             assert "another writer" in rejected.stderr and not blocked_backup.exists()
             print("PASS: second daemon and live offline-backup attempt respect writer exclusion")
 
-            before = command("loomctl", [*loom_args, "status"])
-            dry_run = command("loomctl", [*loom_args, "--dry-run", "gc"])["gc"]
+            before = command("havenctl", [*admin_args, "status"])
+            dry_run = command("havenctl", [*admin_args, "gc", "--dry-run"])["gc"]
             request_file = directory / "gc.json"
             request_file.write_text(json.dumps({"action": "gc", "gc": {"dry_run": True}}))
-            from_file = command("loomctl", [*loom_args, "--request-file", str(request_file), "request"])["gc"]
+            from_file = command("havenctl", [*admin_args, "request", "--request-file", str(request_file)])["gc"]
             assert from_file["dry_run"] and not from_file.get("operation_id")
             request_file.write_text(json.dumps({"action": "gc", "key": "different", "gc": {}}))
-            rejected = command("loomctl", [*loom_args, "--key", "expected", "--request-file", str(request_file), "request"], success=False)
+            rejected = command("havenctl", [*admin_args, "request", "--key", "expected", "--request-file", str(request_file)], success=False)
             assert "key differs" in rejected.stderr
-            command("loomctl", [*loom_args, "request"], success=False)
-            after = command("loomctl", [*loom_args, "status"])
+            command("havenctl", [*admin_args, "request"], success=False)
+            after = command("havenctl", [*admin_args, "status"])
             assert dry_run["dry_run"] and not dry_run.get("operation_id")
             assert before["epoch"] == after["epoch"]
-            collection = command("loomctl", [*loom_args, "--key", "smoke-collection", "gc"])
+            collection = command("havenctl", [*admin_args, "gc", "--key", "smoke-collection"])
             operation_id = collection["gc"]["operation_id"]
-            operation = command("loomctl", [*loom_args, "operation", operation_id])
+            operation = command("havenctl", [*admin_args, "operation", operation_id])
             assert operation["status"] == "succeeded"
             print("PASS: read-only GC preserves epoch; management mutation has a durable operation")
 
             stop(daemon)
             daemon = start(False)
             ready()
-            replay = command("loomctl", [*loom_args, "--key", "smoke-collection", "gc"])
+            replay = command("havenctl", [*admin_args, "gc", "--key", "smoke-collection"])
             assert replay == collection
             status = command("havenctl", ["--config", str(client_config), "status"], {
                 "HAVENCTL_ENDPOINT": endpoint, "SANDBOXCTL_ENDPOINT": "http://127.0.0.1:2",
             })
             assert status["store_id"] == local["store_id"]
             assert request("/v1/sandboxes", bearer=tenant["token"]) == []
-            assert command("loomctl", ["--config", str(loom_config), "status"],
-                           {"LOOMCTL_SOCKET": str(management)})["store_id"] == status["store_id"]
+            assert command("havenctl", ["admin", "status"], {
+                "HAVENCTL_CONFIG": str(client_config), "HAVENCTL_TOKEN_FILE": str(directory / "missing.token"),
+                "HAVENCTL_ADMIN_CONFIG": str(admin_config), "HAVENCTL_ADMIN_SOCKET": str(management),
+            })["store_id"] == status["store_id"]
             assert not (directory / "legacy-engine-must-not-exist").exists()
             assert not (directory / "legacy-sandboxd-must-not-exist").exists()
-            print("PASS: restart preserves operation identity; HAVEN/HAVENCTL/LOOMCTL precedence")
+            print("PASS: restart preserves operation identity; HAVEN/HAVENCTL/HAVENCTL_ADMIN precedence")
             stop(daemon)
             daemon = None
 

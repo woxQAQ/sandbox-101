@@ -5,7 +5,7 @@ Choose a runner by the behavior it exercises. KVM is the Linux virtualization in
 | Command | What runs | What the test observes |
 |---|---|---|
 | `just integration` | Haven/SQLite and the Rust Unix fixture | Guest RPC through Haven HTTP and the sandbox relay |
-| `just smoke` | One daemon, `havenctl` and `loomctl` in private state | Writer exclusion, daemon restart, GC and offline backup |
+| `just smoke` | One daemon and both `havenctl` protocols in private state | Writer exclusion, daemon restart, GC and offline backup |
 | `just guest-image-e2e` | A standalone Cloud Hypervisor VM booted with each OCI layout | Guest file metadata, guest RPC and independent disk and RAM state across clone and restore |
 | `just host-policy-e2e` | TCP peers and cgroup workers in private Linux namespaces, without a VM | Network allow/deny and flow limits, CPU throttling, PID exhaustion, memory limits and block I/O throttling |
 | `just runtime-e2e` | A new private Haven daemon launches VMs | Provisioning, adoption of a live VM after daemon restart, sandbox lifecycle and guest TCP over TAP |

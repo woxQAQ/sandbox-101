@@ -5,7 +5,7 @@ Haven 是单宿主唯一持久控制面。`haven/cmd/haven` 同时提供业务 H
 ```mermaid
 flowchart LR
     C[havenctl / SDK] --> B[业务 HTTP]
-    M[loomctl] --> U[私有管理 UDS]
+    M[havenctl admin] --> U[私有管理 UDS]
     B --> H[Haven 接纳与工作流]
     U --> H
     H --> D[(唯一 SQLite / key / HEAD)]
@@ -57,7 +57,7 @@ controller 不得绕过用例或回指 App，业务层不得手写 SQL、跨领�
 | sandbox-agent | System 基础协作、Admin 激活、非特权 Workload RPC；回复不证明 guest 可信 |
 | 宿主部署 | KVM 权限、存储/网络硬限额、cgroup parent、可信工具与材料、实际宿主资格验收 |
 
-Go 用于宿主控制，Rust 用于静态 guest。生产入口使用真实 Linux/CH runtime；替身仅在测试中显式注入效果。SDK 与两个 CLI 不依赖 Haven 控制、Loom 或 SQLite。管理 UDS 的内核 peer credential 是本地管理员身份边界，不是第二套资源 API。
+Go 用于宿主控制，Rust 用于静态 guest。生产入口使用真实 Linux/CH runtime；替身仅在测试中显式注入效果。SDK 与 `havenctl` 不依赖 Haven 控制、Loom 或 SQLite。管理 UDS 的内核 peer credential 是本地管理员身份边界，不是第二套资源 API。
 
 当前仅支持固定 revision 的 CH，版本与 build receipt 见 [宿主部署](../deploy/host/README.md)。选择它依赖内置块设备 pause 排空已接纳 I/O 的能力；vhost-user 外部设备不获得同样捕获保证。更换 revision、格式或隔离限制须另行验证。跨宿主迁移、跨 VMM 快照、IPv6 direct、热插与在线 resize 不在当前范围。
 
