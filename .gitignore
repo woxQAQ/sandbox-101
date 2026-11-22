@@ -5,3 +5,4 @@
 /build/
 /.runtime/
 *.prof
+.direnv/
