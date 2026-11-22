@@ -1,14 +1,14 @@
 -- name: GetIntent :one
-SELECT tenant_id,operation_id FROM template_intents WHERE template_id=?;
+SELECT tenant_id,candidate_operation_id FROM template_owners WHERE template_id=?;
 
 -- name: GetPermanentOwner :one
-SELECT tenant_id FROM template_intents WHERE template_id=?;
+SELECT tenant_id FROM template_owners WHERE template_id=?;
 
 -- name: CountOwnedIntent :one
-SELECT COUNT(*) FROM template_intents WHERE template_id=? AND tenant_id=?;
+SELECT COUNT(*) FROM template_owners WHERE template_id=? AND tenant_id=?;
 
 -- name: ReservePublication :execrows
-INSERT INTO template_intents(template_id,tenant_id,operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET operation_id=excluded.operation_id WHERE tenant_id=excluded.tenant_id;
+INSERT INTO template_owners(template_id,tenant_id,candidate_operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET candidate_operation_id=excluded.candidate_operation_id WHERE tenant_id=excluded.tenant_id;
 
 -- name: CountSnapshotUsers :one
 -- The cast fixes sqlc's BLOB inference; concatenation keeps the comparison affinity-free.
@@ -18,20 +18,20 @@ SELECT COUNT(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=(CAST(? 
 SELECT body FROM templates WHERE id=?;
 
 -- name: GetOwnedTemplate :one
-SELECT body FROM templates WHERE id=? AND tenant=?;
+SELECT body,published_operation_id FROM templates WHERE id=? AND tenant=?;
 
 -- name: GetPublisher :one
-SELECT i.tenant_id,o.scope_kind,o.scope_id,o.status,i.operation_id
-FROM template_intents i JOIN operations o ON o.id=i.operation_id WHERE i.template_id=?;
+SELECT i.tenant_id,o.scope_kind,o.scope_id,o.status
+FROM template_owners i JOIN operations o ON o.id=sqlc.arg('published_operation_id') WHERE i.template_id=sqlc.arg('template_id');
 
 -- name: ListTemplateIDs :many
 SELECT id,tenant FROM templates ORDER BY id;
 
 -- name: InsertTemplate :execrows
-INSERT INTO templates(id,tenant,body) VALUES(?,?,?);
+INSERT INTO templates(id,tenant,published_operation_id,body) VALUES(?,?,?,?);
 
 -- name: ReplaceTemplate :execrows
-UPDATE templates SET body=sqlc.arg('new_body') WHERE id=sqlc.arg('id') AND tenant=sqlc.arg('tenant') AND body=sqlc.arg('previous_body');
+UPDATE templates SET body=sqlc.arg('new_body'),published_operation_id=sqlc.arg('published_operation_id') WHERE id=sqlc.arg('id') AND tenant=sqlc.arg('tenant') AND published_operation_id=sqlc.arg('previous_operation_id') AND body=sqlc.arg('previous_body');
 
 -- name: GetReservation :one
 SELECT template_id,template_version,vm_id,status,body FROM pool_slots WHERE operation_id=?;
@@ -49,33 +49,33 @@ SELECT COUNT(*) FROM pool_slots WHERE operation_id=?;
 SELECT operation_id FROM pool_slots WHERE vm_id=?;
 
 -- name: FirstReady :one
-SELECT p.operation_id FROM warm w JOIN pool_slots p ON p.vm_id=w.vm_id
+SELECT p.operation_id FROM ready_warm_vms w JOIN pool_slots p ON p.vm_id=w.vm_id
 WHERE w.template_id=? AND w.snapshot_id=? AND p.template_version=? AND p.status='ready'
-ORDER BY w.created_at,w.vm_id LIMIT 1;
+ORDER BY w.created_at_unix_ns,w.vm_id LIMIT 1;
 
 -- name: InsertReservation :execrows
 INSERT INTO pool_slots(operation_id,template_id,template_version,vm_id,status,body) VALUES(?,?,?,?,'pending',?);
 
 -- name: ListWarmVMs :many
-SELECT vm_id FROM warm WHERE template_id=? ORDER BY vm_id;
+SELECT vm_id FROM ready_warm_vms WHERE template_id=? ORDER BY vm_id;
 
 -- name: CountWarmVM :one
-SELECT COUNT(*) FROM warm WHERE vm_id=?;
+SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=?;
 
 -- name: CountWarmSnapshot :one
-SELECT COUNT(*) FROM warm WHERE snapshot_id=?;
+SELECT COUNT(*) FROM ready_warm_vms WHERE snapshot_id=?;
 
 -- name: CountWarmIdentity :one
-SELECT COUNT(*) FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?;
+SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?;
 
 -- name: RemoveWarm :execrows
-DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?;
+DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?;
 
 -- name: ConsumeWarm :execrows
-DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at=?;
+DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at_unix_ns=?;
 
 -- name: InsertWarm :execrows
-INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?);
+INSERT INTO ready_warm_vms(vm_id,template_id,snapshot_id,created_at_unix_ns) VALUES(?,?,?,?);
 
 -- name: MarkReady :execrows
 UPDATE pool_slots SET status='ready',body=sqlc.arg('new_body')

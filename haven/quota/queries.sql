@@ -5,17 +5,17 @@ SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_k
 SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?;
 
 -- name: ReservedCapacity :one
-SELECT CAST(COALESCE(SUM(bytes),0) AS INTEGER) AS bytes, CAST(COALESCE(SUM(memory),0) AS INTEGER) AS memory, CAST(COALESCE(SUM(cpus),0) AS INTEGER) AS cpus FROM reservations;
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) AS storage_bytes, CAST(COALESCE(SUM(memory_mib),0) AS INTEGER) AS memory_mib, CAST(COALESCE(SUM(vcpus),0) AS INTEGER) AS vcpus FROM host_capacity_reservations;
 
 -- name: DeductReservationBytes :execrows
-UPDATE reservations SET bytes=bytes-sqlc.arg('amount') WHERE owner=sqlc.arg('owner') AND bytes>=sqlc.arg('amount');
+UPDATE host_capacity_reservations SET storage_bytes=storage_bytes-sqlc.arg('amount') WHERE owner_key=sqlc.arg('owner_key') AND storage_bytes>=sqlc.arg('amount');
 
 -- name: TransferStorageReservation :execrows
-UPDATE reservations SET owner=sqlc.arg('next_owner')
-WHERE owner=sqlc.arg('previous_owner') AND bytes=sqlc.arg('bytes') AND memory=0 AND cpus=0;
+UPDATE host_capacity_reservations SET owner_key=sqlc.arg('next_owner_key')
+WHERE owner_key=sqlc.arg('previous_owner_key') AND storage_bytes=sqlc.arg('storage_bytes') AND memory_mib=0 AND vcpus=0;
 
 -- name: DeleteMatchingReservation :execrows
-DELETE FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?;
+DELETE FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?;
 
 -- name: ListResourceReferences :many
 SELECT resource_kind,resource_id,holder_kind,holder_id FROM resource_refs ORDER BY resource_kind,resource_id;
@@ -33,7 +33,7 @@ WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.storage_mib=? AND q.
 SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?;
 
 -- name: CountMatchingReservation :one
-SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?;
+SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?;
 
 -- name: CountResourceReference :one
 SELECT COUNT(*) FROM resource_refs WHERE resource_kind=? AND resource_id=? AND holder_kind=? AND holder_id=?;
@@ -63,7 +63,7 @@ SELECT COUNT(*) FROM resource_refs WHERE resource_kind=? AND resource_id=?;
 SELECT COUNT(*) FROM quota_refs WHERE kind=? AND resource_key=?;
 
 -- name: CountReservation :one
-SELECT COUNT(*) FROM reservations WHERE owner=?;
+SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?;
 
 -- name: CountCost :one
 SELECT COUNT(*) FROM quota_resources WHERE kind=? AND resource_key=?;
@@ -81,13 +81,13 @@ CAST(COALESCE(SUM(storage_mib),0) AS INTEGER) AS storage_mib
 FROM quota_resources WHERE tenant_id=?;
 
 -- name: ReservedBytes :one
-SELECT CAST(COALESCE(SUM(bytes),0) AS INTEGER) FROM reservations;
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) FROM host_capacity_reservations;
 
 -- name: InsertReservation :execrows
-INSERT INTO reservations(owner,bytes,memory,cpus) VALUES(?,?,?,?);
+INSERT INTO host_capacity_reservations(owner_key,storage_bytes,memory_mib,vcpus) VALUES(?,?,?,?);
 
 -- name: DeleteReservation :execrows
-DELETE FROM reservations WHERE owner=?;
+DELETE FROM host_capacity_reservations WHERE owner_key=?;
 
 -- name: InsertCost :execrows
 INSERT INTO quota_resources(tenant_id,kind,resource_key,sandbox_slots,storage_mib,source_operation_id) VALUES(?,?,?,?,?,?);

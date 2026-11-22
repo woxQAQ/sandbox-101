@@ -203,9 +203,14 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if bound != 0 {
 		t.Fatal("new proxy survived rejected public completion")
 	}
-	var status string
-	if err = service.State.Database().QueryRow("SELECT status FROM operations WHERE id=?", configure.ID).Scan(&status); err != nil || testutil.Terminal(status) {
+	repository := operation.New(service.State.Database())
+	status, _, err := repository.ResultState(ctx, configure.ID)
+	if err != nil || testutil.Terminal(status) {
 		t.Fatal("terminal result committed without public delivery", status, err)
+	}
+	createdAt, finishedAt, err := repository.Times(ctx, configure.ID)
+	if err != nil || createdAt.IsZero() || !finishedAt.IsZero() {
+		t.Fatal("rejected publication changed the operation clock", createdAt, finishedAt, err)
 	}
 	if _, err = service.State.Database().Exec("DROP TRIGGER reject_public_delivery"); err != nil {
 		t.Fatal(err)
@@ -231,7 +236,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 		t.Fatal("superseded intent returned success")
 	}
 	old, err := service.Delivery.PublicOperation(ctx, principal, configure.ID)
-	if err != nil || old.Status != "failed" || old.Step != "failed" || old.Error != nil {
+	if err != nil || old.Status != "failed" || old.Step != "failed" || old.Error != nil || !old.CreatedAt.Equal(createdAt) || old.FinishedAt.IsZero() {
 		t.Fatal("superseded failure was not frozen", old, err)
 	}
 }

@@ -50,7 +50,7 @@ func (tc *TemplateCatalog) Fresh(ctx context.Context, tenant, id string) (Templa
 
 func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (TemplateRecord, error) {
 	var record TemplateRecord
-	body, err := tc.queries.GetOwnedTemplate(ctx, dbgen.GetOwnedTemplateParams{
+	published, err := tc.queries.GetOwnedTemplate(ctx, dbgen.GetOwnedTemplateParams{
 		ID:     id,
 		Tenant: tenant,
 	})
@@ -60,30 +60,30 @@ func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templa
 	if err != nil {
 		return record, err
 	}
-	if err = json.Unmarshal(body, &record); err != nil {
+	if err = json.Unmarshal(published.Body, &record); err != nil {
 		return record, err
 	}
-	owner, err := tc.queries.GetPublisher(ctx, id)
+	owner, err := tc.queries.GetPublisher(ctx, dbgen.GetPublisherParams{
+		TemplateID:           id,
+		PublishedOperationID: published.PublishedOperationID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, fmt.Errorf("%w: template permanent ownership proof is missing", errs.ErrManualRecovery)
 	}
 	if err != nil {
 		return record, err
 	}
-	proof, err := LoadSupply(ctx, tc.database, owner.OperationID)
+	proof, err := LoadSupply(ctx, tc.database, published.PublishedOperationID)
 	if err != nil {
 		return record, fmt.Errorf("%w: template immutable publication step is missing", errs.ErrManualRecovery)
 	}
 	if owner.TenantID != tenant || owner.ScopeKind != "tenant" || owner.ScopeID != proof.Input.RequestTenantID || (!proof.Input.RequesterRoot && owner.ScopeID != tenant) || proof.Input.Template.ID != id || proof.Input.Template.TenantID != tenant || (proof.Input.Command.Action != "template_put" && proof.Input.Command.Action != "template_build") {
 		return record, fmt.Errorf("%w: template publisher authorization is inconsistent", errs.ErrManualRecovery)
 	}
-	if (owner.Status == "pending" || owner.Status == "running") && proof.Status != "succeeded" && proof.Status != "failed" {
-		return record, fmt.Errorf("%w: template publication is in progress", errs.ErrConflict)
-	}
 	expected := proof.Input.Template
 	expected.State = "ready"
 	expected.SnapshotID = proof.State.SnapshotID
-	if record.ID != id || record.TenantID != tenant || record.Version != owner.OperationID || owner.Status != "succeeded" || proof.Status != "succeeded" || proof.State.Phase != "complete" || !reflect.DeepEqual(record, expected) {
+	if record.ID != id || record.TenantID != tenant || record.Version != published.PublishedOperationID || owner.Status != "succeeded" || proof.Status != "succeeded" || proof.State.Phase != "complete" || !reflect.DeepEqual(record, expected) {
 		return record, fmt.Errorf("%w: template immutable publication differs from catalog", errs.ErrManualRecovery)
 	}
 	return record, nil
@@ -384,7 +384,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	if err != nil {
 		return operation.Result{}, err
 	}
-	if intent.TenantID != input.Template.TenantID || intent.OperationID != step.OperationID {
+	if intent.TenantID != input.Template.TenantID || intent.CandidateOperationID != step.OperationID {
 		return operation.Result{}, fmt.Errorf("template publication was superseded")
 	}
 	previous, err := CurrentTemplate(ctx, tx, input.Template.ID)

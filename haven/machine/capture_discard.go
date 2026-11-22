@@ -352,8 +352,8 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 	if err != nil || owners != 1 {
 		return fmt.Errorf("capture discard responsibility changed: %v", err)
 	}
-	checkpoints, err := dbgen.New(tx).CountCheckpoint(ctx, snapshot.ID)
-	if err != nil || checkpoints != 0 {
+	publications, err := dbgen.New(tx).CountSnapshotPublication(ctx, snapshot.ID)
+	if err != nil || publications != 0 {
 		return fmt.Errorf("capture discard responsibility changed: %v", err)
 	}
 	leases, err := SnapshotReaders(ctx, tx, snapshot.ID)

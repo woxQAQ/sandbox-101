@@ -252,9 +252,9 @@ func (proofs SnapshotProofs) RestoreRelations(ctx context.Context, tx *sql.Tx, s
 			return fmt.Errorf("restore dependency responsibility changed: %v", err)
 		}
 		count, err = dbgen.New(tx).CountMatchingBacking(ctx, dbgen.CountMatchingBackingParams{
-			Path:   path,
-			VmID:   step.Candidate,
-			Digest: source.Snapshot.Manifest.Files["ch/memory-ranges"],
+			Path:       path,
+			VmID:       step.Candidate,
+			FileDigest: source.Snapshot.Manifest.Files["ch/memory-ranges"],
 		})
 
 		if err != nil || count != 1 {
@@ -350,7 +350,6 @@ func (p *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error
 			DiskIdentity: next.DiskIdentity,
 		}
 		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
-			ID:           step.OperationID,
 			VmID:         step.Candidate,
 			OperationID:  step.OperationID,
 			PreviousBody: operation.Encode(previous),
@@ -391,9 +390,9 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	next.Phase = "restore_resources_ready"
 
 	if err = store.RequireOne(dbgen.New(tx).InsertBacking(p.ctx, dbgen.InsertBackingParams{
-		Path:   filepath.Join(step.Input.Resource.RestoreDir, "memory-ranges"),
-		VmID:   step.Candidate,
-		Digest: source.Manifest.Files["ch/memory-ranges"],
+		Path:       filepath.Join(step.Input.Resource.RestoreDir, "memory-ranges"),
+		VmID:       step.Candidate,
+		FileDigest: source.Manifest.Files["ch/memory-ranges"],
 	})); err != nil {
 		return err
 	}

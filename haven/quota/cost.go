@@ -22,10 +22,10 @@ type Reservation struct {
 
 func (reservation Reservation) params() dbgen.InsertReservationParams {
 	return dbgen.InsertReservationParams{
-		Owner:  reservation.Owner,
-		Bytes:  reservation.Bytes,
-		Memory: reservation.MemoryMiB,
-		Cpus:   reservation.CPUs,
+		OwnerKey:     reservation.Owner,
+		StorageBytes: reservation.Bytes,
+		MemoryMib:    reservation.MemoryMiB,
+		Vcpus:        reservation.CPUs,
 	}
 }
 
@@ -105,16 +105,16 @@ func ReservedBytes(ctx context.Context, db store.DBTX) (int64, error) {
 
 func DeductReservationBytes(ctx context.Context, db store.DBTX, owner string, amount int64) error {
 	return store.RequireOne(dbgen.New(db).DeductReservationBytes(ctx, dbgen.DeductReservationBytesParams{
-		Owner:  owner,
-		Amount: amount,
+		OwnerKey: owner,
+		Amount:   amount,
 	}))
 }
 
 func TransferStorageReservation(ctx context.Context, db store.DBTX, previous, next string, bytes int64) error {
 	return store.RequireOne(dbgen.New(db).TransferStorageReservation(ctx, dbgen.TransferStorageReservationParams{
-		PreviousOwner: previous,
-		NextOwner:     next,
-		Bytes:         bytes,
+		PreviousOwnerKey: previous,
+		NextOwnerKey:     next,
+		StorageBytes:     bytes,
 	}))
 }
 

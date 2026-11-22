@@ -10,14 +10,14 @@ import (
 )
 
 const consumeWarm = `-- name: ConsumeWarm :execrows
-DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at=?
+DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at_unix_ns=?
 `
 
 type ConsumeWarmParams struct {
-	VmID       string
-	TemplateID string
-	SnapshotID string
-	CreatedAt  int64
+	VmID            string
+	TemplateID      string
+	SnapshotID      string
+	CreatedAtUnixNs int64
 }
 
 func (q *Queries) ConsumeWarm(ctx context.Context, arg ConsumeWarmParams) (int64, error) {
@@ -25,7 +25,7 @@ func (q *Queries) ConsumeWarm(ctx context.Context, arg ConsumeWarmParams) (int64
 		arg.VmID,
 		arg.TemplateID,
 		arg.SnapshotID,
-		arg.CreatedAt,
+		arg.CreatedAtUnixNs,
 	)
 	if err != nil {
 		return 0, err
@@ -34,7 +34,7 @@ func (q *Queries) ConsumeWarm(ctx context.Context, arg ConsumeWarmParams) (int64
 }
 
 const countOwnedIntent = `-- name: CountOwnedIntent :one
-SELECT COUNT(*) FROM template_intents WHERE template_id=? AND tenant_id=?
+SELECT COUNT(*) FROM template_owners WHERE template_id=? AND tenant_id=?
 `
 
 type CountOwnedIntentParams struct {
@@ -84,7 +84,7 @@ func (q *Queries) CountTemplateReservations(ctx context.Context, templateID stri
 }
 
 const countWarmIdentity = `-- name: CountWarmIdentity :one
-SELECT COUNT(*) FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?
+SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?
 `
 
 type CountWarmIdentityParams struct {
@@ -101,7 +101,7 @@ func (q *Queries) CountWarmIdentity(ctx context.Context, arg CountWarmIdentityPa
 }
 
 const countWarmSnapshot = `-- name: CountWarmSnapshot :one
-SELECT COUNT(*) FROM warm WHERE snapshot_id=?
+SELECT COUNT(*) FROM ready_warm_vms WHERE snapshot_id=?
 `
 
 func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int64, error) {
@@ -112,7 +112,7 @@ func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int
 }
 
 const countWarmVM = `-- name: CountWarmVM :one
-SELECT COUNT(*) FROM warm WHERE vm_id=?
+SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=?
 `
 
 func (q *Queries) CountWarmVM(ctx context.Context, vmID string) (int64, error) {
@@ -141,9 +141,9 @@ func (q *Queries) DeleteReservation(ctx context.Context, arg DeleteReservationPa
 }
 
 const firstReady = `-- name: FirstReady :one
-SELECT p.operation_id FROM warm w JOIN pool_slots p ON p.vm_id=w.vm_id
+SELECT p.operation_id FROM ready_warm_vms w JOIN pool_slots p ON p.vm_id=w.vm_id
 WHERE w.template_id=? AND w.snapshot_id=? AND p.template_version=? AND p.status='ready'
-ORDER BY w.created_at,w.vm_id LIMIT 1
+ORDER BY w.created_at_unix_ns,w.vm_id LIMIT 1
 `
 
 type FirstReadyParams struct {
@@ -160,23 +160,23 @@ func (q *Queries) FirstReady(ctx context.Context, arg FirstReadyParams) (string,
 }
 
 const getIntent = `-- name: GetIntent :one
-SELECT tenant_id,operation_id FROM template_intents WHERE template_id=?
+SELECT tenant_id,candidate_operation_id FROM template_owners WHERE template_id=?
 `
 
 type GetIntentRow struct {
-	TenantID    string
-	OperationID string
+	TenantID             string
+	CandidateOperationID string
 }
 
 func (q *Queries) GetIntent(ctx context.Context, templateID string) (GetIntentRow, error) {
 	row := q.db.QueryRowContext(ctx, getIntent, templateID)
 	var i GetIntentRow
-	err := row.Scan(&i.TenantID, &i.OperationID)
+	err := row.Scan(&i.TenantID, &i.CandidateOperationID)
 	return i, err
 }
 
 const getOwnedTemplate = `-- name: GetOwnedTemplate :one
-SELECT body FROM templates WHERE id=? AND tenant=?
+SELECT body,published_operation_id FROM templates WHERE id=? AND tenant=?
 `
 
 type GetOwnedTemplateParams struct {
@@ -184,15 +184,20 @@ type GetOwnedTemplateParams struct {
 	Tenant string
 }
 
-func (q *Queries) GetOwnedTemplate(ctx context.Context, arg GetOwnedTemplateParams) ([]byte, error) {
+type GetOwnedTemplateRow struct {
+	Body                 []byte
+	PublishedOperationID string
+}
+
+func (q *Queries) GetOwnedTemplate(ctx context.Context, arg GetOwnedTemplateParams) (GetOwnedTemplateRow, error) {
 	row := q.db.QueryRowContext(ctx, getOwnedTemplate, arg.ID, arg.Tenant)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i GetOwnedTemplateRow
+	err := row.Scan(&i.Body, &i.PublishedOperationID)
+	return i, err
 }
 
 const getPermanentOwner = `-- name: GetPermanentOwner :one
-SELECT tenant_id FROM template_intents WHERE template_id=?
+SELECT tenant_id FROM template_owners WHERE template_id=?
 `
 
 func (q *Queries) GetPermanentOwner(ctx context.Context, templateID string) (string, error) {
@@ -203,27 +208,30 @@ func (q *Queries) GetPermanentOwner(ctx context.Context, templateID string) (str
 }
 
 const getPublisher = `-- name: GetPublisher :one
-SELECT i.tenant_id,o.scope_kind,o.scope_id,o.status,i.operation_id
-FROM template_intents i JOIN operations o ON o.id=i.operation_id WHERE i.template_id=?
+SELECT i.tenant_id,o.scope_kind,o.scope_id,o.status
+FROM template_owners i JOIN operations o ON o.id=?1 WHERE i.template_id=?2
 `
 
-type GetPublisherRow struct {
-	TenantID    string
-	ScopeKind   string
-	ScopeID     string
-	Status      string
-	OperationID string
+type GetPublisherParams struct {
+	PublishedOperationID string
+	TemplateID           string
 }
 
-func (q *Queries) GetPublisher(ctx context.Context, templateID string) (GetPublisherRow, error) {
-	row := q.db.QueryRowContext(ctx, getPublisher, templateID)
+type GetPublisherRow struct {
+	TenantID  string
+	ScopeKind string
+	ScopeID   string
+	Status    string
+}
+
+func (q *Queries) GetPublisher(ctx context.Context, arg GetPublisherParams) (GetPublisherRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublisher, arg.PublishedOperationID, arg.TemplateID)
 	var i GetPublisherRow
 	err := row.Scan(
 		&i.TenantID,
 		&i.ScopeKind,
 		&i.ScopeID,
 		&i.Status,
-		&i.OperationID,
 	)
 	return i, err
 }
@@ -302,17 +310,23 @@ func (q *Queries) InsertReservation(ctx context.Context, arg InsertReservationPa
 }
 
 const insertTemplate = `-- name: InsertTemplate :execrows
-INSERT INTO templates(id,tenant,body) VALUES(?,?,?)
+INSERT INTO templates(id,tenant,published_operation_id,body) VALUES(?,?,?,?)
 `
 
 type InsertTemplateParams struct {
-	ID     string
-	Tenant string
-	Body   []byte
+	ID                   string
+	Tenant               string
+	PublishedOperationID string
+	Body                 []byte
 }
 
 func (q *Queries) InsertTemplate(ctx context.Context, arg InsertTemplateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertTemplate, arg.ID, arg.Tenant, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertTemplate,
+		arg.ID,
+		arg.Tenant,
+		arg.PublishedOperationID,
+		arg.Body,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -320,14 +334,14 @@ func (q *Queries) InsertTemplate(ctx context.Context, arg InsertTemplateParams) 
 }
 
 const insertWarm = `-- name: InsertWarm :execrows
-INSERT INTO warm(vm_id,template_id,snapshot_id,created_at) VALUES(?,?,?,?)
+INSERT INTO ready_warm_vms(vm_id,template_id,snapshot_id,created_at_unix_ns) VALUES(?,?,?,?)
 `
 
 type InsertWarmParams struct {
-	VmID       string
-	TemplateID string
-	SnapshotID string
-	CreatedAt  int64
+	VmID            string
+	TemplateID      string
+	SnapshotID      string
+	CreatedAtUnixNs int64
 }
 
 func (q *Queries) InsertWarm(ctx context.Context, arg InsertWarmParams) (int64, error) {
@@ -335,7 +349,7 @@ func (q *Queries) InsertWarm(ctx context.Context, arg InsertWarmParams) (int64, 
 		arg.VmID,
 		arg.TemplateID,
 		arg.SnapshotID,
-		arg.CreatedAt,
+		arg.CreatedAtUnixNs,
 	)
 	if err != nil {
 		return 0, err
@@ -403,7 +417,7 @@ func (q *Queries) ListTemplateIDs(ctx context.Context) ([]ListTemplateIDsRow, er
 }
 
 const listWarmVMs = `-- name: ListWarmVMs :many
-SELECT vm_id FROM warm WHERE template_id=? ORDER BY vm_id
+SELECT vm_id FROM ready_warm_vms WHERE template_id=? ORDER BY vm_id
 `
 
 func (q *Queries) ListWarmVMs(ctx context.Context, templateID string) ([]string, error) {
@@ -478,7 +492,7 @@ func (q *Queries) MarkReadyCleanup(ctx context.Context, arg MarkReadyCleanupPara
 }
 
 const removeWarm = `-- name: RemoveWarm :execrows
-DELETE FROM warm WHERE vm_id=? AND template_id=? AND snapshot_id=?
+DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?
 `
 
 type RemoveWarmParams struct {
@@ -496,21 +510,25 @@ func (q *Queries) RemoveWarm(ctx context.Context, arg RemoveWarmParams) (int64, 
 }
 
 const replaceTemplate = `-- name: ReplaceTemplate :execrows
-UPDATE templates SET body=?1 WHERE id=?2 AND tenant=?3 AND body=?4
+UPDATE templates SET body=?1,published_operation_id=?2 WHERE id=?3 AND tenant=?4 AND published_operation_id=?5 AND body=?6
 `
 
 type ReplaceTemplateParams struct {
-	NewBody      []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
+	NewBody              []byte
+	PublishedOperationID string
+	ID                   string
+	Tenant               string
+	PreviousOperationID  string
+	PreviousBody         []byte
 }
 
 func (q *Queries) ReplaceTemplate(ctx context.Context, arg ReplaceTemplateParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceTemplate,
 		arg.NewBody,
+		arg.PublishedOperationID,
 		arg.ID,
 		arg.Tenant,
+		arg.PreviousOperationID,
 		arg.PreviousBody,
 	)
 	if err != nil {
@@ -520,17 +538,17 @@ func (q *Queries) ReplaceTemplate(ctx context.Context, arg ReplaceTemplateParams
 }
 
 const reservePublication = `-- name: ReservePublication :execrows
-INSERT INTO template_intents(template_id,tenant_id,operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET operation_id=excluded.operation_id WHERE tenant_id=excluded.tenant_id
+INSERT INTO template_owners(template_id,tenant_id,candidate_operation_id) VALUES(?,?,?) ON CONFLICT(template_id) DO UPDATE SET candidate_operation_id=excluded.candidate_operation_id WHERE tenant_id=excluded.tenant_id
 `
 
 type ReservePublicationParams struct {
-	TemplateID  string
-	TenantID    string
-	OperationID string
+	TemplateID           string
+	TenantID             string
+	CandidateOperationID string
 }
 
 func (q *Queries) ReservePublication(ctx context.Context, arg ReservePublicationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reservePublication, arg.TemplateID, arg.TenantID, arg.OperationID)
+	result, err := q.db.ExecContext(ctx, reservePublication, arg.TemplateID, arg.TenantID, arg.CandidateOperationID)
 	if err != nil {
 		return 0, err
 	}

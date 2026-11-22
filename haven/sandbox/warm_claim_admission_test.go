@@ -12,6 +12,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/supply"
 )
 
 func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
@@ -73,8 +74,8 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			if err = service.State.Database().QueryRowContext(ctx, responsibility).Scan(&after[0], &after[1], &after[2], &after[3], &after[4]); err != nil || before != after {
 				t.Fatal("failed admission committed partial responsibility", before, after, err)
 			}
-			var warm int
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM warm WHERE vm_id=?", refill.Result.VMID).Scan(&warm); err != nil || warm != 1 {
+			warm, err := (supply.ResourceUsage{}).VMUsers(ctx, service.State.Database(), refill.Result.VMID)
+			if err != nil || warm != 1 {
 				t.Fatal("failed selection removed warm availability", warm, err)
 			}
 			if runtime.Count("launch") != launches {

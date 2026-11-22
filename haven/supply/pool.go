@@ -79,10 +79,10 @@ func ReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, t
 func SelectWarm(ctx context.Context, tx *sql.Tx, id string, reservation PoolReservation) error {
 	queries := dbgen.New(tx)
 	if err := store.RequireOne(queries.ConsumeWarm(ctx, dbgen.ConsumeWarmParams{
-		VmID:       reservation.VMID,
-		TemplateID: reservation.Template.ID,
-		SnapshotID: reservation.Template.SnapshotID,
-		CreatedAt:  reservation.CreatedAt.UnixNano(),
+		VmID:            reservation.VMID,
+		TemplateID:      reservation.Template.ID,
+		SnapshotID:      reservation.Template.SnapshotID,
+		CreatedAtUnixNs: reservation.CreatedAt.UnixNano(),
 	})); err != nil {
 		return err
 	}

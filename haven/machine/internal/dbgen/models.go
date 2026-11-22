@@ -4,7 +4,7 @@
 
 package dbgen
 
-type SourceLease struct {
+type SnapshotSourceLease struct {
 	SnapshotID  string
 	OperationID string
 	StepKey     string

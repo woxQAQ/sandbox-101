@@ -19,6 +19,7 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
@@ -155,9 +156,18 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 			if err != nil || sandbox.State != "terminated" {
 				t.Fatal(sandbox, err)
 			}
-			var slots, vms, leases int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(sandbox_slots),0) FROM quota_resources),(SELECT COUNT(*) FROM vms),(SELECT COUNT(*) FROM source_leases)").Scan(&slots, &vms, &leases); err != nil || slots != 0 || vms != 0 || leases != 0 {
-				t.Fatal(slots, vms, leases, err)
+			db := service.State.Database()
+			usage, err := quota.TenantUsage(ctx, db, principal.TenantID)
+			if err != nil || usage.Slots != 0 {
+				t.Fatal("release retained sandbox quota", usage, err)
+			}
+			vms, err := machine.VMRoots(ctx, db, service.State.Directory())
+			if err != nil || len(vms) != 0 {
+				t.Fatal("release retained VMs", vms, err)
+			}
+			leases, err := machine.SourceLeases(ctx, db)
+			if err != nil || len(leases) != 0 {
+				t.Fatal("release retained snapshot leases", leases, err)
 			}
 		})
 	}
@@ -481,9 +491,13 @@ func TestHavenResumeRetainsSandboxSlot(t *testing.T) {
 	if err != nil || after.State != "running" || after.VMID == claim.Result.VMID || after.Instance == "" || after.SnapshotID != "" {
 		t.Fatal(after, err)
 	}
-	var slots, backings int
-	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'),(SELECT COUNT(*) FROM backing)").Scan(&slots, &backings); err != nil || slots != 1 || backings != 1 {
-		t.Fatal("resume lost/duplicated responsibilities", slots, backings, err)
+	usage, err := quota.TenantUsage(ctx, service.State.Database(), principal.TenantID)
+	if err != nil || usage.Slots != 1 {
+		t.Fatal("resume lost sandbox quota", usage, err)
+	}
+	backings, err := machine.BackingRoots(ctx, service.State.Database())
+	if err != nil || len(backings) != 1 {
+		t.Fatal("resume did not retain one memory backing", backings, err)
 	}
 }
 

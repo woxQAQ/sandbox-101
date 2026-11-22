@@ -35,25 +35,25 @@ UPDATE operation_steps SET status=?,body=? WHERE operation_id=? AND step_key=? A
 UPDATE operations SET status='running' WHERE id=? AND status IN ('pending','running');
 
 -- name: FailResult :execrows
-UPDATE operations SET status='failed',body=? WHERE id=? AND status IN ('pending','running');
+UPDATE operations SET status='failed',finished_at=?,body=? WHERE id=? AND status IN ('pending','running');
 
 -- name: CompleteResult :execrows
-UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running');
+UPDATE operations SET status='succeeded',finished_at=?,body=? WHERE id=? AND status IN ('pending','running');
 
 -- name: InsertOperation :execrows
-INSERT INTO operations(id,scope_kind,scope_id,idem_key,request_hash,request,status,body) VALUES(?,?,?,?,?,?,?,?);
+INSERT INTO operations(id,scope_kind,scope_id,idem_key,request_hash,request,status,body,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?);
 
 -- name: InsertCredential :execrows
-INSERT INTO operation_credentials(operation_id,request_mac) VALUES(?,?);
+INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?);
 
 -- name: FinishLiveOperation :execrows
-UPDATE operations SET status=?,body=? WHERE id=? AND status IN ('pending','running');
+UPDATE operations SET status=?,finished_at=?,body=? WHERE id=? AND status IN ('pending','running');
 
 -- name: CompletePendingOperation :execrows
-UPDATE operations SET status='succeeded' WHERE id=? AND status='pending';
+UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status='pending';
 
 -- name: CompleteLiveOperation :execrows
-UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running');
+UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running');
 
 -- name: GetScopedRequest :one
 SELECT id,idem_key,status,request_hash,request,body FROM operations WHERE scope_kind=? AND scope_id=? AND idem_key=?;
@@ -65,10 +65,10 @@ SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id=? AND idem_key=
 SELECT scope_id FROM operations WHERE id=? AND scope_kind='tenant';
 
 -- name: GetTenantCredentialMAC :one
-SELECT c.request_mac FROM operations o JOIN operation_credentials c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?;
+SELECT c.request_mac FROM operations o JOIN operation_request_macs c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?;
 
 -- name: GetCredentialMAC :one
-SELECT request_mac FROM operation_credentials WHERE operation_id=?;
+SELECT request_mac FROM operation_request_macs WHERE operation_id=?;
 
 -- name: GetScopedOperation :one
 SELECT id, idem_key, status, body, request_hash, request
@@ -79,13 +79,7 @@ SELECT DISTINCT operation_id FROM operation_steps
 WHERE status IN ('pending','running') ORDER BY operation_id;
 
 -- name: GetOperationTimes :one
-SELECT created_at, finished_at FROM operation_metadata WHERE operation_id=?;
-
--- name: InsertOperationClock :execrows
-INSERT INTO operation_metadata (operation_id, created_at, finished_at) VALUES (?,?,?);
-
--- name: FinishOperationClock :execrows
-UPDATE operation_metadata SET finished_at=? WHERE operation_id=? AND finished_at='';
+SELECT created_at, finished_at FROM operations WHERE id=?;
 
 -- name: GetOperationProjection :one
 SELECT id, idem_key, scope_kind, scope_id, request_hash, request, status, body
@@ -93,7 +87,7 @@ FROM operations WHERE id=?;
 
 -- name: GetPublicStatus :one
 SELECT o.status FROM operations o
-JOIN operation_credentials c ON c.operation_id=o.id
+JOIN operation_request_macs c ON c.operation_id=o.id
 WHERE o.id=? AND o.scope_kind='tenant';
 
 -- name: GetPublication :one
@@ -111,13 +105,12 @@ FROM operation_steps ORDER BY rowid;
 
 -- name: ListPublicationProofs :many
 SELECT p.body AS publication,o.id,o.idem_key,o.scope_kind,o.scope_id,o.request,o.status,o.body AS result,
-       m.created_at,m.finished_at
+       o.created_at,o.finished_at
 FROM operation_publications p
-JOIN operations o ON o.id=p.operation_id
-JOIN operation_metadata m ON m.operation_id=o.id ORDER BY o.rowid;
+JOIN operations o ON o.id=p.operation_id ORDER BY o.rowid;
 
 -- name: CountMissingPublications :one
 SELECT COUNT(*) FROM operations o LEFT JOIN operation_publications p ON p.operation_id=o.id
 WHERE o.status IN ('succeeded','failed') AND p.operation_id IS NULL
-AND (EXISTS(SELECT 1 FROM operation_credentials c WHERE c.operation_id=o.id)
+AND (EXISTS(SELECT 1 FROM operation_request_macs c WHERE c.operation_id=o.id)
   OR EXISTS(SELECT 1 FROM operation_steps s WHERE s.operation_id=o.id AND s.action='activate'));

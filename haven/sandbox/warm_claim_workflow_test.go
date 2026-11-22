@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -11,7 +12,10 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
+	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/supply"
 )
 
 func TestHavenWarmClaimAndFallback(t *testing.T) {
@@ -70,9 +74,29 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 			if after != wanted {
 				t.Fatal("unexpected launches", before, after, wanted)
 			}
-			var slots, storage, pool, warm, leases int
-			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM warm),(SELECT COUNT(*) FROM source_leases)").Scan(&slots, &storage, &pool, &warm, &leases); err != nil || slots != 1 || storage != 256 || pool != 0 || warm != 0 || leases != 0 {
-				t.Fatal(slots, storage, pool, warm, leases, err)
+			db := service.State.Database()
+			tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			usage, err := quota.TenantUsage(ctx, tx, principal.TenantID)
+			if err != nil || usage.Slots != 1 || usage.StorageMiB != 256 {
+				t.Fatal("claimed sandbox has unexpected quota usage", usage, err)
+			}
+			if err := supply.RequireRetiredWarm(ctx, tx, refill.ID); err != nil {
+				t.Fatal(err)
+			}
+			warm, err := (supply.ResourceUsage{}).VMUsers(ctx, tx, refill.Result.VMID)
+			if err != nil || warm != 0 {
+				t.Fatal("refilled VM still available after claim", warm, err)
+			}
+			leases, err := machine.SourceLeases(ctx, tx)
+			if err != nil || len(leases) != 0 {
+				t.Fatal("claim retained snapshot source leases", leases, err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
 			}
 			released, err := service.CommandAdmission.Execute(ctx, principal, "release", operation.Intent{
 				Action:    "release",
@@ -82,8 +106,8 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				reason := service.Workers.State(released.ID).Err
 				t.Fatal(released, reason, err)
 			}
-			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources").Scan(&slots); err != nil || slots != 0 {
-				t.Fatal(slots, err)
+			if usage, err = quota.TenantUsage(ctx, db, principal.TenantID); err != nil || usage.Slots != 0 {
+				t.Fatal("released sandbox retained a slot", usage, err)
 			}
 		})
 	}

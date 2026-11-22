@@ -458,10 +458,10 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertCheckpoint(c.ctx, dbgen.InsertCheckpointParams{
-		ID:     publication.ID,
-		Tenant: publication.TenantID,
-		Body:   body,
+	if err = store.RequireOne(dbgen.New(tx).InsertSnapshotPublication(c.ctx, dbgen.InsertSnapshotPublicationParams{
+		SnapshotID: publication.ID,
+		TenantID:   publication.TenantID,
+		Body:       body,
 	})); err != nil {
 		return err
 	}

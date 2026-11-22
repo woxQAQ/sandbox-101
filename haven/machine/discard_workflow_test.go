@@ -383,8 +383,8 @@ func discardSucceeded(t *testing.T, service *application.App, discard machine.Di
 	}{
 		{"SELECT COUNT(*) FROM vms WHERE id=?", source.Candidate},
 		{"SELECT COUNT(*) FROM quota_resources WHERE source_operation_id=?", source.OperationID},
-		{"SELECT COUNT(*) FROM source_leases WHERE operation_id=?", source.OperationID},
-		{"SELECT COUNT(*) FROM backing WHERE vm_id=?", source.Candidate},
+		{"SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=?", source.OperationID},
+		{"SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?", source.Candidate},
 	} {
 		var count int
 		if err = service.State.Database().QueryRow(check.q, check.arg).Scan(&count); err != nil || count != 0 {

@@ -131,22 +131,22 @@ func (q *Queries) CountMatchingCost(ctx context.Context, arg CountMatchingCostPa
 }
 
 const countMatchingReservation = `-- name: CountMatchingReservation :one
-SELECT COUNT(*) FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?
+SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
 `
 
 type CountMatchingReservationParams struct {
-	Owner  string
-	Bytes  int64
-	Memory int64
-	Cpus   int64
+	OwnerKey     string
+	StorageBytes int64
+	MemoryMib    int64
+	Vcpus        int64
 }
 
 func (q *Queries) CountMatchingReservation(ctx context.Context, arg CountMatchingReservationParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countMatchingReservation,
-		arg.Owner,
-		arg.Bytes,
-		arg.Memory,
-		arg.Cpus,
+		arg.OwnerKey,
+		arg.StorageBytes,
+		arg.MemoryMib,
+		arg.Vcpus,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -154,11 +154,11 @@ func (q *Queries) CountMatchingReservation(ctx context.Context, arg CountMatchin
 }
 
 const countReservation = `-- name: CountReservation :one
-SELECT COUNT(*) FROM reservations WHERE owner=?
+SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?
 `
 
-func (q *Queries) CountReservation(ctx context.Context, owner string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countReservation, owner)
+func (q *Queries) CountReservation(ctx context.Context, ownerKey string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countReservation, ownerKey)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -276,16 +276,16 @@ func (q *Queries) CountTenantCostHolders(ctx context.Context, arg CountTenantCos
 }
 
 const deductReservationBytes = `-- name: DeductReservationBytes :execrows
-UPDATE reservations SET bytes=bytes-?1 WHERE owner=?2 AND bytes>=?1
+UPDATE host_capacity_reservations SET storage_bytes=storage_bytes-?1 WHERE owner_key=?2 AND storage_bytes>=?1
 `
 
 type DeductReservationBytesParams struct {
-	Amount int64
-	Owner  string
+	Amount   int64
+	OwnerKey string
 }
 
 func (q *Queries) DeductReservationBytes(ctx context.Context, arg DeductReservationBytesParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deductReservationBytes, arg.Amount, arg.Owner)
+	result, err := q.db.ExecContext(ctx, deductReservationBytes, arg.Amount, arg.OwnerKey)
 	if err != nil {
 		return 0, err
 	}
@@ -389,22 +389,22 @@ func (q *Queries) DeleteMatchingCost(ctx context.Context, arg DeleteMatchingCost
 }
 
 const deleteMatchingReservation = `-- name: DeleteMatchingReservation :execrows
-DELETE FROM reservations WHERE owner=? AND bytes=? AND memory=? AND cpus=?
+DELETE FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
 `
 
 type DeleteMatchingReservationParams struct {
-	Owner  string
-	Bytes  int64
-	Memory int64
-	Cpus   int64
+	OwnerKey     string
+	StorageBytes int64
+	MemoryMib    int64
+	Vcpus        int64
 }
 
 func (q *Queries) DeleteMatchingReservation(ctx context.Context, arg DeleteMatchingReservationParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteMatchingReservation,
-		arg.Owner,
-		arg.Bytes,
-		arg.Memory,
-		arg.Cpus,
+		arg.OwnerKey,
+		arg.StorageBytes,
+		arg.MemoryMib,
+		arg.Vcpus,
 	)
 	if err != nil {
 		return 0, err
@@ -413,11 +413,11 @@ func (q *Queries) DeleteMatchingReservation(ctx context.Context, arg DeleteMatch
 }
 
 const deleteReservation = `-- name: DeleteReservation :execrows
-DELETE FROM reservations WHERE owner=?
+DELETE FROM host_capacity_reservations WHERE owner_key=?
 `
 
-func (q *Queries) DeleteReservation(ctx context.Context, owner string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteReservation, owner)
+func (q *Queries) DeleteReservation(ctx context.Context, ownerKey string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteReservation, ownerKey)
 	if err != nil {
 		return 0, err
 	}
@@ -537,22 +537,22 @@ func (q *Queries) InsertCostReference(ctx context.Context, arg InsertCostReferen
 }
 
 const insertReservation = `-- name: InsertReservation :execrows
-INSERT INTO reservations(owner,bytes,memory,cpus) VALUES(?,?,?,?)
+INSERT INTO host_capacity_reservations(owner_key,storage_bytes,memory_mib,vcpus) VALUES(?,?,?,?)
 `
 
 type InsertReservationParams struct {
-	Owner  string
-	Bytes  int64
-	Memory int64
-	Cpus   int64
+	OwnerKey     string
+	StorageBytes int64
+	MemoryMib    int64
+	Vcpus        int64
 }
 
 func (q *Queries) InsertReservation(ctx context.Context, arg InsertReservationParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertReservation,
-		arg.Owner,
-		arg.Bytes,
-		arg.Memory,
-		arg.Cpus,
+		arg.OwnerKey,
+		arg.StorageBytes,
+		arg.MemoryMib,
+		arg.Vcpus,
 	)
 	if err != nil {
 		return 0, err
@@ -647,7 +647,7 @@ func (q *Queries) MoveCostReference(ctx context.Context, arg MoveCostReferencePa
 }
 
 const reservedBytes = `-- name: ReservedBytes :one
-SELECT CAST(COALESCE(SUM(bytes),0) AS INTEGER) FROM reservations
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) FROM host_capacity_reservations
 `
 
 func (q *Queries) ReservedBytes(ctx context.Context) (int64, error) {
@@ -658,19 +658,19 @@ func (q *Queries) ReservedBytes(ctx context.Context) (int64, error) {
 }
 
 const reservedCapacity = `-- name: ReservedCapacity :one
-SELECT CAST(COALESCE(SUM(bytes),0) AS INTEGER) AS bytes, CAST(COALESCE(SUM(memory),0) AS INTEGER) AS memory, CAST(COALESCE(SUM(cpus),0) AS INTEGER) AS cpus FROM reservations
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) AS storage_bytes, CAST(COALESCE(SUM(memory_mib),0) AS INTEGER) AS memory_mib, CAST(COALESCE(SUM(vcpus),0) AS INTEGER) AS vcpus FROM host_capacity_reservations
 `
 
 type ReservedCapacityRow struct {
-	Bytes  int64
-	Memory int64
-	Cpus   int64
+	StorageBytes int64
+	MemoryMib    int64
+	Vcpus        int64
 }
 
 func (q *Queries) ReservedCapacity(ctx context.Context) (ReservedCapacityRow, error) {
 	row := q.db.QueryRowContext(ctx, reservedCapacity)
 	var i ReservedCapacityRow
-	err := row.Scan(&i.Bytes, &i.Memory, &i.Cpus)
+	err := row.Scan(&i.StorageBytes, &i.MemoryMib, &i.Vcpus)
 	return i, err
 }
 
@@ -770,18 +770,18 @@ func (q *Queries) TransferResourceReference(ctx context.Context, arg TransferRes
 }
 
 const transferStorageReservation = `-- name: TransferStorageReservation :execrows
-UPDATE reservations SET owner=?1
-WHERE owner=?2 AND bytes=?3 AND memory=0 AND cpus=0
+UPDATE host_capacity_reservations SET owner_key=?1
+WHERE owner_key=?2 AND storage_bytes=?3 AND memory_mib=0 AND vcpus=0
 `
 
 type TransferStorageReservationParams struct {
-	NextOwner     string
-	PreviousOwner string
-	Bytes         int64
+	NextOwnerKey     string
+	PreviousOwnerKey string
+	StorageBytes     int64
 }
 
 func (q *Queries) TransferStorageReservation(ctx context.Context, arg TransferStorageReservationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, transferStorageReservation, arg.NextOwner, arg.PreviousOwner, arg.Bytes)
+	result, err := q.db.ExecContext(ctx, transferStorageReservation, arg.NextOwnerKey, arg.PreviousOwnerKey, arg.StorageBytes)
 	if err != nil {
 		return 0, err
 	}

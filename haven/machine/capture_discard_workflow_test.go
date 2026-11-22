@@ -353,7 +353,7 @@ func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 	}{
 		{"DELETE", "quota_resources", "OLD.kind='pending_storage'"},
 		{"DELETE", "snapshots", "1"},
-		{"DELETE", "reservations", "OLD.owner LIKE 'snapshot:%'"},
+		{"DELETE", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
 		{"UPDATE", "operation_steps", "NEW.action='capture_discard' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
@@ -635,7 +635,7 @@ func failedCaptureFixtureWithFault(t *testing.T, final bool, fault func(string) 
 func captureDiscardLiability(t *testing.T, service *application.App, failed machine.CaptureStep, want int) {
 	t.Helper()
 	var cost, reserved int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM reservations WHERE owner=?)", failed.OperationID, "snapshot:"+failed.Input.Snapshot.ID).Scan(&cost, &reserved); err != nil || cost != want || (want > 0) != (reserved == 1) {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?)", failed.OperationID, "snapshot:"+failed.Input.Snapshot.ID).Scan(&cost, &reserved); err != nil || cost != want || (want > 0) != (reserved == 1) {
 		t.Fatal("capture liability changed without retirement", cost, reserved, err)
 	}
 }

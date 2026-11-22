@@ -52,11 +52,11 @@ def main():
         check(True)
         queries = haven / "supply/queries.sql"
         original_queries = queries.read_bytes()
-        queries.write_bytes(original_queries + b"\n-- name: MixedParameters :execrows\nUPDATE template_intents SET operation_id=sqlc.arg('operation_id') WHERE template_id=?;\n")
+        queries.write_bytes(original_queries + b"\n-- name: MixedParameters :execrows\nUPDATE template_owners SET candidate_operation_id=sqlc.arg('candidate_operation_id') WHERE template_id=?;\n")
         check(False, "mixed sqlc named and positional parameters")
         queries.write_bytes(original_queries)
         check(True)
-        queries.write_bytes(original_queries + b"\n-- name: UnexpandedParameter :one\nSELECT COUNT(*) FROM template_intents WHERE NOT (template_id=sqlc.arg(template_id));\n")
+        queries.write_bytes(original_queries + b"\n-- name: UnexpandedParameter :one\nSELECT COUNT(*) FROM template_owners WHERE NOT (template_id=sqlc.arg(template_id));\n")
         check(False, "unexpanded sqlc parameter")
         queries.write_bytes(original_queries)
         check(True)

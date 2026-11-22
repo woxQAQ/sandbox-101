@@ -11,6 +11,7 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testutil"
+	"github.com/woxQAQ/haven/quota"
 )
 
 func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
@@ -39,9 +40,10 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			testutil.WaitImportInterruption(t, service, collector.ID)
-			var imports int
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner=?", "import:"+original.ID).Scan(&imports); err != nil || imports != 1 {
-				t.Fatal("unconfirmed collection retired import charge", imports, err)
+			owner := "import:" + original.ID
+			imports, err := quota.CountReservation(ctx, service.State.Database(), owner)
+			if err != nil || imports != 1 {
+				t.Fatal("unconfirmed collection retired the import reservation", imports, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
 			if _, err = service.Operations.WaitManagement(ctx, authorization.Principal{
@@ -50,7 +52,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 			}, collector.ID); err != nil {
 				t.Fatal(err)
 			}
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner=?", "import:"+original.ID).Scan(&imports); err != nil || imports != 0 {
+			if imports, err = quota.CountReservation(ctx, service.State.Database(), owner); err != nil || imports != 0 {
 				t.Fatal(imports, err)
 			}
 			unchanged, err := service.Operations.GetManagementOperation(ctx, authorization.Principal{

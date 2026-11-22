@@ -142,7 +142,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 				"vms",
 				"instances",
 				"resource_versions",
-				"reservations",
+				"host_capacity_reservations",
 				"quota_resources",
 				"quota_refs",
 				"resource_refs",

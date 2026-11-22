@@ -147,7 +147,7 @@ func (q *Queries) CompleteStop(ctx context.Context, arg CompleteStopParams) (int
 }
 
 const countBacking = `-- name: CountBacking :one
-SELECT COUNT(*) FROM backing WHERE path=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE path=?
 `
 
 func (q *Queries) CountBacking(ctx context.Context, path string) (int64, error) {
@@ -169,17 +169,6 @@ type CountCaptureOwnerParams struct {
 
 func (q *Queries) CountCaptureOwner(ctx context.Context, arg CountCaptureOwnerParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countCaptureOwner, arg.SnapshotID, arg.TenantID, arg.SourceOperationID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countCheckpoint = `-- name: CountCheckpoint :one
-SELECT COUNT(*) FROM checkpoints WHERE id=?
-`
-
-func (q *Queries) CountCheckpoint(ctx context.Context, id string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countCheckpoint, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -208,17 +197,17 @@ func (q *Queries) CountInstances(ctx context.Context, vmID string) (int64, error
 }
 
 const countMatchingBacking = `-- name: CountMatchingBacking :one
-SELECT COUNT(*) FROM backing WHERE path=? AND vm_id=? AND digest=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?
 `
 
 type CountMatchingBackingParams struct {
-	Path   string
-	VmID   string
-	Digest string
+	Path       string
+	VmID       string
+	FileDigest string
 }
 
 func (q *Queries) CountMatchingBacking(ctx context.Context, arg CountMatchingBackingParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countMatchingBacking, arg.Path, arg.VmID, arg.Digest)
+	row := q.db.QueryRowContext(ctx, countMatchingBacking, arg.Path, arg.VmID, arg.FileDigest)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -236,7 +225,7 @@ func (q *Queries) CountSnapshot(ctx context.Context, id string) (int64, error) {
 }
 
 const countSnapshotLeases = `-- name: CountSnapshotLeases :one
-SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=?
 `
 
 func (q *Queries) CountSnapshotLeases(ctx context.Context, snapshotID string) (int64, error) {
@@ -246,8 +235,19 @@ func (q *Queries) CountSnapshotLeases(ctx context.Context, snapshotID string) (i
 	return count, err
 }
 
+const countSnapshotPublication = `-- name: CountSnapshotPublication :one
+SELECT COUNT(*) FROM snapshot_publications WHERE snapshot_id=?
+`
+
+func (q *Queries) CountSnapshotPublication(ctx context.Context, snapshotID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSnapshotPublication, snapshotID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSourceLease = `-- name: CountSourceLease :one
-SELECT COUNT(*) FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
 `
 
 type CountSourceLeaseParams struct {
@@ -264,7 +264,7 @@ func (q *Queries) CountSourceLease(ctx context.Context, arg CountSourceLeasePara
 }
 
 const countStepLease = `-- name: CountStepLease :one
-SELECT COUNT(*) FROM source_leases WHERE operation_id=? AND step_key=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=? AND step_key=?
 `
 
 type CountStepLeaseParams struct {
@@ -280,7 +280,7 @@ func (q *Queries) CountStepLease(ctx context.Context, arg CountStepLeaseParams) 
 }
 
 const countVMBackings = `-- name: CountVMBackings :one
-SELECT COUNT(*) FROM backing WHERE vm_id=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?
 `
 
 func (q *Queries) CountVMBackings(ctx context.Context, vmID string) (int64, error) {
@@ -326,35 +326,17 @@ func (q *Queries) CreateCandidate(ctx context.Context, arg CreateCandidateParams
 }
 
 const deleteBacking = `-- name: DeleteBacking :execrows
-DELETE FROM backing WHERE path=? AND vm_id=? AND digest=?
+DELETE FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?
 `
 
 type DeleteBackingParams struct {
-	Path   string
-	VmID   string
-	Digest string
+	Path       string
+	VmID       string
+	FileDigest string
 }
 
 func (q *Queries) DeleteBacking(ctx context.Context, arg DeleteBackingParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteBacking, arg.Path, arg.VmID, arg.Digest)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const deleteCheckpoint = `-- name: DeleteCheckpoint :execrows
-DELETE FROM checkpoints WHERE id=? AND tenant=? AND body=?
-`
-
-type DeleteCheckpointParams struct {
-	ID     string
-	Tenant string
-	Body   []byte
-}
-
-func (q *Queries) DeleteCheckpoint(ctx context.Context, arg DeleteCheckpointParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteCheckpoint, arg.ID, arg.Tenant, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteBacking, arg.Path, arg.VmID, arg.FileDigest)
 	if err != nil {
 		return 0, err
 	}
@@ -439,8 +421,26 @@ func (q *Queries) DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) 
 	return result.RowsAffected()
 }
 
+const deleteSnapshotPublication = `-- name: DeleteSnapshotPublication :execrows
+DELETE FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND body=?
+`
+
+type DeleteSnapshotPublicationParams struct {
+	SnapshotID string
+	TenantID   string
+	Body       []byte
+}
+
+func (q *Queries) DeleteSnapshotPublication(ctx context.Context, arg DeleteSnapshotPublicationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSnapshotPublication, arg.SnapshotID, arg.TenantID, arg.Body)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteSourceLease = `-- name: DeleteSourceLease :execrows
-DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
+DELETE FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
 `
 
 type DeleteSourceLeaseParams struct {
@@ -476,23 +476,17 @@ func (q *Queries) DeleteStopped(ctx context.Context, arg DeleteStoppedParams) (i
 }
 
 const deleteVersion = `-- name: DeleteVersion :execrows
-DELETE FROM resource_versions WHERE id=? AND vm_id=? AND operation_id=? AND step_key=?
+DELETE FROM resource_versions WHERE vm_id=? AND operation_id=? AND step_key=?
 `
 
 type DeleteVersionParams struct {
-	ID          string
 	VmID        string
 	OperationID string
 	StepKey     string
 }
 
 func (q *Queries) DeleteVersion(ctx context.Context, arg DeleteVersionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteVersion,
-		arg.ID,
-		arg.VmID,
-		arg.OperationID,
-		arg.StepKey,
-	)
+	result, err := q.db.ExecContext(ctx, deleteVersion, arg.VmID, arg.OperationID, arg.StepKey)
 	if err != nil {
 		return 0, err
 	}
@@ -519,22 +513,6 @@ func (q *Queries) GetCapture(ctx context.Context, arg GetCaptureParams) (GetCapt
 	var i GetCaptureRow
 	err := row.Scan(&i.Published, &i.Deleting, &i.Body)
 	return i, err
-}
-
-const getCheckpointBody = `-- name: GetCheckpointBody :one
-SELECT body FROM checkpoints WHERE id=? AND tenant=?
-`
-
-type GetCheckpointBodyParams struct {
-	ID     string
-	Tenant string
-}
-
-func (q *Queries) GetCheckpointBody(ctx context.Context, arg GetCheckpointBodyParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getCheckpointBody, arg.ID, arg.Tenant)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
 }
 
 const getCurrent = `-- name: GetCurrent :one
@@ -696,68 +674,71 @@ func (q *Queries) GetRetainedInstance(ctx context.Context, arg GetRetainedInstan
 }
 
 const getRetainedVersion = `-- name: GetRetainedVersion :one
-SELECT id, operation_id, step_key, body FROM resource_versions WHERE vm_id = ? AND id = ?
+SELECT step_key, body FROM resource_versions WHERE vm_id = ? AND operation_id = ?
 `
 
 type GetRetainedVersionParams struct {
-	VmID string
-	ID   string
+	VmID        string
+	OperationID string
 }
 
 type GetRetainedVersionRow struct {
-	ID          string
-	OperationID string
-	StepKey     string
-	Body        []byte
+	StepKey string
+	Body    []byte
 }
 
 func (q *Queries) GetRetainedVersion(ctx context.Context, arg GetRetainedVersionParams) (GetRetainedVersionRow, error) {
-	row := q.db.QueryRowContext(ctx, getRetainedVersion, arg.VmID, arg.ID)
+	row := q.db.QueryRowContext(ctx, getRetainedVersion, arg.VmID, arg.OperationID)
 	var i GetRetainedVersionRow
-	err := row.Scan(
-		&i.ID,
-		&i.OperationID,
-		&i.StepKey,
-		&i.Body,
-	)
+	err := row.Scan(&i.StepKey, &i.Body)
 	return i, err
 }
 
+const getSnapshotPublication = `-- name: GetSnapshotPublication :one
+SELECT body FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=?
+`
+
+type GetSnapshotPublicationParams struct {
+	SnapshotID string
+	TenantID   string
+}
+
+func (q *Queries) GetSnapshotPublication(ctx context.Context, arg GetSnapshotPublicationParams) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotPublication, arg.SnapshotID, arg.TenantID)
+	var body []byte
+	err := row.Scan(&body)
+	return body, err
+}
+
 const getVersion = `-- name: GetVersion :one
-SELECT body FROM resource_versions WHERE id = ? AND vm_id = ? AND operation_id = ? AND step_key = ?
+SELECT body FROM resource_versions WHERE vm_id = ? AND operation_id = ? AND step_key = ?
 `
 
 type GetVersionParams struct {
-	ID          string
 	VmID        string
 	OperationID string
 	StepKey     string
 }
 
 func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getVersion,
-		arg.ID,
-		arg.VmID,
-		arg.OperationID,
-		arg.StepKey,
-	)
+	row := q.db.QueryRowContext(ctx, getVersion, arg.VmID, arg.OperationID, arg.StepKey)
 	var body []byte
 	err := row.Scan(&body)
 	return body, err
 }
 
 const insertBacking = `-- name: InsertBacking :execrows
-INSERT INTO backing(path,vm_id,digest) VALUES(?,?,?)
+INSERT INTO vm_memory_backings(path,vm_id,file_digest) VALUES(?,?,?)
 `
 
 type InsertBackingParams struct {
-	Path   string
-	VmID   string
-	Digest string
+	Path       string
+	VmID       string
+	FileDigest string
 }
 
 func (q *Queries) InsertBacking(ctx context.Context, arg InsertBackingParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertBacking, arg.Path, arg.VmID, arg.Digest)
+	result, err := q.db.ExecContext(ctx, insertBacking, arg.Path, arg.VmID, arg.FileDigest)
 	if err != nil {
 		return 0, err
 	}
@@ -776,24 +757,6 @@ type InsertCaptureOwnerParams struct {
 
 func (q *Queries) InsertCaptureOwner(ctx context.Context, arg InsertCaptureOwnerParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertCaptureOwner, arg.SnapshotID, arg.TenantID, arg.SourceOperationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const insertCheckpoint = `-- name: InsertCheckpoint :execrows
-INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?)
-`
-
-type InsertCheckpointParams struct {
-	ID     string
-	Tenant string
-	Body   []byte
-}
-
-func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCheckpoint, arg.ID, arg.Tenant, arg.Body)
 	if err != nil {
 		return 0, err
 	}
@@ -842,8 +805,26 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 	return result.RowsAffected()
 }
 
+const insertSnapshotPublication = `-- name: InsertSnapshotPublication :execrows
+INSERT INTO snapshot_publications(snapshot_id,tenant_id,body) VALUES(?,?,?)
+`
+
+type InsertSnapshotPublicationParams struct {
+	SnapshotID string
+	TenantID   string
+	Body       []byte
+}
+
+func (q *Queries) InsertSnapshotPublication(ctx context.Context, arg InsertSnapshotPublicationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertSnapshotPublication, arg.SnapshotID, arg.TenantID, arg.Body)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertSourceLease = `-- name: InsertSourceLease :execrows
-INSERT INTO source_leases(snapshot_id,operation_id,step_key) VALUES(?,?,?)
+INSERT INTO snapshot_source_leases(snapshot_id,operation_id,step_key) VALUES(?,?,?)
 `
 
 type InsertSourceLeaseParams struct {
@@ -861,11 +842,10 @@ func (q *Queries) InsertSourceLease(ctx context.Context, arg InsertSourceLeasePa
 }
 
 const insertVersion = `-- name: InsertVersion :execrows
-INSERT INTO resource_versions(id,vm_id,operation_id,step_key,body) VALUES(?,?,?,?,?)
+INSERT INTO resource_versions(vm_id,operation_id,step_key,body) VALUES(?,?,?,?)
 `
 
 type InsertVersionParams struct {
-	ID          string
 	VmID        string
 	OperationID string
 	StepKey     string
@@ -874,7 +854,6 @@ type InsertVersionParams struct {
 
 func (q *Queries) InsertVersion(ctx context.Context, arg InsertVersionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertVersion,
-		arg.ID,
 		arg.VmID,
 		arg.OperationID,
 		arg.StepKey,
@@ -887,7 +866,7 @@ func (q *Queries) InsertVersion(ctx context.Context, arg InsertVersionParams) (i
 }
 
 const listBackingPaths = `-- name: ListBackingPaths :many
-SELECT path FROM backing ORDER BY path
+SELECT path FROM vm_memory_backings ORDER BY path
 `
 
 func (q *Queries) ListBackingPaths(ctx context.Context) ([]string, error) {
@@ -1012,18 +991,18 @@ func (q *Queries) ListSnapshots(ctx context.Context) ([]ListSnapshotsRow, error)
 }
 
 const listSourceLeases = `-- name: ListSourceLeases :many
-SELECT snapshot_id,operation_id,step_key FROM source_leases ORDER BY operation_id
+SELECT snapshot_id,operation_id,step_key FROM snapshot_source_leases ORDER BY operation_id
 `
 
-func (q *Queries) ListSourceLeases(ctx context.Context) ([]SourceLease, error) {
+func (q *Queries) ListSourceLeases(ctx context.Context) ([]SnapshotSourceLease, error) {
 	rows, err := q.db.QueryContext(ctx, listSourceLeases)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SourceLease
+	var items []SnapshotSourceLease
 	for rows.Next() {
-		var i SourceLease
+		var i SnapshotSourceLease
 		if err := rows.Scan(&i.SnapshotID, &i.OperationID, &i.StepKey); err != nil {
 			return nil, err
 		}
@@ -1039,7 +1018,7 @@ func (q *Queries) ListSourceLeases(ctx context.Context) ([]SourceLease, error) {
 }
 
 const listVersionIDs = `-- name: ListVersionIDs :many
-SELECT id FROM resource_versions ORDER BY id
+SELECT operation_id FROM resource_versions ORDER BY operation_id
 `
 
 func (q *Queries) ListVersionIDs(ctx context.Context) ([]string, error) {
@@ -1050,11 +1029,11 @@ func (q *Queries) ListVersionIDs(ctx context.Context) ([]string, error) {
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var operation_id string
+		if err := rows.Scan(&operation_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, operation_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1223,12 +1202,11 @@ func (q *Queries) ReplaceInstanceBody(ctx context.Context, arg ReplaceInstanceBo
 
 const replaceVersionBody = `-- name: ReplaceVersionBody :execrows
 UPDATE resource_versions SET body=?1
-WHERE id=?2 AND vm_id=?3 AND operation_id=?4 AND body=?5
+WHERE vm_id=?2 AND operation_id=?3 AND body=?4
 `
 
 type ReplaceVersionBodyParams struct {
 	NewBody      []byte
-	ID           string
 	VmID         string
 	OperationID  string
 	PreviousBody []byte
@@ -1237,7 +1215,6 @@ type ReplaceVersionBodyParams struct {
 func (q *Queries) ReplaceVersionBody(ctx context.Context, arg ReplaceVersionBodyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceVersionBody,
 		arg.NewBody,
-		arg.ID,
 		arg.VmID,
 		arg.OperationID,
 		arg.PreviousBody,

@@ -159,7 +159,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 			if lookup != nil {
 				return lookup
 			}
-			if intent.TenantID != input.Template.TenantID || intent.OperationID != parent.ID {
+			if intent.TenantID != input.Template.TenantID || intent.CandidateOperationID != parent.ID {
 				return fmt.Errorf("%w: template intent was superseded", errs.ErrConflict)
 			}
 		}

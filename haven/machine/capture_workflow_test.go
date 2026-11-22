@@ -194,9 +194,9 @@ END`); err != nil {
 		t.Fatalf("completion crossed running fence or failed to roll back: status=%s phase=%s", step.Status, step.State.Phase)
 	}
 	testutil.CapturePublished(t, service, step, false)
-	var checkpoints int
-	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM checkpoints").Scan(&checkpoints); err != nil || checkpoints != 0 {
-		t.Fatal("checkpoint escaped rejected completion", checkpoints, err)
+	var publications int
+	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM snapshot_publications").Scan(&publications); err != nil || publications != 0 {
+		t.Fatal("rejected capture published a snapshot record", publications, err)
 	}
 	if _, err := service.State.Database().Exec("DROP TRIGGER change_capture_status"); err != nil {
 		t.Fatal(err)
@@ -339,7 +339,7 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 		condition string
 	}{
 		{"UPDATE", "snapshots", "NEW.published=1"},
-		{"INSERT", "checkpoints", "1"},
+		{"INSERT", "snapshot_publications", "1"},
 		{"INSERT", "quota_resources", "NEW.kind='snapshot'"},
 		{"DELETE", "quota_refs", "OLD.kind='pending_storage'"},
 		{"UPDATE", "vms", "NEW.operation_id IS NULL"},
@@ -375,9 +375,9 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 					t.Fatal("rejected publication fixed a terminal result", step.State)
 				}
 				testutil.CapturePublished(t, service, step, false)
-				var checkpoints int
-				if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM checkpoints").Scan(&checkpoints); err != nil || checkpoints != 0 {
-					t.Fatal("checkpoint leaked outside publication transaction", err)
+				var publications int
+				if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM snapshot_publications").Scan(&publications); err != nil || publications != 0 {
+					t.Fatal("rejected capture published a snapshot record", publications, err)
 				}
 				if _, err = service.State.Database().Exec("DROP TRIGGER deny_snapshot"); err != nil {
 					t.Fatal(err)

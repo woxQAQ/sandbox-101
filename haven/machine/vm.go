@@ -130,7 +130,6 @@ func InstanceHistory(ctx context.Context, query store.DBTX, generation Generatio
 // Missing history remains an error; the current VM row is never substituted.
 func VersionHistory(ctx context.Context, query store.DBTX, generation GenerationIdentity, stepKey string) ([]byte, error) {
 	return dbgen.New(query).GetVersion(ctx, dbgen.GetVersionParams{
-		ID:          generation.OperationID,
 		VmID:        generation.VMID,
 		OperationID: generation.OperationID,
 		StepKey:     stepKey,

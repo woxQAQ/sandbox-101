@@ -108,7 +108,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err = loom.CheckLocalReaderIdentities(intent); err != nil {
 		return err
 	}
-	count, err := dbgen.New(tx).CountCheckpoint(ctx, publication.ID)
+	count, err := dbgen.New(tx).CountSnapshotPublication(ctx, publication.ID)
 
 	if err != nil || count != 0 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)

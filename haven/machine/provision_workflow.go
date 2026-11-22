@@ -233,7 +233,6 @@ func (p *Provisioning) markPhase(step *ResourceStep, phase string) error {
 			DiskIdentity: next.DiskIdentity,
 		}
 		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
-			ID:           step.OperationID,
 			VmID:         step.Candidate,
 			OperationID:  step.OperationID,
 			PreviousBody: operation.Encode(previous),

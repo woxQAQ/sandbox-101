@@ -27,13 +27,13 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 			})
 			claim := testfixture.ColdClaim(t, service, "late")
 			before := testutil.AwaitColdWorker(t, service, claim.ID)
-			var other string
-			if err := service.State.Database().QueryRow("SELECT operation_id FROM template_intents WHERE template_id='cold'").Scan(&other); err != nil {
-				t.Fatal(err)
-			}
 			switch change {
 			case "vm-owner":
-				if _, err := service.State.Database().Exec("UPDATE vms SET operation_id=? WHERE id=?", other, before.Candidate); err != nil {
+				publisher, err := service.TemplateCatalog.Owned(t.Context(), "tenant", "cold")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := service.State.Database().Exec("UPDATE vms SET operation_id=? WHERE id=?", publisher.Version, before.Candidate); err != nil {
 					t.Fatal(err)
 				}
 			case "current-instance":

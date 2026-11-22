@@ -10,7 +10,7 @@ machine 收拢 VM generation、canonical snapshot、source lease/backing 和物�
 
 - `Current` 是可变行。`VMRecord`、原 instance、原 version、resource step 和返回 witness 必须相互匹配。
 - `InstanceHistory` 与 `VersionHistory` 使用 `GenerationIdentity` 一起指定原 VM/operation；instance witness 与 version step key 仍由调用方显式提供，不从当前 VM 或较新 step 推导。
-- version ID 仍为原 operation ID，并匹配 VM、step key、body 和 disk identity。release 持有当前 owner 不代表它成为旧 generation 的出生 owner。
+- 操作 ID 是 `resource_versions` 的主键。核验同时匹配 VM、原始 step key、body 和 disk identity。release 持有当前 owner 不代表它成为旧 generation 的出生 owner。
 - `SnapshotRecord`、`Manifest`、`Source` 保留原字段顺序、JSON tags 和 nil。`Source` 记录 capture operation/hash 与 publication inode，不以当前目录替代历史来源。
 - `SnapshotProofs` 分开核验历史 publication 与当前恢复兼容性；删除旧 snapshot 不额外要求它兼容当前 runtime。
 - `ResourceProofs` 核对 ancestry、原费用与 holder、restore 材料及 backing/lease。`quota.Holder` 将责任类型与 ID 一起传递，避免跨 generation 核验时拆散目的地身份；不改变持久费用/引用结构。`Snapshots()` 返回同一历史核验器，不创建新的 authority。
@@ -29,7 +29,7 @@ snapshot publication、删除、source lease/backing 转换与内部计数直接
 
 source lease 固定 snapshot/operation/step 三元组。只有恢复材料证明完成后才接管 backing，step 推进仍保留原 running 条件。generation 退休按原顺序解除 backing/lease、退 restore reservation、尝试 snapshot 最后退责，再删除原 version/instance。它们使用同一事务；查询失败继续保留费用。
 
-`SnapshotDeletion` 保留原接纳、冻结 intent、物理核验、精确删除与原子退责。sandbox 的 checkpoint_bindings 与资源 snapshot 的 checkpoints 不混为一类。
+`SnapshotDeletion` 保留原接纳、冻结 intent、物理核验、精确删除与原子退责。sandbox 的 `checkpoint_bindings` 保存业务 checkpoint 到 snapshot 的绑定，machine 的 `snapshot_publications` 保存 capture 发布时的 SnapshotRecord。
 
 失败 capture 的 discard 分开核验两个责任边界：接纳前要求原 failed capture 仍持有 blocked cleanup、未设置删除标记及 engine_dependency 费用；执行期要求原 discard 已取得 stopped VM owner、transferred cleanup、删除标记与 cleanup 费用，并核对原 child link 和未提交终态的 discard 身份；discard 结果独立解码，缺失 sandbox/VM/snapshot 字段不能继承原失败结果的值。两者共享不随阶段变化的失败、stop、generation、sandbox 与 snapshot 历史；不使用 `admitting` 模式开关，也不接受另一阶段的责任作为替代。成功 capture 的 raw cleanup 使用 `CaptureCleanupTarget` 显式核对 VM、instance 和原 cleanup 状态，publication 成功本身不退休 raw 责任。
 

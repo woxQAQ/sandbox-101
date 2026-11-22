@@ -97,8 +97,7 @@ func RequireTemplateOwner(ctx context.Context, query store.DBTX, id, tenant stri
 	return nil
 }
 
-// reservePublication advances the publication pointer without transferring the
-// permanent tenant. The comparison and conditional upsert share the caller's tx.
+// reservePublication selects the candidate allowed to publish for the permanent tenant.
 func (record TemplateRecord) reservePublication(ctx context.Context, query store.DBTX, previous *TemplateRecord, operationID string) error {
 	current, err := CurrentTemplate(ctx, query, record.ID)
 	if err != nil {
@@ -119,9 +118,9 @@ func (record TemplateRecord) reservePublication(ctx context.Context, query store
 		return fmt.Errorf("%w: template permanent owner cannot change", errs.ErrConflict)
 	}
 	return store.RequireOne(queries.ReservePublication(ctx, dbgen.ReservePublicationParams{
-		TemplateID:  record.ID,
-		TenantID:    record.TenantID,
-		OperationID: operationID,
+		TemplateID:           record.ID,
+		TenantID:             record.TenantID,
+		CandidateOperationID: operationID,
 	}))
 }
 
@@ -133,9 +132,10 @@ func publishTemplate(ctx context.Context, query store.DBTX, desired TemplateReco
 	queries := dbgen.New(query)
 	if previous == nil {
 		return store.RequireOne(queries.InsertTemplate(ctx, dbgen.InsertTemplateParams{
-			ID:     desired.ID,
-			Tenant: desired.TenantID,
-			Body:   body,
+			ID:                   desired.ID,
+			Tenant:               desired.TenantID,
+			PublishedOperationID: desired.Version,
+			Body:                 body,
 		}))
 	}
 	before, err := json.Marshal(previous)
@@ -143,9 +143,11 @@ func publishTemplate(ctx context.Context, query store.DBTX, desired TemplateReco
 		return err
 	}
 	return store.RequireOne(queries.ReplaceTemplate(ctx, dbgen.ReplaceTemplateParams{
-		NewBody:      body,
-		ID:           desired.ID,
-		Tenant:       desired.TenantID,
-		PreviousBody: before,
+		NewBody:              body,
+		ID:                   desired.ID,
+		Tenant:               desired.TenantID,
+		PreviousBody:         before,
+		PreviousOperationID:  previous.Version,
+		PublishedOperationID: desired.Version,
 	}))
 }

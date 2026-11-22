@@ -64,7 +64,6 @@ func RetainGenerationIntent(ctx context.Context, tx *sql.Tx, owner string, recor
 		return err
 	}
 	return store.RequireOne(queries.InsertVersion(ctx, dbgen.InsertVersionParams{
-		ID:          owner,
 		VmID:        record.Resource.VMID,
 		OperationID: owner,
 		StepKey:     "resource",
@@ -130,9 +129,9 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 
 		if generation.State.BackingReady {
 			if err := store.RequireOne(dbgen.New(tx).DeleteBacking(ctx, dbgen.DeleteBackingParams{
-				Path:   filepath.Join(generation.Input.Resource.RestoreDir, "memory-ranges"),
-				VmID:   generation.Candidate,
-				Digest: source.Manifest.Files["ch/memory-ranges"],
+				Path:       filepath.Join(generation.Input.Resource.RestoreDir, "memory-ranges"),
+				VmID:       generation.Candidate,
+				FileDigest: source.Manifest.Files["ch/memory-ranges"],
 			})); err != nil {
 				return err
 			}
@@ -188,7 +187,6 @@ func RetireGeneration(ctx context.Context, tx *sql.Tx, generation ResourceStep, 
 	}
 
 	if err := store.RequireOne(dbgen.New(tx).DeleteVersion(ctx, dbgen.DeleteVersionParams{
-		ID:          generation.OperationID,
 		VmID:        generation.Candidate,
 		OperationID: generation.OperationID,
 		StepKey:     generation.Key,

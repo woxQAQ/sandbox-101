@@ -1,8 +1,8 @@
 # Supply 模板与供给责任
 
-Supply 拥有 template put/build、refill、模板与 warm publication、失败保留和独立 cleanup。模板与 pool 查询共用本包私有 dbgen；TemplateRecord 与 PoolReservation 保留原冻结字段顺序、tags 和 nil。
+Supply 拥有 template put/build、refill、模板与 warm publication、失败保留和独立 cleanup。模板接纳把 `template_owners.candidate_operation_id` 指向有权发布的操作；只有发布事务才替换 `templates.published_operation_id` 和模板内容。滚动 build 期间的 claim 继续核验已发布版本，失败 build 保留永久 owner 和原版本。模板与 pool 查询共用本包私有 dbgen；TemplateRecord 与 PoolReservation 保留原冻结字段顺序、tags 和 nil。
 
-TemplateCatalog 从调用方的同一 DBTX 核对 catalog、永久 tenant、原 publisher operation 和 supply step。TemplateState 与纯行复制 TemplatePublisher/TemplateIdentity/Intent 已删除；用例直接消费生成行。LoadTemplate 保留 JSON 解码，CurrentTemplate 区分缺失与损坏，RequireTemplateOwner 核对永久归属。publication 的原条件 upsert、body CAS、SET 列与 RequireOne 保持。
+TemplateCatalog 从调用方的同一 DBTX 核对 catalog、永久 tenant、原 publisher operation 和 supply step。TemplateState 与纯行复制 TemplatePublisher/TemplateIdentity/Intent 已删除；用例直接消费生成行。LoadTemplate 保留 JSON 解码，CurrentTemplate 区分缺失与损坏，RequireTemplateOwner 核对永久归属。发布前在同一事务核对候选 operation，替换旧版本时还要匹配原发布 operation 和原 body。
 
 build 在 guest Exec 前持久化 warmup intent；warmup_inflight 的未知结果保留资源。refill 依据原零 slot reservation、generation、instance 与 link 交接 warm/image 责任。SupplyAdmission 在资源调用者事务中写 parent、credential、supply step、image holder、template intent/pool reservation 和 child link，不自行提交或派发。
 

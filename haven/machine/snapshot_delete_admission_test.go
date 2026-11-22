@@ -105,8 +105,9 @@ func TestHavenSnapshotDeleteLeaseFence(t *testing.T) {
 		return nil
 	})
 	leased := testfixture.AdmitCloneFixture(t, service, fixture.Capture.Result.SnapshotID, "leased-clone")
-	var leases int
-	if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM source_leases WHERE operation_id=?", leased.ID).Scan(&leases); err != nil || leases != 1 {
+	leases, err := machine.SourceLeases(t.Context(), service.State.Database())
+	wantLease := machine.SourceLease{SnapshotID: fixture.Capture.Result.SnapshotID, OperationID: leased.ID, StepKey: "resource"}
+	if err != nil || !reflect.DeepEqual(leases, []machine.SourceLease{wantLease}) {
 		t.Fatal("fixture did not retain source lease", leases, err)
 	}
 	if _, err := service.SnapshotDeletion.AdmitSnapshotDelete(context.Background(), machine.SnapshotDeleteRequest{

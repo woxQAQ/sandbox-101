@@ -119,7 +119,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 	if err = reviewed.State.Database().QueryRow("SELECT COUNT(*) FROM sandbox_settings").Scan(&count); err != nil || count != 2 {
 		t.Fatal("business settings missing from unified backup", count, err)
 	}
-	if err = reviewed.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner LIKE 'vm:%'").Scan(&count); err != nil || count != 2 {
+	if err = reviewed.State.Database().QueryRow("SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'vm:%'").Scan(&count); err != nil || count != 2 {
 		t.Fatal("resource responsibility missing from unified backup", count, err)
 	}
 	if _, err = reviewed.Sandboxes.AdmitClaim(ctx, principal, "new", operation.Intent{

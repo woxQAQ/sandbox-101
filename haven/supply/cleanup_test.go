@@ -156,7 +156,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 				t.Fatal("node maintenance appeared in tenant operation scope")
 			}
 			var pool, warm, vms, slots, storage int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM warm),(SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&pool, &warm, &vms, &slots, &storage); err != nil || pool != 0 || warm != 0 || vms != 0 || slots != 0 || storage != 192 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM ready_warm_vms),(SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&pool, &warm, &vms, &slots, &storage); err != nil || pool != 0 || warm != 0 || vms != 0 || slots != 0 || storage != 192 {
 				t.Fatal(pool, warm, vms, slots, storage, err)
 			}
 			unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)

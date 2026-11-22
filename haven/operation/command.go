@@ -65,17 +65,16 @@ func SanitizedCommand(command Intent) Intent {
 }
 
 func (r *Repository) Finish(ctx context.Context, id, status string, body []byte) error {
-	if err := store.RequireOne(r.queries.FinishLiveOperation(ctx, dbgen.FinishLiveOperationParams{
-		ID:     id,
-		Status: status,
-		Body:   body,
-	})); err != nil {
-		return err
-	}
+	finished := ""
 	if Terminal(status) {
-		return r.finishClock(ctx, id)
+		finished = clockNow()
 	}
-	return nil
+	return store.RequireOne(r.queries.FinishLiveOperation(ctx, dbgen.FinishLiveOperationParams{
+		ID:         id,
+		Status:     status,
+		Body:       body,
+		FinishedAt: finished,
+	}))
 }
 
 // LiveTenantRequest verifies the persisted bytes, scope and lifecycle before

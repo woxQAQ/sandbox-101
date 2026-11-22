@@ -11,6 +11,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
+	"github.com/woxQAQ/haven/machine"
 )
 
 func TestHavenRestoreResponsibility(t *testing.T) {
@@ -76,28 +77,37 @@ func TestHavenRestoreSourceDeletionAfterHandoff(t *testing.T) {
 		t.Fatal("fixture did not transfer source lease")
 	}
 	snapshot := step.Input.Restore.Snapshot
-	// This private fixture models a completed source catalog deletion. Its backing
-	// holder and conservative D+M charge deliberately survive removal of the names.
-	tx, err := service.State.Database().Begin()
+	ctx := t.Context()
+	capture, err := machine.LoadCapture(ctx, service.State.Database(), source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{
-		"DELETE FROM checkpoints WHERE id=?",
-		"DELETE FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='checkpoint'",
-		"DELETE FROM quota_refs WHERE kind='snapshot' AND resource_key=? AND holder_id='checkpoint:'||resource_key",
-		"DELETE FROM snapshots WHERE id=?",
-	} {
-		if _, err = tx.Exec(statement, snapshot.ID); err != nil {
-			_ = tx.Rollback()
-			t.Fatal(err)
-		}
-	}
-	if err = tx.Commit(); err != nil {
+	release, err := service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
+		TenantID:  snapshot.TenantID,
+		Key:       "release-source",
+		SandboxID: capture.Input.Request.SandboxID,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.RemoveAll(snapshot.Dir); err != nil {
+	if released := testutil.AwaitColdWorker(t, service, release.ID); released.Status != "succeeded" {
+		t.Fatal("source release failed", released.State)
+	}
+	deletion, err := service.SnapshotDeletion.AdmitSnapshotDelete(ctx, machine.SnapshotDeleteRequest{
+		TenantID:   snapshot.TenantID,
+		Key:        "delete-source",
+		SnapshotID: snapshot.ID,
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	testutil.WaitFixtureWorker(t, service, deletion.ID)
+	deleted, err := machine.LoadSnapshotDelete(ctx, service.State.Database(), deletion.ID)
+	if err != nil || deleted.Status != "succeeded" {
+		t.Fatal("source snapshot deletion failed", deleted.Phase, err)
+	}
+	if _, err = os.Stat(snapshot.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source snapshot directory after deletion: %v", err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
 	step = testutil.AwaitColdWorker(t, service, acceptedOperation.ID)
@@ -154,8 +164,8 @@ func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"INSERT", "backing", "1"},
-		{"DELETE", "source_leases", "1"},
+		{"INSERT", "vm_memory_backings", "1"},
+		{"DELETE", "snapshot_source_leases", "1"},
 		{"UPDATE", "quota_refs", "NEW.holder_id LIKE 'backing:%'"},
 		{"UPDATE", "operation_steps", "NEW.action='clone' AND json_extract(NEW.body,'$.backing_ready')=1"},
 	} {

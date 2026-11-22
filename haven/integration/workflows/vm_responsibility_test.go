@@ -113,7 +113,7 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	for _, scenario := range []string{
 		"quota-boundary",
-		"missing-owner",
+		"missing-template-owner",
 		"missing-tenant",
 		"catalog-manifest-mismatch",
 	} {
@@ -125,9 +125,13 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case "missing-owner":
-				if _, err := service.State.Database().Exec("DELETE FROM template_intents WHERE template_id='cold'"); err != nil {
+			case "missing-template-owner":
+				result, err := service.State.Database().Exec("DELETE FROM template_owners WHERE template_id='cold'")
+				if err != nil {
 					t.Fatal(err)
+				}
+				if err := store.RequireOne(result.RowsAffected()); err != nil {
+					t.Fatal("remove cold template owner", err)
 				}
 			case "missing-tenant":
 				if _, err := service.State.Database().Exec("DELETE FROM tenants WHERE id='tenant'"); err != nil {

@@ -27,9 +27,9 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"DELETE", "checkpoints", "1"},
+		{"DELETE", "snapshot_publications", "1"},
 		{"DELETE", "snapshots", "1"},
-		{"DELETE", "reservations", "OLD.owner LIKE 'snapshot:%'"},
+		{"DELETE", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
 		{"DELETE", "quota_resources", "OLD.kind='snapshot'"},
 		{"DELETE", "deletion_intents", "1"},
 		{"DELETE", "resource_refs", "OLD.holder_kind='snapshot'"},
@@ -101,7 +101,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			}
 			snapshotDeleteCost(t, fixture, 192)
 			var backing, versions int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE vm_id=?)", clone.Result.VMID, clone.Result.VMID).Scan(&backing, &versions); err != nil || backing != 1 || versions != 1 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE vm_id=?)", clone.Result.VMID, clone.Result.VMID).Scan(&backing, &versions); err != nil || backing != 1 || versions != 1 {
 				t.Fatal("last backing retirement not atomic", backing, versions, err)
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_backing_fee"); err != nil {

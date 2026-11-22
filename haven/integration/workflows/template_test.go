@@ -15,6 +15,8 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/supply"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -34,9 +36,17 @@ func TestHavenRefillConservesPoolOccupation(t *testing.T) {
 		reason := service.Workers.State(refill.ID).Err
 		t.Fatal(refill, reason, err)
 	}
-	var slots, storage, warm, pool int
-	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM warm),(SELECT COUNT(*) FROM pool_slots)").Scan(&slots, &storage, &warm, &pool); err != nil || slots != 0 || storage != 256 || warm != 1 || pool != 1 {
-		t.Fatal(slots, storage, warm, pool, err)
+	usage, err := quota.TenantUsage(ctx, service.State.Database(), principal.TenantID)
+	if err != nil || usage.Slots != 0 || usage.StorageMiB != 256 {
+		t.Fatal("ready warm VM has unexpected tenant cost", usage, err)
+	}
+	reservation, status, err := supply.LoadPoolReservation(ctx, service.State.Database(), refill.ID)
+	if err != nil || status != "ready" || reservation.VMID != refill.Result.VMID {
+		t.Fatal("refill did not publish its reserved VM", reservation.VMID, status, err)
+	}
+	warm, err := (supply.ResourceUsage{}).PoolSnapshotUsers(ctx, service.State.Database(), reservation.Template.SnapshotID)
+	if err != nil || warm != 1 {
+		t.Fatal("unexpected number of warm VMs for the golden snapshot", warm, err)
 	}
 	runtime.Mu.Lock()
 	launches := runtime.Counts["launch"]
@@ -80,9 +90,17 @@ func TestHavenFailedRefillRetainsPoolSlot(t *testing.T) {
 	if err == nil || failed.Status != "failed" {
 		t.Fatal(failed, err)
 	}
-	var pool, warm, slots int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots WHERE status='cleanup'),(SELECT COUNT(*) FROM warm),(SELECT SUM(sandbox_slots) FROM quota_resources)").Scan(&pool, &warm, &slots); err != nil || pool != 1 || warm != 0 || slots != 0 {
-		t.Fatal(pool, warm, slots, err)
+	reservation, status, err := supply.LoadPoolReservation(ctx, service.State.Database(), failed.ID)
+	if err != nil || status != "cleanup" {
+		t.Fatal("failed refill lost its cleanup reservation", status, err)
+	}
+	warm, err := (supply.ResourceUsage{}).PoolSnapshotUsers(ctx, service.State.Database(), reservation.Template.SnapshotID)
+	if err != nil || warm != 0 {
+		t.Fatal("failed refill published a warm VM", warm, err)
+	}
+	usage, err := quota.TenantUsage(ctx, service.State.Database(), reservation.Template.TenantID)
+	if err != nil || usage.Slots != 0 {
+		t.Fatal("failed refill charged a sandbox slot", usage, err)
 	}
 }
 
@@ -146,6 +164,99 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	var slots int
 	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources").Scan(&slots); err != nil || slots != 1 {
 		t.Fatal("unknown warmup discarded build responsibility", slots, err)
+	}
+}
+
+func TestHavenRollingTemplateBuildKeepsPublishedVersion(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	for _, scenario := range []struct {
+		name            string
+		status          string
+		provisionSource string
+	}{
+		{"failed", "failed", "cold"},
+		{"superseded", "failed", "cold"},
+		{"succeeded", "succeeded", "golden"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			building, resume := make(chan struct{}), make(chan struct{})
+			service, _, _, _ := testapp.SandboxFixtureWithBackend(t, func(point string) error {
+				if point != "build_warmup_done" {
+					return nil
+				}
+				close(building)
+				select {
+				case <-resume:
+					if scenario.name == "failed" {
+						return fmt.Errorf("fixture rejected template build")
+					}
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}, testfixture.RestorableBackend)
+			principal := authorization.Principal{
+				TenantID: "tenant",
+			}
+			spec, err := service.TemplateCatalog.GetTemplate(ctx, principal, "cold")
+			if err != nil {
+				t.Fatal(err)
+			}
+			build, err := service.Supply.AdmitTemplate(ctx, principal, "rolling-build", operation.Intent{
+				Action:   "template_build",
+				Template: &spec,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-building:
+			case <-ctx.Done():
+				t.Fatal("build did not reach warmup", ctx.Err())
+			}
+			claim := func(key, wantSource string) {
+				t.Helper()
+				accepted, err := service.CommandAdmission.Execute(ctx, principal, key, operation.Intent{
+					Action:     "claim",
+					TemplateID: spec.ID,
+					Policy: egress.Policy{
+						Mode: "none",
+					},
+				})
+				if err != nil {
+					t.Fatal(key, err)
+				}
+				ready, err := service.Dataplane.Ready(ctx, principal, accepted.Result.SandboxID)
+				if err != nil || ready.ProvisionSource != wantSource {
+					t.Fatalf("%s: provision source %q, want %q: %v", key, ready.ProvisionSource, wantSource, err)
+				}
+			}
+			claim("during-build", "cold")
+			if scenario.name == "superseded" {
+				replacement := spec
+				replacement.Warmup = "printf replacement"
+				if _, err := service.CommandAdmission.Execute(ctx, principal, "replace-template", operation.Intent{
+					Action:   "template_put",
+					Template: &replacement,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			close(resume)
+			finished, err := service.Operations.Wait(ctx, principal, build.ID)
+			if finished.Status != scenario.status || (err != nil) != (scenario.status == "failed") {
+				t.Fatal("unexpected build outcome", finished.Status, err)
+			}
+			claim("after-build", scenario.provisionSource)
+			if scenario.name == "superseded" {
+				published, err := service.TemplateCatalog.GetTemplate(ctx, principal, spec.ID)
+				if err != nil || published.Warmup != "printf replacement" {
+					t.Fatal("superseded build replaced the newer publication", published, err)
+				}
+			}
+		})
 	}
 }
 

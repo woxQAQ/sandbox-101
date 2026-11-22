@@ -52,7 +52,7 @@ func (s *Supply) supplyCandidate(step SupplyStep, source machine.ResourceStep) e
 	if err != nil {
 		return err
 	}
-	if intent.TenantID != step.Input.Template.TenantID || intent.OperationID != step.OperationID {
+	if intent.TenantID != step.Input.Template.TenantID || intent.CandidateOperationID != step.OperationID {
 		return fmt.Errorf("%w: template build was superseded", errs.ErrConflict)
 	}
 	if err = s.proofs.VerifyGeneration(s.ctx, tx, source); err != nil {

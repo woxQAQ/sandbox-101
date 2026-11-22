@@ -590,7 +590,7 @@ func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx contex
 	defer cancel()
 	var warmID string
 	for {
-		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM warm WHERE template_id=?", template.ID).Scan(&warmID)
+		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM ready_warm_vms WHERE template_id=?", template.ID).Scan(&warmID)
 		if err == nil {
 			break
 		}

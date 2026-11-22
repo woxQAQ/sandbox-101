@@ -177,7 +177,7 @@ func TestHavenRestoreStoppedTargetRepeated(t *testing.T) {
 		t.Fatal(restored.State, reason)
 	}
 	var backing int
-	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM backing WHERE vm_id=?", restored.Candidate).Scan(&backing); err != nil || backing != 2 {
+	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?", restored.Candidate).Scan(&backing); err != nil || backing != 2 {
 		t.Fatal("multiple retained RAM versions lost", backing, err)
 	}
 	release, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{

@@ -41,13 +41,11 @@ func (r *Repository) Run(ctx context.Context, operationID string) error {
 }
 
 func (r *Repository) FailResult(ctx context.Context, operationID string, body []byte) error {
-	if err := store.RequireOne(r.queries.FailResult(ctx, dbgen.FailResultParams{
-		ID:   operationID,
-		Body: body,
-	})); err != nil {
-		return err
-	}
-	return r.finishClock(ctx, operationID)
+	return store.RequireOne(r.queries.FailResult(ctx, dbgen.FailResultParams{
+		ID:         operationID,
+		Body:       body,
+		FinishedAt: clockNow(),
+	}))
 }
 
 // ResourceLinkRecord retains the persisted dependency payload and its identity.

@@ -16,17 +16,14 @@ CREATE TABLE operations (
 	request BLOB NOT NULL,
 	status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed')),
 	body BLOB NOT NULL,
+	created_at TEXT NOT NULL CHECK(created_at<>''),
+	finished_at TEXT NOT NULL,
+	CHECK((status IN ('succeeded','failed')) = (finished_at<>'')),
 	UNIQUE(scope_kind,scope_id,idem_key)
 );
 
-CREATE TABLE operation_metadata (
-	operation_id TEXT PRIMARY KEY REFERENCES operations(id),
-	created_at TEXT NOT NULL,
-	finished_at TEXT NOT NULL
-);
-
 CREATE TABLE operation_publications (
-	operation_id TEXT PRIMARY KEY REFERENCES operations(id),
+	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(id),
 	body BLOB NOT NULL
 );
 
@@ -43,40 +40,43 @@ CREATE TABLE operation_steps (
 	PRIMARY KEY(operation_id,step_key)
 );
 
+CREATE INDEX unfinished_steps_by_operation ON operation_steps(operation_id) WHERE status IN ('pending','running');
+
 CREATE TABLE tenants (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	token_hash TEXT NOT NULL UNIQUE,
 	max_sandboxes INTEGER NOT NULL CHECK(typeof(max_sandboxes)='integer' AND max_sandboxes>=0),
 	max_storage_mib INTEGER NOT NULL CHECK(typeof(max_storage_mib)='integer' AND max_storage_mib>=0)
 );
 
 CREATE TABLE sandboxes (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	tenant TEXT NOT NULL,
 	state TEXT NOT NULL,
 	body BLOB NOT NULL
 );
 
 CREATE TABLE templates (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	tenant TEXT NOT NULL,
+	published_operation_id TEXT NOT NULL REFERENCES operations(id),
 	body BLOB NOT NULL
 );
 
-CREATE TABLE template_intents (
-	template_id TEXT PRIMARY KEY,
+CREATE TABLE template_owners (
+	template_id TEXT PRIMARY KEY NOT NULL,
 	tenant_id TEXT NOT NULL,
-	operation_id TEXT NOT NULL REFERENCES operations(id)
+	candidate_operation_id TEXT NOT NULL REFERENCES operations(id)
 );
 
-CREATE TABLE checkpoints (
-	id TEXT PRIMARY KEY,
-	tenant TEXT NOT NULL,
+CREATE TABLE snapshot_publications (
+	snapshot_id TEXT PRIMARY KEY NOT NULL,
+	tenant_id TEXT NOT NULL,
 	body BLOB NOT NULL
 );
 
 CREATE TABLE checkpoint_bindings (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	tenant TEXT NOT NULL,
 	snapshot_id TEXT NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
@@ -84,7 +84,7 @@ CREATE TABLE checkpoint_bindings (
 );
 
 CREATE TABLE pool_slots (
-	operation_id TEXT PRIMARY KEY REFERENCES operations(id),
+	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(id),
 	template_id TEXT NOT NULL,
 	template_version TEXT NOT NULL,
 	vm_id TEXT NOT NULL UNIQUE,
@@ -92,39 +92,41 @@ CREATE TABLE pool_slots (
 	body BLOB NOT NULL
 );
 
-CREATE TABLE warm (
-	vm_id TEXT PRIMARY KEY,
+CREATE TABLE ready_warm_vms (
+	vm_id TEXT PRIMARY KEY NOT NULL REFERENCES pool_slots(vm_id),
 	template_id TEXT NOT NULL,
 	snapshot_id TEXT NOT NULL,
-	created_at INTEGER NOT NULL
+	created_at_unix_ns INTEGER NOT NULL
 );
 
+CREATE INDEX ready_warm_selection ON ready_warm_vms(template_id,snapshot_id,created_at_unix_ns,vm_id);
+
 CREATE TABLE snapshot_owners (
-	snapshot_id TEXT PRIMARY KEY,
+	snapshot_id TEXT PRIMARY KEY NOT NULL,
 	tenant_id TEXT NOT NULL,
 	source_operation_id TEXT NOT NULL REFERENCES operations(id),
 	source_kind TEXT NOT NULL CHECK(source_kind IN ('capture','root_import'))
 );
 
-CREATE TABLE operation_credentials (
-	operation_id TEXT PRIMARY KEY REFERENCES operations(id),
+CREATE TABLE operation_request_macs (
+	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(id),
 	request_mac TEXT NOT NULL
 );
 
 CREATE TABLE sandbox_settings (
-	sandbox_id TEXT PRIMARY KEY REFERENCES sandboxes(id),
+	sandbox_id TEXT PRIMARY KEY NOT NULL REFERENCES sandboxes(id),
 	body BLOB NOT NULL
 );
 
 CREATE TABLE network_policies (
-	vm_id TEXT PRIMARY KEY REFERENCES vms(id),
+	vm_id TEXT PRIMARY KEY NOT NULL REFERENCES vms(id),
 	instance TEXT NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	body BLOB NOT NULL
 );
 
 CREATE TABLE sandbox_operation_fences (
-	sandbox_id TEXT PRIMARY KEY,
+	sandbox_id TEXT PRIMARY KEY NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id)
 );
 
@@ -138,28 +140,27 @@ CREATE TABLE vms (
 );
 
 CREATE TABLE instances (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	vm_id TEXT NOT NULL REFERENCES vms(id),
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	body BLOB NOT NULL
 );
 
 CREATE TABLE resource_versions (
-	id TEXT PRIMARY KEY,
+	operation_id TEXT PRIMARY KEY NOT NULL,
 	vm_id TEXT NOT NULL REFERENCES vms(id),
-	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,
 	body BLOB NOT NULL,
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
 
 CREATE TABLE images (
-	digest TEXT PRIMARY KEY,
+	digest TEXT PRIMARY KEY NOT NULL,
 	body BLOB NOT NULL
 );
 
 CREATE TABLE image_intents (
-	digest TEXT PRIMARY KEY,
+	digest TEXT PRIMARY KEY NOT NULL,
 	operation_id TEXT NOT NULL UNIQUE REFERENCES operations(id),
 	layout TEXT NOT NULL,
 	body BLOB NOT NULL
@@ -173,7 +174,7 @@ CREATE TABLE image_caches (
 );
 
 CREATE TABLE snapshots (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	source_vm_id TEXT NOT NULL,
 	published INTEGER NOT NULL CHECK(published IN (0,1)),
 	deleting INTEGER NOT NULL CHECK(deleting IN (0,1)),
@@ -188,7 +189,7 @@ CREATE TABLE resource_refs (
 	PRIMARY KEY(resource_kind,resource_id,holder_kind,holder_id)
 );
 
-CREATE TABLE source_leases (
+CREATE TABLE snapshot_source_leases (
 	snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
 	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,
@@ -196,17 +197,19 @@ CREATE TABLE source_leases (
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
 
-CREATE TABLE backing (
-	path TEXT PRIMARY KEY,
+CREATE INDEX source_leases_by_snapshot ON snapshot_source_leases(snapshot_id);
+
+CREATE TABLE vm_memory_backings (
+	path TEXT PRIMARY KEY NOT NULL,
 	vm_id TEXT NOT NULL REFERENCES vms(id),
-	digest TEXT NOT NULL
+	file_digest TEXT NOT NULL
 );
 
-CREATE TABLE reservations (
-	owner TEXT PRIMARY KEY,
-	bytes INTEGER NOT NULL CHECK(typeof(bytes)='integer' AND bytes>=0),
-	memory INTEGER NOT NULL CHECK(typeof(memory)='integer' AND memory>=0),
-	cpus INTEGER NOT NULL CHECK(typeof(cpus)='integer' AND cpus>=0)
+CREATE TABLE host_capacity_reservations (
+	owner_key TEXT PRIMARY KEY NOT NULL,
+	storage_bytes INTEGER NOT NULL CHECK(typeof(storage_bytes)='integer' AND storage_bytes>=0),
+	memory_mib INTEGER NOT NULL CHECK(typeof(memory_mib)='integer' AND memory_mib>=0),
+	vcpus INTEGER NOT NULL CHECK(typeof(vcpus)='integer' AND vcpus>=0)
 );
 
 CREATE TABLE quota_resources (
@@ -230,7 +233,7 @@ CREATE TABLE quota_refs (
 );
 
 CREATE TABLE cleanup_intents (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	resource_kind TEXT NOT NULL,
 	resource_id TEXT NOT NULL,
@@ -246,7 +249,7 @@ CREATE UNIQUE INDEX active_image_collector ON cleanup_intents (
 CREATE UNIQUE INDEX active_supply_collector ON cleanup_intents (resource_id) WHERE resource_kind='supply_cleanup' AND status='pending';
 
 CREATE TABLE deletion_intents (
-	path TEXT PRIMARY KEY,
+	path TEXT PRIMARY KEY NOT NULL,
 	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,
 	body BLOB NOT NULL,

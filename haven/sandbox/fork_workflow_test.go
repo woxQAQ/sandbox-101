@@ -333,7 +333,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 				t.Fatal("failed completion lost committed branch progress", group, err)
 			}
 			var leases, publications int
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM source_leases WHERE operation_id=? AND step_key='fork_group'),(SELECT COUNT(*) FROM operation_publications WHERE operation_id=?)", accepted.ID, accepted.ID).Scan(&leases, &publications); err != nil || leases != 1 || publications != 0 {
+			if err = service.State.Database().QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=? AND step_key='fork_group'),(SELECT COUNT(*) FROM operation_publications WHERE operation_id=?)", accepted.ID, accepted.ID).Scan(&leases, &publications); err != nil || leases != 1 || publications != 0 {
 				t.Fatal("failed completion retired parent custody or published a result", leases, publications, err)
 			}
 			before, err := operation.LoadPublication(ctx, service.State.Database(), group.State.Children[0])

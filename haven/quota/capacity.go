@@ -17,8 +17,8 @@ type CapacityUsage struct {
 func ReservedCapacity(ctx context.Context, db store.DBTX) (CapacityUsage, error) {
 	row, err := dbgen.New(db).ReservedCapacity(ctx)
 	return CapacityUsage{
-		Bytes:     row.Bytes,
-		MemoryMiB: row.Memory,
-		CPUs:      row.Cpus,
+		Bytes:     row.StorageBytes,
+		MemoryMiB: row.MemoryMib,
+		CPUs:      row.Vcpus,
 	}, err
 }

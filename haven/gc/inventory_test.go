@@ -82,7 +82,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				t.Fatal("unconfirmed cache lacks independent cleanup", report)
 			}
 			var charge int
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner LIKE 'cache:%'").Scan(&charge); err != nil || charge != 1 {
+			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'cache:%'").Scan(&charge); err != nil || charge != 1 {
 				t.Fatal("uncertain cache retired physical charge", charge, err)
 			}
 			if condition == "reader" {
@@ -122,7 +122,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if _, err = os.Stat(path); err != nil {
 					t.Fatal("replaced cache file was deleted", err)
 				}
-				if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM reservations WHERE owner LIKE 'cache:%'").Scan(&charge); err != nil || charge != 1 {
+				if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'cache:%'").Scan(&charge); err != nil || charge != 1 {
 					t.Fatal("replacement retired cache charge", charge, err)
 				}
 			}

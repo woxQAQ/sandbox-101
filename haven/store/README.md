@@ -6,7 +6,7 @@
 
 `Workflow` 只借出 Database（query 与 BeginTx）、不可变 Directory/Reviewed 和 Checkpoint 函数。它没有 Close、key 或 writer-lock 能力；各用例仍使用同一个 State 和共享数据库，不能把它当作第二个生命周期所有者。
 
-发布前 schema 版本固定为 **0**。表、约束和索引直接维护在 `migrations/000000_baseline.up.sql`，运行时通过 embed 读取，sqlc 读取同一份 SQL。operation 时钟由 `operation` 包在原事务中写入 `operation_metadata`，epoch 由 `Checkpoint` 在写 HEAD 前推进。
+发布前 schema 版本固定为 **0**。表、约束和索引直接维护在 `migrations/000000_baseline.up.sql`，运行时通过 embed 读取，sqlc 读取同一份 SQL。`operations` 每行保存创建时间，提交终态时在同一条更新中写入完成时间，epoch 由 `Checkpoint` 在写 HEAD 前推进。
 
 `Migrate` 在 writer lock 下检查 SQLite `application_id`、`user_version` 和库内对象。新 SQLite 文件的 `user_version` 默认为 0，只有 application ID 为 0 且没有用户对象的库才进入初始化。schema、Haven application ID、store identity 以及 Goose 的零号记录在同一事务提交；初始化失败时一起回滚。成功后 State 执行 checkpoint/HEAD 协议。
 

@@ -19,7 +19,7 @@ import (
 
 func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx, step SnapshotDeleteStep, admitting bool) ([]ResourceStep, error) {
 	var record SnapshotRecord
-	var checkpoint SnapshotRecord
+	var publication SnapshotRecord
 	source := step.Input.Source
 	snapshot := source.Snapshot
 	request := step.Input.Request
@@ -53,17 +53,17 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 	if !reflect.DeepEqual(record, snapshot) {
 		return nil, fmt.Errorf("snapshot delete catalog changed")
 	}
-	if body, err = dbgen.New(tx).GetCheckpointBody(ctx, dbgen.GetCheckpointBodyParams{
-		ID:     snapshot.ID,
-		Tenant: snapshot.TenantID,
+	if body, err = dbgen.New(tx).GetSnapshotPublication(ctx, dbgen.GetSnapshotPublicationParams{
+		SnapshotID: snapshot.ID,
+		TenantID:   snapshot.TenantID,
 	}); err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(body, &checkpoint); err != nil {
+	if err = json.Unmarshal(body, &publication); err != nil {
 		return nil, err
 	}
-	if !reflect.DeepEqual(checkpoint, snapshot) {
-		return nil, fmt.Errorf("snapshot delete checkpoint changed")
+	if !reflect.DeepEqual(publication, snapshot) {
+		return nil, fmt.Errorf("snapshot publication changed")
 	}
 	operations := operation.New(tx)
 	if body, err = dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
@@ -417,10 +417,10 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	body, previousState, completed := operation.Encode(publication), operation.Encode(step.Phase), operation.Encode("complete")
 
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).DeleteCheckpoint(sd.ctx, dbgen.DeleteCheckpointParams{
-		ID:     publication.ID,
-		Tenant: publication.TenantID,
-		Body:   body,
+	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshotPublication(sd.ctx, dbgen.DeleteSnapshotPublicationParams{
+		SnapshotID: publication.ID,
+		TenantID:   publication.TenantID,
+		Body:       body,
 	})); err != nil {
 		return err
 	}

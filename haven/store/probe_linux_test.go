@@ -172,7 +172,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			case "future-version":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA user_version=99")
 			case "missing-table":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "DROP TABLE backing")
+				storeTestSQL(t, filepath.Join(directory, "haven.db"), "DROP TABLE vm_memory_backings")
 			case "foreign-trigger":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "CREATE TRIGGER foreign_guard BEFORE UPDATE ON operations BEGIN SELECT 1; END")
 			case "dangling-reference":

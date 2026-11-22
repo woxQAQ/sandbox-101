@@ -117,7 +117,12 @@ type Admission struct {
 }
 
 func (r *Repository) Insert(ctx context.Context, admission Admission) error {
-	if err := store.RequireOne(r.queries.InsertOperation(ctx, dbgen.InsertOperationParams{
+	created := clockNow()
+	finished := ""
+	if Terminal(admission.Status) {
+		finished = created
+	}
+	return store.RequireOne(r.queries.InsertOperation(ctx, dbgen.InsertOperationParams{
 		ID:          admission.ID,
 		ScopeKind:   admission.ScopeKind,
 		ScopeID:     admission.ScopeID,
@@ -126,17 +131,7 @@ func (r *Repository) Insert(ctx context.Context, admission Admission) error {
 		Request:     admission.Request,
 		Status:      admission.Status,
 		Body:        admission.Body,
-	})); err != nil {
-		return err
-	}
-	now := clockNow()
-	finished := ""
-	if Terminal(admission.Status) {
-		finished = now
-	}
-	return store.RequireOne(r.queries.InsertOperationClock(ctx, dbgen.InsertOperationClockParams{
-		OperationID: admission.ID,
-		CreatedAt:   now,
+		CreatedAt:   created,
 		FinishedAt:  finished,
 	}))
 }
@@ -162,38 +157,29 @@ func (r *Repository) PublicationEligible(ctx context.Context, operationID string
 }
 
 func (r *Repository) CompleteResult(ctx context.Context, operationID string, body []byte) error {
-	if err := store.RequireOne(r.queries.CompleteResult(ctx, dbgen.CompleteResultParams{
-		ID:   operationID,
-		Body: body,
-	})); err != nil {
-		return err
-	}
-	return r.finishClock(ctx, operationID)
+	return store.RequireOne(r.queries.CompleteResult(ctx, dbgen.CompleteResultParams{
+		ID:         operationID,
+		Body:       body,
+		FinishedAt: clockNow(),
+	}))
 }
 
 func (r *Repository) CompletePending(ctx context.Context, operationID string) error {
-	if err := store.RequireOne(r.queries.CompletePendingOperation(ctx, operationID)); err != nil {
-		return err
-	}
-	return r.finishClock(ctx, operationID)
+	return store.RequireOne(r.queries.CompletePendingOperation(ctx, dbgen.CompletePendingOperationParams{
+		ID:         operationID,
+		FinishedAt: clockNow(),
+	}))
 }
 
 func (r *Repository) Complete(ctx context.Context, operationID string) error {
-	if err := store.RequireOne(r.queries.CompleteLiveOperation(ctx, operationID)); err != nil {
-		return err
-	}
-	return r.finishClock(ctx, operationID)
+	return store.RequireOne(r.queries.CompleteLiveOperation(ctx, dbgen.CompleteLiveOperationParams{
+		ID:         operationID,
+		FinishedAt: clockNow(),
+	}))
 }
 
 // clockNow stamps the operation clock as UTC RFC3339 with millisecond
 // precision; readers parse it with RFC3339Nano.
 func clockNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func (r *Repository) finishClock(ctx context.Context, operationID string) error {
-	return store.RequireOne(r.queries.FinishOperationClock(ctx, dbgen.FinishOperationClockParams{
-		FinishedAt:  clockNow(),
-		OperationID: operationID,
-	}))
 }

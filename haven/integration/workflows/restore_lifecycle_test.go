@@ -56,7 +56,7 @@ func TestHavenRestoreReleaseRetiresOnlyClone(t *testing.T) {
 				t.Fatal("clone files retained after successful deletion", err)
 			}
 			var backing, held, sourceCost int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT COUNT(*) FROM quota_resources WHERE source_operation_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE kind='snapshot' AND resource_key=?)", clone.Result.VMID, clone.ID, source.Result.SnapshotID).Scan(&backing, &held, &sourceCost); err != nil || backing != 0 || held != 0 || sourceCost != 192 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?),(SELECT COUNT(*) FROM quota_resources WHERE source_operation_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE kind='snapshot' AND resource_key=?)", clone.Result.VMID, clone.ID, source.Result.SnapshotID).Scan(&backing, &held, &sourceCost); err != nil || backing != 0 || held != 0 || sourceCost != 192 {
 				t.Fatal("clone release retired source cost or retained clone debt", backing, held, sourceCost, err)
 			}
 			after, err := machine.LoadResourceStep(context.Background(), service.State.Database(), clone.ID)
@@ -140,7 +140,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 				t.Fatal("failure reconstructed source lease instead of retaining backing")
 			}
 			var leases, backing, held int
-			if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM source_leases WHERE operation_id=?),(SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?)", clone.ID, clone.Result.VMID, clone.ID).Scan(&leases, &backing, &held); err != nil || leases != 0 || backing != 1 || held != 64 {
+			if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=?),(SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?)", clone.ID, clone.Result.VMID, clone.ID).Scan(&leases, &backing, &held); err != nil || leases != 0 || backing != 1 || held != 64 {
 				t.Fatal("damaged restore lost conservative debt", leases, backing, held, err)
 			}
 		})
@@ -175,7 +175,7 @@ func TestHavenRestoreHandoffRequiresRunningStep(t *testing.T) {
 	// Change the step inside the attempted handoff, after its original proof was
 	// loaded. The conditional write must roll back backing, lease and costs.
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER change_restore_status
-AFTER INSERT ON backing BEGIN
+AFTER INSERT ON vm_memory_backings BEGIN
  UPDATE operation_steps SET status='pending'
  WHERE operation_id=(SELECT operation_id FROM vms WHERE id=NEW.vm_id) AND step_key='resource';
 END`); err != nil {
@@ -209,7 +209,7 @@ func cloneFixture(t *testing.T) (*application.App, *testfixture.RestorableRuntim
 func cloneLiability(t *testing.T, service *application.App, step machine.ResourceStep, ready bool) {
 	t.Helper()
 	var lease, backing, storage int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM source_leases WHERE operation_id=?),(SELECT COUNT(*) FROM backing WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?)", step.OperationID, step.Candidate, step.OperationID).Scan(&lease, &backing, &storage); err != nil {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=?),(SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?)", step.OperationID, step.Candidate, step.OperationID).Scan(&lease, &backing, &storage); err != nil {
 		t.Fatal(err)
 	}
 	if storage != 64 || step.State.BackingReady && (lease != 0 || backing != 1) || !step.State.BackingReady && (lease != 1 || backing != 0) {

@@ -10,11 +10,16 @@ import (
 )
 
 const completeLiveOperation = `-- name: CompleteLiveOperation :execrows
-UPDATE operations SET status='succeeded' WHERE id=? AND status IN ('pending','running')
+UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running')
 `
 
-func (q *Queries) CompleteLiveOperation(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeLiveOperation, id)
+type CompleteLiveOperationParams struct {
+	FinishedAt string
+	ID         string
+}
+
+func (q *Queries) CompleteLiveOperation(ctx context.Context, arg CompleteLiveOperationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeLiveOperation, arg.FinishedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -46,11 +51,16 @@ func (q *Queries) CompletePendingLink(ctx context.Context, arg CompletePendingLi
 }
 
 const completePendingOperation = `-- name: CompletePendingOperation :execrows
-UPDATE operations SET status='succeeded' WHERE id=? AND status='pending'
+UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status='pending'
 `
 
-func (q *Queries) CompletePendingOperation(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completePendingOperation, id)
+type CompletePendingOperationParams struct {
+	FinishedAt string
+	ID         string
+}
+
+func (q *Queries) CompletePendingOperation(ctx context.Context, arg CompletePendingOperationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completePendingOperation, arg.FinishedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -58,16 +68,17 @@ func (q *Queries) CompletePendingOperation(ctx context.Context, id string) (int6
 }
 
 const completeResult = `-- name: CompleteResult :execrows
-UPDATE operations SET status='succeeded',body=? WHERE id=? AND status IN ('pending','running')
+UPDATE operations SET status='succeeded',finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
 `
 
 type CompleteResultParams struct {
-	Body []byte
-	ID   string
+	FinishedAt string
+	Body       []byte
+	ID         string
 }
 
 func (q *Queries) CompleteResult(ctx context.Context, arg CompleteResultParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeResult, arg.Body, arg.ID)
+	result, err := q.db.ExecContext(ctx, completeResult, arg.FinishedAt, arg.Body, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -77,7 +88,7 @@ func (q *Queries) CompleteResult(ctx context.Context, arg CompleteResultParams) 
 const countMissingPublications = `-- name: CountMissingPublications :one
 SELECT COUNT(*) FROM operations o LEFT JOIN operation_publications p ON p.operation_id=o.id
 WHERE o.status IN ('succeeded','failed') AND p.operation_id IS NULL
-AND (EXISTS(SELECT 1 FROM operation_credentials c WHERE c.operation_id=o.id)
+AND (EXISTS(SELECT 1 FROM operation_request_macs c WHERE c.operation_id=o.id)
   OR EXISTS(SELECT 1 FROM operation_steps s WHERE s.operation_id=o.id AND s.action='activate'))
 `
 
@@ -89,16 +100,17 @@ func (q *Queries) CountMissingPublications(ctx context.Context) (int64, error) {
 }
 
 const failResult = `-- name: FailResult :execrows
-UPDATE operations SET status='failed',body=? WHERE id=? AND status IN ('pending','running')
+UPDATE operations SET status='failed',finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
 `
 
 type FailResultParams struct {
-	Body []byte
-	ID   string
+	FinishedAt string
+	Body       []byte
+	ID         string
 }
 
 func (q *Queries) FailResult(ctx context.Context, arg FailResultParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failResult, arg.Body, arg.ID)
+	result, err := q.db.ExecContext(ctx, failResult, arg.FinishedAt, arg.Body, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -106,34 +118,23 @@ func (q *Queries) FailResult(ctx context.Context, arg FailResultParams) (int64, 
 }
 
 const finishLiveOperation = `-- name: FinishLiveOperation :execrows
-UPDATE operations SET status=?,body=? WHERE id=? AND status IN ('pending','running')
+UPDATE operations SET status=?,finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
 `
 
 type FinishLiveOperationParams struct {
-	Status string
-	Body   []byte
-	ID     string
+	Status     string
+	FinishedAt string
+	Body       []byte
+	ID         string
 }
 
 func (q *Queries) FinishLiveOperation(ctx context.Context, arg FinishLiveOperationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, finishLiveOperation, arg.Status, arg.Body, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const finishOperationClock = `-- name: FinishOperationClock :execrows
-UPDATE operation_metadata SET finished_at=? WHERE operation_id=? AND finished_at=''
-`
-
-type FinishOperationClockParams struct {
-	FinishedAt  string
-	OperationID string
-}
-
-func (q *Queries) FinishOperationClock(ctx context.Context, arg FinishOperationClockParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, finishOperationClock, arg.FinishedAt, arg.OperationID)
+	result, err := q.db.ExecContext(ctx, finishLiveOperation,
+		arg.Status,
+		arg.FinishedAt,
+		arg.Body,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -141,7 +142,7 @@ func (q *Queries) FinishOperationClock(ctx context.Context, arg FinishOperationC
 }
 
 const getCredentialMAC = `-- name: GetCredentialMAC :one
-SELECT request_mac FROM operation_credentials WHERE operation_id=?
+SELECT request_mac FROM operation_request_macs WHERE operation_id=?
 `
 
 func (q *Queries) GetCredentialMAC(ctx context.Context, operationID string) (string, error) {
@@ -195,7 +196,7 @@ func (q *Queries) GetOperationProjection(ctx context.Context, id string) (GetOpe
 }
 
 const getOperationTimes = `-- name: GetOperationTimes :one
-SELECT created_at, finished_at FROM operation_metadata WHERE operation_id=?
+SELECT created_at, finished_at FROM operations WHERE id=?
 `
 
 type GetOperationTimesRow struct {
@@ -203,8 +204,8 @@ type GetOperationTimesRow struct {
 	FinishedAt string
 }
 
-func (q *Queries) GetOperationTimes(ctx context.Context, operationID string) (GetOperationTimesRow, error) {
-	row := q.db.QueryRowContext(ctx, getOperationTimes, operationID)
+func (q *Queries) GetOperationTimes(ctx context.Context, id string) (GetOperationTimesRow, error) {
+	row := q.db.QueryRowContext(ctx, getOperationTimes, id)
 	var i GetOperationTimesRow
 	err := row.Scan(&i.CreatedAt, &i.FinishedAt)
 	return i, err
@@ -212,7 +213,7 @@ func (q *Queries) GetOperationTimes(ctx context.Context, operationID string) (Ge
 
 const getPublicStatus = `-- name: GetPublicStatus :one
 SELECT o.status FROM operations o
-JOIN operation_credentials c ON c.operation_id=o.id
+JOIN operation_request_macs c ON c.operation_id=o.id
 WHERE o.id=? AND o.scope_kind='tenant'
 `
 
@@ -463,7 +464,7 @@ func (q *Queries) GetStepTarget(ctx context.Context, arg GetStepTargetParams) (G
 }
 
 const getTenantCredentialMAC = `-- name: GetTenantCredentialMAC :one
-SELECT c.request_mac FROM operations o JOIN operation_credentials c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?
+SELECT c.request_mac FROM operations o JOIN operation_request_macs c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?
 `
 
 type GetTenantCredentialMACParams struct {
@@ -501,7 +502,7 @@ func (q *Queries) HasActivateStep(ctx context.Context, operationID string) (int6
 }
 
 const insertCredential = `-- name: InsertCredential :execrows
-INSERT INTO operation_credentials(operation_id,request_mac) VALUES(?,?)
+INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?)
 `
 
 type InsertCredentialParams struct {
@@ -518,7 +519,7 @@ func (q *Queries) InsertCredential(ctx context.Context, arg InsertCredentialPara
 }
 
 const insertOperation = `-- name: InsertOperation :execrows
-INSERT INTO operations(id,scope_kind,scope_id,idem_key,request_hash,request,status,body) VALUES(?,?,?,?,?,?,?,?)
+INSERT INTO operations(id,scope_kind,scope_id,idem_key,request_hash,request,status,body,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)
 `
 
 type InsertOperationParams struct {
@@ -530,6 +531,8 @@ type InsertOperationParams struct {
 	Request     []byte
 	Status      string
 	Body        []byte
+	CreatedAt   string
+	FinishedAt  string
 }
 
 func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams) (int64, error) {
@@ -542,25 +545,9 @@ func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams
 		arg.Request,
 		arg.Status,
 		arg.Body,
+		arg.CreatedAt,
+		arg.FinishedAt,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const insertOperationClock = `-- name: InsertOperationClock :execrows
-INSERT INTO operation_metadata (operation_id, created_at, finished_at) VALUES (?,?,?)
-`
-
-type InsertOperationClockParams struct {
-	OperationID string
-	CreatedAt   string
-	FinishedAt  string
-}
-
-func (q *Queries) InsertOperationClock(ctx context.Context, arg InsertOperationClockParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertOperationClock, arg.OperationID, arg.CreatedAt, arg.FinishedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -586,10 +573,9 @@ func (q *Queries) InsertPublication(ctx context.Context, arg InsertPublicationPa
 
 const listPublicationProofs = `-- name: ListPublicationProofs :many
 SELECT p.body AS publication,o.id,o.idem_key,o.scope_kind,o.scope_id,o.request,o.status,o.body AS result,
-       m.created_at,m.finished_at
+       o.created_at,o.finished_at
 FROM operation_publications p
-JOIN operations o ON o.id=p.operation_id
-JOIN operation_metadata m ON m.operation_id=o.id ORDER BY o.rowid
+JOIN operations o ON o.id=p.operation_id ORDER BY o.rowid
 `
 
 type ListPublicationProofsRow struct {

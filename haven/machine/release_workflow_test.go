@@ -149,11 +149,11 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			}
 			switch damage {
 			case "version-owner":
-				err = testutil.RequireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE id=?", release.ID, claim.ID))
+				err = testutil.RequireWrite(service.State.Database().Exec("UPDATE resource_versions SET operation_id=? WHERE operation_id=?", release.ID, claim.ID))
 			case "instance-owner":
 				err = testutil.RequireWrite(service.State.Database().Exec("UPDATE instances SET operation_id=? WHERE vm_id=?", release.ID, claim.Result.VMID))
 			case "missing-version":
-				err = testutil.RequireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE id=?", claim.ID))
+				err = testutil.RequireWrite(service.State.Database().Exec("DELETE FROM resource_versions WHERE operation_id=?", claim.ID))
 			case "missing-instance":
 				err = testutil.RequireWrite(service.State.Database().Exec("DELETE FROM instances WHERE vm_id=?", claim.Result.VMID))
 			}

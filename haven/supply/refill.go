@@ -113,10 +113,10 @@ func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reser
 	previous, next := operation.Encode(original), operation.Encode(reservation)
 	previousState := operation.Encode(step.State)
 	if err = store.RequireOne(queries.InsertWarm(s.ctx, dbgen.InsertWarmParams{
-		VmID:       reservation.VMID,
-		TemplateID: reservation.Template.ID,
-		SnapshotID: reservation.Template.SnapshotID,
-		CreatedAt:  reservation.CreatedAt.UnixNano(),
+		VmID:            reservation.VMID,
+		TemplateID:      reservation.Template.ID,
+		SnapshotID:      reservation.Template.SnapshotID,
+		CreatedAtUnixNs: reservation.CreatedAt.UnixNano(),
 	})); err != nil {
 		return err
 	}

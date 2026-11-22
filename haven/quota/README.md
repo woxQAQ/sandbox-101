@@ -1,6 +1,6 @@
 # 资源与费用引用
 
-`quota` 的读写函数直接接收调用者的数据库连接或事务，负责 resource_refs、quota_refs、quota_resources 和 reservations 的查询、写入与精确 holder 交接。
+`quota` 的读写函数直接接收调用者的数据库连接或事务，负责 resource_refs、quota_refs、quota_resources 和 host_capacity_reservations 的查询、写入与精确 holder 交接。
 
 `Reservation` 保存宿主 bytes、memory 与 CPU 容量；`CostIdentity` 固定 tenant、费用类别、resource key 和最初承担费用的 operation，`Cost` 再带 slot/storage 数量。创建和退休均要求恰好一行。跨 tenant 的 CountCost/CountCostHolders 用于检查全部责任，不能改成只看当前租户而隐藏异常重复归属。
 

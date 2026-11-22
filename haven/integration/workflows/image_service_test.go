@@ -21,7 +21,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 	testutil.ParallelLifecycle(t)
 	for _, condition := range []string{
 		"ignored_step",
-		"changed_charge",
+		"changed_host_reservation",
 	} {
 		t.Run(condition, func(t *testing.T) {
 			service, id, options := pendingImageRecovery(t)
@@ -36,14 +36,14 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			if err == nil || original.Status != "failed" {
 				t.Fatal(original, err)
 			}
-			expectedCharge := int64(64 << 20)
+			expectedStorageBytes := int64(64 << 20)
 			if condition == "ignored_step" {
 				_, err = service.State.Database().Exec(`CREATE TRIGGER ignore_image_completion BEFORE UPDATE ON operation_steps
 					WHEN OLD.step_key='image_cleanup' AND NEW.status='succeeded'
 					BEGIN SELECT RAISE(IGNORE); END`)
 			} else {
-				expectedCharge++
-				_, err = service.State.Database().Exec("UPDATE reservations SET bytes=bytes+1 WHERE owner=?", "import:"+id)
+				expectedStorageBytes++
+				_, err = service.State.Database().Exec("UPDATE host_capacity_reservations SET storage_bytes=storage_bytes+1 WHERE owner_key=?", "import:"+id)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -65,20 +65,20 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			if err = service.State.Database().QueryRow("SELECT status,json_extract(body,'$.phase') FROM operation_steps WHERE operation_id=? AND step_key='image_cleanup'", collector.ID).Scan(&stepStatus, &phase); err != nil || stepStatus != "running" || phase != "removed" {
 				t.Fatal("collector did not retain the physical deletion proof", stepStatus, phase, err)
 			}
-			var charge int64
+			var storageBytes int64
 			var intents, pending int
 			if err = service.State.Database().QueryRow(`SELECT
-				(SELECT bytes FROM reservations WHERE owner=?),
+				(SELECT storage_bytes FROM host_capacity_reservations WHERE owner_key=?),
 				(SELECT COUNT(*) FROM image_intents WHERE operation_id=?),
 				(SELECT COUNT(*) FROM cleanup_intents WHERE id IN (?,?) AND status='pending')`,
 				"import:"+id, id, "image_import:"+id, "image_cleanup:"+collector.ID,
-			).Scan(&charge, &intents, &pending); err != nil || charge != expectedCharge || intents != 1 || pending != 2 {
-				t.Fatal("failed handoff partially retired responsibility", charge, intents, pending, err)
+			).Scan(&storageBytes, &intents, &pending); err != nil || storageBytes != expectedStorageBytes || intents != 1 || pending != 2 {
+				t.Fatal("failed handoff partially retired responsibility", storageBytes, intents, pending, err)
 			}
 			if condition == "ignored_step" {
 				_, err = service.State.Database().Exec("DROP TRIGGER ignore_image_completion")
 			} else {
-				_, err = service.State.Database().Exec("UPDATE reservations SET bytes=bytes-1 WHERE owner=?", "import:"+id)
+				_, err = service.State.Database().Exec("UPDATE host_capacity_reservations SET storage_bytes=storage_bytes-1 WHERE owner_key=?", "import:"+id)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -91,7 +91,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			}
 			var remaining int
 			if err = service.State.Database().QueryRow(`SELECT
-				(SELECT COUNT(*) FROM reservations WHERE owner=?)+
+				(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?)+
 				(SELECT COUNT(*) FROM image_intents WHERE digest=?)+
 				(SELECT COUNT(*) FROM cleanup_intents WHERE id IN (?,?) AND status='pending')`,
 				"import:"+id, options.Digest, "image_import:"+id, "image_cleanup:"+collector.ID,

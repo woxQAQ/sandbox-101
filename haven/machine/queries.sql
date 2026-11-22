@@ -56,13 +56,13 @@ DELETE FROM vms WHERE id=? AND operation_id=? AND current_instance=? AND state='
 INSERT INTO instances(id,vm_id,operation_id,body) VALUES(?,?,?,?);
 
 -- name: InsertVersion :execrows
-INSERT INTO resource_versions(id,vm_id,operation_id,step_key,body) VALUES(?,?,?,?,?);
+INSERT INTO resource_versions(vm_id,operation_id,step_key,body) VALUES(?,?,?,?);
 
 -- name: ReplaceInstanceBody :execrows
 UPDATE instances SET body=? WHERE id=? AND vm_id=? AND operation_id=?;
 
 -- name: ListVersionIDs :many
-SELECT id FROM resource_versions ORDER BY id;
+SELECT operation_id FROM resource_versions ORDER BY operation_id;
 
 -- name: CountInstances :one
 SELECT COUNT(*) FROM instances WHERE vm_id=?;
@@ -71,14 +71,14 @@ SELECT COUNT(*) FROM instances WHERE vm_id=?;
 SELECT COUNT(*) FROM resource_versions WHERE vm_id=?;
 
 -- name: DeleteVersion :execrows
-DELETE FROM resource_versions WHERE id=? AND vm_id=? AND operation_id=? AND step_key=?;
+DELETE FROM resource_versions WHERE vm_id=? AND operation_id=? AND step_key=?;
 
 -- name: DeleteInstance :execrows
 DELETE FROM instances WHERE id=? AND vm_id=? AND operation_id=?;
 
 -- name: ReplaceVersionBody :execrows
 UPDATE resource_versions SET body=sqlc.arg('new_body')
-WHERE id=sqlc.arg('id') AND vm_id=sqlc.arg('vm_id') AND operation_id=sqlc.arg('operation_id') AND body=sqlc.arg('previous_body');
+WHERE vm_id=sqlc.arg('vm_id') AND operation_id=sqlc.arg('operation_id') AND body=sqlc.arg('previous_body');
 
 -- name: ClaimStopped :execrows
 UPDATE vms SET operation_id=sqlc.arg('owner')
@@ -101,52 +101,52 @@ SELECT current_instance, state, operation_id, body FROM vms WHERE id = ?;
 SELECT body FROM instances WHERE id = ? AND vm_id = ? AND operation_id = ?;
 
 -- name: GetVersion :one
-SELECT body FROM resource_versions WHERE id = ? AND vm_id = ? AND operation_id = ? AND step_key = ?;
+SELECT body FROM resource_versions WHERE vm_id = ? AND operation_id = ? AND step_key = ?;
 
 -- name: GetRetainedVersion :one
-SELECT id, operation_id, step_key, body FROM resource_versions WHERE vm_id = ? AND id = ?;
+SELECT step_key, body FROM resource_versions WHERE vm_id = ? AND operation_id = ?;
 
 -- name: GetRetainedInstance :one
 SELECT operation_id, body FROM instances WHERE id = ? AND vm_id = ?;
 
 -- name: InsertSourceLease :execrows
-INSERT INTO source_leases(snapshot_id,operation_id,step_key) VALUES(?,?,?);
+INSERT INTO snapshot_source_leases(snapshot_id,operation_id,step_key) VALUES(?,?,?);
 
 -- name: DeleteSourceLease :execrows
-DELETE FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?;
+DELETE FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?;
 
 -- name: CountStepLease :one
-SELECT COUNT(*) FROM source_leases WHERE operation_id=? AND step_key=?;
+SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=? AND step_key=?;
 
 -- name: CountSourceLease :one
-SELECT COUNT(*) FROM source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?;
+SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?;
 
 -- name: ListSourceLeases :many
-SELECT snapshot_id,operation_id,step_key FROM source_leases ORDER BY operation_id;
+SELECT snapshot_id,operation_id,step_key FROM snapshot_source_leases ORDER BY operation_id;
 
 -- name: InsertBacking :execrows
-INSERT INTO backing(path,vm_id,digest) VALUES(?,?,?);
+INSERT INTO vm_memory_backings(path,vm_id,file_digest) VALUES(?,?,?);
 
 -- name: DeleteBacking :execrows
-DELETE FROM backing WHERE path=? AND vm_id=? AND digest=?;
+DELETE FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?;
 
 -- name: CountBacking :one
-SELECT COUNT(*) FROM backing WHERE path=?;
+SELECT COUNT(*) FROM vm_memory_backings WHERE path=?;
 
 -- name: CountVMBackings :one
-SELECT COUNT(*) FROM backing WHERE vm_id=?;
+SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?;
 
 -- name: CountMatchingBacking :one
-SELECT COUNT(*) FROM backing WHERE path=? AND vm_id=? AND digest=?;
+SELECT COUNT(*) FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?;
 
 -- name: ListBackingPaths :many
-SELECT path FROM backing ORDER BY path;
+SELECT path FROM vm_memory_backings ORDER BY path;
 
--- name: GetCheckpointBody :one
-SELECT body FROM checkpoints WHERE id=? AND tenant=?;
+-- name: GetSnapshotPublication :one
+SELECT body FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=?;
 
--- name: CountCheckpoint :one
-SELECT COUNT(*) FROM checkpoints WHERE id=?;
+-- name: CountSnapshotPublication :one
+SELECT COUNT(*) FROM snapshot_publications WHERE snapshot_id=?;
 
 -- name: InsertSnapshot :execrows
 INSERT INTO snapshots(id,source_vm_id,published,deleting,body) VALUES(?,?,0,0,?);
@@ -167,11 +167,11 @@ UPDATE snapshots SET deleting=1 WHERE id=? AND published=1 AND deleting=0 AND bo
 -- name: DeleteSnapshot :execrows
 DELETE FROM snapshots WHERE id=? AND published=? AND deleting=1 AND body=?;
 
--- name: InsertCheckpoint :execrows
-INSERT INTO checkpoints(id,tenant,body) VALUES(?,?,?);
+-- name: InsertSnapshotPublication :execrows
+INSERT INTO snapshot_publications(snapshot_id,tenant_id,body) VALUES(?,?,?);
 
--- name: DeleteCheckpoint :execrows
-DELETE FROM checkpoints WHERE id=? AND tenant=? AND body=?;
+-- name: DeleteSnapshotPublication :execrows
+DELETE FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND body=?;
 
 -- name: GetOwnedBody :one
 SELECT s.body FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?;
@@ -196,4 +196,4 @@ SELECT COUNT(*) FROM snapshots WHERE id=?;
 SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture';
 
 -- name: CountSnapshotLeases :one
-SELECT COUNT(*) FROM source_leases WHERE snapshot_id=?;
+SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=?;

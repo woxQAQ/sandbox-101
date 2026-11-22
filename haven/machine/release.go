@@ -392,8 +392,8 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 		return currentMachine, err
 	}
 	retained, err := queries.GetRetainedVersion(d.ctx, dbgen.GetRetainedVersionParams{
-		VmID: step.Candidate,
-		ID:   source.OperationID,
+		VmID:        step.Candidate,
+		OperationID: source.OperationID,
 	})
 	if err != nil {
 		return currentMachine, err
@@ -402,7 +402,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 	if err = json.Unmarshal(retained.Body, &version); err != nil {
 		return currentMachine, err
 	}
-	if retained.ID != source.OperationID || retained.OperationID != source.OperationID || retained.StepKey != source.Key || !reflect.DeepEqual(version, RetainedVersion{
+	if retained.StepKey != source.Key || !reflect.DeepEqual(version, RetainedVersion{
 		Resource:     source.Input.Resource,
 		DiskIdentity: source.State.DiskIdentity,
 	}) {
