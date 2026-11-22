@@ -18,8 +18,17 @@ import (
 // A matching retry resumes the original operation, including while the node is draining.
 func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
 	var empty operation.State
-	if sb.guest == nil || principal.TenantID == "" || principal.SandboxID != "" || command.Action != "claim" || command.TemplateID == "" || key == "" || len(key) > 256 {
-		return empty, fmt.Errorf("%w: claim requires tenant authority, template, key and guest effects", errs.ErrInvalid)
+	if sb.guest == nil {
+		return empty, fmt.Errorf("%w: claim requires guest effects", errs.ErrInvalid)
+	}
+	if principal.TenantID == "" || principal.SandboxID != "" {
+		return empty, fmt.Errorf("%w: claim requires tenant authority without sandbox scope", errs.ErrInvalid)
+	}
+	if command.Action != "claim" || command.TemplateID == "" {
+		return empty, fmt.Errorf("%w: claim requires the claim action and a template", errs.ErrInvalid)
+	}
+	if key == "" || len(key) > 256 {
+		return empty, fmt.Errorf("%w: claim requires a key of 1..256 bytes", errs.ErrInvalid)
 	}
 	// Validate settings before taking the per-key guard. Only redacted values may be frozen.
 	admission, err := sb.policy.Prepare(command)
