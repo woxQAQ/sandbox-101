@@ -160,7 +160,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			TenantID:    input.OwnerTenantID,
 			OperationID: parent.ID,
 			State:       "provisioning",
-			Identity:    NewSandboxIdentity(input.Template, ""),
+			Identity:    NewSandboxBirth(input.Template, ""),
 		}
 		input.Targets = append(input.Targets, target)
 	}

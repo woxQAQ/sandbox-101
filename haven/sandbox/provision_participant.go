@@ -170,7 +170,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 	if restore != nil {
 		provisionSource = "golden"
 	}
-	identity := NewSandboxIdentity(selected, provisionSource)
+	identity := NewSandboxBirth(selected, provisionSource)
 	if reuseSlot {
 		identity = target.Sandbox.Identity
 	}

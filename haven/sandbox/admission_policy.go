@@ -20,6 +20,15 @@ type AdmissionPolicy struct {
 	maxTTL   time.Duration
 }
 
+// ClaimAdmission carries the sanitized command/settings and ephemeral host
+// credentials. Only the explicit frozen inputs and credential MAC are persisted.
+type ClaimAdmission struct {
+	Command  operation.Intent
+	Settings Settings
+	MAC      string
+	Secrets  map[string]egress.Secret
+}
+
 func NewAdmissionPolicy(maxTTL time.Duration, registry *ephemeral.Registry) *AdmissionPolicy {
 	return &AdmissionPolicy{
 		registry: registry,

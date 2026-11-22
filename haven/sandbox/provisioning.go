@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/execution"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -104,15 +103,6 @@ func (p *Provisioning) fault(point string) error {
 
 func (p *Provisioning) Continue(id string) error {
 	return p.physical.Continue(id)
-}
-
-// ClaimAdmission carries the sanitized command/settings and ephemeral host
-// credentials. Only the explicit frozen inputs and credential MAC are persisted.
-type ClaimAdmission struct {
-	Command  operation.Intent
-	Settings Settings
-	MAC      string
-	Secrets  map[string]egress.Secret
 }
 
 // ProvisionAdmission joins one preflight request to its business transaction

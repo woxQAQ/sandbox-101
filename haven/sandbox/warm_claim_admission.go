@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 
@@ -24,6 +25,14 @@ type WarmClaimRequest struct {
 	Admission ClaimAdmission
 	Template  supply.TemplateRecord
 	Restore   machine.SnapshotSource
+}
+
+// WarmClaimAdmission binds one resource admission to the frozen warm claim
+// step that owns the pool custody and its release or fallback role.
+type WarmClaimAdmission struct {
+	ParentID string
+	Role     string
+	Input    WarmClaimInput
 }
 
 // Admit borrows the caller's tenant request guard and selects a ready warm
@@ -113,7 +122,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 		OperationID: accepted.ID,
 		InputHash:   hash,
 	}
-	destination.Identity = NewSandboxIdentity(selectedTemplate, "warm")
+	destination.Identity = NewSandboxBirth(selectedTemplate, "warm")
 	activation := ActivationInput{
 		Attempt:           "warm",
 		AllowFallback:     true,
@@ -224,4 +233,69 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	}
 	wc.dispatch(accepted.ID)
 	return accepted, true, nil
+}
+
+func (admission *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context, tx *sql.Tx, slot ProvisionSlotClaim) (*machine.QuotaDestination, error) {
+	record, source, holder := slot.Sandbox, slot.Source, slot.Holder
+	claim, err := LoadWarmClaim(ctx, tx, admission.ParentID)
+	if err != nil {
+		return nil, err
+	}
+	if claim.State.Phase != "warm_retired" || operation.Terminal(claim.Status) || record.State != "terminated" || holder != "claim:"+admission.ParentID || record.ID != claim.Input.Pool.SandboxID || source.Snapshot.ID != claim.Input.Restore.Snapshot.ID {
+		return nil, fmt.Errorf("%w: fallback target differs from retired warm responsibility", errs.ErrConflict)
+	}
+	released, status, err := machine.LoadResourceLink(ctx, tx, admission.ParentID, "warm_release")
+	if err != nil {
+		return nil, err
+	}
+	if status != "succeeded" {
+		return nil, fmt.Errorf("%w: fallback warm cleanup incomplete", errs.ErrConflict)
+	}
+	receipt, err := machine.LoadResourceStep(ctx, tx, released.ChildID)
+	if err != nil {
+		return nil, err
+	}
+	if receipt.Status != "succeeded" || receipt.State.Phase != "complete" || receipt.Input.SourceOperation != claim.Input.Source.OperationID || receipt.Input.SlotDestination == nil || receipt.Input.SlotDestination.Kind != "claim" || receipt.Input.SlotDestination.OperationID != admission.ParentID {
+		return nil, fmt.Errorf("%w: fallback original warm retirement proof changed", errs.ErrManualRecovery)
+	}
+	return nil, nil
+}
+
+func (admission *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.Tx, request machine.ResourceAdmission) error {
+	kind, candidate := request.Kind, request.Candidate
+	step, err := LoadWarmClaim(ctx, tx, admission.ParentID)
+	if err != nil {
+		return err
+	}
+	if operation.Terminal(step.Status) || !reflect.DeepEqual(step.Input, admission.Input) {
+		return fmt.Errorf("%w: warm claim no longer owns resource admission", errs.ErrConflict)
+	}
+	fence, err := LifecycleFence(ctx, tx, step.Input.Pool.SandboxID)
+	if err != nil {
+		return err
+	}
+	if fence != step.OperationID {
+		return fmt.Errorf("%w: warm claim was superseded", errs.ErrConflict)
+	}
+	switch admission.Role {
+	case "warm_release":
+		activation, err := LoadActivation(ctx, tx, admission.ParentID)
+		if err != nil {
+			return err
+		}
+		if kind != "release" || candidate != step.Input.Pool.VMID || step.State.Phase != "warm_failed" || activation.Status != "failed" || activation.Input.Attempt != "warm" || activation.Input.ResourceOperation != step.Input.Source.OperationID {
+			return fmt.Errorf("%w: warm release lacks original failed attempt", errs.ErrConflict)
+		}
+	case "fallback":
+		if kind != "clone" || step.State.Phase != "warm_retired" {
+			return fmt.Errorf("%w: fallback has no completed warm retirement", errs.ErrConflict)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported warm claim resource role", errs.ErrInvalid)
+	}
+	return machine.InsertResourceLink(ctx, tx, machine.ResourceLinkTarget{
+		OperationID:      admission.ParentID,
+		Role:             admission.Role,
+		ExpectedInstance: step.Input.Pool.Instance,
+	}, request)
 }
