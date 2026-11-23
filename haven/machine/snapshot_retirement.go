@@ -122,7 +122,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil || count != 0 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}
-	count, err = SnapshotReaders(ctx, tx, publication.ID)
+	count, err = CountSnapshotSourceLeases(ctx, tx, publication.ID)
 	if err != nil || count != 0 {
 		return fmt.Errorf("snapshot retained retirement proof changed: %v", err)
 	}

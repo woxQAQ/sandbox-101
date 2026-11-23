@@ -183,5 +183,5 @@ SELECT COUNT(*) FROM snapshots WHERE deleted_at IS NULL AND id=?;
 -- name: CountCaptureOwner :one
 SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=? AND tenant_id=? AND source_operation_id=? AND source_kind='capture';
 
--- name: CountSnapshotLeases :one
+-- name: CountSnapshotSourceLeases :one
 SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND snapshot_id=?;

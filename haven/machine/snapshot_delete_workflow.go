@@ -181,7 +181,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 	if err != nil || count != 1 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
-	count, err = SnapshotReaders(ctx, tx, snapshot.ID)
+	count, err = CountSnapshotSourceLeases(ctx, tx, snapshot.ID)
 	if err != nil || count != 0 {
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}

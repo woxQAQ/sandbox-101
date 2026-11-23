@@ -189,8 +189,9 @@ func SnapshotRoots(ctx context.Context, query store.DBTX) ([]SnapshotRoot, error
 	return roots, err
 }
 
-func SnapshotReaders(ctx context.Context, query store.DBTX, id string) (int64, error) {
-	return dbgen.New(query).CountSnapshotLeases(ctx, id)
+// CountSnapshotSourceLeases counts the operation steps that currently pin the snapshot as a source.
+func CountSnapshotSourceLeases(ctx context.Context, query store.DBTX, snapshotID string) (int64, error) {
+	return dbgen.New(query).CountSnapshotSourceLeases(ctx, snapshotID)
 }
 
 // Backings enumerates explicit retained users. No name or current VM query

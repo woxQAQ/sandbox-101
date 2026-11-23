@@ -66,18 +66,18 @@ func (c *Collector) snapshotCandidate(ctx context.Context, record machine.Snapsh
 	if !complete {
 		return false, "owning control workflow remains unresolved", nil
 	}
-	readers, err := machine.SnapshotReaders(ctx, c.store.Database, record.ID)
+	leases, err := machine.CountSnapshotSourceLeases(ctx, c.store.Database, record.ID)
 	if err != nil {
 		return false, "", err
 	}
-	if readers != 0 {
+	if leases != 0 {
 		return false, "source lease retained", nil
 	}
-	readers, err = quota.ActiveSnapshotReferences(ctx, c.store.Database, record.ID)
+	references, err := quota.ActiveSnapshotReferences(ctx, c.store.Database, record.ID)
 	if err != nil {
 		return false, "", err
 	}
-	if readers != 0 {
+	if references != 0 {
 		return false, "active or unresolved snapshot use retained", nil
 	}
 	raw, err := dbgen.New(c.store.Database).GetCleanupKindStatus(ctx, dbgen.GetCleanupKindStatusParams{

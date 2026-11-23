@@ -216,23 +216,23 @@ func (q *Queries) CountSnapshot(ctx context.Context, id string) (int64, error) {
 	return count, err
 }
 
-const countSnapshotLeases = `-- name: CountSnapshotLeases :one
-SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND snapshot_id=?
-`
-
-func (q *Queries) CountSnapshotLeases(ctx context.Context, snapshotID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSnapshotLeases, snapshotID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countSnapshotPublication = `-- name: CountSnapshotPublication :one
 SELECT COUNT(*) FROM snapshot_publications WHERE deleted_at IS NULL AND snapshot_id=?
 `
 
 func (q *Queries) CountSnapshotPublication(ctx context.Context, snapshotID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countSnapshotPublication, snapshotID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSnapshotSourceLeases = `-- name: CountSnapshotSourceLeases :one
+SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND snapshot_id=?
+`
+
+func (q *Queries) CountSnapshotSourceLeases(ctx context.Context, snapshotID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSnapshotSourceLeases, snapshotID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
