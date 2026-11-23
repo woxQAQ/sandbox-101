@@ -81,22 +81,30 @@ func ValidateCOWTopology(dir string, memoryBytes uint64) error {
 			return state.Mappings[i].GPA < state.Mappings[j].GPA
 		},
 	)
-	var total, end uint64
+	var total, previousEnd uint64
 	for i, mapping := range state.Mappings {
-		if mapping.Size == 0 || mapping.GPA%page != 0 || mapping.Size%page != 0 ||
-			mapping.GPA+mapping.Size < mapping.GPA ||
-			mapping.VirtioMem ||
-			mapping.ZoneID != "mem0" ||
-			mapping.FileOffset != 0 ||
-			(i > 0 && mapping.GPA < end) {
-			return errors.New("unsupported COW RAM region")
+		if mapping.VirtioMem || mapping.ZoneID != "mem0" || mapping.FileOffset != 0 {
+			return errors.New("COW requires static mem0 RAM regions with zero file offset")
+		}
+		if mapping.Size == 0 || mapping.GPA%page != 0 || mapping.Size%page != 0 {
+			return errors.New("COW RAM region must be nonempty and page-aligned")
+		}
+		end := mapping.GPA + mapping.Size
+		if end < mapping.GPA {
+			return errors.New("COW RAM region end overflows guest address space")
+		}
+		if mapping.GPA < previousEnd {
+			return errors.New("COW RAM regions overlap")
 		}
 		saved := state.MemoryRanges.Data[i]
-		if saved.GPA != mapping.GPA || saved.Length != mapping.Size || total+mapping.Size < total {
+		if saved.GPA != mapping.GPA || saved.Length != mapping.Size {
 			return errors.New("saved range does not cover one private RAM region")
 		}
+		if total+mapping.Size < total {
+			return errors.New("total COW RAM size overflows")
+		}
 		total += mapping.Size
-		end = mapping.GPA + mapping.Size
+		previousEnd = end
 	}
 	info, err := os.Stat(filepath.Join(dir, "memory-ranges"))
 	if err != nil {

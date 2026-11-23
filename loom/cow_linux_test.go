@@ -2,6 +2,7 @@ package loom
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,8 +14,11 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 	page := uint64(os.Getpagesize())
 	for _, name := range []string{
 		"valid",
+		"adjacent",
 		"missing",
 		"unaligned",
+		"range-mismatch",
+		"address-overflow",
 		"spanning",
 		"overlap",
 		"file-offset",
@@ -49,8 +53,16 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 			}
 			length := 2 * page
 			switch name {
+			case "adjacent":
+				mappings[1].GPA, ranges[1].GPA = page, page
 			case "unaligned":
+				mappings[1].GPA++
+				ranges[1].GPA = mappings[1].GPA
+			case "range-mismatch":
 				ranges[1].GPA++
+			case "address-overflow":
+				mappings[1].GPA = math.MaxUint64 - page + 1
+				ranges[1].GPA = mappings[1].GPA
 			case "spanning":
 				ranges[0].Length = 2 * page
 			case "overlap":
@@ -105,10 +117,11 @@ func TestCOWSavedTopologyRejectsEagerFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = ValidateCOWTopology(dir, 2*page)
-			if name == "valid" && err != nil {
+			valid := name == "valid" || name == "adjacent"
+			if valid && err != nil {
 				t.Fatal(err)
 			}
-			if name != "valid" && err == nil {
+			if !valid && err == nil {
 				t.Fatal("ineligible saved topology accepted")
 			}
 		})

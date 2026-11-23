@@ -52,7 +52,9 @@ func CheckConfig(config *loom.Config) error {
 		return errors.New("invalid image digest")
 	}
 	shape := config.Shape
-	if shape.VCPUs < 1 || shape.VCPUs > 255 || shape.MemoryMiB < 128 || shape.MemoryMiB > 1<<24 || shape.DiskMiB < 64 || shape.DiskMiB > 1<<30 {
+	if shape.VCPUs < 1 || shape.VCPUs > 255 ||
+		shape.MemoryMiB < 128 || shape.MemoryMiB > 1<<24 ||
+		shape.DiskMiB < 64 || shape.DiskMiB > 1<<30 {
 		return errors.New("shape outside supported bounds")
 	}
 	return nil
