@@ -204,7 +204,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 		t.Fatal("new proxy survived rejected public completion")
 	}
 	repository := operation.New(service.State.Database())
-	status, _, err := repository.ResultState(ctx, configure.ID)
+	status, _, err := repository.StatusAndResult(ctx, configure.ID)
 	if err != nil || testutil.Terminal(status) {
 		t.Fatal("terminal result committed without public delivery", status, err)
 	}

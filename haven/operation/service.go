@@ -49,14 +49,14 @@ func NewMonitor(database *store.Database, workers WorkerReader, nodeID string) *
 // GetForTenant reads state in the tenant scope supplied by the caller.
 // The caller is responsible for establishing authority to read that scope.
 func (o *Monitor) GetForTenant(ctx context.Context, tenantID, operationID string) (State, error) {
-	return o.repository.Get(ctx, "tenant", tenantID, operationID)
+	return o.repository.GetScopedState(ctx, "tenant", tenantID, operationID)
 }
 
 func (o *Monitor) GetManagementOperation(ctx context.Context, principal authorization.Principal, id string) (State, error) {
 	if !principal.Root || principal.SandboxID != "" {
 		return State{}, fmt.Errorf("%w: not found", errs.ErrNotFound)
 	}
-	return o.repository.Get(ctx, "node", o.nodeID, id)
+	return o.repository.GetScopedState(ctx, "node", o.nodeID, id)
 }
 
 // Get returns operation state after checking the principal's access.
@@ -83,7 +83,7 @@ func (o *Monitor) authorized(ctx context.Context, principal authorization.Princi
 	if err != nil {
 		return record, "", err
 	}
-	mac, lookup := o.repository.CredentialMAC(ctx, id)
+	mac, lookup := o.repository.CommandMAC(ctx, id)
 	if lookup == nil && strings.HasPrefix(mac, "root:") && !principal.Root {
 		return State{}, "", fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 	}
@@ -131,7 +131,7 @@ func (o *Monitor) WaitManagement(ctx context.Context, principal authorization.Pr
 // dispatch are owned by the workflow that admitted the operation.
 func (o *Monitor) wait(ctx context.Context, scope Scope, id, sandbox string) (State, error) {
 	for {
-		record, err := o.repository.Get(ctx, scope.Kind, scope.ID, id)
+		record, err := o.repository.GetScopedState(ctx, scope.Kind, scope.ID, id)
 		if err != nil {
 			return record, err
 		}

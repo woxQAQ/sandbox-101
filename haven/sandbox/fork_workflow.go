@@ -312,7 +312,7 @@ func (f *Forks) completeFork(step ForkStep) error {
 				return fmt.Errorf("%w: fork compensation lacks verified retirement", errs.ErrManualRecovery)
 			}
 		} else {
-			child, err := operation.New(tx).Get(f.ctx, "tenant", step.Input.OwnerTenantID, step.State.Children[index])
+			child, err := operation.New(tx).GetScopedState(f.ctx, "tenant", step.Input.OwnerTenantID, step.State.Children[index])
 			if err != nil {
 				return err
 			}
@@ -342,7 +342,7 @@ func (f *Forks) completeFork(step ForkStep) error {
 	}); err != nil {
 		return err
 	}
-	accepted, err := operation.New(tx).Get(f.ctx, "tenant", step.Input.RequestTenantID, step.OperationID)
+	accepted, err := operation.New(tx).GetScopedState(f.ctx, "tenant", step.Input.RequestTenantID, step.OperationID)
 	if err != nil {
 		return err
 	}

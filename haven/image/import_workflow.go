@@ -170,7 +170,7 @@ func (i *Images) failImageImport(step imageImportStep) error {
 	if err = transitionImport(i.ctx, tx, current, current.State.FailedPhase, "failed"); err != nil {
 		return err
 	}
-	if err = operations.FailResult(i.ctx, step.OperationID, operation.Result{
+	if err = operations.MarkFailedWithResult(i.ctx, step.OperationID, operation.Result{
 		Error: current.State.Error,
 	}); err != nil {
 		return err
@@ -252,7 +252,7 @@ func (i *Images) completeImageImport(step imageImportStep) error {
 	if err = transitionImport(i.ctx, tx, step, current.State.Phase, "succeeded"); err != nil {
 		return err
 	}
-	if err = operations.CompleteResult(i.ctx, step.OperationID, operation.Result{
+	if err = operations.MarkSucceededWithResult(i.ctx, step.OperationID, operation.Result{
 		ImageDigest: proof.Manifest.Digest,
 	}); err != nil {
 		return err

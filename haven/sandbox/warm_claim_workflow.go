@@ -341,7 +341,7 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 		return nil
 	}
 	operations := operation.New(tx)
-	status, result, err := operations.ResultState(wc.ctx, step.OperationID)
+	status, result, err := operations.StatusAndResult(wc.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -412,7 +412,7 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]o
 			return nil, err
 		}
 	}
-	state, result, err := operations.ResultState(wc.ctx, parent.OperationID)
+	state, result, err := operations.StatusAndResult(wc.ctx, parent.OperationID)
 	if err != nil {
 		return nil, err
 	}

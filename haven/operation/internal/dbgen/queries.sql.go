@@ -53,23 +53,6 @@ func (q *Queries) ClearResultSandboxes(ctx context.Context, operationID string) 
 	return err
 }
 
-const completeLiveOperation = `-- name: CompleteLiveOperation :execrows
-UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running')
-`
-
-type CompleteLiveOperationParams struct {
-	FinishedAt string
-	ID         string
-}
-
-func (q *Queries) CompleteLiveOperation(ctx context.Context, arg CompleteLiveOperationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeLiveOperation, arg.FinishedAt, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completePendingLink = `-- name: CompletePendingLink :execrows
 UPDATE operation_steps SET status=? WHERE operation_id=? AND step_key=? AND action='resource_link' AND status='pending'
 `
@@ -82,23 +65,6 @@ type CompletePendingLinkParams struct {
 
 func (q *Queries) CompletePendingLink(ctx context.Context, arg CompletePendingLinkParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completePendingLink, arg.Status, arg.OperationID, arg.StepKey)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completePendingOperation = `-- name: CompletePendingOperation :execrows
-UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status='pending'
-`
-
-type CompletePendingOperationParams struct {
-	FinishedAt string
-	ID         string
-}
-
-func (q *Queries) CompletePendingOperation(ctx context.Context, arg CompletePendingOperationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completePendingOperation, arg.FinishedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -214,6 +180,33 @@ func (q *Queries) GetCommandHosts(ctx context.Context, operationID string) ([]Co
 	return items, nil
 }
 
+const getCommandMAC = `-- name: GetCommandMAC :one
+SELECT request_mac FROM operation_request_macs WHERE operation_id=?
+`
+
+func (q *Queries) GetCommandMAC(ctx context.Context, operationID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getCommandMAC, operationID)
+	var request_mac string
+	err := row.Scan(&request_mac)
+	return request_mac, err
+}
+
+const getCommandMACByTenantKey = `-- name: GetCommandMACByTenantKey :one
+SELECT c.request_mac FROM operations o JOIN operation_request_macs c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?
+`
+
+type GetCommandMACByTenantKeyParams struct {
+	ScopeID string
+	IdemKey string
+}
+
+func (q *Queries) GetCommandMACByTenantKey(ctx context.Context, arg GetCommandMACByTenantKeyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getCommandMACByTenantKey, arg.ScopeID, arg.IdemKey)
+	var request_mac string
+	err := row.Scan(&request_mac)
+	return request_mac, err
+}
+
 const getCommandRules = `-- name: GetCommandRules :many
 SELECT operation_id, kind, position, value FROM command_policy_rules WHERE operation_id=? ORDER BY kind,position
 `
@@ -269,15 +262,20 @@ func (q *Queries) GetCommandTemplate(ctx context.Context, operationID string) (C
 	return i, err
 }
 
-const getCredentialMAC = `-- name: GetCredentialMAC :one
-SELECT request_mac FROM operation_request_macs WHERE operation_id=?
+const getOperationIDByTenantKey = `-- name: GetOperationIDByTenantKey :one
+SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id=? AND idem_key=?
 `
 
-func (q *Queries) GetCredentialMAC(ctx context.Context, operationID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getCredentialMAC, operationID)
-	var request_mac string
-	err := row.Scan(&request_mac)
-	return request_mac, err
+type GetOperationIDByTenantKeyParams struct {
+	ScopeID string
+	IdemKey string
+}
+
+func (q *Queries) GetOperationIDByTenantKey(ctx context.Context, arg GetOperationIDByTenantKeyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getOperationIDByTenantKey, arg.ScopeID, arg.IdemKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getOperationProjection = `-- name: GetOperationProjection :one
@@ -427,22 +425,6 @@ func (q *Queries) GetRequestGC(ctx context.Context, operationID string) (Operati
 	return i, err
 }
 
-const getRequestID = `-- name: GetRequestID :one
-SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id=? AND idem_key=?
-`
-
-type GetRequestIDParams struct {
-	ScopeID string
-	IdemKey string
-}
-
-func (q *Queries) GetRequestID(ctx context.Context, arg GetRequestIDParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getRequestID, arg.ScopeID, arg.IdemKey)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
 const getRequestImport = `-- name: GetRequestImport :one
 SELECT operation_id, layout, digest, materialization, max_bytes, max_files FROM operation_import_requests WHERE operation_id=?
 `
@@ -590,22 +572,6 @@ func (q *Queries) GetStepTarget(ctx context.Context, arg GetStepTargetParams) (G
 	return i, err
 }
 
-const getTenantCredentialMAC = `-- name: GetTenantCredentialMAC :one
-SELECT c.request_mac FROM operations o JOIN operation_request_macs c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?
-`
-
-type GetTenantCredentialMACParams struct {
-	ScopeID string
-	IdemKey string
-}
-
-func (q *Queries) GetTenantCredentialMAC(ctx context.Context, arg GetTenantCredentialMACParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getTenantCredentialMAC, arg.ScopeID, arg.IdemKey)
-	var request_mac string
-	err := row.Scan(&request_mac)
-	return request_mac, err
-}
-
 const getTenantScope = `-- name: GetTenantScope :one
 SELECT scope_id FROM operations WHERE id=? AND scope_kind='tenant'
 `
@@ -730,6 +696,23 @@ func (q *Queries) InsertCommandHost(ctx context.Context, arg InsertCommandHostPa
 	return result.RowsAffected()
 }
 
+const insertCommandMAC = `-- name: InsertCommandMAC :execrows
+INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?)
+`
+
+type InsertCommandMACParams struct {
+	OperationID string
+	RequestMac  string
+}
+
+func (q *Queries) InsertCommandMAC(ctx context.Context, arg InsertCommandMACParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommandMAC, arg.OperationID, arg.RequestMac)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertCommandRule = `-- name: InsertCommandRule :execrows
 INSERT INTO command_policy_rules(operation_id,kind,position,value) VALUES(?,?,?,?)
 `
@@ -786,23 +769,6 @@ func (q *Queries) InsertCommandTemplate(ctx context.Context, arg InsertCommandTe
 		arg.TargetWarm,
 		arg.Warmup,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const insertCredential = `-- name: InsertCredential :execrows
-INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?)
-`
-
-type InsertCredentialParams struct {
-	OperationID string
-	RequestMac  string
-}
-
-func (q *Queries) InsertCredential(ctx context.Context, arg InsertCredentialParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCredential, arg.OperationID, arg.RequestMac)
 	if err != nil {
 		return 0, err
 	}
@@ -1156,6 +1122,34 @@ func (q *Queries) InsertResultSandbox(ctx context.Context, arg InsertResultSandb
 	return result.RowsAffected()
 }
 
+const listIDsWithUnfinishedSteps = `-- name: ListIDsWithUnfinishedSteps :many
+SELECT DISTINCT operation_id FROM operation_steps
+WHERE status IN ('pending','running') ORDER BY operation_id
+`
+
+func (q *Queries) ListIDsWithUnfinishedSteps(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listIDsWithUnfinishedSteps)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var operation_id string
+		if err := rows.Scan(&operation_id); err != nil {
+			return nil, err
+		}
+		items = append(items, operation_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublicationIDs = `-- name: ListPublicationIDs :many
 SELECT operation_id FROM operation_publications ORDER BY operation_id
 `
@@ -1345,34 +1339,6 @@ func (q *Queries) ListStepsForRecovery(ctx context.Context) ([]ListStepsForRecov
 	return items, nil
 }
 
-const listUnfinishedOperations = `-- name: ListUnfinishedOperations :many
-SELECT DISTINCT operation_id FROM operation_steps
-WHERE status IN ('pending','running') ORDER BY operation_id
-`
-
-func (q *Queries) ListUnfinishedOperations(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listUnfinishedOperations)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var operation_id string
-		if err := rows.Scan(&operation_id); err != nil {
-			return nil, err
-		}
-		items = append(items, operation_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUnpublishedOperations = `-- name: ListUnpublishedOperations :many
 SELECT o.id, o.scope_kind, o.scope_id, o.idem_key, o."action", o.request_kind, o.status, o.result_sandbox_id, o.result_vm_id, o.result_image_digest, o.result_template_id, o.result_checkpoint_id, o.result_snapshot_id, o.resource_ready, o.result_error, o.created_at, o.finished_at FROM operations o LEFT JOIN operation_publications p ON p.operation_id=o.id
 WHERE p.operation_id IS NULL ORDER BY o.id
@@ -1419,12 +1385,29 @@ func (q *Queries) ListUnpublishedOperations(ctx context.Context) ([]Operation, e
 	return items, nil
 }
 
-const runLiveOperation = `-- name: RunLiveOperation :execrows
+const markLiveOperationRunning = `-- name: MarkLiveOperationRunning :execrows
 UPDATE operations SET status='running' WHERE id=? AND status IN ('pending','running')
 `
 
-func (q *Queries) RunLiveOperation(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, runLiveOperation, id)
+func (q *Queries) MarkLiveOperationRunning(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markLiveOperationRunning, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markLiveOperationSucceeded = `-- name: MarkLiveOperationSucceeded :execrows
+UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running')
+`
+
+type MarkLiveOperationSucceededParams struct {
+	FinishedAt string
+	ID         string
+}
+
+func (q *Queries) MarkLiveOperationSucceeded(ctx context.Context, arg MarkLiveOperationSucceededParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markLiveOperationSucceeded, arg.FinishedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

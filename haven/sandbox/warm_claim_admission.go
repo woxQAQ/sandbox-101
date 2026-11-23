@@ -131,7 +131,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	}
 	frozen := operation.CommandRequest(admission.Command)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: operation.ScopeTenant,
 		ScopeID:   tenantID,
@@ -142,7 +142,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	}); err != nil {
 		return empty, false, err
 	}
-	if err = operations.InsertCredential(ctx, accepted.ID, admission.MAC); err != nil {
+	if err = operations.RecordCommandMAC(ctx, accepted.ID, admission.MAC); err != nil {
 		return empty, false, err
 	}
 	queries := dbgen.New(tx)

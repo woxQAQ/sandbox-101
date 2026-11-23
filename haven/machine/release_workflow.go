@@ -409,7 +409,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 	if err = transitionResource(d.ctx, tx, current, next, "succeeded"); err != nil {
 		return err
 	}
-	if err = operation.New(tx).Complete(d.ctx, step.OperationID); err != nil {
+	if err = operation.New(tx).MarkSucceeded(d.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = d.handoff.CompleteRelease(d.ctx, tx, step); err != nil {

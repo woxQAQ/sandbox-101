@@ -185,7 +185,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -266,7 +266,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -370,7 +370,7 @@ func (cc *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) e
 	if err != nil || count != 1 {
 		return fmt.Errorf("raw capture responsibility missing: %v", err)
 	}
-	projection, err := operation.New(tx).Projection(cc.ctx, step.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(cc.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -579,7 +579,7 @@ func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loo
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(cc.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(cc.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = cc.fault("capture_cleanup_completion_before_commit"); err != nil {

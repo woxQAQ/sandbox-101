@@ -128,7 +128,7 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 			CacheDiffID:       request.CacheDiffID,
 		},
 	}
-	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(i.database).LookupForReplay(ctx, operation.Scope{
 		Kind: "node",
 		ID:   i.nodeID,
 	}, key, frozen); found || err != nil {
@@ -221,7 +221,7 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 	}
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
 		ScopeID:   i.nodeID,

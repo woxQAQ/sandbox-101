@@ -212,7 +212,7 @@ func readWarmClaim(ctx context.Context, query *sql.Tx, id string) (WarmClaimStep
 	if err = json.Unmarshal(row.Activation, &activation); err != nil {
 		return step, err
 	}
-	parent, err := operation.New(query).Projection(ctx, id)
+	parent, err := operation.New(query).LoadProjectionSource(ctx, id)
 	if err != nil {
 		return step, err
 	}

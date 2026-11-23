@@ -40,7 +40,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		Action: "image_import",
 		Import: &options,
 	}
-	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(i.database).LookupForReplay(ctx, operation.Scope{
 		Kind: "node",
 		ID:   i.nodeID,
 	}, key, frozen); found || err != nil {
@@ -138,7 +138,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 	}
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
 		ScopeID:   i.nodeID,

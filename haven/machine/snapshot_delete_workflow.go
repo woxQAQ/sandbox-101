@@ -92,7 +92,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
 	if !admitting {
-		parent, err := operations.Projection(ctx, step.OperationID)
+		parent, err := operations.LoadProjectionSource(ctx, step.OperationID)
 		if err != nil {
 			return nil, err
 		}
@@ -452,7 +452,7 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(sd.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(sd.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = RetireDeletedSnapshot(sd.ctx, tx, step.Input.Source, sd.proofs); err != nil {

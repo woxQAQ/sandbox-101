@@ -265,7 +265,7 @@ func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
 	}, "failed"); err != nil {
 		return err
 	}
-	status, result, err := operations.ResultState(l.ctx, step.OperationID)
+	status, result, err := operations.StatusAndResult(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}

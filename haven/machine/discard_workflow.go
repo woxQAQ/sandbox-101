@@ -447,7 +447,7 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(d.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(d.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if source.Input.FailureSlotDestination != nil {

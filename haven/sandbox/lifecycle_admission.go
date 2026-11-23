@@ -121,7 +121,7 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 			parent.Result.SnapshotID = input.Sandbox.SnapshotID
 		}
 		operations := operation.New(tx)
-		if err = operations.Insert(ctx, operation.Admission{
+		if err = operations.RecordAdmission(ctx, operation.Admission{
 			ID:        parent.ID,
 			ScopeKind: "tenant",
 			ScopeID:   input.RequestTenantID,
@@ -132,7 +132,7 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 		}); err != nil {
 			return err
 		}
-		if err = operations.InsertCredential(ctx, parent.ID, admission.MAC); err != nil {
+		if err = operations.RecordCommandMAC(ctx, parent.ID, admission.MAC); err != nil {
 			return err
 		}
 		if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{

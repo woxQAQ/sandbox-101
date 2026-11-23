@@ -229,7 +229,7 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 	if err = transitionActivation(ctx, tx, current, "blocked", "failed"); err != nil {
 		return errors.Join(cleanupErr, err)
 	}
-	status, result, err := operation.New(tx).ResultState(ctx, step.OperationID)
+	status, result, err := operation.New(tx).StatusAndResult(ctx, step.OperationID)
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}

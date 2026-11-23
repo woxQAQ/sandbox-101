@@ -179,7 +179,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 		Publication machine.SnapshotSource
 	}{checkpoint, publication})
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        record.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
@@ -190,7 +190,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.InsertCredential(ctx, record.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, record.ID, mac); err != nil {
 		return empty, err
 	}
 	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
@@ -314,7 +314,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -325,7 +325,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
 	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{

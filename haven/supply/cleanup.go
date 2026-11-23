@@ -154,7 +154,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 			SourceOperationID: request.OperationID,
 		},
 	}
-	if cached, found, err := operation.New(sc.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(sc.store.Database).LookupForReplay(ctx, operation.Scope{
 		Kind: "node",
 		ID:   sc.nodeID,
 	}, key, frozen); found || err != nil {
@@ -304,7 +304,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	}
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "node",
 		ScopeID:   sc.nodeID,
@@ -654,7 +654,7 @@ func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(sc.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(sc.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = sc.fault("supply_cleanup_completion_before_commit"); err != nil {

@@ -73,7 +73,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 		parent.Result.SandboxID = input.SandboxID
 		parent.Result.VMID = child.Result.VMID
 		operations := operation.New(tx)
-		if err = operations.Insert(ctx, operation.Admission{
+		if err = operations.RecordAdmission(ctx, operation.Admission{
 			ID:        parent.ID,
 			ScopeKind: "tenant",
 			ScopeID:   input.RequestTenantID,
@@ -84,7 +84,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 		}); err != nil {
 			return err
 		}
-		if err = operations.InsertCredential(ctx, parent.ID, admission.MAC); err != nil {
+		if err = operations.RecordCommandMAC(ctx, parent.ID, admission.MAC); err != nil {
 			return err
 		}
 		if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "pending", payload, SupplyState{

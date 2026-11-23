@@ -51,7 +51,7 @@ func New(db store.DBTX) *Repository {
 	}
 }
 
-func (r *Repository) Get(ctx context.Context, kind, scope, id string) (State, error) {
+func (r *Repository) GetScopedState(ctx context.Context, kind, scope, id string) (State, error) {
 	row, err := r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
 		return q.GetScopedOperation(ctx, dbgen.GetScopedOperationParams{
 			ID:        id,
@@ -74,15 +74,16 @@ func (r *Repository) Get(ctx context.Context, kind, scope, id string) (State, er
 	return out, nil
 }
 
-func (r *Repository) RequestID(ctx context.Context, tenant, key string) (string, error) {
-	return r.queries.GetRequestID(ctx, dbgen.GetRequestIDParams{
+func (r *Repository) OperationIDByTenantKey(ctx context.Context, tenant, key string) (string, error) {
+	return r.queries.GetOperationIDByTenantKey(ctx, dbgen.GetOperationIDByTenantKeyParams{
 		ScopeID: tenant,
 		IdemKey: key,
 	})
 }
 
-// Cached compares the original parameters for the scoped idempotency key.
-func (r *Repository) Cached(ctx context.Context, scope Scope, key string, request Request) (State, bool, error) {
+// LookupForReplay returns the operation for a scoped key. A parameter mismatch
+// returns the existing operation, found=true and ErrConflict.
+func (r *Repository) LookupForReplay(ctx context.Context, scope Scope, key string, request Request) (State, bool, error) {
 	row, err := r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
 		return q.GetScopedRequest(ctx, dbgen.GetScopedRequestParams{
 			ScopeKind: scope.Kind,
@@ -112,19 +113,19 @@ func (r *Repository) TenantScope(ctx context.Context, id string) (string, error)
 	return r.queries.GetTenantScope(ctx, id)
 }
 
-func (r *Repository) TenantCredentialMAC(ctx context.Context, tenant, key string) (string, error) {
-	return r.queries.GetTenantCredentialMAC(ctx, dbgen.GetTenantCredentialMACParams{
+func (r *Repository) CommandMACByTenantKey(ctx context.Context, tenant, key string) (string, error) {
+	return r.queries.GetCommandMACByTenantKey(ctx, dbgen.GetCommandMACByTenantKeyParams{
 		ScopeID: tenant,
 		IdemKey: key,
 	})
 }
 
-func (r *Repository) CredentialMAC(ctx context.Context, id string) (string, error) {
-	return r.queries.GetCredentialMAC(ctx, id)
+func (r *Repository) CommandMAC(ctx context.Context, id string) (string, error) {
+	return r.queries.GetCommandMAC(ctx, id)
 }
 
-func (r *Repository) Unfinished(ctx context.Context) ([]string, error) {
-	return r.queries.ListUnfinishedOperations(ctx)
+func (r *Repository) ListIDsWithUnfinishedSteps(ctx context.Context) ([]string, error) {
+	return r.queries.ListIDsWithUnfinishedSteps(ctx)
 }
 
 func (r *Repository) Times(ctx context.Context, id string) (time.Time, time.Time, error) {
@@ -155,7 +156,7 @@ type ProjectionSource struct {
 	Result    Result
 }
 
-func (r *Repository) Projection(ctx context.Context, id string) (ProjectionSource, error) {
+func (r *Repository) LoadProjectionSource(ctx context.Context, id string) (ProjectionSource, error) {
 	return r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
 		return q.GetOperationProjection(ctx, id)
 	})

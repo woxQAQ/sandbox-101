@@ -361,7 +361,7 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(cd.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(cd.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = cd.fault("capture_discard_completion_before_commit"); err != nil {

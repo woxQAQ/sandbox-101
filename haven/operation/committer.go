@@ -59,7 +59,7 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 	repository := New(tx)
 	for _, outcome := range outcomes {
 		if outcome.Frozen {
-			status, result, err := repository.ResultState(ctx, outcome.ID)
+			status, result, err := repository.StatusAndResult(ctx, outcome.ID)
 			if err != nil {
 				return err
 			}
@@ -74,11 +74,11 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 		var err error
 		switch {
 		case outcome.Failed:
-			err = repository.FailResult(ctx, outcome.ID, outcome.Result)
+			err = repository.MarkFailedWithResult(ctx, outcome.ID, outcome.Result)
 		case outcome.AdoptResult:
-			err = repository.Complete(ctx, outcome.ID)
+			err = repository.MarkSucceeded(ctx, outcome.ID)
 		default:
-			err = repository.CompleteResult(ctx, outcome.ID, outcome.Result)
+			err = repository.MarkSucceededWithResult(ctx, outcome.ID, outcome.Result)
 		}
 		if err != nil {
 			return err
@@ -114,7 +114,8 @@ type Admission struct {
 	Result    Result
 }
 
-func (r *Repository) Insert(ctx context.Context, admission Admission) error {
+// RecordAdmission persists the scoped request, initial status and result together.
+func (r *Repository) RecordAdmission(ctx context.Context, admission Admission) error {
 	kind, err := admission.Request.kind()
 	if err != nil {
 		return err
@@ -154,8 +155,9 @@ func (r *Repository) Insert(ctx context.Context, admission Admission) error {
 	})
 }
 
-func (r *Repository) InsertCredential(ctx context.Context, operationID, mac string) error {
-	return store.RequireOne(r.queries.InsertCredential(ctx, dbgen.InsertCredentialParams{
+// RecordCommandMAC binds the admitted operation to the signed principal and command.
+func (r *Repository) RecordCommandMAC(ctx context.Context, operationID, mac string) error {
+	return store.RequireOne(r.queries.InsertCommandMAC(ctx, dbgen.InsertCommandMACParams{
 		OperationID: operationID,
 		RequestMac:  mac,
 	}))
@@ -165,7 +167,7 @@ func (r *Repository) InsertCredential(ctx context.Context, operationID, mac stri
 // view: tenant-admitted operations carry a credential, and activation
 // operations carry their activate step. Other operations stay internal.
 func (r *Repository) PublicationEligible(ctx context.Context, operationID string) (bool, error) {
-	if _, err := r.queries.GetCredentialMAC(ctx, operationID); err == nil {
+	if _, err := r.queries.GetCommandMAC(ctx, operationID); err == nil {
 		return true, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
@@ -174,19 +176,12 @@ func (r *Repository) PublicationEligible(ctx context.Context, operationID string
 	return activate != 0, err
 }
 
-func (r *Repository) CompleteResult(ctx context.Context, operationID string, result Result) error {
+func (r *Repository) MarkSucceededWithResult(ctx context.Context, operationID string, result Result) error {
 	return r.updateResult(ctx, operationID, "succeeded", result)
 }
 
-func (r *Repository) CompletePending(ctx context.Context, operationID string) error {
-	return store.RequireOne(r.queries.CompletePendingOperation(ctx, dbgen.CompletePendingOperationParams{
-		ID:         operationID,
-		FinishedAt: clockNow(),
-	}))
-}
-
-func (r *Repository) Complete(ctx context.Context, operationID string) error {
-	return store.RequireOne(r.queries.CompleteLiveOperation(ctx, dbgen.CompleteLiveOperationParams{
+func (r *Repository) MarkSucceeded(ctx context.Context, operationID string) error {
+	return store.RequireOne(r.queries.MarkLiveOperationSucceeded(ctx, dbgen.MarkLiveOperationSucceededParams{
 		ID:         operationID,
 		FinishedAt: clockNow(),
 	}))

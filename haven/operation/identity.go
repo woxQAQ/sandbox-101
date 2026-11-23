@@ -34,7 +34,7 @@ func (r *Repository) StepTarget(ctx context.Context, id, key, hash string) (cand
 }
 
 func (r *Repository) LiveResult(ctx context.Context, id string) (Result, error) {
-	status, result, err := r.ResultState(ctx, id)
+	status, result, err := r.StatusAndResult(ctx, id)
 	if err == nil && Terminal(status) {
 		return Result{}, sql.ErrNoRows
 	}
@@ -85,7 +85,7 @@ type CommandCredentials struct {
 // Existing preserves scoped publication and original credential matching before
 // restoring the accepted request's in-memory secrets.
 func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (State, bool, error) {
-	id, err := ci.repository.RequestID(ctx, principal.TenantID, key)
+	id, err := ci.repository.OperationIDByTenantKey(ctx, principal.TenantID, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return State{}, false, nil
 	}
@@ -106,7 +106,7 @@ func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization
 }
 
 func (ci *CommandIdentity) MatchCredentials(operationID, mac string) error {
-	expected, err := ci.repository.CredentialMAC(ci.ctx, operationID)
+	expected, err := ci.repository.CommandMAC(ci.ctx, operationID)
 	if err != nil {
 		return err
 	}

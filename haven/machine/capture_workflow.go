@@ -224,7 +224,7 @@ func (c *Captures) failCapture(step *CaptureStep, cause error) error {
 		SnapshotID: step.Input.Snapshot.ID,
 		Error:      next.Error,
 	}
-	if err = operations.FailResult(c.ctx, step.OperationID, result); err != nil {
+	if err = operations.MarkFailedWithResult(c.ctx, step.OperationID, result); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(c.ctx, dbgen.ReleaseOwnershipParams{
@@ -592,7 +592,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	if err = transitionCapture(c.ctx, tx, step, next, "succeeded"); err != nil {
 		return err
 	}
-	if err = operations.Complete(c.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(c.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = c.fault("capture_completion_before_commit"); err != nil {

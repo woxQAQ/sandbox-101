@@ -4,7 +4,7 @@ operation 保存 operation 的公共身份、幂等、终态、通用链接头�
 
 HTTP 严格解码 `types.Command`。`NewIntent` 复制公开字段，宿主恢复与配置工作流可另外设置 `ObservedGeneration`。`Intent` 保持原 JSON 字段顺序，以便同键重试能核对已存 MAC。环境值与注入描述使用 `types.EnvVar` 和 `types.Injection`，进入持久请求前由业务入口净化 secret。
 
-`Repository.Cached` 在同一读快照按作用域和幂等 key 查找操作，并比较接纳时的类型化请求参数。携带凭据的公开命令另以 `operation_request_macs` 核对 principal 与原始命令，secret 真值只经调用者重新提供。
+`Repository.RecordAdmission` 在同一事务保存操作的作用域、幂等 key、原请求、初始状态和结果。`Repository.LookupForReplay` 在同一读快照按作用域和幂等 key 查找操作，并比较接纳时的类型化请求参数。携带凭据的公开命令在接纳事务内用 `RecordCommandMAC` 记录 principal 与原始命令的 MAC，重试时核对它。secret 真值只经调用者重新提供。
 
 `AcceptedCommand` 读取接纳时冻结的公开命令。`LoadPublication` 在同一读事务中组合原请求、类型化结果、当时的资源字段与模板版本，并核对终态提交时记录的响应摘要。`Monitor` 提供通用状态与等待，`sandbox.OperationViews.Get` 按调用者权限返回 operation 视图。
 

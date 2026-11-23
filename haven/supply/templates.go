@@ -306,7 +306,7 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, i
 	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -317,7 +317,7 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, i
 	}); err != nil {
 		return operation.State{}, err
 	}
-	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
 		return operation.State{}, err
 	}
 	if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "pending", payload, SupplyState{
@@ -502,7 +502,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	if err = publishTemplate(ctx, tx, desired, previous); err != nil {
 		return operation.Result{}, err
 	}
-	parent, err := operations.Projection(ctx, step.OperationID)
+	parent, err := operations.LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return operation.Result{}, err
 	}

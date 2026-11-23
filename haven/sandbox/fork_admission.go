@@ -299,7 +299,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 		state.Snapshot = input.Snapshot
 	}
 	operations := operation.New(tx)
-	if err := operations.Insert(ctx, operation.Admission{
+	if err := operations.RecordAdmission(ctx, operation.Admission{
 		ID:        admission.Parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -310,7 +310,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 	}); err != nil {
 		return err
 	}
-	if err := operations.InsertCredential(ctx, admission.Parent.ID, admission.MAC); err != nil {
+	if err := operations.RecordCommandMAC(ctx, admission.Parent.ID, admission.MAC); err != nil {
 		return err
 	}
 	if err := operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{

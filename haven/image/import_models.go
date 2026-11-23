@@ -250,7 +250,7 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 	if err = transitionImport(i.ctx, tx, *step, previousPhase, "running"); err != nil {
 		return err
 	}
-	if err = operations.Run(i.ctx, step.OperationID); err != nil {
+	if err = operations.MarkRunning(i.ctx, step.OperationID); err != nil {
 		return err
 	}
 	catalog := dbgen.New(tx)

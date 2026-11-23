@@ -17,7 +17,7 @@ func ProjectionHeader(ctx context.Context, query store.DBTX, id string) (types.O
 	var out types.Operation
 	var result Result
 	repository := New(query)
-	source, err := repository.Projection(ctx, id)
+	source, err := repository.LoadProjectionSource(ctx, id)
 	if err != nil {
 		return out, result, err
 	}
@@ -180,7 +180,7 @@ func (r *Repository) RecoverySteps(ctx context.Context) ([]Step, error) {
 	return out, nil
 }
 
-func (r *Repository) ResultState(ctx context.Context, id string) (string, Result, error) {
-	row, err := r.Projection(ctx, id)
+func (r *Repository) StatusAndResult(ctx context.Context, id string) (string, Result, error) {
+	row, err := r.LoadProjectionSource(ctx, id)
 	return row.Status, row.Result, err
 }

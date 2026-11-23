@@ -459,7 +459,7 @@ func VerifyActivation(proofs machine.ResourceProofs, ctx context.Context, tx *sq
 	if !reflect.DeepEqual(settings, expectedSettings) || step.Input.Settings.Generation != step.OperationID {
 		return source, record, fmt.Errorf("activation desired settings changed")
 	}
-	identity, err := operation.New(tx).Projection(ctx, step.OperationID)
+	identity, err := operation.New(tx).LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return source, record, err
 	}

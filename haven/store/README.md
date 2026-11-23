@@ -43,7 +43,7 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 
 `tenants.max_sandboxes` 和 `tenants.max_storage_mib` 是非负整数列。`authorization.Repository` 在同一条 UPSERT 中写入 token hash 和两项预算。认证 sandbox token 时只查询 `sandboxes.tenant` 和 `sandboxes.id`，普通认证按 `state` 排除已终止记录。
 
-`operation.Repository.LiveTenantRequest` 在同一快照读取资源参数和结果，核对租户作用域及运行状态。provisioning 从原 cold、clone 或 restore 请求取得模板、快照、预期实例及 stop operation，与资源步骤及历史归属共同核验。
+`operation.Repository.LiveTenantRequestAndResult` 在同一快照读取资源参数和结果，核对租户作用域及运行状态。provisioning 从原 cold、clone 或 restore 请求取得模板、快照、预期实例及 stop operation，与资源步骤及历史归属共同核验。
 
 ```nu
 just generate-sql

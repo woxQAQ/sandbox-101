@@ -84,7 +84,7 @@ func (c *Coordinator) ResumePending() error {
 	if c.reviewed {
 		return nil
 	}
-	pending, err := c.operations.Unfinished(c.workers.Context())
+	pending, err := c.operations.ListIDsWithUnfinishedSteps(c.workers.Context())
 	if err != nil {
 		return err
 	}

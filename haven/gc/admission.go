@@ -51,7 +51,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		if key == "" || len(key) > 256 {
 			return empty, fmt.Errorf("%w: GC mutation requires key", errs.ErrInvalid)
 		}
-		if cached, found, err := operation.New(c.store.Database).Cached(ctx, operation.Scope{
+		if cached, found, err := operation.New(c.store.Database).LookupForReplay(ctx, operation.Scope{
 			Kind: "node",
 			ID:   c.nodeID,
 		}, key, request); found || err != nil {
@@ -135,7 +135,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		tx, err = c.store.Database.BeginTx(ctx, nil)
 		if err == nil {
 			operations := operation.New(tx)
-			err = operations.Insert(ctx, operation.Admission{
+			err = operations.RecordAdmission(ctx, operation.Admission{
 				ID:        accepted.ID,
 				ScopeKind: "node",
 				ScopeID:   c.nodeID,

@@ -227,7 +227,7 @@ func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step Lifecyc
 	if source.Hash != step.Input.Source.InputHash || source.Input.SandboxID != step.Input.Sandbox.ID || source.Input.TenantID != step.Input.OwnerTenantID || source.State.Witness != step.Input.SourceInstance || !sourceTerminal {
 		return fmt.Errorf("lifecycle original resource witness changed")
 	}
-	identity, err := operation.New(tx).Projection(ctx, step.OperationID)
+	identity, err := operation.New(tx).LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -593,7 +593,7 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	if fence != step.OperationID {
 		return nil
 	}
-	status, result, err := operations.ResultState(l.ctx, step.OperationID)
+	status, result, err := operations.StatusAndResult(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}

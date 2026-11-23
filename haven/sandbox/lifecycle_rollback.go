@@ -182,7 +182,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.St
 	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -193,7 +193,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.St
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
 	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{

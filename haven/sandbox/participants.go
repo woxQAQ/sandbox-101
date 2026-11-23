@@ -370,7 +370,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 	currentMachine := machine.VMRecord{
 		Resource: resource,
 	}
-	if err = operation.New(tx).Insert(ctx, operation.Admission{
+	if err = operation.New(tx).RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -498,7 +498,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 			return empty, errors.New("resource has two activation admissions")
 		}
 		activation = &claim.Settings
-		if err = operation.New(tx).InsertCredential(ctx, accepted.ID, claim.MAC); err != nil {
+		if err = operation.New(tx).RecordCommandMAC(ctx, accepted.ID, claim.MAC); err != nil {
 			return empty, err
 		}
 	}

@@ -203,7 +203,7 @@ func (c *Collector) save(step Step, previous progress, complete bool) error {
 		}
 	}
 	if complete {
-		if err = operations.Complete(c.ctx, step.OperationID); err != nil {
+		if err = operations.MarkSucceeded(c.ctx, step.OperationID); err != nil {
 			return err
 		}
 	}

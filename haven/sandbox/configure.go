@@ -156,13 +156,13 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	}
 	frozen := operation.CommandRequest(operation.SanitizedCommand(command))
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, operation.Scope{
+	if cached, found, err := operations.LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   principal.TenantID,
 	}, key, frozen); found || err != nil {
 		if err == nil {
 			var prior string
-			prior, err = operations.CredentialMAC(ctx, cached.ID)
+			prior, err = operations.CommandMAC(ctx, cached.ID)
 			if err == nil && prior != mac {
 				err = fmt.Errorf("%w: idempotency key has different parameters", errs.ErrConflict)
 			}
@@ -193,7 +193,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	if current.State != "paused" {
 		input.PreviousSettings = &old
 	}
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
@@ -204,7 +204,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	}); err != nil {
 		return empty, noResource, false, err
 	}
-	if err = operations.InsertCredential(ctx, accepted.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, accepted.ID, mac); err != nil {
 		return empty, noResource, false, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).UpsertFence(ctx, dbgen.UpsertFenceParams{

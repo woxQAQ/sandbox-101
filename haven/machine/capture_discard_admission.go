@@ -57,7 +57,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -115,7 +115,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 		return empty, err
 	}
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -252,7 +252,7 @@ func (cd *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, tx *sq
 	if owner != expectedOwner || current != request.ExpectedInstance || currentOwnership.State != "stopped" || currentMachine.Deleting || !currentMachine.Verified || currentMachine.AgentReady || !reflect.DeepEqual(currentMachine.Resource, resource.Input.Resource) {
 		return empty, fmt.Errorf("capture discard current stopped instance changed")
 	}
-	projection, err := operation.New(tx).Projection(ctx, source.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(ctx, source.OperationID)
 	if err != nil {
 		return empty, err
 	}

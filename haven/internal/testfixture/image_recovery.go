@@ -59,7 +59,7 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        id,
 		ScopeKind: "node",
 		ScopeID:   state.Identity().Identity,

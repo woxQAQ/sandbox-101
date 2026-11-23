@@ -62,7 +62,7 @@ func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent 
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -123,7 +123,7 @@ func (s *Stops) AdmitForParent(ctx context.Context, request StopRequest, parent 
 		return empty, err
 	}
 	payload := operation.Encode(input)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -202,7 +202,7 @@ func (s *Stops) stopProof(tx *sql.Tx, step StopStep) (ResourceStep, VMRecord, er
 	if owner != step.OperationID || current != step.Input.Request.ExpectedInstance || currentMachine.Deleting || record.SourceOperation != source.OperationID || record.State != state || record.Instance != current {
 		return source, currentMachine, fmt.Errorf("stop current instance or sandbox ownership changed")
 	}
-	projection, err := operation.New(tx).Projection(s.ctx, step.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(s.ctx, step.OperationID)
 	if err != nil {
 		return source, currentMachine, err
 	}
@@ -314,7 +314,7 @@ func (s *Stops) runStop(step StopStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(s.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(s.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = s.fault("stop_completion_before_commit"); err != nil {

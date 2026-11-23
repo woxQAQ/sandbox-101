@@ -29,7 +29,7 @@ func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshReque
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -72,7 +72,7 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -145,7 +145,7 @@ func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) 
 		_ = tx.Rollback()
 	}()
 	if claim != nil {
-		previous, lookup := operation.New(tx).TenantCredentialMAC(ctx, tenantID, key)
+		previous, lookup := operation.New(tx).CommandMACByTenantKey(ctx, tenantID, key)
 		if lookup == nil && previous != claim.MAC {
 			return empty, fmt.Errorf("%w: idempotency key has different parameters", errs.ErrConflict)
 		}
@@ -153,7 +153,7 @@ func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) 
 			return empty, lookup
 		}
 	}
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   tenantID,
 	}, key, request.Frozen); found || err != nil {
@@ -316,7 +316,7 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 
 func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, step machine.ResourceStep) (machine.VMRecord, ownership.Sandbox, operation.Result, error) {
 	tenant := step.Input.TenantID
-	request, result, err := operation.New(tx).LiveTenantRequest(ctx, step.OperationID, tenant)
+	request, result, err := operation.New(tx).LiveTenantRequestAndResult(ctx, step.OperationID, tenant)
 	if err != nil {
 		return machine.VMRecord{}, ownership.Sandbox{}, result, err
 	}

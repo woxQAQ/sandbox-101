@@ -280,7 +280,7 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	if err = transitionResource(p.ctx, tx, current, next, "failed"); err != nil {
 		return errors.Join(cause, err)
 	}
-	status, result, err := operation.New(tx).ResultState(p.ctx, step.OperationID)
+	status, result, err := operation.New(tx).StatusAndResult(p.ctx, step.OperationID)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
@@ -426,7 +426,7 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 		return err
 	}
 	result.ResourceReady = true
-	if err = operation.New(tx).RunResult(p.ctx, step.OperationID, result); err != nil {
+	if err = operation.New(tx).MarkRunningWithResult(p.ctx, step.OperationID, result); err != nil {
 		return err
 	}
 	if err = p.fault("completion_before_commit"); err != nil {

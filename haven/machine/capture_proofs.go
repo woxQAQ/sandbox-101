@@ -162,7 +162,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 	if !current.Owned || current.Instance != source.State.Witness || current.Owner != step.OperationID || current.State != "running" || currentMachine.Deleting || !currentMachine.Verified || !currentMachine.AgentReady || !reflect.DeepEqual(currentMachine.Resource, source.Input.Resource) {
 		return currentMachine, fmt.Errorf("capture current instance ownership changed")
 	}
-	projection, err := operation.New(tx).Projection(ctx, step.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}

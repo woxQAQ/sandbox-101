@@ -221,7 +221,7 @@ func (cd *CaptureDiscard) captureDiscardProof(ctx context.Context, tx *sql.Tx, s
 	}
 	// Decode the discard result independently; missing fields cannot inherit
 	// identity from the original failed capture result.
-	projection, err := operation.New(tx).Projection(ctx, step.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return err
 	}

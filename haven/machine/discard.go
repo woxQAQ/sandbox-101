@@ -118,7 +118,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, operation.Scope{
+	if cached, found, err := operations.LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -183,7 +183,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		return empty, err
 	}
 	payload := operation.Encode(input)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -347,7 +347,7 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 			return currentMachine, fmt.Errorf("discard resume slot source changed")
 		}
 	}
-	projection, err := operation.New(tx).Projection(ctx, source.OperationID)
+	projection, err := operation.New(tx).LoadProjectionSource(ctx, source.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}
@@ -421,7 +421,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 		return currentMachine, fmt.Errorf("discard sandbox destination changed")
 	}
 	operations := operation.New(tx)
-	projection, err := operations.Projection(ctx, step.OperationID)
+	projection, err := operations.LoadProjectionSource(ctx, step.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}

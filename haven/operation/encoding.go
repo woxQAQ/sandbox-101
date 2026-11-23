@@ -36,11 +36,11 @@ func Terminal(status string) bool {
 	return status == "succeeded" || status == "failed"
 }
 
-func (r *Repository) Run(ctx context.Context, operationID string) error {
-	return store.RequireOne(r.queries.RunLiveOperation(ctx, operationID))
+func (r *Repository) MarkRunning(ctx context.Context, operationID string) error {
+	return store.RequireOne(r.queries.MarkLiveOperationRunning(ctx, operationID))
 }
 
-func (r *Repository) FailResult(ctx context.Context, operationID string, result Result) error {
+func (r *Repository) MarkFailedWithResult(ctx context.Context, operationID string, result Result) error {
 	return r.updateResult(ctx, operationID, "failed", result)
 }
 

@@ -197,7 +197,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	}
 	request := operation.CommandRequest(command)
 	operations := operation.New(service.State.Database())
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        original.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
@@ -209,7 +209,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	mac := service.CommandIdentity.CommandMAC(principal, command)
-	if err = operations.InsertCredential(ctx, original.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, original.ID, mac); err != nil {
 		t.Fatal(err)
 	}
 

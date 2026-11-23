@@ -76,40 +76,37 @@ SELECT status FROM operation_steps WHERE operation_id=? AND step_key=?;
 -- name: CompletePendingLink :execrows
 UPDATE operation_steps SET status=? WHERE operation_id=? AND step_key=? AND action='resource_link' AND status='pending';
 
--- name: RunLiveOperation :execrows
+-- name: MarkLiveOperationRunning :execrows
 UPDATE operations SET status='running' WHERE id=? AND status IN ('pending','running');
 
 -- name: InsertOperation :execrows
 INSERT INTO operations(id,scope_kind,scope_id,idem_key,action,request_kind,status,created_at,finished_at,result_sandbox_id,result_vm_id,result_image_digest,result_template_id,result_checkpoint_id,result_snapshot_id,resource_ready,result_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
 
--- name: InsertCredential :execrows
+-- name: InsertCommandMAC :execrows
 INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?);
 
--- name: CompletePendingOperation :execrows
-UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status='pending';
-
--- name: CompleteLiveOperation :execrows
+-- name: MarkLiveOperationSucceeded :execrows
 UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running');
 
 -- name: GetScopedRequest :one
 SELECT * FROM operations WHERE scope_kind=? AND scope_id=? AND idem_key=?;
 
--- name: GetRequestID :one
+-- name: GetOperationIDByTenantKey :one
 SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id=? AND idem_key=?;
 
 -- name: GetTenantScope :one
 SELECT scope_id FROM operations WHERE id=? AND scope_kind='tenant';
 
--- name: GetTenantCredentialMAC :one
+-- name: GetCommandMACByTenantKey :one
 SELECT c.request_mac FROM operations o JOIN operation_request_macs c ON c.operation_id=o.id WHERE o.scope_kind='tenant' AND o.scope_id=? AND o.idem_key=?;
 
--- name: GetCredentialMAC :one
+-- name: GetCommandMAC :one
 SELECT request_mac FROM operation_request_macs WHERE operation_id=?;
 
 -- name: GetScopedOperation :one
 SELECT * FROM operations WHERE id=? AND scope_kind=? AND scope_id=?;
 
--- name: ListUnfinishedOperations :many
+-- name: ListIDsWithUnfinishedSteps :many
 SELECT DISTINCT operation_id FROM operation_steps
 WHERE status IN ('pending','running') ORDER BY operation_id;
 

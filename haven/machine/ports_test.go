@@ -31,7 +31,7 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = operation.New(state.Database()).Insert(ctx, operation.Admission{
+	if err = operation.New(state.Database()).RecordAdmission(ctx, operation.Admission{
 		ID:        "retained",
 		ScopeKind: "node",
 		ScopeID:   state.Identity().Identity,

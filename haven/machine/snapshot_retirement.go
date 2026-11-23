@@ -38,7 +38,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 		return fmt.Errorf("snapshot fee retirement lacks completed deletion")
 	}
 	publication := source.Snapshot
-	parent, err := operations.Projection(ctx, cleanup.OperationID)
+	parent, err := operations.LoadProjectionSource(ctx, cleanup.OperationID)
 	if err != nil {
 		return err
 	}

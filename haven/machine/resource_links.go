@@ -43,7 +43,7 @@ func readResourceLink(ctx context.Context, tx *sql.Tx, parent, role string) (Res
 	if !row.ChildOperationID.Valid || !row.ChildKind.Valid {
 		return ResourceLink{}, row.Status, fmt.Errorf("%w: resource link detail missing", errs.ErrManualRecovery)
 	}
-	child, err := operation.New(tx).Projection(ctx, row.ChildOperationID.String)
+	child, err := operation.New(tx).LoadProjectionSource(ctx, row.ChildOperationID.String)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ResourceLink{}, row.Status, fmt.Errorf("%w: resource link child missing", errs.ErrManualRecovery)

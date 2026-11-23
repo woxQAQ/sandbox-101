@@ -169,7 +169,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 		After   Settings
 	}{current, settings, next})
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
@@ -180,7 +180,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.InsertCredential(ctx, accepted.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, accepted.ID, mac); err != nil {
 		return empty, err
 	}
 	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{

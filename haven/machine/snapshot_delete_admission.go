@@ -37,7 +37,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -74,7 +74,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 		return empty, err
 	}
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,

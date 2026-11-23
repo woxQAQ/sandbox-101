@@ -53,7 +53,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if cached, found, err := operations.Cached(ctx, operation.Scope{
+	if cached, found, err := operations.LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -175,7 +175,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
@@ -269,7 +269,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 			return empty, err
 		}
 	}
-	parentStatus, result, err := operations.ResultState(ctx, source.OperationID)
+	parentStatus, result, err := operations.StatusAndResult(ctx, source.OperationID)
 	if err != nil {
 		return empty, err
 	}
@@ -374,7 +374,7 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 	if cleanup != step.Hash {
 		return currentMachine, fmt.Errorf("cleanup frozen input changed")
 	}
-	projection, err := operations.Projection(d.ctx, step.OperationID)
+	projection, err := operations.LoadProjectionSource(d.ctx, step.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}

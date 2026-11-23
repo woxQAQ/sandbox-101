@@ -69,10 +69,10 @@ func SanitizedCommand(command Intent) Intent {
 	return result
 }
 
-// LiveTenantRequest returns the admitted parameters and result in one snapshot.
-func (r *Repository) LiveTenantRequest(ctx context.Context, id, tenant string) (Request, Result, error) {
+// LiveTenantRequestAndResult returns the admitted parameters and result in one snapshot.
+func (r *Repository) LiveTenantRequestAndResult(ctx context.Context, id, tenant string) (Request, Result, error) {
 	var result Result
-	row, err := r.Projection(ctx, id)
+	row, err := r.LoadProjectionSource(ctx, id)
 	if err != nil {
 		return Request{}, result, err
 	}
@@ -82,6 +82,6 @@ func (r *Repository) LiveTenantRequest(ctx context.Context, id, tenant string) (
 	return row.Request, row.Result, nil
 }
 
-func (r *Repository) RunResult(ctx context.Context, id string, result Result) error {
+func (r *Repository) MarkRunningWithResult(ctx context.Context, id string, result Result) error {
 	return r.updateResult(ctx, id, "running", result)
 }

@@ -279,7 +279,7 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State
 	parent.Status = "failed"
 	parent.Result.Error = "refill admission exhausted"
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -290,7 +290,7 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State
 	}); err != nil {
 		return operation.State{}, err
 	}
-	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
 		return operation.State{}, err
 	}
 	if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "failed", payload, SupplyState{

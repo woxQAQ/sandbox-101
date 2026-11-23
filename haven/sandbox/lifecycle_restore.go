@@ -27,7 +27,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		return empty, fmt.Errorf("%w: restore requires scoped snapshot, stopped instance, stop proof and key", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(p.store.Database).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -67,7 +67,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
+	if cached, found, err := operation.New(tx).LookupForReplay(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
 	}, request.Key, frozen); found || err != nil {
@@ -228,7 +228,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	destination.OperationID = accepted.ID
 	destination.SourceOperation = accepted.ID
 	destination.Instance = ""
-	if err = operation.New(tx).Insert(ctx, operation.Admission{
+	if err = operation.New(tx).RecordAdmission(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,

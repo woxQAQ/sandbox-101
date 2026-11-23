@@ -115,7 +115,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
-	if err = operations.Insert(ctx, operation.Admission{
+	if err = operations.RecordAdmission(ctx, operation.Admission{
 		ID:        parent.ID,
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
@@ -126,7 +126,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}); err != nil {
 		return empty, err
 	}
-	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
 	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
@@ -301,7 +301,7 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 			return nil, err
 		}
 	}
-	status, result, err := operations.ResultState(l.ctx, id)
+	status, result, err := operations.StatusAndResult(l.ctx, id)
 	if err != nil {
 		return nil, err
 	}

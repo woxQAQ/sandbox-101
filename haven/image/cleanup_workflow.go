@@ -357,7 +357,7 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 	}); err != nil {
 		return err
 	}
-	if err = operations.Complete(i.ctx, step.OperationID); err != nil {
+	if err = operations.MarkSucceeded(i.ctx, step.OperationID); err != nil {
 		return err
 	}
 	if err = i.fault("image_cleanup_completion_before_commit"); err != nil {
