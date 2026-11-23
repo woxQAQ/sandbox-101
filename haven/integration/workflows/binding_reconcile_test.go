@@ -115,7 +115,7 @@ func TestHavenBindingMaintenanceRetainsDiagnosticWithoutChangingOperation(t *tes
 	if err := service.Ephemeral.BindingError(claim.Result.SandboxID); !errors.Is(err, failure) {
 		t.Fatal("successful maintenance erased the last failure", err)
 	}
-	record, err := service.Operations.Operation(context.Background(), authorization.Principal{
+	record, err := service.OperationMonitor.Get(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, claim.ID)
 	if err != nil || record.Status != "succeeded" || service.Workers.State(claim.ID).Err != nil {

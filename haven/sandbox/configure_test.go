@@ -172,7 +172,7 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 			if _, err = service.CommandAdmission.Execute(ctx, principal, "repair", command); err != nil {
 				t.Fatal("fresh explicit configure did not repair fence", err)
 			}
-			original, err := service.Operations.GetOperation(ctx, "tenant", failed.ID)
+			original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", failed.ID)
 			if err != nil || !reflect.DeepEqual(original, failed) {
 				t.Fatal("repair rewrote original terminal", original, failed, err)
 			}
@@ -240,12 +240,12 @@ func TestHavenConfigureAdmission(t *testing.T) {
 	close(finish)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err = service.Operations.Wait(ctx, authorization.Principal{
+	if _, err = service.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, first.ID); err == nil {
 		t.Fatal("superseded configuration succeeded")
 	}
-	if _, err = service.Operations.Wait(ctx, authorization.Principal{
+	if _, err = service.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, newer.ID); err != nil {
 		t.Fatal(err)

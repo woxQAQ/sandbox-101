@@ -19,11 +19,11 @@ import (
 // ManagementServices names the node capabilities exposed to the local
 // administrator socket. Authentication comes from the unix peer, not tokens.
 type ManagementServices struct {
-	Node          *node.Service
-	Operations    *operation.Monitor
-	Images        *image.Images
-	GC            *gc.Collector
-	SupplyCleanup *supply.SupplyCleanup
+	Node             *node.Service
+	OperationMonitor *operation.Monitor
+	Images           *image.Images
+	GC               *gc.Collector
+	SupplyCleanup    *supply.SupplyCleanup
 }
 
 // NewManagement adapts authenticated local administration to Haven. The unix
@@ -67,7 +67,7 @@ func (s ManagementServices) status(c *gin.Context) {
 }
 
 func (s ManagementServices) getOperation(c *gin.Context) {
-	value, err := s.Operations.GetManagementOperation(c.Request.Context(), principal(c), c.Param("id"))
+	value, err := s.OperationMonitor.GetManagementOperation(c.Request.Context(), principal(c), c.Param("id"))
 	if err != nil {
 		writeError(c, err)
 		return
@@ -132,7 +132,7 @@ func (s ManagementServices) manage(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	result, err := s.Operations.WaitManagement(ctx, principal, accepted.ID)
+	result, err := s.OperationMonitor.WaitManagement(ctx, principal, accepted.ID)
 	if result.IsTerminalFailure(err) {
 		internalFailure(c)
 		return

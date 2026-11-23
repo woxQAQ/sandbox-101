@@ -245,7 +245,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(final), func(t *testing.T) {
 			service, backend, request, failed := failedCaptureFixture(t, final)
-			original, err := service.Operations.GetOperation(context.Background(), request.TenantID, failed.OperationID)
+			original, err := service.OperationMonitor.GetForTenant(context.Background(), request.TenantID, failed.OperationID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +271,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(current, failed) {
 				t.Fatal("cleanup rewrote failed capture", err)
 			}
-			result, err := service.Operations.GetOperation(context.Background(), request.TenantID, failed.OperationID)
+			result, err := service.OperationMonitor.GetForTenant(context.Background(), request.TenantID, failed.OperationID)
 			if err != nil || !reflect.DeepEqual(result, original) {
 				t.Fatal("cleanup changed original public result", err)
 			}

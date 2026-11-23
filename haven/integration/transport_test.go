@@ -857,7 +857,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		Authentication:   service.Authentication,
 		Catalog:          service.Catalog,
 		Templates:        service.TemplateCatalog,
-		Operations:       service.Operations,
+		OperationMonitor: service.OperationMonitor,
 		Tenants:          service.Tenants,
 		CommandAdmission: service.CommandAdmission,
 		Dataplane:        service.Dataplane,

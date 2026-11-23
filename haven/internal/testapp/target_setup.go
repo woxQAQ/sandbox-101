@@ -50,7 +50,7 @@ func TargetSetupWithFault(t *testing.T, fault func(string) error) (*application.
 		}
 		time.Sleep(time.Millisecond)
 	}
-	result, err := service.Operations.GetOperation(context.Background(), "tenant", stop.ID)
+	result, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", stop.ID)
 	if err != nil || result.Status != "succeeded" {
 		reason := service.Workers.State(stop.ID).Err
 		t.Fatal("stop did not succeed", result, reason, err)

@@ -74,7 +74,7 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 		} else {
 			err = errors.Join(err, lookup)
 		}
-		if current, lookup := sb.operations.GetOperation(cleanupCtx, principal.TenantID, accepted.ID); lookup == nil {
+		if current, lookup := sb.operationMonitor.GetForTenant(cleanupCtx, principal.TenantID, accepted.ID); lookup == nil {
 			accepted = current
 		}
 		return accepted, err

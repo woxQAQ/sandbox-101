@@ -229,7 +229,7 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 	if worker := service.Workers.State(original.ID); worker.Active || worker.Completed {
 		t.Errorf("renewal replay dispatched a worker: %+v", worker)
 	}
-	stored, err := service.Operations.Operation(ctx, principal, original.ID)
+	stored, err := service.OperationMonitor.Get(ctx, principal, original.ID)
 	if err != nil || !reflect.DeepEqual(stored, original) {
 		t.Errorf("renewal replay changed the persisted operation: %+v, %v", stored, err)
 	}
@@ -294,7 +294,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 			if err = service.State.Database().QueryRowContext(ctx, "SELECT id FROM operations WHERE scope_id='tenant' AND idem_key=?", "expire:"+id+":"+deadline.Format(time.RFC3339Nano)).Scan(&acceptedRecord); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.Wait(ctx, principal, acceptedRecord); err != nil {
+			if _, err = service.OperationMonitor.Wait(ctx, principal, acceptedRecord); err != nil {
 				t.Fatal(err)
 			}
 			sandboxView, err := service.Catalog.Get(ctx, principal, id)

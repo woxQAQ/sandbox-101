@@ -183,7 +183,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 }
 
 func (c *Collector) wait(ctx context.Context, principal authorization.Principal, id string) (types.GCReport, error) {
-	_, err := c.operations.WaitManagement(ctx, principal, id)
+	_, err := c.operationMonitor.WaitManagement(ctx, principal, id)
 	step, lookup := Load(context.Background(), c.store.Database, id)
 	if lookup != nil {
 		return types.GCReport{}, errors.Join(err, lookup)

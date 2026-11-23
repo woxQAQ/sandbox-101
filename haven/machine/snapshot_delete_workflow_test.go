@@ -289,7 +289,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 		t.Run(fmt.Sprint(clones), func(t *testing.T) {
 			fixture := snapshotDeleteFixture(t, clones)
 			service := fixture.Service
-			original, err := service.Operations.GetOperation(context.Background(), "tenant", fixture.Capture.ID)
+			original, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", fixture.Capture.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +345,7 @@ func TestHavenSnapshotDelete(t *testing.T) {
 				}
 				snapshotDeleteCost(t, fixture, want)
 			}
-			after, err := service.Operations.GetOperation(context.Background(), "tenant", fixture.Capture.ID)
+			after, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", fixture.Capture.ID)
 			if err != nil || !reflect.DeepEqual(after, original) {
 				t.Fatal("snapshot delete changed original capture result", err)
 			}

@@ -110,7 +110,7 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 					t.Fatal("failed handoff retired storage responsibility", retained, storageBefore, err)
 				}
 				if mode == "delete" {
-					after, err := service.Operations.GetOperation(ctx, principal.TenantID, original.ID)
+					after, err := service.OperationMonitor.GetForTenant(ctx, principal.TenantID, original.ID)
 					if err != nil || !reflect.DeepEqual(after, original) {
 						t.Fatal("failed deletion rewrote the original checkpoint result", err)
 					}

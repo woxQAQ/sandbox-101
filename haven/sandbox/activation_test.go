@@ -92,7 +92,7 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 				paused,
 				failed,
 			} {
-				unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)
+				unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
 				if err != nil || !reflect.DeepEqual(unchanged, original) {
 					t.Fatal("repair rewrote an original terminal", original, unchanged, err)
 				}
@@ -182,7 +182,7 @@ func TestHavenSecretRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err = restarted.Operations.Wait(ctx, authorization.Principal{
+	if _, err = restarted.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, configured.ID); err != nil {
 		t.Fatal(err)

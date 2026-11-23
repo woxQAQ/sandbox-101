@@ -48,7 +48,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'cache:%')").Scan(&caches, &cacheCharges); err != nil || caches != 0 || cacheCharges != 0 {
 		t.Fatal(caches, cacheCharges, err)
 	}
-	unchanged, err := service.Operations.GetManagementOperation(ctx, authorization.Principal{
+	unchanged, err := service.OperationMonitor.GetManagementOperation(ctx, authorization.Principal{
 		Root: true,
 	}, original.ID)
 	if err != nil || !reflect.DeepEqual(unchanged, original) {
@@ -212,7 +212,7 @@ func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
 				t.Fatal("failed GC completion lost durable child progress", before, err)
 			}
 			childID := before.State.Report.Collected[0].OperationID
-			child, err := service.Operations.GetManagementOperation(ctx, root, childID)
+			child, err := service.OperationMonitor.GetManagementOperation(ctx, root, childID)
 			if err != nil || child.Status != "succeeded" {
 				t.Fatal("fixture did not cross independent child completion", child, err)
 			}
@@ -231,7 +231,7 @@ func TestHavenGCCompletionRetainsChildProgress(t *testing.T) {
 			if runtime.Count("stop") != stops || runtime.Count("remove") != removals {
 				t.Fatal("GC replay repeated retired child effects")
 			}
-			unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)
+			unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
 			if err != nil || !reflect.DeepEqual(unchanged, original) {
 				t.Fatal("GC changed original supply failure", unchanged, err)
 			}

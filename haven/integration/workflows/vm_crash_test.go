@@ -78,7 +78,7 @@ func TestHavenStepAbruptSQLiteRecovery(t *testing.T) {
 			if err != nil || string(calls) != "launch\n" {
 				t.Fatalf("crash recovery called Launch again: %q %v", calls, err)
 			}
-			result, err := service.Operations.GetOperation(context.Background(), "tenant", operation)
+			result, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", operation)
 			if err != nil {
 				t.Fatal(err)
 			}

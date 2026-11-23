@@ -101,7 +101,7 @@ func TestHavenImageReplayDoesNotRunConflictingRequest(t *testing.T) {
 			if err != nil || replay.ID != id {
 				t.Fatal(replay, err)
 			}
-			failed, err := service.Operations.WaitManagement(ctx, root, id)
+			failed, err := service.OperationMonitor.WaitManagement(ctx, root, id)
 			if err == nil || failed.Status != "failed" {
 				t.Fatal("matching replay did not resume the frozen import", failed, err)
 			}
@@ -114,10 +114,10 @@ func TestHavenImageReplayDoesNotRunConflictingRequest(t *testing.T) {
 }
 
 type imageFixture struct {
-	State      *store.State
-	Images     *image.Images
-	Operations *operation.Monitor
-	Workers    *execution.Workers
+	State            *store.State
+	Images           *image.Images
+	OperationMonitor *operation.Monitor
+	Workers          *execution.Workers
 }
 
 func newImageFixture(t *testing.T) *imageFixture {
@@ -135,8 +135,8 @@ func newImageFixture(t *testing.T) *imageFixture {
 			Gate:                 gate,
 			Workers:              workers,
 		}, image.ImageOptions{}),
-		Operations: operation.NewMonitor(state.Database(), workers, state.Identity().Identity),
-		Workers:    workers,
+		OperationMonitor: operation.NewMonitor(state.Database(), workers, state.Identity().Identity),
+		Workers:          workers,
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

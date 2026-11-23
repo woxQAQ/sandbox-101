@@ -107,7 +107,7 @@ func TestHavenBackupRecoveryFence(t *testing.T) {
 		running,
 		pending,
 	} {
-		copy, err := reviewed.Operations.GetOperation(ctx, "tenant", acceptedOperation.ID)
+		copy, err := reviewed.OperationMonitor.GetForTenant(ctx, "tenant", acceptedOperation.ID)
 		if err != nil || !reflect.DeepEqual(copy, acceptedOperation) {
 			t.Fatal("backup changed committed result or pending identity", copy, acceptedOperation, err)
 		}

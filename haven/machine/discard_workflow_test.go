@@ -100,7 +100,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 				service, b, source = failedCloneFixture(t, kind == "clone-transferred")
 				backend = b
 			}
-			original, err := service.Operations.GetOperation(context.Background(), source.Input.TenantID, source.OperationID)
+			original, err := service.OperationMonitor.GetForTenant(context.Background(), source.Input.TenantID, source.OperationID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +119,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 			if err != nil || cached.ID != accepted.ID || cached.Status != "succeeded" {
 				t.Fatal("completed discard did not replay original result", err)
 			}
-			replay, err := service.Operations.GetOperation(context.Background(), source.Input.TenantID, source.OperationID)
+			replay, err := service.OperationMonitor.GetForTenant(context.Background(), source.Input.TenantID, source.OperationID)
 			if err != nil || !bytes.Equal(operation.Encode(replay), operation.Encode(original)) {
 				t.Fatal("reopen changed failed operation", err)
 			}
@@ -152,7 +152,7 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 				}
 				return nil
 			})
-			original, err := service.Operations.GetOperation(context.Background(), "tenant", source.OperationID)
+			original, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", source.OperationID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 		} {
 			t.Run(write.table+"/"+mode, func(t *testing.T) {
 				service, backend, source := failedColdFixture(t)
-				original, err := service.Operations.GetOperation(context.Background(), "tenant", source.OperationID)
+				original, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", source.OperationID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -369,7 +369,7 @@ func discardSucceeded(t *testing.T, service *application.App, discard machine.Di
 	if _, err := os.Lstat(source.Input.Resource.Dir); !os.IsNotExist(err) {
 		t.Fatal("discard reported success with candidate files retained", err)
 	}
-	after, err := service.Operations.GetOperation(context.Background(), source.Input.TenantID, source.OperationID)
+	after, err := service.OperationMonitor.GetForTenant(context.Background(), source.Input.TenantID, source.OperationID)
 	if err != nil || !bytes.Equal(operation.Encode(after), original) {
 		t.Fatal("discard rewrote original public failure", err)
 	}

@@ -110,7 +110,7 @@ func TestHavenStartupRejectsMalformedWarmStepBeforeEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.Wait(ctx, principal, claim.ID); !errors.Is(err, errs.ErrInterrupted) {
+	if _, err = service.OperationMonitor.Wait(ctx, principal, claim.ID); !errors.Is(err, errs.ErrInterrupted) {
 		t.Fatal(err)
 	}
 	testutil.WaitFixtureWorker(t, service, claim.ID)

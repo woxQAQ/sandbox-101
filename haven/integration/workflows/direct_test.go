@@ -178,7 +178,7 @@ func TestHavenDirectRetirementUnknownRetainsFence(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	original, err := service.Operations.GetOperation(ctx, "tenant", claim.ID)
+	original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", claim.ID)
 	if err != nil || !reflect.DeepEqual(original, claim) {
 		t.Fatal("independent retirement changed claim result", original, claim, err)
 	}
@@ -217,7 +217,7 @@ func TestHavenDirectDataAdmissionRevalidatesSavedPolicy(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT id FROM operations WHERE scope_kind='tenant' AND scope_id='tenant' AND idem_key=?", key).Scan(&acceptedRecord); err != nil {
 		t.Fatal("network rejection lacks durable revalidation", err)
 	}
-	if _, err = service.Operations.Wait(ctx, principal, acceptedRecord); err != nil {
+	if _, err = service.OperationMonitor.Wait(ctx, principal, acceptedRecord); err != nil {
 		t.Fatal(err)
 	}
 	after, err := service.Dataplane.Ready(ctx, principal, before.ID)
@@ -331,7 +331,7 @@ func TestHavenDirectRetirementReopensOriginalIntent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	original, err := service.Operations.GetOperation(ctx, "tenant", claim.ID)
+	original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", claim.ID)
 	if err != nil || !reflect.DeepEqual(original, claim) {
 		t.Fatal("policy cleanup changed original claim", original, claim, err)
 	}
@@ -519,7 +519,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			original, err := service.Operations.GetOperation(ctx, "tenant", claim.ID)
+			original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", claim.ID)
 			if err != nil || !reflect.DeepEqual(original, claim) {
 				t.Fatal("retirement altered original claim result", original, claim, err)
 			}

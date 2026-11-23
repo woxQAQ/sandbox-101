@@ -723,7 +723,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 				t.Fatal(err)
 			}
 			service = testapp.ReopenCloneService(t, service, runtime)
-			result, err := service.Operations.WaitManagement(ctx, authorization.Principal{
+			result, err := service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, operation.ID)
@@ -781,7 +781,7 @@ func TestHavenActualOCIImportRejectsReplacedOutput(t *testing.T) {
 		}
 	}
 	service = testapp.ReopenCloneService(t, service, runtime)
-	result, err := service.Operations.WaitManagement(ctx, authorization.Principal{
+	result, err := service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 		Root:     true,
 		TenantID: "root",
 	}, operation.ID)
@@ -815,7 +815,7 @@ func TestHavenActualOCIImportPublishesSingleCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := service.Operations.WaitManagement(ctx, authorization.Principal{
+			result, err := service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, operation.ID)

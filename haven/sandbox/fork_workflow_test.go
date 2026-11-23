@@ -231,7 +231,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err = service.Operations.Wait(ctx, principal, acceptedOperation.ID); !errors.Is(err, errs.ErrInterrupted) {
+				if _, err = service.OperationMonitor.Wait(ctx, principal, acceptedOperation.ID); !errors.Is(err, errs.ErrInterrupted) {
 					t.Fatal(err)
 				}
 			}
@@ -257,7 +257,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 			}
 			faults.Set(nil)
 			service = testapp.ReopenCloneServiceWithFault(fixtureOwner, service, service.Options.Backend, faults.Check)
-			result, err := service.Operations.Wait(ctx, principal, acceptedOperation.ID)
+			result, err := service.OperationMonitor.Wait(ctx, principal, acceptedOperation.ID)
 			if err != nil || result.Status != "succeeded" || !slices.Equal(expected, result.Result.SandboxIDs) {
 				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal("reopen changed batch targets or lost completion", result, err, reason)
@@ -325,7 +325,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.Wait(ctx, principal, accepted.ID); err == nil {
+			if _, err = service.OperationMonitor.Wait(ctx, principal, accepted.ID); err == nil {
 				t.Fatal("rejected group completion reported success")
 			}
 			group, err := sandbox.LoadFork(ctx, service.State.Database(), accepted.ID)

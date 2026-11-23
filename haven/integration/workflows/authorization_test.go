@@ -40,17 +40,17 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	if err != nil || scoped.SandboxID != record.ID {
 		t.Fatal(scoped, err)
 	}
-	if _, err = service.Operations.Operation(ctx, scoped, first.ID); err != nil {
+	if _, err = service.OperationMonitor.Get(ctx, scoped, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{
 		second.ID,
 		"missing-operation",
 	} {
-		if _, err = service.Operations.Operation(ctx, scoped, id); err == nil {
+		if _, err = service.OperationMonitor.Get(ctx, scoped, id); err == nil {
 			t.Fatal("sandbox credential discovered foreign operation", id)
 		}
-		if _, err = service.Operations.Wait(ctx, scoped, id); err == nil {
+		if _, err = service.OperationMonitor.Wait(ctx, scoped, id); err == nil {
 			t.Fatal("sandbox credential polled foreign operation", id)
 		}
 	}
@@ -62,7 +62,7 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.Wait(ctx, scoped, renewal.ID); err != nil {
+	if _, err = service.OperationMonitor.Wait(ctx, scoped, renewal.ID); err != nil {
 		t.Fatal("sandbox credential cannot poll its lease operation", err)
 	}
 	checkpoint, err := service.CommandAdmission.Execute(ctx, tenant, "checkpoint", operation.Intent{
@@ -82,10 +82,10 @@ func TestHavenSandboxOperationAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.Operation(ctx, scoped, fork.ID); err == nil {
+	if _, err = service.OperationMonitor.Get(ctx, scoped, fork.ID); err == nil {
 		t.Fatal("source sandbox credential read fork destination")
 	}
-	if _, err = service.Operations.Operation(ctx, authorization.Principal{
+	if _, err = service.OperationMonitor.Get(ctx, authorization.Principal{
 		TenantID: "other",
 	}, first.ID); err == nil {
 		t.Fatal("foreign tenant discovered operation")

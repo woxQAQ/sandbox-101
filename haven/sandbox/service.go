@@ -37,7 +37,7 @@ type SandboxDependencies struct {
 	CommandIdentity        *operation.CommandIdentity
 	AdmissionPolicy        *AdmissionPolicy
 	Availability           *execution.Availability
-	Operations             *operation.Monitor
+	OperationMonitor       *operation.Monitor
 	Activations            *Activations
 	WarmClaims             *WarmClaims
 	Provisioning           *Provisioning
@@ -59,7 +59,7 @@ type Sandboxes struct {
 	identity               *operation.CommandIdentity
 	policy                 *AdmissionPolicy
 	availability           *execution.Availability
-	operations             *operation.Monitor
+	operationMonitor       *operation.Monitor
 	activations            *Activations
 	warmClaims             *WarmClaims
 	provisioning           *Provisioning
@@ -89,7 +89,7 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies) *Sandbox
 		identity:               dependencies.CommandIdentity,
 		policy:                 dependencies.AdmissionPolicy,
 		availability:           dependencies.Availability,
-		operations:             dependencies.Operations,
+		operationMonitor:       dependencies.OperationMonitor,
 		activations:            dependencies.Activations,
 		warmClaims:             dependencies.WarmClaims,
 		provisioning:           dependencies.Provisioning,

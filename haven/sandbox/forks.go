@@ -45,7 +45,7 @@ type ForkDependencies struct {
 	CommandIdentity        *operation.CommandIdentity
 	AdmissionPolicy        *AdmissionPolicy
 	Availability           *execution.Availability
-	Operations             *operation.Monitor
+	OperationMonitor       *operation.Monitor
 	Provisioning           *Provisioning
 	Captures               *machine.Captures
 	Deletion               *machine.Deletion
@@ -70,7 +70,7 @@ type Forks struct {
 	identity               *operation.CommandIdentity
 	policy                 *AdmissionPolicy
 	availability           *execution.Availability
-	operations             *operation.Monitor
+	operationMonitor       *operation.Monitor
 	provisioning           *Provisioning
 	captures               *machine.Captures
 	deletion               *machine.Deletion
@@ -100,7 +100,7 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 		identity:               dependencies.CommandIdentity,
 		policy:                 dependencies.AdmissionPolicy,
 		availability:           dependencies.Availability,
-		operations:             dependencies.Operations,
+		operationMonitor:       dependencies.OperationMonitor,
 		provisioning:           dependencies.Provisioning,
 		captures:               dependencies.Captures,
 		deletion:               dependencies.Deletion,

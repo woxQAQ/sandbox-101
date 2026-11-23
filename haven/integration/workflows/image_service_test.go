@@ -32,7 +32,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 				TenantID: "root",
 			}
 			service.Reconcile.Dispatch(id)
-			original, err := service.Operations.WaitManagement(ctx, root, id)
+			original, err := service.OperationMonitor.WaitManagement(ctx, root, id)
 			if err == nil || original.Status != "failed" {
 				t.Fatal(original, err)
 			}
@@ -54,7 +54,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			retained, err := service.Operations.WaitManagement(ctx, root, collector.ID)
+			retained, err := service.OperationMonitor.WaitManagement(ctx, root, collector.ID)
 			if err == nil || retained.Status != "pending" || ctx.Err() != nil {
 				t.Fatal("completion did not retain unfinished responsibility", retained, err)
 			}
@@ -86,7 +86,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			if err = service.Reconcile.ResumePending(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.WaitManagement(ctx, root, collector.ID); err != nil {
+			if _, err = service.OperationMonitor.WaitManagement(ctx, root, collector.ID); err != nil {
 				t.Fatal(err)
 			}
 			var remaining int
@@ -98,7 +98,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			).Scan(&remaining); err != nil || remaining != 0 {
 				t.Fatal("confirmed cleanup retained discharged responsibility", remaining, err)
 			}
-			unchanged, err := service.Operations.GetManagementOperation(ctx, root, id)
+			unchanged, err := service.OperationMonitor.GetManagementOperation(ctx, root, id)
 			if err != nil || !reflect.DeepEqual(original, unchanged) {
 				t.Fatal("collector rewrote the original import outcome", unchanged, err)
 			}

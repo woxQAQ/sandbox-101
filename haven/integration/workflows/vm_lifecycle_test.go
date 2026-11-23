@@ -91,14 +91,14 @@ func TestVMActivationSerializesCompetingEffects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.Wait(ctx, principal, other.ID); err != nil {
+			if _, err = service.OperationMonitor.Wait(ctx, principal, other.ID); err != nil {
 				t.Fatalf("independent VM could not activate: %v", err)
 			}
 			if !service.Workers.State(competing.ID).Active || backend.Count("stop") != 0 {
 				t.Fatalf("%s advanced during activation", action)
 			}
 			unblock()
-			result, err := service.Operations.Wait(ctx, principal, competing.ID)
+			result, err := service.OperationMonitor.Wait(ctx, principal, competing.ID)
 			if err != nil || result.Status != "succeeded" {
 				t.Fatalf("%s after activation exited: %s, %v", action, result.Status, err)
 			}
@@ -342,7 +342,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if step.Status != "failed" || step.State.Witness != "" {
 		t.Fatal("failure fabricated a witness")
 	}
-	original, err := service.Operations.GetOperation(context.Background(), "tenant", failed.ID)
+	original, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", failed.ID)
 	if err != nil || original.Status != "failed" {
 		t.Fatal("original failure not fixed", err)
 	}
@@ -390,7 +390,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if !errors.Is(err, errs.ErrInterrupted) {
 		t.Fatal("cleanup was not paused after its durable admission", err)
 	}
-	parentFailure, err := service.Operations.GetOperation(context.Background(), "tenant", current.ID)
+	parentFailure, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", current.ID)
 	if err != nil || parentFailure.Status != "failed" {
 		t.Fatal("released parent was not fixed before cleanup", err)
 	}
@@ -400,7 +400,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if deleted.Status != "succeeded" {
 		t.Fatal("release did not retire its own responsibility", deleted.State)
 	}
-	parentAfterCleanup, err := service.Operations.GetOperation(context.Background(), "tenant", current.ID)
+	parentAfterCleanup, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", current.ID)
 	if err != nil || !bytes.Equal(operation.Encode(parentAfterCleanup), parentFailureBytes) {
 		t.Fatal("independent cleanup rewrote its failed parent's public result", err)
 	}
@@ -408,7 +408,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessAfter); err != nil || !bytes.Equal(witnessBefore, witnessAfter) {
 		t.Fatal("cleanup rewrote historical generation proof", err)
 	}
-	old, err := service.Operations.GetOperation(context.Background(), "tenant", failed.ID)
+	old, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", failed.ID)
 	if err != nil || !bytes.Equal(operation.Encode(old), originalBytes) {
 		t.Fatal("another generation/cleanup changed original failure", err)
 	}

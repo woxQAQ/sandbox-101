@@ -109,11 +109,11 @@ func (c *Collector) run(step Step) error {
 				item.OperationID = child.ID
 				if err == nil {
 					if scope == "" {
-						_, err = c.operations.WaitManagement(ctx, authorization.Principal{
+						_, err = c.operationMonitor.WaitManagement(ctx, authorization.Principal{
 							Root: true,
 						}, child.ID)
 					} else {
-						_, err = c.operations.Wait(ctx, authorization.Principal{
+						_, err = c.operationMonitor.Wait(ctx, authorization.Principal{
 							TenantID: scope,
 						}, child.ID)
 					}

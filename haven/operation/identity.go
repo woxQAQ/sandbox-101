@@ -68,20 +68,20 @@ func (r *Repository) ReplaceLiveBody(ctx context.Context, id string, body []byte
 // CommandIdentity binds credential-bearing retries to the original authenticated
 // role and accepted operation. Complete secrets remain only in the shared registry.
 type CommandIdentity struct {
-	ctx        context.Context
-	operations *Repository
-	view       *Monitor
-	registry   *ephemeral.Registry
-	sign       func(...string) string
+	ctx              context.Context
+	repository       *Repository
+	operationMonitor *Monitor
+	registry         *ephemeral.Registry
+	sign             func(...string) string
 }
 
-func NewCommandIdentity(ctx context.Context, operations *Repository, view *Monitor, registry *ephemeral.Registry, sign func(...string) string) *CommandIdentity {
+func NewCommandIdentity(ctx context.Context, repository *Repository, operations *Monitor, registry *ephemeral.Registry, sign func(...string) string) *CommandIdentity {
 	return &CommandIdentity{
-		ctx:        ctx,
-		operations: operations,
-		view:       view,
-		registry:   registry,
-		sign:       sign,
+		ctx:              ctx,
+		repository:       repository,
+		operationMonitor: operations,
+		registry:         registry,
+		sign:             sign,
 	}
 }
 
@@ -105,14 +105,14 @@ type CommandCredentials struct {
 // Existing preserves scoped publication and original credential matching before
 // restoring the accepted request's in-memory secrets.
 func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization.Principal, key string, credentials CommandCredentials) (State, bool, error) {
-	id, err := ci.operations.RequestID(ctx, principal.TenantID, key)
+	id, err := ci.repository.RequestID(ctx, principal.TenantID, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return State{}, false, nil
 	}
 	if err != nil {
 		return State{}, false, err
 	}
-	accepted, err := ci.view.Operation(ctx, principal, id)
+	accepted, err := ci.operationMonitor.Get(ctx, principal, id)
 	if err != nil {
 		return accepted, true, err
 	}
@@ -126,7 +126,7 @@ func (ci *CommandIdentity) Existing(ctx context.Context, principal authorization
 }
 
 func (ci *CommandIdentity) MatchCredentials(operationID, mac string) error {
-	expected, err := ci.operations.CredentialMAC(ci.ctx, operationID)
+	expected, err := ci.repository.CredentialMAC(ci.ctx, operationID)
 	if err != nil {
 		return err
 	}

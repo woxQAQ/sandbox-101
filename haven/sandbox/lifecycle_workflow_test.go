@@ -74,7 +74,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			done, err := service.Operations.Wait(ctx, principal, accepted.ID)
+			done, err := service.OperationMonitor.Wait(ctx, principal, accepted.ID)
 			if err != nil || done.Status != "succeeded" || backend.Count("capture") != captures {
 				t.Fatal("replay failed to reuse original child", done, err)
 			}

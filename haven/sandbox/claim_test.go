@@ -44,7 +44,7 @@ func TestHavenClaimNetworkModeVocabulary(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err = service.Operations.Wait(ctx, principal, accepted.ID); err != nil {
+	if _, err = service.OperationMonitor.Wait(ctx, principal, accepted.ID); err != nil {
 		t.Fatal(err)
 	}
 	view, err := service.Catalog.Get(ctx, principal, accepted.Result.SandboxID)

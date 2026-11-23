@@ -37,7 +37,7 @@ func (p *Plane) ensureResume(ctx context.Context, principal authorization.Princi
 		if err != nil {
 			return err
 		}
-		_, err = p.operations.Wait(ctx, authorization.Principal{
+		_, err = p.operationMonitor.Wait(ctx, authorization.Principal{
 			TenantID: view.TenantID,
 		}, accepted.ID)
 		return err
@@ -49,7 +49,7 @@ func (p *Plane) ensureResume(ctx context.Context, principal authorization.Princi
 		if lifecycle.Input.OwnerTenantID != view.TenantID || lifecycle.Input.Sandbox.ID != id || lifecycle.Input.Command.Action != "resume" {
 			return fmt.Errorf("%w: automatic resume ownership changed", errs.ErrConflict)
 		}
-		_, err = p.operations.Wait(ctx, authorization.Principal{
+		_, err = p.operationMonitor.Wait(ctx, authorization.Principal{
 			TenantID: lifecycle.Input.RequestTenantID,
 		}, lifecycle.OperationID)
 		return err

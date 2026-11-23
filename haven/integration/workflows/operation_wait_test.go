@@ -52,7 +52,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker did not reach durable completion")
 	}
-	current, err := service.Operations.GetOperation(context.Background(), "tenant", accepted.ID)
+	current, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", accepted.ID)
 	if err != nil || current.Status != "succeeded" {
 		t.Fatal("fixture did not publish terminal metadata before blocking", current, err)
 	}
@@ -69,7 +69,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err = service.Operations.Wait(ctx, authorization.Principal{
+	if _, err = service.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, accepted.ID); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("terminal metadata escaped the worker completion barrier", err)
@@ -82,7 +82,7 @@ func TestHavenOperationWaitRetainsWorkerCustodyAfterCommit(t *testing.T) {
 	if worker.Active || !worker.Completed || !errors.Is(worker.Err, interrupted) {
 		t.Fatal("worker result was not published atomically", worker)
 	}
-	if result, err := service.Operations.Wait(context.Background(), authorization.Principal{
+	if result, err := service.OperationMonitor.Wait(context.Background(), authorization.Principal{
 		TenantID: "tenant",
 	}, accepted.ID); err != nil || result.Status != "succeeded" {
 		t.Fatal("runner diagnostic rewrote committed operation success", result, err)

@@ -30,8 +30,8 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 	})
 	peer := adminPeer(t)
 	services := api.ManagementServices{
-		Images:     app.Images,
-		Operations: app.Operations,
+		Images:           app.Images,
+		OperationMonitor: app.OperationMonitor,
 	}
 	post := func(ctx context.Context, wantStatus int, wantCode, wantMessage string) {
 		t.Helper()
@@ -52,7 +52,7 @@ func TestManagementWaitForFailedImport(t *testing.T) {
 	// that row, while the worker reader still reports custody.
 	ctx, cancel := context.WithCancel(peer)
 	defer cancel()
-	services.Operations = operation.NewMonitor(app.State.Database(), cancelDuringCustody{cancel}, app.State.Identity().Identity)
+	services.OperationMonitor = operation.NewMonitor(app.State.Database(), cancelDuringCustody{cancel}, app.State.Identity().Identity)
 	post(ctx, 503, types.CodeUnknown, "operation wait ended")
 
 	recorder := httptest.NewRecorder()

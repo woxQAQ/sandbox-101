@@ -43,7 +43,7 @@ type PlaneDependencies struct {
 	AdmissionPolicy       *sandbox.AdmissionPolicy
 	Sandboxes             *sandbox.Sandboxes
 	Lifecycle             *sandbox.Lifecycle
-	Operations            *operation.Monitor
+	OperationMonitor      *operation.Monitor
 	Activations           *sandbox.Activations
 }
 
@@ -64,7 +64,7 @@ type Plane struct {
 	policy                *sandbox.AdmissionPolicy
 	sandboxes             *sandbox.Sandboxes
 	lifecycle             *sandbox.Lifecycle
-	operations            *operation.Monitor
+	operationMonitor      *operation.Monitor
 	activations           *sandbox.Activations
 	opts                  PlaneOptions
 }
@@ -89,7 +89,7 @@ func NewPlane(state *store.State, dependencies PlaneDependencies, options PlaneO
 		policy:                dependencies.AdmissionPolicy,
 		sandboxes:             dependencies.Sandboxes,
 		lifecycle:             dependencies.Lifecycle,
-		operations:            dependencies.Operations,
+		operationMonitor:      dependencies.OperationMonitor,
 		activations:           dependencies.Activations,
 		opts:                  options,
 	}

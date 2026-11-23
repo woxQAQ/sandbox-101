@@ -200,7 +200,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 			Authentication:   service.Authentication,
 			Catalog:          service.Catalog,
 			Templates:        service.TemplateCatalog,
-			Operations:       service.Operations,
+			OperationMonitor: service.OperationMonitor,
 			Tenants:          service.Tenants,
 			CommandAdmission: service.CommandAdmission,
 			Dataplane:        service.Dataplane,
@@ -216,11 +216,11 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 	}
 	localServer := &http.Server{
 		Handler: api.NewManagement(api.ManagementServices{
-			Node:          service.Node,
-			Images:        service.Images,
-			GC:            service.GC,
-			SupplyCleanup: service.SupplyCleanup,
-			Operations:    service.Operations,
+			Node:             service.Node,
+			Images:           service.Images,
+			GC:               service.GC,
+			SupplyCleanup:    service.SupplyCleanup,
+			OperationMonitor: service.OperationMonitor,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,

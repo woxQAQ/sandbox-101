@@ -155,7 +155,7 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 	service = testapp.ReopenCloneService(t, service, service.Options.Backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	failed, err := service.Operations.Wait(ctx, authorization.Principal{
+	failed, err := service.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedRecord.ID)
 	if err == nil || failed.Status != "failed" || executions.Load() != 0 {
@@ -245,7 +245,7 @@ func TestHavenRollingTemplateBuildKeepsPublishedVersion(t *testing.T) {
 				}
 			}
 			close(resume)
-			finished, err := service.Operations.Wait(ctx, principal, build.ID)
+			finished, err := service.OperationMonitor.Wait(ctx, principal, build.ID)
 			if finished.Status != scenario.status || (err != nil) != (scenario.status == "failed") {
 				t.Fatal("unexpected build outcome", finished.Status, err)
 			}

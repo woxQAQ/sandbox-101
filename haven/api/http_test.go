@@ -19,7 +19,7 @@ func TestClaimResponsePreference(t *testing.T) {
 	handler := api.New(api.Services{
 		Authentication:   app.Authentication,
 		CommandAdmission: app.CommandAdmission,
-		Operations:       app.Operations,
+		OperationMonitor: app.OperationMonitor,
 		OperationViews:   app.OperationViews,
 	})
 	for _, tc := range []struct {
@@ -86,7 +86,7 @@ func TestClaimReplayDuringDrain(t *testing.T) {
 	handler := api.New(api.Services{
 		Authentication:   app.Authentication,
 		CommandAdmission: app.CommandAdmission,
-		Operations:       app.Operations,
+		OperationMonitor: app.OperationMonitor,
 		OperationViews:   app.OperationViews,
 	})
 	const body = `{"template_id":"cold","ttl_seconds":60,"env":{"TOKEN":{"guest":false,"value":"fixture-value","inject":{"hosts":["example.test"],"header":"Authorization"}}}}`

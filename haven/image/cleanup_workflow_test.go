@@ -46,7 +46,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 				t.Fatal("unconfirmed collection retired the import reservation", imports, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
-			if _, err = service.Operations.WaitManagement(ctx, authorization.Principal{
+			if _, err = service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, collector.ID); err != nil {
@@ -55,7 +55,7 @@ func TestHavenActualOCIWorkCleanupRecovery(t *testing.T) {
 			if imports, err = quota.CountReservation(ctx, service.State.Database(), owner); err != nil || imports != 0 {
 				t.Fatal(imports, err)
 			}
-			unchanged, err := service.Operations.GetManagementOperation(ctx, authorization.Principal{
+			unchanged, err := service.OperationMonitor.GetManagementOperation(ctx, authorization.Principal{
 				Root: true,
 			}, original.ID)
 			if err != nil || !reflect.DeepEqual(unchanged, original) {

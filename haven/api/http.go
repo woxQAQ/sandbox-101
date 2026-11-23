@@ -24,7 +24,7 @@ type Services struct {
 	Authentication   *authorization.Authentication
 	Catalog          *sandbox.Catalog
 	Templates        *supply.TemplateCatalog
-	Operations       *operation.Monitor
+	OperationMonitor *operation.Monitor
 	OperationViews   *sandbox.OperationViews
 	Tenants          *authorization.Tenants
 	CommandAdmission *sandbox.CommandAdmission
@@ -342,6 +342,62 @@ func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Comma
 	return command, true
 }
 
+// submit accepts one business command and delivers the accepted operation
+// synchronously or as an asynchronous pointer. All routes share this single
+// submit, wait and response behavior.
+func (h *Services) submit(c *gin.Context, command types.Command) {
+	request := c.Request
+	key := request.Header.Get("Idempotency-Key")
+	if len(key) < 1 || len(key) > 256 {
+		invalidRequest(c, "Idempotency-Key required (max 256 bytes)")
+		return
+	}
+	accepted, err := h.CommandAdmission.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if prefersAsync(request.Header.Values("Prefer")) {
+		view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
+		if err != nil {
+			writeError(c, err)
+			return
+		}
+		c.Header("Location", "/v1/operations/"+accepted.ID)
+		c.JSON(http.StatusAccepted, operationView(view))
+		return
+	}
+	accepted, err = h.OperationMonitor.Wait(request.Context(), principal(c), accepted.ID)
+	if err != nil && !accepted.IsTerminalFailure(err) {
+		writeError(c, err)
+		return
+	}
+	view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if view.Status == "failed" {
+		internalFailure(c)
+		return
+	}
+	c.JSON(http.StatusOK, view.Result)
+}
+
+// operationView adds transport error data to a copy of the frozen business
+// view. Internal diagnostics never determine HTTP categories or enter this
+// view. Both asynchronous answers and operation GET use this representation.
+func operationView(view types.Operation) types.Operation {
+	view.Error = nil
+	if view.Status == "failed" {
+		view.Error = &types.ApiError{
+			Code:    types.CodeInternal,
+			Message: "internal service error",
+		}
+	}
+	return view
+}
+
 // prefersAsync checks the first respond-async preference across all Prefer fields.
 // RFC 7240 defines it without a value and treats an empty value as absent.
 func prefersAsync(fields []string) bool {
@@ -380,60 +436,4 @@ func cutPreference(field string) (preference, rest string) {
 		}
 	}
 	return field, ""
-}
-
-// submit accepts one business command and delivers the accepted operation
-// synchronously or as an asynchronous pointer. All routes share this single
-// submit, wait and response behavior.
-func (h *Services) submit(c *gin.Context, command types.Command) {
-	request := c.Request
-	key := request.Header.Get("Idempotency-Key")
-	if len(key) < 1 || len(key) > 256 {
-		invalidRequest(c, "Idempotency-Key required (max 256 bytes)")
-		return
-	}
-	accepted, err := h.CommandAdmission.Submit(request.Context(), principal(c), key, operation.NewIntent(command))
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	if prefersAsync(request.Header.Values("Prefer")) {
-		view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		c.Header("Location", "/v1/operations/"+accepted.ID)
-		c.JSON(http.StatusAccepted, operationView(view))
-		return
-	}
-	accepted, err = h.Operations.Wait(request.Context(), principal(c), accepted.ID)
-	if err != nil && !accepted.IsTerminalFailure(err) {
-		writeError(c, err)
-		return
-	}
-	view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	if view.Status == "failed" {
-		internalFailure(c)
-		return
-	}
-	c.JSON(http.StatusOK, view.Result)
-}
-
-// operationView adds transport error data to a copy of the frozen business
-// view. Internal diagnostics never determine HTTP categories or enter this
-// view. Both asynchronous answers and operation GET use this representation.
-func operationView(view types.Operation) types.Operation {
-	view.Error = nil
-	if view.Status == "failed" {
-		view.Error = &types.ApiError{
-			Code:    types.CodeInternal,
-			Message: "internal service error",
-		}
-	}
-	return view
 }

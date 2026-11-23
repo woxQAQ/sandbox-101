@@ -51,7 +51,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.WaitManagement(ctx, principal, accepted.ID); err == nil || errors.Is(err, context.DeadlineExceeded) {
+			if _, err = service.OperationMonitor.WaitManagement(ctx, principal, accepted.ID); err == nil || errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal("collector did not expose rejected completion", err)
 			}
 			step, err := supply.LoadSupplyCleanup(ctx, service.State.Database(), accepted.ID)
@@ -88,7 +88,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			if err != nil || replay.ID != accepted.ID {
 				t.Fatal("collector replay changed original operation", replay, err)
 			}
-			if _, err = service.Operations.WaitManagement(ctx, principal, accepted.ID); err != nil {
+			if _, err = service.OperationMonitor.WaitManagement(ctx, principal, accepted.ID); err != nil {
 				t.Fatal(err)
 			}
 			done, err := supply.LoadSupplyCleanup(ctx, service.State.Database(), accepted.ID)
@@ -98,7 +98,7 @@ func TestHavenSupplyCleanupRetainsPoolAfterChildRetirement(t *testing.T) {
 			if _, _, err = supply.LoadPoolReservation(ctx, service.State.Database(), original.ID); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatal("completed collector retained pool reservation", err)
 			}
-			unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)
+			unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
 			if err != nil || !reflect.DeepEqual(unchanged, original) {
 				t.Fatal("collector rewrote original refill result", unchanged, err)
 			}
@@ -145,21 +145,21 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.Operations.WaitManagement(ctx, authorization.Principal{
+			if _, err = service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, collector.ID); err != nil {
 				reason := service.Workers.State(collector.ID).Err
 				t.Fatal(reason, err)
 			}
-			if _, err = service.Operations.GetOperation(ctx, "tenant", collector.ID); err == nil {
+			if _, err = service.OperationMonitor.GetForTenant(ctx, "tenant", collector.ID); err == nil {
 				t.Fatal("node maintenance appeared in tenant operation scope")
 			}
 			var pool, warm, vms, slots, storage int
 			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM ready_warm_vms),(SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&pool, &warm, &vms, &slots, &storage); err != nil || pool != 0 || warm != 0 || vms != 0 || slots != 0 || storage != 192 {
 				t.Fatal(pool, warm, vms, slots, storage, err)
 			}
-			unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)
+			unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
 			if err != nil || !reflect.DeepEqual(unchanged, original) {
 				t.Fatal("cleanup changed original supply result", original, unchanged, err)
 			}
@@ -230,7 +230,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				t.Fatal("unproved cleanup freed pool capacity", count, err)
 			}
 			service = testapp.ReopenCloneService(t, service, service.Options.Backend)
-			if _, err = service.Operations.WaitManagement(ctx, authorization.Principal{
+			if _, err = service.OperationMonitor.WaitManagement(ctx, authorization.Principal{
 				Root:     true,
 				TenantID: "root",
 			}, collector.ID); err != nil {

@@ -35,7 +35,7 @@ func (fixture SandboxClaims) Claim(t *testing.T, key string, env map[string]type
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	acceptedOperation, err = service.Operations.Wait(ctx, authorization.Principal{
+	acceptedOperation, err = service.OperationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: "tenant",
 	}, acceptedOperation.ID)
 	if err != nil {

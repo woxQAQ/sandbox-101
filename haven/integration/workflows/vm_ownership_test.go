@@ -54,7 +54,7 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 			if backend.Count("launch") != 1 || backend.Count("agent") != agents || backend.Count("stop") != 0 || backend.Count("remove") != 0 {
 				t.Fatal("stale ownership caused another host effect")
 			}
-			result, err := service.Operations.GetOperation(context.Background(), "tenant", claim.ID)
+			result, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", claim.ID)
 			if err != nil || result.Result.ResourceReady {
 				t.Fatal("current state backfilled a historical delivery proof", err)
 			}

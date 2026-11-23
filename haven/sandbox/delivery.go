@@ -15,23 +15,23 @@ import (
 
 // OperationViews reads operation status and results within the caller's authority.
 type OperationViews struct {
-	database       *store.Database
-	operations     *operation.Monitor
-	authentication *authorization.Authentication
+	database         *store.Database
+	operationMonitor *operation.Monitor
+	authentication   *authorization.Authentication
 }
 
 func NewOperationViews(database *store.Database, operations *operation.Monitor, authentication *authorization.Authentication) *OperationViews {
 	return &OperationViews{
-		database:       database,
-		operations:     operations,
-		authentication: authentication,
+		database:         database,
+		operationMonitor: operations,
+		authentication:   authentication,
 	}
 }
 
 // Get returns the operation view authorized for principal. It reads the status and
 // any frozen terminal result in one snapshot and derives sandbox tokens on read.
 func (v *OperationViews) Get(ctx context.Context, principal authorization.Principal, id string) (types.Operation, error) {
-	if _, err := v.operations.Operation(ctx, principal, id); err != nil {
+	if _, err := v.operationMonitor.Get(ctx, principal, id); err != nil {
 		return types.Operation{}, err
 	}
 	tx, err := v.database.BeginTx(ctx, &sql.TxOptions{

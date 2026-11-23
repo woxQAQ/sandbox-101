@@ -46,8 +46,10 @@ func NewMonitor(database *store.Database, workers WorkerReader, nodeID string) *
 	}
 }
 
-func (o *Monitor) GetOperation(ctx context.Context, tenant, id string) (State, error) {
-	return o.repository.Get(ctx, "tenant", tenant, id)
+// GetForTenant reads state in the tenant scope supplied by the caller.
+// The caller is responsible for establishing authority to read that scope.
+func (o *Monitor) GetForTenant(ctx context.Context, tenantID, operationID string) (State, error) {
+	return o.repository.Get(ctx, "tenant", tenantID, operationID)
 }
 
 func (o *Monitor) GetManagementOperation(ctx context.Context, principal authorization.Principal, id string) (State, error) {
@@ -57,8 +59,9 @@ func (o *Monitor) GetManagementOperation(ctx context.Context, principal authoriz
 	return o.repository.Get(ctx, "node", o.nodeID, id)
 }
 
-func (o *Monitor) Operation(ctx context.Context, principal authorization.Principal, id string) (State, error) {
-	record, _, err := o.authorized(ctx, principal, id)
+// Get returns operation state after checking the principal's access.
+func (o *Monitor) Get(ctx context.Context, principal authorization.Principal, operationID string) (State, error) {
+	record, _, err := o.authorized(ctx, principal, operationID)
 	return record, err
 }
 
@@ -76,7 +79,7 @@ func (o *Monitor) authorized(ctx context.Context, principal authorization.Princi
 			return State{}, "", err
 		}
 	}
-	record, err := o.GetOperation(ctx, tenant, id)
+	record, err := o.GetForTenant(ctx, tenant, id)
 	if err != nil {
 		return record, "", err
 	}

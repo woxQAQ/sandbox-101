@@ -92,7 +92,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if err = service.Reconcile.ResumePending(); err != nil {
 					t.Fatal(err)
 				}
-				if _, err = service.Operations.WaitManagement(ctx, root, collector); err != nil {
+				if _, err = service.OperationMonitor.WaitManagement(ctx, root, collector); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -116,7 +116,7 @@ func TestHavenActualOCICacheReaderAndReplacementFence(t *testing.T) {
 				if err = service.Reconcile.ResumePending(); err != nil {
 					t.Fatal(err)
 				}
-				if _, err = service.Operations.WaitManagement(ctx, root, collector); err == nil {
+				if _, err = service.OperationMonitor.WaitManagement(ctx, root, collector); err == nil {
 					t.Fatal("cache replacement passed original deletion receipt")
 				}
 				if _, err = os.Stat(path); err != nil {

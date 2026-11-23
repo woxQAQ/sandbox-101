@@ -79,7 +79,7 @@ type App struct {
 	Availability     *execution.Availability
 	Catalog          *sandbox.Catalog
 	TemplateCatalog  *supply.TemplateCatalog
-	Operations       *operation.Monitor
+	OperationMonitor *operation.Monitor
 	OperationViews   *sandbox.OperationViews
 	Tenants          *authorization.Tenants
 	SnapshotDeletion *machine.SnapshotDeletion
@@ -172,15 +172,15 @@ func Open(opts Options) (*App, error) {
 	registry := ephemeral.New()
 	commandIdentity := operation.NewCommandIdentity(lifetime.Context(), operation.New(state.Database()), operations, registry, state.Sign)
 	service := &App{
-		Authentication:  authentication,
-		Availability:    execution.NewAvailability(registrationMu),
-		registrationMu:  registrationMu,
-		CommandIdentity: commandIdentity,
-		AdmissionPolicy: sandbox.NewAdmissionPolicy(opts.MaxTTL, registry),
-		Catalog:         sandbox.NewCatalog(state.Database()),
-		TemplateCatalog: supply.NewTemplateCatalog(state.Database()),
-		Operations:      operations,
-		OperationViews:  sandbox.NewOperationViews(state.Database(), operations, authentication),
+		Authentication:   authentication,
+		Availability:     execution.NewAvailability(registrationMu),
+		registrationMu:   registrationMu,
+		CommandIdentity:  commandIdentity,
+		AdmissionPolicy:  sandbox.NewAdmissionPolicy(opts.MaxTTL, registry),
+		Catalog:          sandbox.NewCatalog(state.Database()),
+		TemplateCatalog:  supply.NewTemplateCatalog(state.Database()),
+		OperationMonitor: operations,
+		OperationViews:   sandbox.NewOperationViews(state.Database(), operations, authentication),
 		Tenants: authorization.NewTenants(authorization.New(state.Database()), authorization.TenantDependencies{
 			StoreWriteMu: storeWriteMu,
 			Lifetime:     lifetime,
@@ -282,7 +282,7 @@ func Open(opts Options) (*App, error) {
 		Gate:                 admissionGate,
 		Workers:              workers,
 		Proofs:               snapshotProofs,
-		Operations:           service.Operations,
+		OperationMonitor:     service.OperationMonitor,
 		Images:               service.Images,
 		Supply:               service.SupplyCleanup,
 		Snapshots:            service.SnapshotDeletion,
@@ -420,7 +420,7 @@ func Open(opts Options) (*App, error) {
 		CommandIdentity:        commandIdentity,
 		AdmissionPolicy:        service.AdmissionPolicy,
 		Availability:           service.Availability,
-		Operations:             service.Operations,
+		OperationMonitor:       service.OperationMonitor,
 		Activations:            service.Activations,
 		WarmClaims:             service.WarmClaims,
 		Provisioning:           service.Provisioning,
@@ -440,7 +440,7 @@ func Open(opts Options) (*App, error) {
 		CommandIdentity:        commandIdentity,
 		AdmissionPolicy:        service.AdmissionPolicy,
 		Availability:           service.Availability,
-		Operations:             service.Operations,
+		OperationMonitor:       service.OperationMonitor,
 		Provisioning:           service.Provisioning,
 		Captures:               service.Captures,
 		Deletion:               service.Deletion,
@@ -466,7 +466,7 @@ func Open(opts Options) (*App, error) {
 		AdmissionPolicy:       service.AdmissionPolicy,
 		Sandboxes:             service.Sandboxes,
 		Lifecycle:             service.Lifecycle,
-		Operations:            service.Operations,
+		OperationMonitor:      service.OperationMonitor,
 		Activations:           service.Activations,
 	}, dataplane.PlaneOptions{
 		Backend: opts.Backend,
@@ -474,7 +474,7 @@ func Open(opts Options) (*App, error) {
 		Epoch:   registry.Epoch(),
 	})
 	service.Node = node.New(state, service.Availability)
-	service.CommandAdmission = sandbox.NewCommandAdmission(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.Operations)
+	service.CommandAdmission = sandbox.NewCommandAdmission(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.OperationMonitor)
 	policies := service.DirectPolicies
 	deletion := service.Deletion
 	service.Reconcile = reconcile.New(state, reconcile.Dependencies{

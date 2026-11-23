@@ -61,7 +61,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	ordinaryRoot := authorization.Principal{
 		TenantID: "root",
 	}
-	if _, err = service.Operations.Operation(ctx, ordinaryRoot, publication.ID); err == nil {
+	if _, err = service.OperationMonitor.Get(ctx, ordinaryRoot, publication.ID); err == nil {
 		t.Fatal("tenant named root read administrator operation")
 	}
 	if _, err = service.Supply.AdmitTemplate(ctx, ordinaryRoot, "create", command); err == nil {

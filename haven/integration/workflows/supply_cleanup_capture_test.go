@@ -61,7 +61,7 @@ func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.WaitManagement(ctx, root, accepted.ID); err != nil {
+	if _, err = service.OperationMonitor.WaitManagement(ctx, root, accepted.ID); err != nil {
 		t.Fatal("collector did not complete dependent stop/capture/release", err)
 	}
 	step, err := supply.LoadSupplyCleanup(ctx, service.State.Database(), accepted.ID)
@@ -85,7 +85,7 @@ func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources),(SELECT COUNT(*) FROM cleanup_intents WHERE status IN ('pending','blocked','transferred'))").Scan(&machines, &storage, &cleanup); err != nil || machines != 0 || storage != 0 || cleanup != 0 {
 		t.Fatal("collector did not retire completed child responsibility", machines, storage, cleanup, err)
 	}
-	unchanged, err := service.Operations.GetOperation(ctx, "tenant", original.ID)
+	unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
 	if err != nil || !reflect.DeepEqual(unchanged, original) {
 		t.Fatal("cleanup changed the failed build result", unchanged, err)
 	}

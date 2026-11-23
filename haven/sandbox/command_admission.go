@@ -12,20 +12,20 @@ import (
 
 // CommandAdmission checks capability scope before dispatching each intent to its admission service.
 type CommandAdmission struct {
-	sandboxes  *Sandboxes
-	lifecycle  *Lifecycle
-	supply     *supply.Supply
-	forks      *Forks
-	operations *operation.Monitor
+	sandboxes        *Sandboxes
+	lifecycle        *Lifecycle
+	supply           *supply.Supply
+	forks            *Forks
+	operationMonitor *operation.Monitor
 }
 
 func NewCommandAdmission(sandboxes *Sandboxes, lifecycle *Lifecycle, supply *supply.Supply, forks *Forks, operations *operation.Monitor) *CommandAdmission {
 	return &CommandAdmission{
-		sandboxes:  sandboxes,
-		lifecycle:  lifecycle,
-		supply:     supply,
-		forks:      forks,
-		operations: operations,
+		sandboxes:        sandboxes,
+		lifecycle:        lifecycle,
+		supply:           supply,
+		forks:            forks,
+		operationMonitor: operations,
 	}
 }
 
@@ -66,5 +66,5 @@ func (sr *CommandAdmission) Execute(ctx context.Context, principal authorization
 	if err != nil {
 		return accepted, err
 	}
-	return sr.operations.Wait(ctx, principal, accepted.ID)
+	return sr.operationMonitor.Wait(ctx, principal, accepted.ID)
 }

@@ -79,7 +79,7 @@ func (p *Plane) waitRestartBinding(ctx context.Context, view types.Sandbox, sett
 	if err != nil {
 		return accepted, err
 	}
-	return p.operations.Wait(ctx, authorization.Principal{
+	return p.operationMonitor.Wait(ctx, authorization.Principal{
 		TenantID: view.TenantID,
 	}, accepted.ID)
 }

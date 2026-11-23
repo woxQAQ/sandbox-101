@@ -30,7 +30,7 @@ func (f *Forks) runForkGroup(step ForkStep) error {
 				if errors.Is(err, errs.ErrInterrupted) || f.ctx.Err() != nil {
 					return err
 				}
-				child, lookup := f.operations.GetOperation(f.ctx, step.Input.OwnerTenantID, link.ChildID)
+				child, lookup := f.operationMonitor.GetForTenant(f.ctx, step.Input.OwnerTenantID, link.ChildID)
 				if lookup != nil || !operation.Terminal(child.Status) {
 					return err
 				}
@@ -58,7 +58,7 @@ func (f *Forks) runForkGroup(step ForkStep) error {
 			}
 			failed := false
 			for index, id := range step.State.Children {
-				child, err := f.operations.WaitAccepted(f.ctx, step.Input.OwnerTenantID, id)
+				child, err := f.operationMonitor.WaitAccepted(f.ctx, step.Input.OwnerTenantID, id)
 				if err != nil && !operation.Terminal(child.Status) {
 					return err
 				}

@@ -31,7 +31,7 @@ type Collector struct {
 	collectionLocks      execution.KeyedLocks[string]
 	workers              *execution.Workers
 	proofs               machine.SnapshotProofs
-	operations           *operation.Monitor
+	operationMonitor     *operation.Monitor
 	images               *image.Images
 	supply               *supply.SupplyCleanup
 	snapshots            *machine.SnapshotDeletion
@@ -46,7 +46,7 @@ type CollectorDependencies struct {
 	Gate                 execution.AdmissionGate
 	Workers              *execution.Workers
 	Proofs               machine.SnapshotProofs
-	Operations           *operation.Monitor
+	OperationMonitor     *operation.Monitor
 	Images               *image.Images
 	Supply               *supply.SupplyCleanup
 	Snapshots            *machine.SnapshotDeletion
@@ -69,7 +69,7 @@ func NewCollector(state *store.State, dependencies CollectorDependencies, fault 
 		nodeIdempotencyLocks: dependencies.NodeIdempotencyLocks,
 		workers:              dependencies.Workers,
 		proofs:               dependencies.Proofs,
-		operations:           dependencies.Operations,
+		operationMonitor:     dependencies.OperationMonitor,
 		images:               dependencies.Images,
 		supply:               dependencies.Supply,
 		snapshots:            dependencies.Snapshots,

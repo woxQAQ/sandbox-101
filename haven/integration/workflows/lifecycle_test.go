@@ -55,7 +55,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := service.Operations.GetOperation(ctx, "tenant", captureLink.ChildID)
+	original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", captureLink.ChildID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(sandbox_slots),0) FROM quota_resources),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources),(SELECT COUNT(*) FROM vms)").Scan(&slots, &storage, &vms); err != nil || slots != 0 || storage != 0 || vms != 0 {
 		t.Fatal(slots, storage, vms, err)
 	}
-	after, err := service.Operations.GetOperation(ctx, "tenant", captureLink.ChildID)
+	after, err := service.OperationMonitor.GetForTenant(ctx, "tenant", captureLink.ChildID)
 	if err != nil || !reflect.DeepEqual(original, after) {
 		t.Fatal("release changed original capture failure", original, after, err)
 	}
@@ -110,7 +110,7 @@ func TestHavenReleasePausedAndFailedCandidates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			claim, claimErr := service.Operations.Wait(ctx, principal, claim.ID)
+			claim, claimErr := service.OperationMonitor.Wait(ctx, principal, claim.ID)
 			if boundary != "boot" && claimErr != nil {
 				t.Fatal(claimErr)
 			}
@@ -273,7 +273,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	server := httptest.NewServer(api.New(api.Services{
 		Authentication:   service.Authentication,
 		CommandAdmission: service.CommandAdmission,
-		Operations:       service.Operations,
+		OperationMonitor: service.OperationMonitor,
 		OperationViews:   service.OperationViews,
 	}))
 	t.Cleanup(server.Close)
@@ -526,7 +526,7 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			result, err := service.Operations.Wait(ctx, authorization.Principal{
+			result, err := service.OperationMonitor.Wait(ctx, authorization.Principal{
 				TenantID: "tenant",
 			}, acceptedRecord.ID)
 			if err != nil {

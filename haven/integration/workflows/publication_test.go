@@ -191,7 +191,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.Wait(ctx, principal, configure.ID); err == nil {
+	if _, err = service.OperationMonitor.Wait(ctx, principal, configure.ID); err == nil {
 		t.Fatal("publication fault returned success")
 	}
 	if _, err = service.Dataplane.Ready(ctx, principal, acceptedRecord.Result.SandboxID); err == nil {
@@ -232,7 +232,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if err = service.Reconcile.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Operations.Wait(ctx, principal, configure.ID); err == nil {
+	if _, err = service.OperationMonitor.Wait(ctx, principal, configure.ID); err == nil {
 		t.Fatal("superseded intent returned success")
 	}
 	old, err := service.OperationViews.Get(ctx, principal, configure.ID)

@@ -102,7 +102,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources").Scan(&slots, &storage); err != nil || slots != 0 || storage != 0 {
 		t.Fatal("last backing reclamation did not retire snapshot", slots, storage, err)
 	}
-	original, err := service.Operations.GetOperation(ctx, "tenant", checkpoint.ID)
+	original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", checkpoint.ID)
 	if err != nil || !reflect.DeepEqual(original, checkpoint) {
 		t.Fatal("checkpoint cleanup changed original result", original, checkpoint, err)
 	}
