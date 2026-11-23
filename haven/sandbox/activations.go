@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/woxQAQ/haven/egress"
@@ -262,11 +261,8 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 
 func (a *Activations) activationSecrets(step ActivationStep) (map[string]egress.Secret, error) {
 	secrets := a.registry.OperationSecrets(step.OperationID)
-	for name, descriptor := range step.Input.Settings.Secrets {
-		secret, ok := secrets[name]
-		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {
-			return nil, fmt.Errorf("%w: host credentials must be supplied again after restart", errs.ErrConflict)
-		}
+	if !step.Input.Settings.hasCredentials(secrets) {
+		return nil, fmt.Errorf("%w: host credentials must be supplied again after restart", errs.ErrConflict)
 	}
 	return secrets, nil
 }

@@ -74,8 +74,17 @@ func (proofs SnapshotProofs) ValidateSnapshotPublication(source SnapshotSource, 
 	if capture.Hash != source.CaptureHash || capture.OperationID != source.CaptureOperation || capture.State.Boundary == nil || capture.State.Boundary.Publication != source.Publication {
 		return fmt.Errorf("restore publication history identity changed")
 	}
-	if publication.TenantID != tenant || publication.Manifest == nil || publication.OperationID != capture.OperationID || capture.Status != "succeeded" || capture.State.Phase != "complete" || capture.State.ResumeRequired || !capture.State.Captured || !capture.State.Materialized || !capture.State.ArtifactsSynced || capture.State.Boundary == nil || len(capture.State.Files) != 4 || capture.Input.Request.TenantID != tenant {
-		return fmt.Errorf("restore historical publication proof missing")
+	if publication.TenantID != tenant || capture.Input.Request.TenantID != tenant || publication.OperationID != capture.OperationID {
+		return fmt.Errorf("snapshot publication tenant or operation differs from capture")
+	}
+	if capture.Status != "succeeded" || capture.State.Phase != "complete" || capture.State.ResumeRequired {
+		return fmt.Errorf("snapshot capture has not completed")
+	}
+	if !capture.State.Captured || !capture.State.Materialized || !capture.State.ArtifactsSynced {
+		return fmt.Errorf("snapshot capture lacks synchronized artifacts")
+	}
+	if publication.Manifest == nil || len(capture.State.Files) != 4 {
+		return fmt.Errorf("snapshot publication lacks manifest or capture files")
 	}
 	expected := capture.Input.Snapshot
 	expected.Manifest = publication.Manifest

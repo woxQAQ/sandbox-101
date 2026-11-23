@@ -87,8 +87,14 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if err = d.validateStep(source); err != nil {
 		return empty, err
 	}
-	if (source.Action != "cold_start" && source.Action != "clone" && source.Action != "restore") || source.Status != "succeeded" || source.State.Phase != "complete" || source.State.Observation == nil || source.State.DiskIdentity == nil || source.State.Witness == "" || source.State.Witness != record.Instance || source.State.Witness != source.Input.Resource.Instance || source.Input.SandboxID != record.ID || source.Input.TenantID != record.TenantID || source.Candidate != record.VMID {
+	if !source.hasCompletedGenerationWitness() {
 		return empty, fmt.Errorf("%w: release requires the frozen successful generation witness", errs.ErrManualRecovery)
+	}
+	if source.State.Witness != source.Input.Resource.Instance || source.State.Witness != record.Instance {
+		return empty, fmt.Errorf("%w: release source witness differs from the sandbox instance", errs.ErrManualRecovery)
+	}
+	if source.Input.SandboxID != record.ID || source.Input.TenantID != record.TenantID || source.Candidate != record.VMID {
+		return empty, fmt.Errorf("%w: release source differs from sandbox ownership", errs.ErrManualRecovery)
 	}
 	currentMachine, instance, owner, err := LoadVM(ctx, tx, source)
 	if err != nil {
@@ -313,14 +319,32 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	return accepted, nil
 }
 
+func (source *ResourceStep) hasCompletedGenerationWitness() bool {
+	switch source.Action {
+	case "cold_start", "clone", "restore":
+	default:
+		return false
+	}
+	if source.Status != "succeeded" || source.State.Phase != "complete" {
+		return false
+	}
+	return source.State.Witness != "" && source.State.Observation != nil && source.State.DiskIdentity != nil
+}
+
 func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error) {
 	queries := dbgen.New(tx)
 	source, err := LoadResourceStep(d.ctx, tx, step.Input.SourceOperation)
 	if err != nil {
 		return VMRecord{}, err
 	}
-	if (source.Action != "cold_start" && source.Action != "clone" && source.Action != "restore") || source.Status != "succeeded" || source.State.Phase != "complete" || source.State.Observation == nil || source.State.DiskIdentity == nil || source.State.Witness == "" || source.State.Witness != step.ExpectedInstance || source.State.Witness != step.Input.Resource.Instance || source.Input.SourceOperation != "" || source.Input.TenantID != step.Input.TenantID || source.Input.SandboxID != step.Input.SandboxID || source.Candidate != step.Candidate {
+	if !source.hasCompletedGenerationWitness() || source.Input.SourceOperation != "" {
 		return VMRecord{}, fmt.Errorf("release lost its immutable source witness")
+	}
+	if source.State.Witness != step.ExpectedInstance || source.State.Witness != step.Input.Resource.Instance {
+		return VMRecord{}, fmt.Errorf("release instance differs from its source witness")
+	}
+	if source.Input.TenantID != step.Input.TenantID || source.Input.SandboxID != step.Input.SandboxID || source.Candidate != step.Candidate {
+		return VMRecord{}, fmt.Errorf("release tenant, sandbox or VM differs from its source")
 	}
 	expected := source.Input
 	expected.Captures = step.Input.Captures

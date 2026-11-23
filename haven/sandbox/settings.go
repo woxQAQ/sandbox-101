@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/woxQAQ/haven/egress"
@@ -24,6 +25,16 @@ type Settings struct {
 	Generation  string                      `json:"generation"`
 	Instance    string                      `json:"instance"`
 	ActiveEpoch string                      `json:"active_epoch,omitempty"`
+}
+
+func (s Settings) hasCredentials(secrets map[string]egress.Secret) bool {
+	for name, descriptor := range s.Secrets {
+		secret := secrets[name]
+		if secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {
+			return false
+		}
+	}
+	return true
 }
 
 func LoadSandbox(ctx context.Context, query store.DBTX, id, tenant string) (ownership.Sandbox, error) {

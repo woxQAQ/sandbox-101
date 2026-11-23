@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"reflect"
 	"strings"
 	"time"
 
@@ -88,14 +87,7 @@ func (sc *AdmissionPolicy) CredentialsMissing(id string, settings Settings) bool
 	if len(settings.Secrets) == 0 {
 		return false
 	}
-	secrets := sc.registry.SandboxSecrets(id)
-	for name, descriptor := range settings.Secrets {
-		secret, ok := secrets[name]
-		if !ok || secret.Value == "" || secret.Header != descriptor.Header || secret.Placeholder != descriptor.Placeholder || !reflect.DeepEqual(secret.Hosts, descriptor.Hosts) {
-			return true
-		}
-	}
-	return false
+	return !settings.hasCredentials(sc.registry.SandboxSecrets(id))
 }
 
 func SplitEnv(env map[string]types.EnvVar) (map[string]string, map[string]egress.Secret, map[string]egress.Injection, error) {

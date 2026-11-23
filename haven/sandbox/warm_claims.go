@@ -217,11 +217,21 @@ func CurrentSlotBudget(ctx context.Context, query store.DBTX, record ownership.S
 		return quota.SlotBudget{}, err
 	}
 	original := claim.Input.Source
-	if claim.Hash != assignment.InputHash || claim.Input.Pool.SandboxID != record.ID || claim.Input.Pool.Template.TenantID != record.TenantID || original.OperationID != source.Input.SlotOperation || original.Hash != claim.Input.Pool.Source.InputHash || original.State.Witness == "" || original.State.Witness != claim.Input.Pool.Instance || original.Status != "succeeded" || original.Input.SlotBudget != (quota.SlotBudget{
-		Kind:  "sandbox_slot",
-		Units: 0,
-	}) || (source.Input.SlotAssignment != nil && !reflect.DeepEqual(source.Input.SlotAssignment, assignment)) {
-		return quota.SlotBudget{}, fmt.Errorf("%w: slot charge differs from frozen warm selection", errs.ErrManualRecovery)
+	if claim.Hash != assignment.InputHash || claim.Input.Pool.SandboxID != record.ID || claim.Input.Pool.Template.TenantID != record.TenantID {
+		return quota.SlotBudget{}, fmt.Errorf("%w: slot assignment differs from its warm claim", errs.ErrManualRecovery)
+	}
+	if original.OperationID != source.Input.SlotOperation || original.Hash != claim.Input.Pool.Source.InputHash {
+		return quota.SlotBudget{}, fmt.Errorf("%w: slot operation differs from the selected refill source", errs.ErrManualRecovery)
+	}
+	if original.Status != "succeeded" || original.State.Witness == "" || original.State.Witness != claim.Input.Pool.Instance {
+		return quota.SlotBudget{}, fmt.Errorf("%w: selected warm instance lacks its refill witness", errs.ErrManualRecovery)
+	}
+	warmBudget := quota.SlotBudget{Kind: "sandbox_slot", Units: 0}
+	if original.Input.SlotBudget != warmBudget {
+		return quota.SlotBudget{}, fmt.Errorf("%w: warm refill did not start with a zero-unit sandbox slot budget", errs.ErrManualRecovery)
+	}
+	if frozen := source.Input.SlotAssignment; frozen != nil && *frozen != *assignment {
+		return quota.SlotBudget{}, fmt.Errorf("%w: frozen slot assignment differs from current assignment", errs.ErrManualRecovery)
 	}
 	historical, err := machine.LoadResourceStep(ctx, query, original.OperationID)
 	if err != nil {

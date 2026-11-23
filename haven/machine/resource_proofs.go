@@ -60,8 +60,24 @@ func (proofs ResourceProofs) GenerationHistoryAt(ctx context.Context, tx *sql.Tx
 		if !slices.Equal(prior.Input.Ancestors, step.Input.Ancestors[:index]) {
 			return nil, fmt.Errorf("generation history prefix changed")
 		}
-		if prior.Hash != reference.InputHash || prior.Status != "succeeded" || prior.State.Phase != "complete" || prior.State.Witness == "" || prior.State.Witness != prior.Input.Resource.Instance || prior.Candidate != step.Candidate || prior.Input.SandboxID != step.Input.SandboxID || prior.Input.TenantID != step.Input.TenantID || prior.Input.Resource.Config.Image != step.Input.Resource.Config.Image || !reflect.DeepEqual(prior.Input.Resource.Config.Shape, step.Input.Resource.Config.Shape) || prior.Input.Resource.NetworkToken != step.Input.Resource.NetworkToken || prior.Input.Resource.Slot != step.Input.Resource.Slot || prior.Input.RuntimeBytes != step.Input.RuntimeBytes || prior.Input.SlotOperation != step.Input.SlotOperation {
-			return nil, fmt.Errorf("retained generation lineage changed")
+		if prior.Hash != reference.InputHash || prior.Status != "succeeded" || prior.State.Phase != "complete" {
+			return nil, fmt.Errorf("generation history reference differs from its completed step")
+		}
+		if prior.State.Witness == "" || prior.State.Witness != prior.Input.Resource.Instance {
+			return nil, fmt.Errorf("retained generation lacks its instance witness")
+		}
+		if prior.Candidate != step.Candidate || prior.Input.SandboxID != step.Input.SandboxID || prior.Input.TenantID != step.Input.TenantID {
+			return nil, fmt.Errorf("generation history crosses a VM, sandbox or tenant boundary")
+		}
+		previous, current := prior.Input.Resource, step.Input.Resource
+		if previous.Config.Image != current.Config.Image || previous.Config.Shape != current.Config.Shape {
+			return nil, fmt.Errorf("generation image or shape changed")
+		}
+		if previous.NetworkToken != current.NetworkToken || previous.Slot != current.Slot {
+			return nil, fmt.Errorf("generation network allocation changed")
+		}
+		if prior.Input.RuntimeBytes != step.Input.RuntimeBytes || prior.Input.SlotOperation != step.Input.SlotOperation {
+			return nil, fmt.Errorf("generation runtime reservation or slot operation changed")
 		}
 		if err = proofs.VerifyGenerationAt(ctx, tx, prior, holder); err != nil {
 			return nil, err
