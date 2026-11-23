@@ -40,9 +40,22 @@ func check(a, b, c, d, e bool) {
 		code  int
 		lines []string
 	}{
-		{[]string{dir}, 1, []string{"3:5", "5:6", "7:7"}},
-		{[]string{"-max", "5", file}, 0, nil},
-		{[]string{filepath.Join(dir, "missing.go"), file}, 2, nil},
+		{[]string{
+			dir,
+		}, 1, []string{
+			"3:5",
+			"5:6",
+			"7:7",
+		}},
+		{[]string{
+			"-max",
+			"5",
+			file,
+		}, 0, nil},
+		{[]string{
+			filepath.Join(dir, "missing.go"),
+			file,
+		}, 2, nil},
 	} {
 		output, err := exec.Command(binary, scenario.args...).CombinedOutput()
 		code := 0

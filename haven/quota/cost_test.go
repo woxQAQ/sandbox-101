@@ -27,7 +27,10 @@ func TestRetiredCostKeyCanBeChargedAgain(t *testing.T) {
 		HolderKind: "active_use",
 		HolderID:   "reader",
 	}
-	for _, id := range []string{"first", "second"} {
+	for _, id := range []string{
+		"first",
+		"second",
+	} {
 		if err := operation.New(db).RecordAdmission(ctx, operation.Admission{
 			ID:        id,
 			ScopeKind: "tenant",

@@ -19,8 +19,14 @@ func TestHavenForkRequiresExactlyOneSource(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
 	ctx := t.Context()
-	principal := authorization.Principal{TenantID: "tenant"}
-	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "source", nil, egress.Policy{Mode: "none"})
+	principal := authorization.Principal{
+		TenantID: "tenant",
+	}
+	claim := (testfixture.SandboxClaims{
+		App: service,
+	}).Claim(t, "source", nil, egress.Policy{
+		Mode: "none",
+	})
 	checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
 		Action:    "checkpoint",
 		SandboxID: claim.Result.SandboxID,
@@ -28,7 +34,11 @@ func TestHavenForkRequiresExactlyOneSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type totals struct{ operations, slots, storage int64 }
+	type totals struct {
+		operations int64
+		slots      int64
+		storage    int64
+	}
 	readTotals := func() totals {
 		t.Helper()
 		var got totals
@@ -40,8 +50,14 @@ func TestHavenForkRequiresExactlyOneSource(t *testing.T) {
 	}
 	before := readTotals()
 	for _, command := range []operation.Intent{
-		{Action: "fork"},
-		{Action: "fork", SandboxID: claim.Result.SandboxID, CheckpointID: checkpoint.Result.CheckpointID},
+		{
+			Action: "fork",
+		},
+		{
+			Action:       "fork",
+			SandboxID:    claim.Result.SandboxID,
+			CheckpointID: checkpoint.Result.CheckpointID,
+		},
 	} {
 		accepted, err := service.CommandAdmission.Submit(ctx, principal, "invalid-source", command)
 		if !errors.Is(err, errs.ErrInvalid) || accepted.ID != "" {

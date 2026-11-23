@@ -133,7 +133,11 @@ func (wc *WarmClaims) verifyReadyPool(ctx context.Context, tx *sql.Tx, request W
 	if pooledSandbox.State != ownership.StateProvisioning || pooledSandbox.SourceOperation != source.OperationID || pooledSandbox.Instance != selected.Instance || pooledSandbox.SlotAssignment != nil {
 		return selection, false, fmt.Errorf("%w: warm allocation current sandbox identity changed", errs.ErrManualRecovery)
 	}
-	return warmClaimSelection{poolID: poolID, selected: selected, source: source}, true, nil
+	return warmClaimSelection{
+		poolID:   poolID,
+		selected: selected,
+		source:   source,
+	}, true, nil
 }
 
 // persistWarmClaim freezes the accepted claim, its activation and the pool

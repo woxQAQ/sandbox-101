@@ -28,13 +28,28 @@ func TestClaimResponsePreference(t *testing.T) {
 		status int
 	}{
 		{"default", nil, http.StatusOK},
-		{"extension name", []string{"x-respond-async"}, http.StatusOK},
-		{"extension value and parameter", []string{`mode=respond-async; respond-async`}, http.StatusOK},
-		{"quoted comma and escaped quote", []string{`note="one\", respond-async, two"`}, http.StatusOK},
-		{"list", []string{`note="one,two", ReSpOnD-AsYnC; x=1`}, http.StatusAccepted},
-		{"second field", []string{"wait=5", "RESPOND-ASYNC"}, http.StatusAccepted},
-		{"empty value", []string{`respond-async=""`}, http.StatusAccepted},
-		{"first occurrence wins", []string{"respond-async=no, respond-async"}, http.StatusOK},
+		{"extension name", []string{
+			"x-respond-async",
+		}, http.StatusOK},
+		{"extension value and parameter", []string{
+			`mode=respond-async; respond-async`,
+		}, http.StatusOK},
+		{"quoted comma and escaped quote", []string{
+			`note="one\", respond-async, two"`,
+		}, http.StatusOK},
+		{"list", []string{
+			`note="one,two", ReSpOnD-AsYnC; x=1`,
+		}, http.StatusAccepted},
+		{"second field", []string{
+			"wait=5",
+			"RESPOND-ASYNC",
+		}, http.StatusAccepted},
+		{"empty value", []string{
+			`respond-async=""`,
+		}, http.StatusAccepted},
+		{"first occurrence wins", []string{
+			"respond-async=no, respond-async",
+		}, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", strings.NewReader(`{"template_id":"cold","ttl_seconds":60}`))
