@@ -15,6 +15,44 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
+func TestHavenForkRequiresExactlyOneSource(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	service, _, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)
+	ctx := t.Context()
+	principal := authorization.Principal{TenantID: "tenant"}
+	claim := (testfixture.SandboxClaims{App: service}).Claim(t, "source", nil, egress.Policy{Mode: "none"})
+	checkpoint, err := service.CommandAdmission.Execute(ctx, principal, "checkpoint", operation.Intent{
+		Action:    "checkpoint",
+		SandboxID: claim.Result.SandboxID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type totals struct{ operations, slots, storage int64 }
+	readTotals := func() totals {
+		t.Helper()
+		var got totals
+		const query = `SELECT (SELECT COUNT(*) FROM operations), SUM(sandbox_slots), SUM(storage_mib) FROM quota_resources`
+		if err := service.State.Database().QueryRowContext(ctx, query).Scan(&got.operations, &got.slots, &got.storage); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	before := readTotals()
+	for _, command := range []operation.Intent{
+		{Action: "fork"},
+		{Action: "fork", SandboxID: claim.Result.SandboxID, CheckpointID: checkpoint.Result.CheckpointID},
+	} {
+		accepted, err := service.CommandAdmission.Submit(ctx, principal, "invalid-source", command)
+		if !errors.Is(err, errs.ErrInvalid) || accepted.ID != "" {
+			t.Fatalf("invalid fork sources yielded operation %q, error %v", accepted.ID, err)
+		}
+		if after := readTotals(); after != before {
+			t.Fatalf("rejected fork changed operations or quota: before %+v, after %+v", before, after)
+		}
+	}
+}
+
 func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	service, runtime, _, _ := testapp.SandboxFixtureWithBackend(t, nil, testfixture.RestorableBackend)

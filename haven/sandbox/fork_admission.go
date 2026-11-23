@@ -26,8 +26,23 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 	if command.Count == 0 {
 		command.Count = 1
 	}
-	if command.Action != "fork" || (command.CheckpointID == "" && command.SandboxID == "") || command.Count < 1 || command.Count > 32 || principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") || key == "" || len(key) > 256 || f.opts.Guest == nil {
-		return empty, errs.InvalidInput("fork requires tenant authority, one source, count 1..32 and key")
+	if f.opts.Guest == nil {
+		return empty, errs.InvalidInput("fork requires guest effects")
+	}
+	if command.Action != "fork" {
+		return empty, errs.InvalidInput("fork requires the fork action")
+	}
+	if (command.SandboxID == "") == (command.CheckpointID == "") {
+		return empty, errs.InvalidInput("fork requires exactly one sandbox or checkpoint source")
+	}
+	if command.Count < 1 || command.Count > 32 {
+		return empty, errs.InvalidInput("fork count must be 1..32")
+	}
+	if principal.SandboxID != "" || (!principal.Root && principal.TenantID == "") {
+		return empty, errs.InvalidInput("fork requires tenant authority")
+	}
+	if key == "" || len(key) > 256 {
+		return empty, errs.InvalidInput("fork requires a key of 1..256 bytes")
 	}
 	unlock := f.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer unlock()
