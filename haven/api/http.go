@@ -368,6 +368,8 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 		return
 	}
 	accepted, err = h.OperationMonitor.Wait(request.Context(), principal(c), accepted.ID)
+	// A confirmed failure has a frozen result. Read it under the caller's authority
+	// before returning HTTP 500. Other wait errors go through writeError immediately.
 	if err != nil && !accepted.IsTerminalFailure(err) {
 		writeError(c, err)
 		return
