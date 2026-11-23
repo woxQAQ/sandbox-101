@@ -7,93 +7,11 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
 
-const advanceLiveStep = `-- name: AdvanceLiveStep :execrows
-UPDATE operation_steps SET status='running',body=?1
-WHERE operation_id=?2 AND step_key=?3
-AND input_hash=?4 AND status IN ('pending','running') AND body=?5
-`
-
-type AdvanceLiveStepParams struct {
-	NewBody      []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) AdvanceLiveStep(ctx context.Context, arg AdvanceLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, advanceLiveStep,
-		arg.NewBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const advanceRunningStep = `-- name: AdvanceRunningStep :execrows
-UPDATE operation_steps SET status='running',body=?1
-WHERE operation_id=?2 AND step_key=?3
-AND input_hash=?4 AND body=?5 AND status='running'
-`
-
-type AdvanceRunningStepParams struct {
-	NewBody      []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) AdvanceRunningStep(ctx context.Context, arg AdvanceRunningStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, advanceRunningStep,
-		arg.NewBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const beginPendingStep = `-- name: BeginPendingStep :execrows
-UPDATE operation_steps SET status='running',body=?1
-WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND status='pending' AND body=?5
-`
-
-type BeginPendingStepParams struct {
-	NextBody     []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) BeginPendingStep(ctx context.Context, arg BeginPendingStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, beginPendingStep,
-		arg.NextBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const cleanupBody = `-- name: CleanupBody :one
-SELECT body FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status=?
+SELECT witness_hash FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status=?
 `
 
 type CleanupBodyParams struct {
@@ -104,7 +22,7 @@ type CleanupBodyParams struct {
 	Status       string
 }
 
-func (q *Queries) CleanupBody(ctx context.Context, arg CleanupBodyParams) ([]byte, error) {
+func (q *Queries) CleanupBody(ctx context.Context, arg CleanupBodyParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, cleanupBody,
 		arg.ID,
 		arg.OperationID,
@@ -112,9 +30,9 @@ func (q *Queries) CleanupBody(ctx context.Context, arg CleanupBodyParams) ([]byt
 		arg.ResourceID,
 		arg.Status,
 	)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var witness_hash string
+	err := row.Scan(&witness_hash)
+	return witness_hash, err
 }
 
 const cleanupResourceCount = `-- name: CleanupResourceCount :one
@@ -132,6 +50,18 @@ func (q *Queries) CleanupResourceCount(ctx context.Context, arg CleanupResourceC
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const clearRestoreMaterials = `-- name: ClearRestoreMaterials :execrows
+DELETE FROM restore_materials WHERE operation_id=?
+`
+
+func (q *Queries) ClearRestoreMaterials(ctx context.Context, operationID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearRestoreMaterials, operationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const completeLiveDirectCleanup = `-- name: CompleteLiveDirectCleanup :execrows
@@ -186,32 +116,6 @@ func (q *Queries) CompletePendingCleanupKind(ctx context.Context, arg CompletePe
 	return result.RowsAffected()
 }
 
-const completePendingStep = `-- name: CompletePendingStep :execrows
-UPDATE operation_steps SET status='succeeded',body=?1 WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND body=?5 AND status='pending'
-`
-
-type CompletePendingStepParams struct {
-	NextBody     []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) CompletePendingStep(ctx context.Context, arg CompletePendingStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completePendingStep,
-		arg.NextBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completeRetainedCleanup = `-- name: CompleteRetainedCleanup :execrows
 UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND status='retained'
 `
@@ -223,58 +127,6 @@ type CompleteRetainedCleanupParams struct {
 
 func (q *Queries) CompleteRetainedCleanup(ctx context.Context, arg CompleteRetainedCleanupParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeRetainedCleanup, arg.ID, arg.OperationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeRunningStep = `-- name: CompleteRunningStep :execrows
-UPDATE operation_steps SET status='succeeded',body=?1
-WHERE operation_id=?2 AND step_key=?3
-AND input_hash=?4 AND body=?5 AND status='running'
-`
-
-type CompleteRunningStepParams struct {
-	NewBody      []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) CompleteRunningStep(ctx context.Context, arg CompleteRunningStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeRunningStep,
-		arg.NewBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeRunningStepByInput = `-- name: CompleteRunningStepByInput :execrows
-UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key=? AND status='running' AND input_hash=?
-`
-
-type CompleteRunningStepByInputParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
-}
-
-func (q *Queries) CompleteRunningStepByInput(ctx context.Context, arg CompleteRunningStepByInputParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeRunningStepByInput,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-	)
 	if err != nil {
 		return 0, err
 	}
@@ -298,44 +150,18 @@ func (q *Queries) CompleteTransferredCleanup(ctx context.Context, arg CompleteTr
 	return result.RowsAffected()
 }
 
-const completeUnchangedStep = `-- name: CompleteUnchangedStep :execrows
-UPDATE operation_steps SET status='succeeded',body=?1 WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND body=?5 AND status IN ('pending','running')
-`
-
-type CompleteUnchangedStepParams struct {
-	NewBody      []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) CompleteUnchangedStep(ctx context.Context, arg CompleteUnchangedStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeUnchangedStep,
-		arg.NewBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const countCompletedCleanup = `-- name: CountCompletedCleanup :one
-SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND status='done' AND body=?
+SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND status='done' AND witness_hash=?
 `
 
 type CountCompletedCleanupParams struct {
 	ID          string
 	OperationID string
-	Body        []byte
+	WitnessHash string
 }
 
 func (q *Queries) CountCompletedCleanup(ctx context.Context, arg CountCompletedCleanupParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countCompletedCleanup, arg.ID, arg.OperationID, arg.Body)
+	row := q.db.QueryRowContext(ctx, countCompletedCleanup, arg.ID, arg.OperationID, arg.WitnessHash)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -373,99 +199,28 @@ func (q *Queries) CountUnfinishedCleanupResource(ctx context.Context, arg CountU
 	return count, err
 }
 
-const deleteMatchingDeletionReceipt = `-- name: DeleteMatchingDeletionReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=? AND body=?
+const getCaptureBoundary = `-- name: GetCaptureBoundary :one
+SELECT operation_id, path, parent_device, parent_inode, parent_mode, publication_device, publication_inode, publication_mode FROM capture_boundaries WHERE operation_id=?
 `
 
-type DeleteMatchingDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
-	Body        []byte
-}
-
-func (q *Queries) DeleteMatchingDeletionReceipt(ctx context.Context, arg DeleteMatchingDeletionReceiptParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteMatchingDeletionReceipt,
-		arg.Path,
-		arg.OperationID,
-		arg.StepKey,
-		arg.Body,
+func (q *Queries) GetCaptureBoundary(ctx context.Context, operationID string) (CaptureBoundary, error) {
+	row := q.db.QueryRowContext(ctx, getCaptureBoundary, operationID)
+	var i CaptureBoundary
+	err := row.Scan(
+		&i.OperationID,
+		&i.Path,
+		&i.ParentDevice,
+		&i.ParentInode,
+		&i.ParentMode,
+		&i.PublicationDevice,
+		&i.PublicationInode,
+		&i.PublicationMode,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const failLiveStep = `-- name: FailLiveStep :execrows
-UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND status IN ('pending','running')
-`
-
-type FailLiveStepParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
-}
-
-func (q *Queries) FailLiveStep(ctx context.Context, arg FailLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failLiveStep,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const failUnchangedLiveStep = `-- name: FailUnchangedLiveStep :execrows
-UPDATE operation_steps SET status='failed',body=?1 WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND body=?5 AND status IN ('pending','running')
-`
-
-type FailUnchangedLiveStepParams struct {
-	NextBody     []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) FailUnchangedLiveStep(ctx context.Context, arg FailUnchangedLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failUnchangedLiveStep,
-		arg.NextBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const getDeletionReceipt = `-- name: GetDeletionReceipt :one
-SELECT body FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?
-`
-
-type GetDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
-}
-
-func (q *Queries) GetDeletionReceipt(ctx context.Context, arg GetDeletionReceiptParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getDeletionReceipt, arg.Path, arg.OperationID, arg.StepKey)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	return i, err
 }
 
 const getPendingCleanupBody = `-- name: GetPendingCleanupBody :one
-SELECT body FROM cleanup_intents WHERE id=? AND operation_id=? AND status='pending'
+SELECT witness_hash FROM cleanup_intents WHERE id=? AND operation_id=? AND status='pending'
 `
 
 type GetPendingCleanupBodyParams struct {
@@ -473,15 +228,80 @@ type GetPendingCleanupBodyParams struct {
 	OperationID string
 }
 
-func (q *Queries) GetPendingCleanupBody(ctx context.Context, arg GetPendingCleanupBodyParams) ([]byte, error) {
+func (q *Queries) GetPendingCleanupBody(ctx context.Context, arg GetPendingCleanupBodyParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getPendingCleanupBody, arg.ID, arg.OperationID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var witness_hash string
+	err := row.Scan(&witness_hash)
+	return witness_hash, err
+}
+
+const getResourceLink = `-- name: GetResourceLink :one
+SELECT s.status,s.input_hash,s.candidate_resource_id,l.child_operation_id,l.child_kind
+FROM operation_steps s
+LEFT JOIN resource_links l ON l.parent_operation_id=s.operation_id AND l.step_key=s.step_key
+WHERE s.operation_id=?1 AND s.step_key=?2 AND s.action='resource_link'
+`
+
+type GetResourceLinkParams struct {
+	ParentOperationID string
+	StepKey           string
+}
+
+type GetResourceLinkRow struct {
+	Status              string
+	InputHash           string
+	CandidateResourceID string
+	ChildOperationID    sql.NullString
+	ChildKind           sql.NullString
+}
+
+func (q *Queries) GetResourceLink(ctx context.Context, arg GetResourceLinkParams) (GetResourceLinkRow, error) {
+	row := q.db.QueryRowContext(ctx, getResourceLink, arg.ParentOperationID, arg.StepKey)
+	var i GetResourceLinkRow
+	err := row.Scan(
+		&i.Status,
+		&i.InputHash,
+		&i.CandidateResourceID,
+		&i.ChildOperationID,
+		&i.ChildKind,
+	)
+	return i, err
+}
+
+const getResourceProgress = `-- name: GetResourceProgress :one
+SELECT operation_id, step_key, restore_snapshot_id, backing_holder, backing_ready, restore_blocked, disk_device, disk_inode, disk_mode, materials_hash, observation_present, alive, paused, booted, configured, pid, start_time, network, result_instance, error FROM resource_progress WHERE operation_id=?
+`
+
+func (q *Queries) GetResourceProgress(ctx context.Context, operationID string) (ResourceProgress, error) {
+	row := q.db.QueryRowContext(ctx, getResourceProgress, operationID)
+	var i ResourceProgress
+	err := row.Scan(
+		&i.OperationID,
+		&i.StepKey,
+		&i.RestoreSnapshotID,
+		&i.BackingHolder,
+		&i.BackingReady,
+		&i.RestoreBlocked,
+		&i.DiskDevice,
+		&i.DiskInode,
+		&i.DiskMode,
+		&i.MaterialsHash,
+		&i.ObservationPresent,
+		&i.Alive,
+		&i.Paused,
+		&i.Booted,
+		&i.Configured,
+		&i.Pid,
+		&i.StartTime,
+		&i.Network,
+		&i.ResultInstance,
+		&i.Error,
+	)
+	return i, err
 }
 
 const getRetainedCleanup = `-- name: GetRetainedCleanup :one
-SELECT operation_id,body FROM cleanup_intents WHERE resource_kind=? AND resource_id=? AND status='retained'
+SELECT operation_id,witness_hash FROM cleanup_intents WHERE resource_kind=? AND resource_id=? AND status='retained'
 `
 
 type GetRetainedCleanupParams struct {
@@ -491,18 +311,18 @@ type GetRetainedCleanupParams struct {
 
 type GetRetainedCleanupRow struct {
 	OperationID string
-	Body        []byte
+	WitnessHash string
 }
 
 func (q *Queries) GetRetainedCleanup(ctx context.Context, arg GetRetainedCleanupParams) (GetRetainedCleanupRow, error) {
 	row := q.db.QueryRowContext(ctx, getRetainedCleanup, arg.ResourceKind, arg.ResourceID)
 	var i GetRetainedCleanupRow
-	err := row.Scan(&i.OperationID, &i.Body)
+	err := row.Scan(&i.OperationID, &i.WitnessHash)
 	return i, err
 }
 
 const getStep = `-- name: GetStep :one
-SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,body
+SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,phase,step_error,retired_by
 FROM operation_steps WHERE operation_id=? AND step_key=?
 `
 
@@ -520,7 +340,9 @@ type GetStepRow struct {
 	Input               []byte
 	CandidateResourceID string
 	ExpectedInstance    string
-	Body                []byte
+	Phase               sql.NullString
+	StepError           string
+	RetiredBy           sql.NullString
 }
 
 func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, error) {
@@ -535,13 +357,15 @@ func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, e
 		&i.Input,
 		&i.CandidateResourceID,
 		&i.ExpectedInstance,
-		&i.Body,
+		&i.Phase,
+		&i.StepError,
+		&i.RetiredBy,
 	)
 	return i, err
 }
 
 const insertArmedCleanup = `-- name: InsertArmedCleanup :execrows
-INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,body) VALUES(?,?,?,?,'armed',?)
+INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,step_key,witness_hash) VALUES(?,?,?,?,'armed',?,?)
 `
 
 type InsertArmedCleanupParams struct {
@@ -549,7 +373,8 @@ type InsertArmedCleanupParams struct {
 	OperationID  string
 	ResourceKind string
 	ResourceID   string
-	Body         []byte
+	StepKey      string
+	WitnessHash  string
 }
 
 func (q *Queries) InsertArmedCleanup(ctx context.Context, arg InsertArmedCleanupParams) (int64, error) {
@@ -558,7 +383,8 @@ func (q *Queries) InsertArmedCleanup(ctx context.Context, arg InsertArmedCleanup
 		arg.OperationID,
 		arg.ResourceKind,
 		arg.ResourceID,
-		arg.Body,
+		arg.StepKey,
+		arg.WitnessHash,
 	)
 	if err != nil {
 		return 0, err
@@ -567,7 +393,7 @@ func (q *Queries) InsertArmedCleanup(ctx context.Context, arg InsertArmedCleanup
 }
 
 const insertBlockedCleanup = `-- name: InsertBlockedCleanup :execrows
-INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,body) VALUES(?,?,?,?,'blocked',?)
+INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,step_key,witness_hash) VALUES(?,?,?,?,'blocked',?,?)
 `
 
 type InsertBlockedCleanupParams struct {
@@ -575,7 +401,8 @@ type InsertBlockedCleanupParams struct {
 	OperationID  string
 	ResourceKind string
 	ResourceID   string
-	Body         []byte
+	StepKey      string
+	WitnessHash  string
 }
 
 func (q *Queries) InsertBlockedCleanup(ctx context.Context, arg InsertBlockedCleanupParams) (int64, error) {
@@ -584,7 +411,8 @@ func (q *Queries) InsertBlockedCleanup(ctx context.Context, arg InsertBlockedCle
 		arg.OperationID,
 		arg.ResourceKind,
 		arg.ResourceID,
-		arg.Body,
+		arg.StepKey,
+		arg.WitnessHash,
 	)
 	if err != nil {
 		return 0, err
@@ -592,8 +420,70 @@ func (q *Queries) InsertBlockedCleanup(ctx context.Context, arg InsertBlockedCle
 	return result.RowsAffected()
 }
 
+const insertCaptureBoundary = `-- name: InsertCaptureBoundary :execrows
+INSERT INTO capture_boundaries(operation_id,path,parent_device,parent_inode,parent_mode,publication_device,publication_inode,publication_mode) VALUES(?,?,?,?,?,?,?,?)
+`
+
+type InsertCaptureBoundaryParams struct {
+	OperationID       string
+	Path              string
+	ParentDevice      int64
+	ParentInode       int64
+	ParentMode        int64
+	PublicationDevice int64
+	PublicationInode  int64
+	PublicationMode   int64
+}
+
+func (q *Queries) InsertCaptureBoundary(ctx context.Context, arg InsertCaptureBoundaryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCaptureBoundary,
+		arg.OperationID,
+		arg.Path,
+		arg.ParentDevice,
+		arg.ParentInode,
+		arg.ParentMode,
+		arg.PublicationDevice,
+		arg.PublicationInode,
+		arg.PublicationMode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCaptureFile = `-- name: InsertCaptureFile :execrows
+INSERT INTO capture_files(operation_id,path,digest) VALUES(?,?,?)
+`
+
+type InsertCaptureFileParams struct {
+	OperationID string
+	Path        string
+	Digest      string
+}
+
+func (q *Queries) InsertCaptureFile(ctx context.Context, arg InsertCaptureFileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCaptureFile, arg.OperationID, arg.Path, arg.Digest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCaptureProgress = `-- name: InsertCaptureProgress :execrows
+INSERT INTO capture_progress(operation_id) VALUES(?)
+`
+
+func (q *Queries) InsertCaptureProgress(ctx context.Context, operationID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCaptureProgress, operationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertCleanupIntent = `-- name: InsertCleanupIntent :execrows
-INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,body) VALUES(?,?,?,?,'pending',?)
+INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,step_key,witness_hash) VALUES(?,?,?,?,'pending',?,?)
 `
 
 type InsertCleanupIntentParams struct {
@@ -601,7 +491,8 @@ type InsertCleanupIntentParams struct {
 	OperationID  string
 	ResourceKind string
 	ResourceID   string
-	Body         []byte
+	StepKey      string
+	WitnessHash  string
 }
 
 func (q *Queries) InsertCleanupIntent(ctx context.Context, arg InsertCleanupIntentParams) (int64, error) {
@@ -610,31 +501,8 @@ func (q *Queries) InsertCleanupIntent(ctx context.Context, arg InsertCleanupInte
 		arg.OperationID,
 		arg.ResourceKind,
 		arg.ResourceID,
-		arg.Body,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const insertDeletionReceipt = `-- name: InsertDeletionReceipt :execrows
-INSERT INTO deletion_intents(path,operation_id,step_key,body) VALUES(?,?,?,?)
-`
-
-type InsertDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
-	Body        []byte
-}
-
-func (q *Queries) InsertDeletionReceipt(ctx context.Context, arg InsertDeletionReceiptParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertDeletionReceipt,
-		arg.Path,
-		arg.OperationID,
 		arg.StepKey,
-		arg.Body,
+		arg.WitnessHash,
 	)
 	if err != nil {
 		return 0, err
@@ -642,38 +510,198 @@ func (q *Queries) InsertDeletionReceipt(ctx context.Context, arg InsertDeletionR
 	return result.RowsAffected()
 }
 
-const insertStep = `-- name: InsertStep :execrows
-INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance,status,body) VALUES(?,?,?,?,?,?,?,?,?)
+const insertLinkStep = `-- name: InsertLinkStep :execrows
+INSERT INTO operation_steps(operation_id,step_key,action,input_hash,candidate_resource_id,expected_instance,status) VALUES(?,?,'resource_link',?,?,?,'pending')
 `
 
-type InsertStepParams struct {
+type InsertLinkStepParams struct {
 	OperationID         string
 	StepKey             string
+	InputHash           string
+	CandidateResourceID string
+	ExpectedInstance    string
+}
+
+func (q *Queries) InsertLinkStep(ctx context.Context, arg InsertLinkStepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertLinkStep,
+		arg.OperationID,
+		arg.StepKey,
+		arg.InputHash,
+		arg.CandidateResourceID,
+		arg.ExpectedInstance,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertResourceLink = `-- name: InsertResourceLink :execrows
+INSERT INTO resource_links(parent_operation_id,step_key,child_operation_id,child_kind) VALUES(?,?,?,?)
+`
+
+type InsertResourceLinkParams struct {
+	ParentOperationID string
+	StepKey           string
+	ChildOperationID  string
+	ChildKind         string
+}
+
+func (q *Queries) InsertResourceLink(ctx context.Context, arg InsertResourceLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertResourceLink,
+		arg.ParentOperationID,
+		arg.StepKey,
+		arg.ChildOperationID,
+		arg.ChildKind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertResourceProgress = `-- name: InsertResourceProgress :execrows
+INSERT INTO resource_progress(operation_id,restore_snapshot_id,backing_holder) VALUES(?,?,?)
+`
+
+type InsertResourceProgressParams struct {
+	OperationID       string
+	RestoreSnapshotID sql.NullString
+	BackingHolder     sql.NullString
+}
+
+func (q *Queries) InsertResourceProgress(ctx context.Context, arg InsertResourceProgressParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertResourceProgress, arg.OperationID, arg.RestoreSnapshotID, arg.BackingHolder)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertResourceStep = `-- name: InsertResourceStep :execrows
+INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance,status,phase) VALUES(?,'resource',?,?,?,?,?,'pending','admitted')
+`
+
+type InsertResourceStepParams struct {
+	OperationID         string
 	Action              string
 	InputHash           string
 	Input               []byte
 	CandidateResourceID string
 	ExpectedInstance    string
-	Status              string
-	Body                []byte
 }
 
-func (q *Queries) InsertStep(ctx context.Context, arg InsertStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertStep,
+func (q *Queries) InsertResourceStep(ctx context.Context, arg InsertResourceStepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertResourceStep,
 		arg.OperationID,
-		arg.StepKey,
 		arg.Action,
 		arg.InputHash,
 		arg.Input,
 		arg.CandidateResourceID,
 		arg.ExpectedInstance,
-		arg.Status,
-		arg.Body,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const insertRestoreFile = `-- name: InsertRestoreFile :execrows
+INSERT INTO restore_files(operation_id,name,source,candidate,size,device,inode,mode) VALUES(?,?,?,?,?,?,?,?)
+`
+
+type InsertRestoreFileParams struct {
+	OperationID string
+	Name        string
+	Source      string
+	Candidate   string
+	Size        int64
+	Device      int64
+	Inode       int64
+	Mode        int64
+}
+
+func (q *Queries) InsertRestoreFile(ctx context.Context, arg InsertRestoreFileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRestoreFile,
+		arg.OperationID,
+		arg.Name,
+		arg.Source,
+		arg.Candidate,
+		arg.Size,
+		arg.Device,
+		arg.Inode,
+		arg.Mode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertRestoreMaterials = `-- name: InsertRestoreMaterials :execrows
+INSERT INTO restore_materials(operation_id,complete,files_present,version_device,version_inode,version_mode,restore_device,restore_inode,restore_mode) VALUES(?,?,?,?,?,?,?,?,?)
+`
+
+type InsertRestoreMaterialsParams struct {
+	OperationID   string
+	Complete      bool
+	FilesPresent  bool
+	VersionDevice int64
+	VersionInode  int64
+	VersionMode   int64
+	RestoreDevice int64
+	RestoreInode  int64
+	RestoreMode   int64
+}
+
+func (q *Queries) InsertRestoreMaterials(ctx context.Context, arg InsertRestoreMaterialsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRestoreMaterials,
+		arg.OperationID,
+		arg.Complete,
+		arg.FilesPresent,
+		arg.VersionDevice,
+		arg.VersionInode,
+		arg.VersionMode,
+		arg.RestoreDevice,
+		arg.RestoreInode,
+		arg.RestoreMode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const listCaptureFiles = `-- name: ListCaptureFiles :many
+SELECT path,digest FROM capture_files WHERE operation_id=? ORDER BY path
+`
+
+type ListCaptureFilesRow struct {
+	Path   string
+	Digest string
+}
+
+func (q *Queries) ListCaptureFiles(ctx context.Context, operationID string) ([]ListCaptureFilesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCaptureFiles, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCaptureFilesRow
+	for rows.Next() {
+		var i ListCaptureFilesRow
+		if err := rows.Scan(&i.Path, &i.Digest); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listLiveDirectRetirements = `-- name: ListLiveDirectRetirements :many
@@ -704,7 +732,7 @@ func (q *Queries) ListLiveDirectRetirements(ctx context.Context, candidateResour
 }
 
 const matchingCleanupCount = `-- name: MatchingCleanupCount :one
-SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status=? AND body=?
+SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND operation_id=? AND resource_kind=? AND resource_id=? AND status=? AND witness_hash=?
 `
 
 type MatchingCleanupCountParams struct {
@@ -713,7 +741,7 @@ type MatchingCleanupCountParams struct {
 	ResourceKind string
 	ResourceID   string
 	Status       string
-	Body         []byte
+	WitnessHash  string
 }
 
 func (q *Queries) MatchingCleanupCount(ctx context.Context, arg MatchingCleanupCountParams) (int64, error) {
@@ -723,7 +751,7 @@ func (q *Queries) MatchingCleanupCount(ctx context.Context, arg MatchingCleanupC
 		arg.ResourceKind,
 		arg.ResourceID,
 		arg.Status,
-		arg.Body,
+		arg.WitnessHash,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -746,45 +774,98 @@ func (q *Queries) PendingCleanupResourceOwner(ctx context.Context, arg PendingCl
 	return operation_id, err
 }
 
-const replaceRunningStepBody = `-- name: ReplaceRunningStepBody :execrows
-UPDATE operation_steps SET body=?1
-WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND status='running' AND body=?5
+const readCaptureProgress = `-- name: ReadCaptureProgress :one
+SELECT resume_required,captured,materialized,artifacts_synced FROM capture_progress WHERE operation_id=?
 `
 
-type ReplaceRunningStepBodyParams struct {
-	NextBody     []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
+type ReadCaptureProgressRow struct {
+	ResumeRequired  bool
+	Captured        bool
+	Materialized    bool
+	ArtifactsSynced bool
 }
 
-func (q *Queries) ReplaceRunningStepBody(ctx context.Context, arg ReplaceRunningStepBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceRunningStepBody,
-		arg.NextBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
+func (q *Queries) ReadCaptureProgress(ctx context.Context, operationID string) (ReadCaptureProgressRow, error) {
+	row := q.db.QueryRowContext(ctx, readCaptureProgress, operationID)
+	var i ReadCaptureProgressRow
+	err := row.Scan(
+		&i.ResumeRequired,
+		&i.Captured,
+		&i.Materialized,
+		&i.ArtifactsSynced,
 	)
+	return i, err
+}
+
+const readRestoreFiles = `-- name: ReadRestoreFiles :many
+SELECT operation_id, name, source, candidate, size, device, inode, mode FROM restore_files WHERE operation_id=?
+`
+
+func (q *Queries) ReadRestoreFiles(ctx context.Context, operationID string) ([]RestoreFile, error) {
+	rows, err := q.db.QueryContext(ctx, readRestoreFiles, operationID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []RestoreFile
+	for rows.Next() {
+		var i RestoreFile
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Name,
+			&i.Source,
+			&i.Candidate,
+			&i.Size,
+			&i.Device,
+			&i.Inode,
+			&i.Mode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readRestoreMaterials = `-- name: ReadRestoreMaterials :one
+SELECT operation_id, complete, files_present, version_device, version_inode, version_mode, restore_device, restore_inode, restore_mode FROM restore_materials WHERE operation_id=?
+`
+
+func (q *Queries) ReadRestoreMaterials(ctx context.Context, operationID string) (RestoreMaterial, error) {
+	row := q.db.QueryRowContext(ctx, readRestoreMaterials, operationID)
+	var i RestoreMaterial
+	err := row.Scan(
+		&i.OperationID,
+		&i.Complete,
+		&i.FilesPresent,
+		&i.VersionDevice,
+		&i.VersionInode,
+		&i.VersionMode,
+		&i.RestoreDevice,
+		&i.RestoreInode,
+		&i.RestoreMode,
+	)
+	return i, err
 }
 
 const restoreBackingOperation = `-- name: RestoreBackingOperation :one
-SELECT operation_id FROM operation_steps WHERE step_key='resource' AND action IN ('clone','restore')
-AND json_extract(input,'$.backing_holder')=(CAST(?1 AS TEXT)||'') AND json_extract(input,'$.restore.snapshot.id')=(CAST(?2 AS TEXT)||'')
+SELECT r.operation_id FROM resource_progress r JOIN operation_steps s ON s.operation_id=r.operation_id AND s.step_key=r.step_key
+WHERE s.action IN ('clone','restore') AND r.backing_holder=? AND r.restore_snapshot_id=?
 `
 
 type RestoreBackingOperationParams struct {
-	HolderID   string
-	SnapshotID string
+	BackingHolder     sql.NullString
+	RestoreSnapshotID sql.NullString
 }
 
 func (q *Queries) RestoreBackingOperation(ctx context.Context, arg RestoreBackingOperationParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, restoreBackingOperation, arg.HolderID, arg.SnapshotID)
+	row := q.db.QueryRowContext(ctx, restoreBackingOperation, arg.BackingHolder, arg.RestoreSnapshotID)
 	var operation_id string
 	err := row.Scan(&operation_id)
 	return operation_id, err
@@ -819,6 +900,56 @@ type RetireDeletionReceiptParams struct {
 
 func (q *Queries) RetireDeletionReceipt(ctx context.Context, arg RetireDeletionReceiptParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, retireDeletionReceipt, arg.Path, arg.OperationID, arg.StepKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setResourceProgress = `-- name: SetResourceProgress :execrows
+UPDATE resource_progress SET backing_ready=?,restore_blocked=?,disk_device=?,disk_inode=?,disk_mode=?,materials_hash=?,observation_present=?,alive=?,paused=?,booted=?,configured=?,pid=?,start_time=?,network=?,result_instance=?,error=? WHERE operation_id=?
+`
+
+type SetResourceProgressParams struct {
+	BackingReady       bool
+	RestoreBlocked     bool
+	DiskDevice         sql.NullInt64
+	DiskInode          sql.NullInt64
+	DiskMode           sql.NullInt64
+	MaterialsHash      sql.NullString
+	ObservationPresent bool
+	Alive              bool
+	Paused             bool
+	Booted             bool
+	Configured         bool
+	Pid                int64
+	StartTime          int64
+	Network            bool
+	ResultInstance     string
+	Error              string
+	OperationID        string
+}
+
+func (q *Queries) SetResourceProgress(ctx context.Context, arg SetResourceProgressParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setResourceProgress,
+		arg.BackingReady,
+		arg.RestoreBlocked,
+		arg.DiskDevice,
+		arg.DiskInode,
+		arg.DiskMode,
+		arg.MaterialsHash,
+		arg.ObservationPresent,
+		arg.Alive,
+		arg.Paused,
+		arg.Booted,
+		arg.Configured,
+		arg.Pid,
+		arg.StartTime,
+		arg.Network,
+		arg.ResultInstance,
+		arg.Error,
+		arg.OperationID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -924,6 +1055,107 @@ func (q *Queries) TransitionDirectCleanup(ctx context.Context, arg TransitionDir
 		arg.ID,
 		arg.OperationID,
 		arg.PreviousStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const transitionDirectRetirement = `-- name: TransitionDirectRetirement :execrows
+UPDATE operation_steps SET status=?1,phase=?2,retired_by=?3 WHERE operation_id=?4 AND step_key='direct_retirement' AND input_hash=?5 AND status=?6 AND phase=?7 AND retired_by IS NULL AND status IN ('pending','running') AND (?2<>'pending' OR status='pending') AND (?2<>'replaced' OR status='pending') AND (?2<>'complete' OR status='running')
+`
+
+type TransitionDirectRetirementParams struct {
+	NextStatus     string
+	NextPhase      sql.NullString
+	RetiredBy      sql.NullString
+	OperationID    string
+	InputHash      string
+	PreviousStatus string
+	PreviousPhase  sql.NullString
+}
+
+func (q *Queries) TransitionDirectRetirement(ctx context.Context, arg TransitionDirectRetirementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, transitionDirectRetirement,
+		arg.NextStatus,
+		arg.NextPhase,
+		arg.RetiredBy,
+		arg.OperationID,
+		arg.InputHash,
+		arg.PreviousStatus,
+		arg.PreviousPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const transitionResource = `-- name: TransitionResource :execrows
+UPDATE operation_steps SET phase=?1,status=?2 WHERE operation_id=?3 AND step_key='resource' AND phase=?4 AND status=?5 AND input_hash=?6 AND status IN ('pending','running') AND (?2<>'succeeded' OR status='running')
+`
+
+type TransitionResourceParams struct {
+	NextPhase      sql.NullString
+	NextStatus     string
+	OperationID    string
+	PreviousPhase  sql.NullString
+	PreviousStatus string
+	InputHash      string
+}
+
+func (q *Queries) TransitionResource(ctx context.Context, arg TransitionResourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, transitionResource,
+		arg.NextPhase,
+		arg.NextStatus,
+		arg.OperationID,
+		arg.PreviousPhase,
+		arg.PreviousStatus,
+		arg.InputHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateCaptureError = `-- name: UpdateCaptureError :execrows
+UPDATE operation_steps SET step_error=? WHERE operation_id=? AND step_key='capture'
+`
+
+type UpdateCaptureErrorParams struct {
+	StepError   string
+	OperationID string
+}
+
+func (q *Queries) UpdateCaptureError(ctx context.Context, arg UpdateCaptureErrorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateCaptureError, arg.StepError, arg.OperationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateCaptureProgress = `-- name: UpdateCaptureProgress :execrows
+UPDATE capture_progress SET resume_required=?,captured=?,materialized=?,artifacts_synced=? WHERE operation_id=?
+`
+
+type UpdateCaptureProgressParams struct {
+	ResumeRequired  bool
+	Captured        bool
+	Materialized    bool
+	ArtifactsSynced bool
+	OperationID     string
+}
+
+func (q *Queries) UpdateCaptureProgress(ctx context.Context, arg UpdateCaptureProgressParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateCaptureProgress,
+		arg.ResumeRequired,
+		arg.Captured,
+		arg.Materialized,
+		arg.ArtifactsSynced,
+		arg.OperationID,
 	)
 	if err != nil {
 		return 0, err

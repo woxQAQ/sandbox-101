@@ -88,8 +88,9 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 			if history.Status != "succeeded" || testutil.AwaitColdWorker(t, service, other.ID).Status != "succeeded" {
 				t.Fatal("fixture resources did not complete")
 			}
+			const readCurrent = "SELECT json_array(state,slot,directory,current_instance,generation_operation_id,resource_hash,verified,agent_ready,deleting,observation_hash) FROM vms WHERE id=? AND operation_id IS NULL"
 			var before []byte
-			if err := service.State.Database().QueryRow("SELECT body FROM vms WHERE id=? AND operation_id IS NULL", claim.Result.VMID).Scan(&before); err != nil {
+			if err := service.State.Database().QueryRow(readCurrent, claim.Result.VMID).Scan(&before); err != nil {
 				t.Fatal(err)
 			}
 			var query string
@@ -123,7 +124,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				t.Fatal("unproved disk funding authorized stop", accepted, err)
 			}
 			var after []byte
-			if err = service.State.Database().QueryRow("SELECT body FROM vms WHERE id=? AND operation_id IS NULL", claim.Result.VMID).Scan(&after); err != nil || !bytes.Equal(before, after) {
+			if err = service.State.Database().QueryRow(readCurrent, claim.Result.VMID).Scan(&after); err != nil || !bytes.Equal(before, after) {
 				t.Fatal("rejected stop changed current custody", err)
 			}
 			var retained int64

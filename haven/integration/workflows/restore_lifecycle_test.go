@@ -125,9 +125,7 @@ func TestHavenRestoreLeaseAndIncompleteProof(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "missing-proof":
-				state := before.State
-				state.Materials = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='resource'", operation.Encode(state), clone.ID); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE resource_progress SET materials_hash=NULL WHERE operation_id=?", clone.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

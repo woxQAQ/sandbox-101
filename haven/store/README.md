@@ -21,7 +21,7 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 | 位置 | 允许的维护操作 |
 |---|---|
 | `state_linux.go:initialize` | store identity 元数据初始化、`wal_checkpoint(FULL)` |
-| `state_linux.go:validate` | quick_check、application_id/user_version、sqlite_master 的必需 table 计数 |
+| `state_linux.go:validate` | quick_check、application_id/user_version、`sqlite_master` 的 trigger 检查 |
 | `migrations.go:Migrate` | SQLite header、空库检查、嵌入的 v0 baseline 和 Goose 零号记录 |
 | `validation.go:HasForeignKeyViolations` | foreign_key_check |
 | `backup_linux.go:backup` | VACUUM INTO |
@@ -31,11 +31,17 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 
 领域查询位于各领域的 `queries.sql`，由 `haven/sqlc.yaml` 配置生成到该领域的 `internal/dbgen/`。生成结构不越过领域 API；事务内操作绑定原 `*sql.Tx`，必需单行写仍核验影响行数恰好为 1。
 
-sqlc 生成数据库表结构、查询参数和查询投影，不能从 BLOB 推导其中的 JSON 协议。当前开启 `omit_unused_structs: true`：例如 `templates(id, tenant, body BLOB)` 的查询只读 `body`，生成结果是 `[]byte`，因此其 `models.go` 可以为空；`GetPublisherRow` 等多列投影则生成在 `queries.sql.go`。手写 `template.Record` 负责 JSON 内的 `loom.Config`、字段顺序/tags 与公开视图转换，属于领域/持久协议模型。纯行投影在能力内直接消费生成类型；不为了隐藏 sqlc 而复制整行。BLOB 中的冻结 JSON 仍由手写协议类型表达，不能为填满 `models.go` 生成未使用类型。
+`templates` 指向当前 `template_versions`，标签按版本存入 `template_version_labels`。`pool_slots` 的 ready 索引服务于选择，`warm_claims` 固定原 refill 和资源操作。重启时从这些历史记录、接纳请求和 `activation:warm` 的设置重建 claim，再核对接纳时的摘要。模板替换、slot 退休和当前 VM 归属转移都遵循这条历史链。
+
+`operation_steps` 保存步骤身份、候选资源、期望实例、状态和阶段。`resource_links` 固定父步骤与子操作。`operation_steps.input` 保留需要按字节核验的步骤输入。关联型步骤按保留的关系重建输入，读写跨表时共享 SQLite 事务。资源、capture、fork、镜像导入和 GC 各自保存进度；GC 按序追加回收结果，删除流程分别保留原始文件树与当前路径的回收权。
+
+`operations` 保存类型化结果，`operation_result_sandboxes` 按位置保存交付顺序。终态事务在 `operation_publications` 固定响应摘要和模板版本，同时写入当时可见的 sandbox、网络规则及 checkpoint 字段。重放在同一个读快照中结合原请求与终态结果重建响应，并核验该摘要。资源的 launch observation、恢复文件身份、capture 边界及镜像导入证明均由列和子表保存。
+
+`operations` 固定作用域、幂等键、动作与请求种类。资源目标、镜像导入选项、GC 参数及公开命令分别写入请求明细表。命令的模板、环境、策略规则和注入 host 随同 operation 原子写入，列表按位置恢复。同键重试比较接纳时的字段。`journal.signed_payload` 保存 HMAC 覆盖的原字节。
 
 `tenants.max_sandboxes` 和 `tenants.max_storage_mib` 是非负整数列。`authorization.Repository` 在同一条 UPSERT 中写入 token hash 和两项预算。认证 sandbox token 时只查询 `sandboxes.tenant` 和 `sandboxes.id`，普通认证按 `state` 排除已终止记录。
 
-provisioning 需要按原始字节验证冻结请求。`operation.Repository.LiveTenantRequest` 在同一行核对摘要、租户范围和运行状态，返回已核验的请求字节及类型化结果。`machine` 定义 cold、clone 和 restore 的请求格式，工作流取得对应的请求类型后核对资源归属与历史证明。
+`operation.Repository.LiveTenantRequest` 在同一快照读取资源参数和结果，核对租户作用域及运行状态。provisioning 从原 cold、clone 或 restore 请求取得模板、快照、预期实例及 stop operation，与资源步骤及历史归属共同核验。
 
 ```nu
 just generate-sql

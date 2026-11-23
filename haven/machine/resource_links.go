@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -24,25 +23,43 @@ type ResourceLink struct {
 
 func LoadResourceLink(ctx context.Context, database store.DBTX, parent, role string) (ResourceLink, string, error) {
 	var link ResourceLink
-	operations := operation.New(database)
-	record, err := operations.ResourceLink(ctx, parent, "link:"+role)
+	var status string
+	err := store.ReadSnapshot(ctx, database, func(tx *sql.Tx) error {
+		var err error
+		link, status, err = readResourceLink(ctx, tx, parent, role)
+		return err
+	})
+	return link, status, err
+}
+
+func readResourceLink(ctx context.Context, tx *sql.Tx, parent, role string) (ResourceLink, string, error) {
+	row, err := dbgen.New(tx).GetResourceLink(ctx, dbgen.GetResourceLinkParams{
+		ParentOperationID: parent,
+		StepKey:           "link:" + role,
+	})
 	if err != nil {
-		return link, record.Status, err
+		return ResourceLink{}, "", err
 	}
-	if operation.Digest(record.Input) != record.Hash {
-		return link, record.Status, fmt.Errorf("resource link checksum changed")
+	if !row.ChildOperationID.Valid || !row.ChildKind.Valid {
+		return ResourceLink{}, row.Status, fmt.Errorf("%w: resource link detail missing", errs.ErrManualRecovery)
 	}
-	if err = json.Unmarshal(record.Input, &link); err != nil {
-		return link, record.Status, err
-	}
-	childHash, err := operations.RequestHash(ctx, link.ChildID)
+	child, err := operation.New(tx).Projection(ctx, row.ChildOperationID.String)
 	if err != nil {
-		return link, record.Status, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return ResourceLink{}, row.Status, fmt.Errorf("%w: resource link child missing", errs.ErrManualRecovery)
+		}
+		return ResourceLink{}, row.Status, fmt.Errorf("resource link child request unavailable: %w", err)
 	}
-	if link.RequestHash != childHash || link.Candidate != record.Candidate {
-		return link, record.Status, fmt.Errorf("resource link immutable child changed")
+	link := ResourceLink{
+		ChildID:     row.ChildOperationID.String,
+		Kind:        row.ChildKind.String,
+		RequestHash: operation.Digest(operation.Encode(child.Request)),
+		Candidate:   row.CandidateResourceID,
 	}
-	return link, record.Status, nil
+	if operation.Digest(operation.Encode(link)) != row.InputHash {
+		return link, row.Status, fmt.Errorf("resource link checksum changed")
+	}
+	return link, row.Status, nil
 }
 
 // ResourceLinkTarget names the parent responsibility receiving a child link.
@@ -56,20 +73,25 @@ func InsertResourceLink(ctx context.Context, tx *sql.Tx, target ResourceLinkTarg
 	link := ResourceLink{
 		ChildID:     request.Child.ID,
 		Kind:        request.Kind,
-		RequestHash: request.RequestHash,
+		RequestHash: operation.Digest(operation.Encode(request.Request)),
 		Candidate:   request.Candidate,
 	}
-	payload := operation.Encode(link)
-	return store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	queries := dbgen.New(tx)
+	key := "link:" + target.Role
+	if err := store.RequireOne(queries.InsertLinkStep(ctx, dbgen.InsertLinkStepParams{
 		OperationID:         target.OperationID,
-		StepKey:             "link:" + target.Role,
-		Action:              "resource_link",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
+		StepKey:             key,
+		InputHash:           operation.Digest(operation.Encode(link)),
 		CandidateResourceID: request.Candidate,
 		ExpectedInstance:    target.ExpectedInstance,
-		Status:              "pending",
-		Body:                operation.Encode("admitted"),
+	})); err != nil {
+		return err
+	}
+	return store.RequireOne(queries.InsertResourceLink(ctx, dbgen.InsertResourceLinkParams{
+		ParentOperationID: target.OperationID,
+		StepKey:           key,
+		ChildOperationID:  link.ChildID,
+		ChildKind:         link.Kind,
 	}))
 }
 
@@ -115,7 +137,6 @@ func (link ResourceLink) Complete(ctx context.Context, tx *sql.Tx, parent, role 
 		OperationID: parent,
 		StepKey:     "link:" + role,
 		Status:      childStatus,
-		Body:        operation.Encode("complete"),
 	}); err != nil {
 		return false, err
 	}

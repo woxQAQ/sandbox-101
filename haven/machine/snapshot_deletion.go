@@ -138,7 +138,7 @@ func LoadSnapshotDelete(ctx context.Context, q store.DBTX, id string) (SnapshotD
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -150,9 +150,7 @@ func LoadSnapshotDelete(ctx context.Context, q store.DBTX, id string) (SnapshotD
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if action != "snapshot_delete" || expected != "" || candidate != step.Input.Request.SnapshotID || candidate != step.Input.Source.Snapshot.ID {
 		return step, fmt.Errorf("snapshot delete frozen identity changed")
 	}

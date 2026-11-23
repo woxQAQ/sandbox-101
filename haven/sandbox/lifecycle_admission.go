@@ -108,10 +108,7 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 				return err
 			}
 		}
-		frozen := operation.Encode(struct {
-			Action  string
-			Request operation.Intent
-		}{input.Command.Action, input.Command})
+		frozen := operation.CommandRequest(input.Command)
 		payload := operation.Encode(input)
 		parent.Result.SandboxID = current.ID
 		parent.Result.VMID = current.VMID
@@ -129,29 +126,25 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 			ScopeKind: "tenant",
 			ScopeID:   input.RequestTenantID,
 			Key:       parent.Key,
-			Hash:      operation.Digest(frozen),
 			Request:   frozen,
 			Status:    "pending",
-			Body:      operation.Encode(parent.Result),
+			Result:    parent.Result,
 		}); err != nil {
 			return err
 		}
 		if err = operations.InsertCredential(ctx, parent.ID, admission.MAC); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+		if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 			OperationID:         parent.ID,
 			StepKey:             "lifecycle",
 			Action:              input.Command.Action,
-			InputHash:           operation.Digest(payload),
 			Input:               payload,
 			CandidateResourceID: input.Sandbox.ID,
 			ExpectedInstance:    input.Sandbox.Instance,
 			Status:              "pending",
-			Body: operation.Encode(LifecycleState{
-				Phase: "admitted",
-			}),
-		})); err != nil {
+			Phase:               "admitted",
+		}); err != nil {
 			return err
 		}
 		if err = store.RequireOne(dbgen.New(tx).UpsertFence(ctx, dbgen.UpsertFenceParams{
@@ -167,10 +160,10 @@ func (admission *LifecycleAdmission) AdmitResource(ctx context.Context, tx *sql.
 		}
 		if admission.Upper != nil {
 			if err = admission.Upper.AdmitResource(ctx, tx, machine.ResourceAdmission{
-				Child:       parent,
-				Kind:        "lifecycle",
-				Candidate:   input.Sandbox.ID,
-				RequestHash: operation.Digest(frozen),
+				Child:     parent,
+				Kind:      "lifecycle",
+				Candidate: input.Sandbox.ID,
+				Request:   frozen,
 			}); err != nil {
 				return err
 			}

@@ -26,8 +26,8 @@ import (
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 
-	"github.com/woxQAQ/haven/loom"
 	engine "github.com/woxQAQ/haven/loom/host"
+	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/sdk"
 	"github.com/woxQAQ/haven/types"
 	pb "github.com/woxQAQ/sandbox-protocol/gen"
@@ -590,7 +590,7 @@ func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx contex
 	defer cancel()
 	var warmID string
 	for {
-		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM ready_warm_vms WHERE template_id=?", template.ID).Scan(&warmID)
+		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM pool_slots WHERE template_id=? AND status='ready'", template.ID).Scan(&warmID)
 		if err == nil {
 			break
 		}
@@ -1295,18 +1295,11 @@ func (inventory *vmInventory) close() {
 
 func (inventory *vmInventory) getVM(ctx context.Context, id string) (vmObservation, error) {
 	var vm vmObservation
-	var raw []byte
-	if err := inventory.db.QueryRowContext(ctx, "SELECT body FROM vms WHERE id=?", id).Scan(&raw); err != nil {
+	current, err := machine.LoadOwnership(ctx, inventory.db, id)
+	if err != nil {
 		return vm, err
 	}
-	var record struct {
-		Resource   loom.Resource `json:"resource"`
-		Verified   bool          `json:"verified"`
-		AgentReady bool          `json:"agent_ready"`
-	}
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return vm, err
-	}
+	record := current.Record
 	if record.Resource.VMID != id || record.Resource.Instance == "" {
 		return vm, fmt.Errorf("VM observation lacks exact resource identity")
 	}
@@ -1323,21 +1316,25 @@ func (inventory *vmInventory) getVM(ctx context.Context, id string) (vmObservati
 		AgentReady:    record.AgentReady,
 		NetworkActual: observation.Network,
 	}
-	var policyRaw []byte
-	err = inventory.db.QueryRowContext(ctx, "SELECT instance,body FROM network_policies WHERE vm_id=?", id).Scan(&vm.NetworkPolicyInstance, &policyRaw)
-	if err == nil {
-		var policy loom.NetworkPolicy
-		if err = json.Unmarshal(policyRaw, &policy); err != nil {
+	witness, err := machine.LoadPolicyWitness(ctx, inventory.db, id)
+	if err == nil && witness.PolicyHash.Valid {
+		retirement, err := machine.LoadDirectRetirement(ctx, inventory.db, witness.OperationID)
+		if err != nil {
 			return vm, err
 		}
+		policy := retirement.Input.Policy
+		if machine.InstalledPolicyHash(policy) != witness.PolicyHash {
+			return vm, fmt.Errorf("installed network policy differs from retirement witness")
+		}
+		vm.NetworkPolicyInstance = witness.Instance
 		if vm.NetworkPolicyInstance != vm.Instance {
 			return vm, fmt.Errorf("direct policy belongs to another instance")
 		}
-		if err = inventory.backend.VerifyNetworkPolicy(ctx, record.Resource, &policy); err != nil {
+		if err = inventory.backend.VerifyNetworkPolicy(ctx, record.Resource, policy); err != nil {
 			return vm, err
 		}
 		vm.NetworkEnabled = true
-	} else if err != sql.ErrNoRows {
+	} else if err != nil && err != sql.ErrNoRows {
 		return vm, err
 	}
 	return vm, nil

@@ -40,8 +40,8 @@ func (state *State) AppendAudit(ctx context.Context, body []byte) error {
 		return err
 	}
 	if err = RequireOne(queries.AppendJournal(ctx, dbgen.AppendJournalParams{
-		Body: body,
-		Hash: state.Sign("journal-v1", previous, string(body)),
+		SignedPayload: body,
+		Hash:          state.Sign("journal-v1", previous, string(body)),
 	})); err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (state *State) validateJournal(database *sql.DB) error {
 	}
 	previous := ""
 	for _, row := range rows {
-		if !hmac.Equal([]byte(row.Hash), []byte(state.Sign("journal-v1", previous, string(row.Body)))) {
+		if !hmac.Equal([]byte(row.Hash), []byte(state.Sign("journal-v1", previous, string(row.SignedPayload)))) {
 			return fmt.Errorf("%w: audit journal identity changed", errs.ErrManualRecovery)
 		}
 		previous = row.Hash

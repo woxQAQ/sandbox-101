@@ -9,30 +9,6 @@ import (
 	"context"
 )
 
-const consumeWarm = `-- name: ConsumeWarm :execrows
-DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=? AND created_at_unix_ns=?
-`
-
-type ConsumeWarmParams struct {
-	VmID            string
-	TemplateID      string
-	SnapshotID      string
-	CreatedAtUnixNs int64
-}
-
-func (q *Queries) ConsumeWarm(ctx context.Context, arg ConsumeWarmParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, consumeWarm,
-		arg.VmID,
-		arg.TemplateID,
-		arg.SnapshotID,
-		arg.CreatedAtUnixNs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const countOwnedIntent = `-- name: CountOwnedIntent :one
 SELECT COUNT(*) FROM template_owners WHERE template_id=? AND tenant_id=?
 `
@@ -61,12 +37,11 @@ func (q *Queries) CountReservation(ctx context.Context, operationID string) (int
 }
 
 const countSnapshotUsers = `-- name: CountSnapshotUsers :one
-SELECT COUNT(*) FROM templates WHERE json_extract(body,'$.snapshot_id')=(CAST(? AS TEXT)||'')
+SELECT COUNT(*) FROM templates t JOIN template_versions v ON v.operation_id=t.published_operation_id WHERE v.snapshot_id=?
 `
 
-// The cast fixes sqlc's BLOB inference; concatenation keeps the comparison affinity-free.
-func (q *Queries) CountSnapshotUsers(ctx context.Context, dollar_1 string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSnapshotUsers, dollar_1)
+func (q *Queries) CountSnapshotUsers(ctx context.Context, snapshotID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSnapshotUsers, snapshotID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -84,7 +59,7 @@ func (q *Queries) CountTemplateReservations(ctx context.Context, templateID stri
 }
 
 const countWarmIdentity = `-- name: CountWarmIdentity :one
-SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?
+SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.status='ready' AND p.vm_id=? AND p.template_id=? AND v.snapshot_id=?
 `
 
 type CountWarmIdentityParams struct {
@@ -101,7 +76,7 @@ func (q *Queries) CountWarmIdentity(ctx context.Context, arg CountWarmIdentityPa
 }
 
 const countWarmSnapshot = `-- name: CountWarmSnapshot :one
-SELECT COUNT(*) FROM ready_warm_vms WHERE snapshot_id=?
+SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.status='ready' AND v.snapshot_id=?
 `
 
 func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int64, error) {
@@ -112,7 +87,7 @@ func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int
 }
 
 const countWarmVM = `-- name: CountWarmVM :one
-SELECT COUNT(*) FROM ready_warm_vms WHERE vm_id=?
+SELECT COUNT(*) FROM pool_slots WHERE vm_id=? AND status='ready'
 `
 
 func (q *Queries) CountWarmVM(ctx context.Context, vmID string) (int64, error) {
@@ -123,17 +98,23 @@ func (q *Queries) CountWarmVM(ctx context.Context, vmID string) (int64, error) {
 }
 
 const deleteReservation = `-- name: DeleteReservation :execrows
-DELETE FROM pool_slots WHERE operation_id=? AND status=? AND body=?
+DELETE FROM pool_slots WHERE operation_id=? AND status=? AND instance=? AND source_input_hash=?
 `
 
 type DeleteReservationParams struct {
-	OperationID string
-	Status      string
-	Body        []byte
+	OperationID     string
+	Status          string
+	Instance        string
+	SourceInputHash string
 }
 
 func (q *Queries) DeleteReservation(ctx context.Context, arg DeleteReservationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteReservation, arg.OperationID, arg.Status, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteReservation,
+		arg.OperationID,
+		arg.Status,
+		arg.Instance,
+		arg.SourceInputHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -141,19 +122,17 @@ func (q *Queries) DeleteReservation(ctx context.Context, arg DeleteReservationPa
 }
 
 const firstReady = `-- name: FirstReady :one
-SELECT p.operation_id FROM ready_warm_vms w JOIN pool_slots p ON p.vm_id=w.vm_id
-WHERE w.template_id=? AND w.snapshot_id=? AND p.template_version=? AND p.status='ready'
-ORDER BY w.created_at_unix_ns,w.vm_id LIMIT 1
+SELECT p.operation_id FROM pool_slots p WHERE p.template_id=? AND p.template_version=? AND p.status='ready'
+ORDER BY p.created_at_unix_ns,p.vm_id LIMIT 1
 `
 
 type FirstReadyParams struct {
 	TemplateID      string
-	SnapshotID      string
 	TemplateVersion string
 }
 
 func (q *Queries) FirstReady(ctx context.Context, arg FirstReadyParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, firstReady, arg.TemplateID, arg.SnapshotID, arg.TemplateVersion)
+	row := q.db.QueryRowContext(ctx, firstReady, arg.TemplateID, arg.TemplateVersion)
 	var operation_id string
 	err := row.Scan(&operation_id)
 	return operation_id, err
@@ -172,27 +151,6 @@ func (q *Queries) GetIntent(ctx context.Context, templateID string) (GetIntentRo
 	row := q.db.QueryRowContext(ctx, getIntent, templateID)
 	var i GetIntentRow
 	err := row.Scan(&i.TenantID, &i.CandidateOperationID)
-	return i, err
-}
-
-const getOwnedTemplate = `-- name: GetOwnedTemplate :one
-SELECT body,published_operation_id FROM templates WHERE id=? AND tenant=?
-`
-
-type GetOwnedTemplateParams struct {
-	ID     string
-	Tenant string
-}
-
-type GetOwnedTemplateRow struct {
-	Body                 []byte
-	PublishedOperationID string
-}
-
-func (q *Queries) GetOwnedTemplate(ctx context.Context, arg GetOwnedTemplateParams) (GetOwnedTemplateRow, error) {
-	row := q.db.QueryRowContext(ctx, getOwnedTemplate, arg.ID, arg.Tenant)
-	var i GetOwnedTemplateRow
-	err := row.Scan(&i.Body, &i.PublishedOperationID)
 	return i, err
 }
 
@@ -237,26 +195,23 @@ func (q *Queries) GetPublisher(ctx context.Context, arg GetPublisherParams) (Get
 }
 
 const getReservation = `-- name: GetReservation :one
-SELECT template_id,template_version,vm_id,status,body FROM pool_slots WHERE operation_id=?
+SELECT operation_id, template_id, template_version, sandbox_id, vm_id, source_operation_id, source_input_hash, instance, created_at_unix_ns, status FROM pool_slots WHERE operation_id=?
 `
 
-type GetReservationRow struct {
-	TemplateID      string
-	TemplateVersion string
-	VmID            string
-	Status          string
-	Body            []byte
-}
-
-func (q *Queries) GetReservation(ctx context.Context, operationID string) (GetReservationRow, error) {
+func (q *Queries) GetReservation(ctx context.Context, operationID string) (PoolSlot, error) {
 	row := q.db.QueryRowContext(ctx, getReservation, operationID)
-	var i GetReservationRow
+	var i PoolSlot
 	err := row.Scan(
+		&i.OperationID,
 		&i.TemplateID,
 		&i.TemplateVersion,
+		&i.SandboxID,
 		&i.VmID,
+		&i.SourceOperationID,
+		&i.SourceInputHash,
+		&i.Instance,
+		&i.CreatedAtUnixNs,
 		&i.Status,
-		&i.Body,
 	)
 	return i, err
 }
@@ -273,26 +228,96 @@ func (q *Queries) GetReservationForVM(ctx context.Context, vmID string) (string,
 }
 
 const getTemplate = `-- name: GetTemplate :one
-SELECT body FROM templates WHERE id=?
+SELECT published_operation_id FROM templates WHERE id=?
 `
 
-func (q *Queries) GetTemplate(ctx context.Context, id string) ([]byte, error) {
+func (q *Queries) GetTemplate(ctx context.Context, id string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getTemplate, id)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var published_operation_id string
+	err := row.Scan(&published_operation_id)
+	return published_operation_id, err
+}
+
+const getTemplateLabels = `-- name: GetTemplateLabels :many
+SELECT name,value FROM template_version_labels WHERE version_id=?
+`
+
+type GetTemplateLabelsRow struct {
+	Name  string
+	Value string
+}
+
+func (q *Queries) GetTemplateLabels(ctx context.Context, versionID string) ([]GetTemplateLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getTemplateLabels, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTemplateLabelsRow
+	for rows.Next() {
+		var i GetTemplateLabelsRow
+		if err := rows.Scan(&i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTemplateVersion = `-- name: GetTemplateVersion :one
+SELECT v.operation_id, v.template_id, v.image, v.vcpus, v.memory_mib, v.disk_mib, v.warmup, v.snapshot_id, v.target_warm,o.tenant_id FROM template_versions v JOIN template_owners o ON o.template_id=v.template_id WHERE v.operation_id=?
+`
+
+type GetTemplateVersionRow struct {
+	OperationID string
+	TemplateID  string
+	Image       string
+	Vcpus       int64
+	MemoryMib   int64
+	DiskMib     int64
+	Warmup      string
+	SnapshotID  string
+	TargetWarm  int64
+	TenantID    string
+}
+
+func (q *Queries) GetTemplateVersion(ctx context.Context, operationID string) (GetTemplateVersionRow, error) {
+	row := q.db.QueryRowContext(ctx, getTemplateVersion, operationID)
+	var i GetTemplateVersionRow
+	err := row.Scan(
+		&i.OperationID,
+		&i.TemplateID,
+		&i.Image,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.Warmup,
+		&i.SnapshotID,
+		&i.TargetWarm,
+		&i.TenantID,
+	)
+	return i, err
 }
 
 const insertReservation = `-- name: InsertReservation :execrows
-INSERT INTO pool_slots(operation_id,template_id,template_version,vm_id,status,body) VALUES(?,?,?,?,'pending',?)
+INSERT INTO pool_slots(operation_id,template_id,template_version,vm_id,sandbox_id,source_operation_id,source_input_hash,created_at_unix_ns,status) VALUES(?,?,?,?,?,?,?,?,'pending')
 `
 
 type InsertReservationParams struct {
-	OperationID     string
-	TemplateID      string
-	TemplateVersion string
-	VmID            string
-	Body            []byte
+	OperationID       string
+	TemplateID        string
+	TemplateVersion   string
+	VmID              string
+	SandboxID         string
+	SourceOperationID string
+	SourceInputHash   string
+	CreatedAtUnixNs   int64
 }
 
 func (q *Queries) InsertReservation(ctx context.Context, arg InsertReservationParams) (int64, error) {
@@ -301,7 +326,10 @@ func (q *Queries) InsertReservation(ctx context.Context, arg InsertReservationPa
 		arg.TemplateID,
 		arg.TemplateVersion,
 		arg.VmID,
-		arg.Body,
+		arg.SandboxID,
+		arg.SourceOperationID,
+		arg.SourceInputHash,
+		arg.CreatedAtUnixNs,
 	)
 	if err != nil {
 		return 0, err
@@ -310,46 +338,67 @@ func (q *Queries) InsertReservation(ctx context.Context, arg InsertReservationPa
 }
 
 const insertTemplate = `-- name: InsertTemplate :execrows
-INSERT INTO templates(id,tenant,published_operation_id,body) VALUES(?,?,?,?)
+INSERT INTO templates(id,published_operation_id) VALUES(?,?)
 `
 
 type InsertTemplateParams struct {
 	ID                   string
-	Tenant               string
 	PublishedOperationID string
-	Body                 []byte
 }
 
 func (q *Queries) InsertTemplate(ctx context.Context, arg InsertTemplateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertTemplate,
-		arg.ID,
-		arg.Tenant,
-		arg.PublishedOperationID,
-		arg.Body,
-	)
+	result, err := q.db.ExecContext(ctx, insertTemplate, arg.ID, arg.PublishedOperationID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const insertWarm = `-- name: InsertWarm :execrows
-INSERT INTO ready_warm_vms(vm_id,template_id,snapshot_id,created_at_unix_ns) VALUES(?,?,?,?)
+const insertTemplateLabel = `-- name: InsertTemplateLabel :execrows
+INSERT INTO template_version_labels(version_id,name,value) VALUES(?,?,?)
 `
 
-type InsertWarmParams struct {
-	VmID            string
-	TemplateID      string
-	SnapshotID      string
-	CreatedAtUnixNs int64
+type InsertTemplateLabelParams struct {
+	VersionID string
+	Name      string
+	Value     string
 }
 
-func (q *Queries) InsertWarm(ctx context.Context, arg InsertWarmParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertWarm,
-		arg.VmID,
+func (q *Queries) InsertTemplateLabel(ctx context.Context, arg InsertTemplateLabelParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTemplateLabel, arg.VersionID, arg.Name, arg.Value)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertTemplateVersion = `-- name: InsertTemplateVersion :execrows
+INSERT INTO template_versions(operation_id,template_id,image,vcpus,memory_mib,disk_mib,warmup,snapshot_id,target_warm) VALUES(?,?,?,?,?,?,?,?,?)
+`
+
+type InsertTemplateVersionParams struct {
+	OperationID string
+	TemplateID  string
+	Image       string
+	Vcpus       int64
+	MemoryMib   int64
+	DiskMib     int64
+	Warmup      string
+	SnapshotID  string
+	TargetWarm  int64
+}
+
+func (q *Queries) InsertTemplateVersion(ctx context.Context, arg InsertTemplateVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTemplateVersion,
+		arg.OperationID,
 		arg.TemplateID,
+		arg.Image,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.Warmup,
 		arg.SnapshotID,
-		arg.CreatedAtUnixNs,
+		arg.TargetWarm,
 	)
 	if err != nil {
 		return 0, err
@@ -385,7 +434,7 @@ func (q *Queries) ListReady(ctx context.Context) ([]string, error) {
 }
 
 const listTemplateIDs = `-- name: ListTemplateIDs :many
-SELECT id,tenant FROM templates ORDER BY id
+SELECT t.id,CAST(coalesce(o.tenant_id,'') AS TEXT) AS tenant FROM templates t LEFT JOIN template_owners o ON o.template_id=t.id ORDER BY t.id
 `
 
 type ListTemplateIDsRow struct {
@@ -417,7 +466,7 @@ func (q *Queries) ListTemplateIDs(ctx context.Context) ([]ListTemplateIDsRow, er
 }
 
 const listWarmVMs = `-- name: ListWarmVMs :many
-SELECT vm_id FROM ready_warm_vms WHERE template_id=? ORDER BY vm_id
+SELECT vm_id FROM pool_slots WHERE template_id=? AND status='ready' ORDER BY vm_id
 `
 
 func (q *Queries) ListWarmVMs(ctx context.Context, templateID string) ([]string, error) {
@@ -456,18 +505,17 @@ func (q *Queries) MarkPendingCleanup(ctx context.Context, operationID string) (i
 }
 
 const markReady = `-- name: MarkReady :execrows
-UPDATE pool_slots SET status='ready',body=?1
-WHERE operation_id=?2 AND status='pending' AND body=?3
+UPDATE pool_slots SET status='ready',instance=? WHERE operation_id=? AND status='pending' AND instance='' AND source_input_hash=?
 `
 
 type MarkReadyParams struct {
-	NewBody      []byte
-	OperationID  string
-	PreviousBody []byte
+	Instance        string
+	OperationID     string
+	SourceInputHash string
 }
 
 func (q *Queries) MarkReady(ctx context.Context, arg MarkReadyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReady, arg.NewBody, arg.OperationID, arg.PreviousBody)
+	result, err := q.db.ExecContext(ctx, markReady, arg.Instance, arg.OperationID, arg.SourceInputHash)
 	if err != nil {
 		return 0, err
 	}
@@ -475,34 +523,17 @@ func (q *Queries) MarkReady(ctx context.Context, arg MarkReadyParams) (int64, er
 }
 
 const markReadyCleanup = `-- name: MarkReadyCleanup :execrows
-UPDATE pool_slots SET status='cleanup' WHERE operation_id=? AND status='ready' AND body=?
+UPDATE pool_slots SET status='cleanup' WHERE operation_id=? AND status='ready' AND instance=? AND source_input_hash=?
 `
 
 type MarkReadyCleanupParams struct {
-	OperationID string
-	Body        []byte
+	OperationID     string
+	Instance        string
+	SourceInputHash string
 }
 
 func (q *Queries) MarkReadyCleanup(ctx context.Context, arg MarkReadyCleanupParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReadyCleanup, arg.OperationID, arg.Body)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const removeWarm = `-- name: RemoveWarm :execrows
-DELETE FROM ready_warm_vms WHERE vm_id=? AND template_id=? AND snapshot_id=?
-`
-
-type RemoveWarmParams struct {
-	VmID       string
-	TemplateID string
-	SnapshotID string
-}
-
-func (q *Queries) RemoveWarm(ctx context.Context, arg RemoveWarmParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, removeWarm, arg.VmID, arg.TemplateID, arg.SnapshotID)
+	result, err := q.db.ExecContext(ctx, markReadyCleanup, arg.OperationID, arg.Instance, arg.SourceInputHash)
 	if err != nil {
 		return 0, err
 	}
@@ -510,27 +541,17 @@ func (q *Queries) RemoveWarm(ctx context.Context, arg RemoveWarmParams) (int64, 
 }
 
 const replaceTemplate = `-- name: ReplaceTemplate :execrows
-UPDATE templates SET body=?1,published_operation_id=?2 WHERE id=?3 AND tenant=?4 AND published_operation_id=?5 AND body=?6
+UPDATE templates SET published_operation_id=?1 WHERE id=?2 AND published_operation_id=?3
 `
 
 type ReplaceTemplateParams struct {
-	NewBody              []byte
 	PublishedOperationID string
 	ID                   string
-	Tenant               string
 	PreviousOperationID  string
-	PreviousBody         []byte
 }
 
 func (q *Queries) ReplaceTemplate(ctx context.Context, arg ReplaceTemplateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceTemplate,
-		arg.NewBody,
-		arg.PublishedOperationID,
-		arg.ID,
-		arg.Tenant,
-		arg.PreviousOperationID,
-		arg.PreviousBody,
-	)
+	result, err := q.db.ExecContext(ctx, replaceTemplate, arg.PublishedOperationID, arg.ID, arg.PreviousOperationID)
 	if err != nil {
 		return 0, err
 	}
@@ -556,16 +577,25 @@ func (q *Queries) ReservePublication(ctx context.Context, arg ReservePublication
 }
 
 const selectReservation = `-- name: SelectReservation :execrows
-UPDATE pool_slots SET status='selected' WHERE operation_id=? AND status='ready' AND body=?
+UPDATE pool_slots SET status='selected' WHERE operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?
 `
 
 type SelectReservationParams struct {
-	OperationID string
-	Body        []byte
+	OperationID     string
+	VmID            string
+	Instance        string
+	SourceInputHash string
+	TemplateVersion string
 }
 
 func (q *Queries) SelectReservation(ctx context.Context, arg SelectReservationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, selectReservation, arg.OperationID, arg.Body)
+	result, err := q.db.ExecContext(ctx, selectReservation,
+		arg.OperationID,
+		arg.VmID,
+		arg.Instance,
+		arg.SourceInputHash,
+		arg.TemplateVersion,
+	)
 	if err != nil {
 		return 0, err
 	}

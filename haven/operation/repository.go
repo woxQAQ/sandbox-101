@@ -3,10 +3,7 @@ package operation
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -30,6 +27,8 @@ type Result struct {
 	Error         string   `json:"error,omitempty"`
 }
 
+const StatusPending = "pending"
+
 // State is the durable status and workflow result of an accepted operation.
 type State struct {
 	ID     string `json:"id"`
@@ -41,20 +40,24 @@ type State struct {
 // Repository uses either the shared read connection or the caller's transaction.
 // It does not decide admission, project business results, or commit transactions.
 type Repository struct {
-	queries *dbgen.Queries
+	database store.DBTX
+	queries  *dbgen.Queries
 }
 
 func New(db store.DBTX) *Repository {
 	return &Repository{
-		queries: dbgen.New(db),
+		database: db,
+		queries:  dbgen.New(db),
 	}
 }
 
 func (r *Repository) Get(ctx context.Context, kind, scope, id string) (State, error) {
-	row, err := r.queries.GetScopedOperation(ctx, dbgen.GetScopedOperationParams{
-		ID:        id,
-		ScopeKind: kind,
-		ScopeID:   scope,
+	row, err := r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
+		return q.GetScopedOperation(ctx, dbgen.GetScopedOperationParams{
+			ID:        id,
+			ScopeKind: kind,
+			ScopeID:   scope,
+		})
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return State{}, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
@@ -64,15 +67,11 @@ func (r *Repository) Get(ctx context.Context, kind, scope, id string) (State, er
 	}
 	out := State{
 		ID:     row.ID,
-		Key:    row.IdemKey,
+		Key:    row.Key,
 		Status: row.Status,
+		Result: row.Result,
 	}
-	hash := sha256.Sum256(row.Request)
-	if hex.EncodeToString(hash[:]) != row.RequestHash {
-		return out, fmt.Errorf("operation request identity corrupted")
-	}
-	err = json.Unmarshal(row.Body, &out.Result)
-	return out, err
+	return out, nil
 }
 
 func (r *Repository) RequestID(ctx context.Context, tenant, key string) (string, error) {
@@ -82,18 +81,20 @@ func (r *Repository) RequestID(ctx context.Context, tenant, key string) (string,
 	})
 }
 
-// Cached resolves the original scoped request. A matching key alone cannot
-// authorize replay: both the stored checksum and the requested hash must match.
-func (r *Repository) Cached(ctx context.Context, scope Scope, key, hash string) (State, bool, error) {
-	row, err := r.queries.GetScopedRequest(ctx, dbgen.GetScopedRequestParams{
-		ScopeKind: scope.Kind,
-		ScopeID:   scope.ID,
-		IdemKey:   key,
+// Cached compares the original parameters for the scoped idempotency key.
+func (r *Repository) Cached(ctx context.Context, scope Scope, key string, request Request) (State, bool, error) {
+	row, err := r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
+		return q.GetScopedRequest(ctx, dbgen.GetScopedRequestParams{
+			ScopeKind: scope.Kind,
+			ScopeID:   scope.ID,
+			IdemKey:   key,
+		})
 	})
 	record := State{
 		ID:     row.ID,
-		Key:    row.IdemKey,
+		Key:    row.Key,
 		Status: row.Status,
+		Result: row.Result,
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, false, nil
@@ -101,14 +102,7 @@ func (r *Repository) Cached(ctx context.Context, scope Scope, key, hash string) 
 	if err != nil {
 		return record, false, err
 	}
-	checksum := sha256.Sum256(row.Request)
-	if hex.EncodeToString(checksum[:]) != row.RequestHash {
-		return record, true, fmt.Errorf("operation request identity corrupted")
-	}
-	if err = json.Unmarshal(row.Body, &record.Result); err != nil {
-		return record, true, err
-	}
-	if hash != row.RequestHash {
+	if !row.Request.Equal(request) {
 		return record, true, fmt.Errorf("%w: key belongs to a different request", errs.ErrConflict)
 	}
 	return record, true, nil
@@ -152,46 +146,23 @@ func (r *Repository) Times(ctx context.Context, id string) (time.Time, time.Time
 // ProjectionSource is the original request and result read in the caller's
 // snapshot. Application services interpret it to build a business publication.
 type ProjectionSource struct {
-	ID          string
-	Key         string
-	ScopeKind   string
-	ScopeID     string
-	Status      string
-	RequestHash string
-	Request     []byte
-	Body        []byte
+	ID        string
+	Key       string
+	ScopeKind string
+	ScopeID   string
+	Status    string
+	Request   Request
+	Result    Result
 }
 
 func (r *Repository) Projection(ctx context.Context, id string) (ProjectionSource, error) {
-	row, err := r.queries.GetOperationProjection(ctx, id)
-	if err != nil {
-		return ProjectionSource{}, err
-	}
-	return ProjectionSource{
-		ID:          row.ID,
-		Key:         row.IdemKey,
-		ScopeKind:   row.ScopeKind,
-		ScopeID:     row.ScopeID,
-		Status:      row.Status,
-		RequestHash: row.RequestHash,
-		Request:     row.Request,
-		Body:        row.Body,
-	}, nil
+	return r.readOperation(ctx, func(q *dbgen.Queries) (dbgen.Operation, error) {
+		return q.GetOperationProjection(ctx, id)
+	})
 }
 
 func (r *Repository) PublicStatus(ctx context.Context, id string) (string, error) {
 	return r.queries.GetPublicStatus(ctx, id)
-}
-
-func (r *Repository) Publication(ctx context.Context, id string) ([]byte, error) {
-	return r.queries.GetPublication(ctx, id)
-}
-
-func (r *Repository) Publish(ctx context.Context, id string, body []byte) error {
-	return store.RequireOne(r.queries.InsertPublication(ctx, dbgen.InsertPublicationParams{
-		OperationID: id,
-		Body:        body,
-	}))
 }
 
 // Step retains the exact durable payload. Its owner decodes and verifies the
@@ -205,5 +176,4 @@ type Step struct {
 	Candidate        string
 	ExpectedInstance string
 	Input            []byte
-	Body             []byte
 }

@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -44,11 +43,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.FailedOperationID, "op-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: capture discard requires tenant, sandbox, failed capture, stopped instance and key", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request CaptureDiscardRequest
-	}{"capture_discard", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	cd.storeWriteMu.Lock()
 	defer cd.storeWriteMu.Unlock()
 	closing := cd.lifetime.Closing() || cd.store.Reviewed
@@ -65,7 +60,7 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			cd.dispatch(cached.ID)
 		}
@@ -101,10 +96,10 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 		input.Lifecycle = authority.LifecycleOperation()
 	}
 	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
-		Child:       accepted,
-		Kind:        "capture_discard",
-		Candidate:   source.Input.Snapshot.ID,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "capture_discard",
+		Candidate: source.Input.Snapshot.ID,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
@@ -125,24 +120,22 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "capture_discard",
 		Action:              "capture_discard",
-		InputHash:           step.Hash,
 		Input:               payload,
 		CandidateResourceID: source.Input.Snapshot.ID,
 		ExpectedInstance:    request.ExpectedInstance,
 		Status:              "pending",
-		Body:                operation.Encode(step.Phase),
-	})); err != nil {
+		Phase:               step.Phase,
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).MarkFailedDeleting(ctx, source.Input.Snapshot.ID)); err != nil {
@@ -178,7 +171,8 @@ func (cd *CaptureDiscard) AdmitForParent(ctx context.Context, request CaptureDis
 		OperationID:  accepted.ID,
 		ResourceKind: "snapshot",
 		ResourceID:   source.Input.Snapshot.ID,
-		Body:         payload,
+		StepKey:      "capture_discard",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}
@@ -258,22 +252,12 @@ func (cd *CaptureDiscard) verifyCaptureDiscardSource(ctx context.Context, tx *sq
 	if owner != expectedOwner || current != request.ExpectedInstance || currentOwnership.State != "stopped" || currentMachine.Deleting || !currentMachine.Verified || currentMachine.AgentReady || !reflect.DeepEqual(currentMachine.Resource, resource.Input.Resource) {
 		return empty, fmt.Errorf("capture discard current stopped instance changed")
 	}
-	var frozen struct {
-		Action  string
-		Request CaptureRequest
-	}
-	var result operation.Result
 	projection, err := operation.New(tx).Projection(ctx, source.OperationID)
 	if err != nil {
 		return empty, err
 	}
-	if err = json.Unmarshal(projection.Request, &frozen); err != nil {
-		return empty, err
-	}
-	if err = json.Unmarshal(projection.Body, &result); err != nil {
-		return empty, err
-	}
-	if operation.Digest(projection.Request) != projection.RequestHash || projection.Status != "failed" || projection.ScopeKind != "tenant" || projection.ScopeID != request.TenantID || frozen.Action != "snapshot" || frozen.Request != source.Input.Request || result.Error != source.State.Error || result.SnapshotID != source.Input.Snapshot.ID || result.VMID != resource.Candidate || result.SandboxID != sandboxRecord.ID {
+	result := projection.Result
+	if !projection.Request.Equal(source.Input.Request.operationRequest()) || projection.Status != "failed" || projection.ScopeKind != "tenant" || projection.ScopeID != request.TenantID || result.Error != source.State.Error || result.SnapshotID != source.Input.Snapshot.ID || result.VMID != resource.Candidate || result.SandboxID != sandboxRecord.ID {
 		return empty, fmt.Errorf("capture discard original terminal result changed")
 	}
 	snapshot := source.Input.Snapshot

@@ -1,19 +1,121 @@
 package sandbox_test
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/supply"
 )
+
+func TestWarmClaimRechecksRequestedTemplate(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	service, _, _ := testapp.GoldenSupplyFixture(t, 0)
+	ctx := t.Context()
+	template, err := service.TemplateCatalog.Owned(ctx, "tenant", "golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		tenantID   string
+		templateID string
+		want       error
+	}{
+		{"other", "golden", errs.ErrNotFound},
+		{"tenant", "cold", errs.ErrConflict},
+	} {
+		t.Run(tc.tenantID+"/"+tc.templateID, func(t *testing.T) {
+			prepared, err := service.AdmissionPolicy.PrepareCommand(operation.Intent{
+				Action:     "claim",
+				TemplateID: tc.templateID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, found, err := service.WarmClaims.Admit(ctx, sandbox.WarmClaimRequest{
+				Principal: authorization.Principal{
+					TenantID: tc.tenantID,
+				},
+				Key: "claim",
+				Admission: sandbox.ClaimAdmission{
+					PreparedCommand: *prepared,
+				},
+				Template: template,
+			})
+			if found || !errors.Is(err, tc.want) {
+				t.Fatalf("admission with mismatched template returned found=%t, err=%v, want %v", found, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestConcurrentClaimsConsumeReadySlotOnce(t *testing.T) {
+	testutil.ParallelLifecycle(t)
+	service, _, _ := testapp.GoldenSupplyFixture(t, 1)
+	ctx := t.Context()
+	principal := authorization.Principal{
+		TenantID: "tenant",
+	}
+	refill, err := service.CommandAdmission.Execute(ctx, principal, "refill", operation.Intent{
+		Action:     "refill",
+		TemplateID: "golden",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		claim operation.State
+		err   error
+	}
+	results := make(chan outcome, 2)
+	start := make(chan struct{})
+	for _, key := range []string{
+		"first",
+		"second",
+	} {
+		go func() {
+			<-start
+			claim, err := service.CommandAdmission.Execute(ctx, principal, key, operation.Intent{
+				Action:     "claim",
+				TemplateID: "golden",
+			})
+			results <- outcome{
+				claim: claim,
+				err:   err,
+			}
+		}()
+	}
+	close(start)
+	ids := map[string]bool{}
+	warm := 0
+	for range 2 {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		ids[r.claim.Result.SandboxID] = true
+		if r.claim.Result.VMID == refill.Result.VMID {
+			warm++
+		}
+	}
+	if len(ids) != 2 || warm != 1 || !ids[refill.Result.SandboxID] {
+		t.Fatalf("claims returned sandbox IDs %v and used the ready VM %d times", ids, warm)
+	}
+	var claims int
+	if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM warm_claims WHERE refill_operation_id=?", refill.ID).Scan(&claims); err != nil || claims != 1 {
+		t.Fatalf("ready slot has %d claims: %v", claims, err)
+	}
+}
 
 func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 	testutil.ParallelLifecycle(t)
@@ -38,8 +140,8 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var original []byte
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT body FROM pool_slots WHERE operation_id=? AND status='ready'", refill.ID).Scan(&original); err != nil {
+			original, status, err := supply.LoadPoolReservation(ctx, service.State.Database(), refill.ID)
+			if err != nil || status != "ready" {
 				t.Fatal(err)
 			}
 			const responsibility = `SELECT
@@ -67,8 +169,8 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			if _, err = service.CommandAdmission.Execute(ctx, principal, "claim", command); err == nil {
 				t.Fatal("claim accepted without acquiring the selected pool reservation")
 			}
-			var retained []byte
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT body FROM pool_slots WHERE operation_id=? AND status='ready'", refill.ID).Scan(&retained); err != nil || !bytes.Equal(retained, original) {
+			retained, status, err := supply.LoadPoolReservation(ctx, service.State.Database(), refill.ID)
+			if err != nil || status != "ready" || !reflect.DeepEqual(retained, original) {
 				t.Fatal("failed selection changed the original ready reservation", err)
 			}
 			if err = service.State.Database().QueryRowContext(ctx, responsibility).Scan(&after[0], &after[1], &after[2], &after[3], &after[4]); err != nil || before != after {

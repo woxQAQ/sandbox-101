@@ -24,8 +24,8 @@ func (p *Plane) verifyDirectNetwork(ctx context.Context, view types.Sandbox, set
 	if err != nil {
 		return err
 	}
-	instance, operationID, body := policyRecord.Instance, policyRecord.OperationID, policyRecord.Body
-	if instance != view.Instance || operationID != settings.Generation || string(body) != string(operation.Encode(expected)) {
+	instance, operationID := policyRecord.Instance, policyRecord.OperationID
+	if instance != view.Instance || operationID != settings.Generation || policyRecord.PolicyHash != machine.InstalledPolicyHash(expected) {
 		return fmt.Errorf("%w: direct admission lacks exact configuration policy witness", errs.ErrManualRecovery)
 	}
 	activation, err := sandbox.LoadActivation(ctx, p.store.Database, operationID)

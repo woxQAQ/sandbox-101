@@ -2,7 +2,6 @@ package machine
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -27,26 +26,25 @@ func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	currentMachine, err := d.discardProof(d.ctx, tx, *step)
+	_, err = d.discardProof(d.ctx, tx, *step)
 	if err != nil {
 		return err
 	}
 	next := DiscardState{
 		Phase: phase,
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(d.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "discard",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = operation.AdvancePhase(d.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "discard",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     "running",
+		NextPhase:      next.Phase,
+	}); err != nil {
 		return err
 	}
 	if phase == "stopped" {
-		currentMachine.AgentReady = false
-		currentMachine.Verified = true
-		currentMachine.Observation = nil
 		if err = store.RequireOne(dbgen.New(tx).RecordStopped(d.ctx, dbgen.RecordStoppedParams{
 			ID:              step.Input.Source.Candidate,
 			CurrentInstance: step.Input.CurrentInstance,
@@ -54,7 +52,6 @@ func (d *Deletion) markDiscard(step *DiscardStep, phase string) error {
 				String: step.OperationID,
 				Valid:  true,
 			},
-			Body: operation.Encode(currentMachine),
 		})); err != nil {
 			return err
 		}
@@ -235,16 +232,9 @@ func (d *Deletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error
 	var intent loom.DeletionIntent
 	source := step.Input.Source
 	r := source.Input.Resource
-	body, err := dbgen.New(d.store.Database).GetDeletionReceipt(d.ctx, dbgen.GetDeletionReceiptParams{
-		Path:        r.Dir,
-		OperationID: step.OperationID,
-		StepKey:     "discard",
-	})
+	intent, err := store.LoadDeletionReceipt(d.ctx, d.store.Database, step.OperationID, "discard", r.Dir)
 
 	if err == nil {
-		if err = json.Unmarshal(body, &intent); err != nil {
-			return intent, err
-		}
 		if intent.Format != 1 || intent.Path != r.Dir || !intent.Dir {
 			return intent, fmt.Errorf("discard deletion receipt changed")
 		}
@@ -285,12 +275,7 @@ func (d *Deletion) discardDeletion(step DiscardStep) (loom.DeletionIntent, error
 	if _, err = d.discardProof(d.ctx, tx, step); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(d.ctx, dbgen.InsertDeletionReceiptParams{
-		Path:        r.Dir,
-		OperationID: step.OperationID,
-		StepKey:     "discard",
-		Body:        operation.Encode(intent),
-	})); err != nil {
+	if err = store.RecordDeletionReceipt(d.ctx, tx, step.OperationID, "discard", intent); err != nil {
 		return intent, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -451,13 +436,15 @@ func (d *Deletion) completeDiscard(step DiscardStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(d.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "discard",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = operation.AdvancePhase(d.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "discard",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      next.Phase,
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(d.ctx, step.OperationID); err != nil {

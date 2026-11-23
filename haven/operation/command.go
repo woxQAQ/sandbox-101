@@ -2,12 +2,9 @@ package operation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/woxQAQ/haven/operation/internal/dbgen"
-	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/types"
 )
 
@@ -47,6 +44,14 @@ func NewIntent(command types.Command) Intent {
 	}
 }
 
+// CommandRequest records the sanitized business intent accepted for replay.
+func CommandRequest(command Intent) Request {
+	return Request{
+		Action:  command.Action,
+		Command: &command,
+	}
+}
+
 func SanitizedCommand(command Intent) Intent {
 	result := command
 	result.Env = map[string]types.EnvVar{}
@@ -64,42 +69,19 @@ func SanitizedCommand(command Intent) Intent {
 	return result
 }
 
-func (r *Repository) Finish(ctx context.Context, id, status string, body []byte) error {
-	finished := ""
-	if Terminal(status) {
-		finished = clockNow()
-	}
-	return store.RequireOne(r.queries.FinishLiveOperation(ctx, dbgen.FinishLiveOperationParams{
-		ID:         id,
-		Status:     status,
-		Body:       body,
-		FinishedAt: finished,
-	}))
-}
-
-// LiveTenantRequest verifies the persisted bytes, scope and lifecycle before
-// returning the input for action-specific decoding and the current result.
-func (r *Repository) LiveTenantRequest(ctx context.Context, id, tenant string) ([]byte, Result, error) {
+// LiveTenantRequest returns the admitted parameters and result in one snapshot.
+func (r *Repository) LiveTenantRequest(ctx context.Context, id, tenant string) (Request, Result, error) {
 	var result Result
-	row, err := r.queries.GetRequestState(ctx, id)
+	row, err := r.Projection(ctx, id)
 	if err != nil {
-		return nil, result, err
+		return Request{}, result, err
 	}
-	if Digest(row.Request) != row.RequestHash {
-		return nil, result, fmt.Errorf("operation request checksum mismatch")
+	if row.ScopeKind != ScopeTenant || row.ScopeID != tenant || Terminal(row.Status) {
+		return Request{}, result, fmt.Errorf("operation tenant or lifecycle changed")
 	}
-	if row.ScopeKind != "tenant" || row.ScopeID != tenant || Terminal(row.Status) {
-		return nil, result, fmt.Errorf("operation tenant or lifecycle changed")
-	}
-	if err := json.Unmarshal(row.Body, &result); err != nil {
-		return nil, result, err
-	}
-	return row.Request, result, nil
+	return row.Request, row.Result, nil
 }
 
-func (r *Repository) RunResult(ctx context.Context, id string, body []byte) error {
-	return store.RequireOne(r.queries.RunLiveOperationResult(ctx, dbgen.RunLiveOperationResultParams{
-		Body: body,
-		ID:   id,
-	}))
+func (r *Repository) RunResult(ctx context.Context, id string, result Result) error {
+	return r.updateResult(ctx, id, "running", result)
 }

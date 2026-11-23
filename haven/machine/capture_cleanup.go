@@ -137,7 +137,7 @@ func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCl
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	candidate, expected, action := record.CandidateResourceID, record.ExpectedInstance, record.Action
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -149,9 +149,7 @@ func LoadCaptureCleanup(ctx context.Context, q store.DBTX, id string) (CaptureCl
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if action != "capture_cleanup" || candidate != step.sourceVMID() || expected != step.Input.Capture.Input.Request.ExpectedInstance {
 		return step, fmt.Errorf("raw capture cleanup identity changed")
 	}
@@ -174,11 +172,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.CaptureOperationID, "op-") || !loom.ValidResourceID(request.StopOperationID, "op-") {
 		return empty, fmt.Errorf("%w: raw capture cleanup requires original capture and stop proof", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request CaptureCleanupRequest
-	}{"capture_cleanup", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	cc.storeWriteMu.Lock()
 	defer cc.storeWriteMu.Unlock()
 	if err := cc.gate.Check(); err != nil {
@@ -194,7 +188,7 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			cc.dispatch(cached.ID)
 		}
@@ -265,10 +259,10 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 	}
 	payload := operation.Encode(input)
 	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
-		Child:       accepted,
-		Kind:        "capture_cleanup",
-		Candidate:   source.Candidate,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "capture_cleanup",
+		Candidate: source.Candidate,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
@@ -277,24 +271,22 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "capture_cleanup",
 		Action:              "capture_cleanup",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: source.Candidate,
 		ExpectedInstance:    source.State.Witness,
 		Status:              "pending",
-		Body:                operation.Encode("admitted"),
-	})); err != nil {
+		Phase:               "admitted",
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).TransferPendingCleanupResource(ctx, dbgen.TransferPendingCleanupResourceParams{
@@ -310,7 +302,8 @@ func (cc *CaptureCleanup) Admit(ctx context.Context, request CaptureCleanupReque
 		OperationID:  accepted.ID,
 		ResourceKind: "capture_raw",
 		ResourceID:   source.Candidate,
-		Body:         payload,
+		StepKey:      "capture_cleanup",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}
@@ -381,20 +374,8 @@ func (cc *CaptureCleanup) captureRawProof(tx *sql.Tx, step CaptureCleanupStep) e
 	if err != nil {
 		return err
 	}
-	body, request := projection.Body, projection.Request
-	status, scope, tenant, hash := projection.Status, projection.ScopeKind, projection.ScopeID, projection.RequestHash
-	var result operation.Result
-	var frozen struct {
-		Action  string
-		Request CaptureCleanupRequest
-	}
-	if err = json.Unmarshal(body, &result); err != nil {
-		return err
-	}
-	if err = json.Unmarshal(request, &frozen); err != nil {
-		return err
-	}
-	if operation.Terminal(status) || scope != "tenant" || tenant != source.Input.TenantID || operation.Digest(request) != hash || frozen.Action != "capture_cleanup" || frozen.Request != step.Input.Request || result.SandboxID != source.Input.SandboxID || result.VMID != source.Candidate || result.SnapshotID != capture.Input.Snapshot.ID {
+	result := projection.Result
+	if operation.Terminal(projection.Status) || projection.ScopeKind != "tenant" || projection.ScopeID != source.Input.TenantID || !projection.Request.Equal(step.Input.Request.operationRequest()) || result.SandboxID != source.Input.SandboxID || result.VMID != source.Candidate || result.SnapshotID != capture.Input.Snapshot.ID {
 		return fmt.Errorf("raw capture operation authority changed")
 	}
 	return nil
@@ -417,18 +398,11 @@ func (cc *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom.Dele
 	var intent loom.DeletionIntent
 	capture := step.Input.Capture
 	raw := capture.State.Boundary.Path
-	body, err := dbgen.New(cc.store.Database).GetDeletionReceipt(cc.ctx, dbgen.GetDeletionReceiptParams{
-		Path:        raw,
-		OperationID: step.OperationID,
-		StepKey:     "capture_cleanup",
-	})
+	intent, err := store.LoadDeletionReceipt(cc.ctx, cc.store.Database, step.OperationID, "capture_cleanup", raw)
 
 	if err == nil {
 		if step.Phase != "deleting" {
 			return intent, fmt.Errorf("raw capture receipt outside deletion phase")
-		}
-		if err = json.Unmarshal(body, &intent); err != nil {
-			return intent, err
 		}
 		return intent, loom.VerifyPublishedCaptureRawDeletion(intent, raw, capture.State.Boundary)
 	}
@@ -457,21 +431,18 @@ func (cc *CaptureCleanup) captureRawReceipt(step *CaptureCleanupStep) (loom.Dele
 		return intent, err
 	}
 
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(cc.ctx, dbgen.InsertDeletionReceiptParams{
-		Path:        raw,
-		OperationID: step.OperationID,
-		StepKey:     "capture_cleanup",
-		Body:        operation.Encode(intent),
-	})); err != nil {
+	if err = store.RecordDeletionReceipt(cc.ctx, tx, step.OperationID, "capture_cleanup", intent); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(cc.ctx, dbgen.BeginPendingStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture_cleanup",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("deleting"),
-	})); err != nil {
+	if err = operation.AdvancePhase(cc.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture_cleanup",
+		InputHash:      step.Hash,
+		PreviousStatus: "pending",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "running",
+		NextPhase:      "deleting",
+	}); err != nil {
 		return intent, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -594,21 +565,18 @@ func (cc *CaptureCleanup) completeCaptureRaw(step CaptureCleanupStep, intent loo
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(cc.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
-		Path:        intent.Path,
-		OperationID: step.OperationID,
-		StepKey:     "capture_cleanup",
-		Body:        operation.Encode(intent),
-	})); err != nil {
+	if err = store.RetireDeletionReceipt(cc.ctx, tx, step.OperationID, "capture_cleanup", intent); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(cc.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture_cleanup",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NewBody:      operation.Encode("complete"),
-	})); err != nil {
+	if err = operation.AdvancePhase(cc.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture_cleanup",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      "complete",
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(cc.ctx, step.OperationID); err != nil {

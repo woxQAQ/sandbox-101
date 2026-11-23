@@ -17,13 +17,12 @@ type BareTarget struct {
 	Parent       machine.ResourceParent
 }
 
-// ProvisionRequest carries the frozen caller request and its preflight materials.
-// The coordinator derives the request hash from Frozen; it is never supplied
-// independently. Restore is present only for a clone allocation.
+// ProvisionRequest carries the accepted parameters and their preflight materials.
+// Restore identifies the retained source of a clone allocation.
 type ProvisionRequest struct {
 	TenantID string
 	Key      string
-	Frozen   []byte
+	Frozen   operation.Request
 	Template TemplateRecord
 	Image    host.ImageManifest
 	Restore  *machine.SnapshotSource

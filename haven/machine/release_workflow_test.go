@@ -143,8 +143,9 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 			}
 			// Current ownership is valid for this release. Only the separately
 			// retained birth proof is damaged, within this fixture's private DB.
+			const readCurrent = "SELECT json_array(state,slot,directory,generation_operation_id,resource_hash,verified,agent_ready,deleting,observation_hash) FROM vms WHERE id=? AND current_instance=? AND operation_id=?"
 			var currentBody []byte
-			if err = service.State.Database().QueryRow("SELECT body FROM vms WHERE id=? AND current_instance=? AND operation_id=?", claim.Result.VMID, history.State.Witness, release.ID).Scan(&currentBody); err != nil {
+			if err = service.State.Database().QueryRow(readCurrent, claim.Result.VMID, history.State.Witness, release.ID).Scan(&currentBody); err != nil {
 				t.Fatal(err)
 			}
 			switch damage {
@@ -166,7 +167,7 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 				t.Fatal("current ownership replaced the original generation proof", step.State)
 			}
 			var after []byte
-			if err = service.State.Database().QueryRow("SELECT body FROM vms WHERE id=? AND current_instance=? AND operation_id=?", claim.Result.VMID, history.State.Witness, release.ID).Scan(&after); err != nil || !bytes.Equal(after, currentBody) {
+			if err = service.State.Database().QueryRow(readCurrent, claim.Result.VMID, history.State.Witness, release.ID).Scan(&after); err != nil || !bytes.Equal(after, currentBody) {
 				t.Fatal("failed proof changed current VM custody", err)
 			}
 			var storage int64

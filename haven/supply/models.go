@@ -2,6 +2,7 @@ package supply
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -61,6 +62,53 @@ type SupplyCleanupStep struct {
 	Input       SupplyCleanupInput
 }
 
+func supplyTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
+}
+
+func insertSupply(ctx context.Context, tx *sql.Tx, id, action, candidate, status string, input []byte, state SupplyState) error {
+	return store.RequireOne(dbgen.New(tx).InsertSupply(ctx, dbgen.InsertSupplyParams{
+		OperationID:         id,
+		Action:              action,
+		CandidateResourceID: candidate,
+		Input:               input,
+		InputHash:           operation.Digest(input),
+		Status:              status,
+		Phase: sql.NullString{
+			String: state.Phase,
+			Valid:  true,
+		},
+		CompletedAt: supplyTime(state.FinishedAt),
+		StepError:   state.Error,
+	}))
+}
+
+func transitionSupply(ctx context.Context, q store.DBTX, step SupplyStep, next SupplyState, status string) error {
+	return store.RequireOne(dbgen.New(q).TransitionSupply(ctx, dbgen.TransitionSupplyParams{
+		OperationID:    step.OperationID,
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase: sql.NullString{
+			String: step.State.Phase,
+			Valid:  true,
+		},
+		PreviousCompletion: supplyTime(step.State.FinishedAt),
+		PreviousSnapshot:   step.State.SnapshotID,
+		PreviousError:      step.State.Error,
+		NextPhase: sql.NullString{
+			String: next.Phase,
+			Valid:  true,
+		},
+		NextStatus:       status,
+		CompletedAt:      supplyTime(next.FinishedAt),
+		ResultSnapshotID: next.SnapshotID,
+		StepError:        next.Error,
+	}))
+}
+
 func LoadSupply(ctx context.Context, database store.DBTX, id string) (SupplyStep, error) {
 	step := SupplyStep{
 		OperationID: id,
@@ -72,7 +120,7 @@ func LoadSupply(ctx context.Context, database store.DBTX, id string) (SupplyStep
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	candidate, expected, action := record.CandidateResourceID, record.ExpectedInstance, record.Action
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -84,8 +132,15 @@ func LoadSupply(ctx context.Context, database store.DBTX, id string) (SupplyStep
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
+	step.State = SupplyState{
+		Phase:      record.Phase.String,
+		SnapshotID: record.ResultSnapshotID,
+		Error:      record.StepError,
+	}
+	if record.CompletedAt != "" {
+		if step.State.FinishedAt, err = time.Parse(time.RFC3339Nano, record.CompletedAt); err != nil {
+			return step, err
+		}
 	}
 	if action != step.Input.Command.Action || candidate != step.Input.Template.ID || expected != "" || step.Input.Template.TenantID == "" {
 		return step, fmt.Errorf("supply frozen identity changed")
@@ -104,7 +159,7 @@ func LoadSupplyCleanup(ctx context.Context, database store.DBTX, id string) (Sup
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -116,9 +171,7 @@ func LoadSupplyCleanup(ctx context.Context, database store.DBTX, id string) (Sup
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if action != "supply_cleanup" || candidate != step.Input.Source.Candidate || expected != step.Input.Source.Input.Resource.Instance || step.Input.Request.OperationID != step.Input.Original.OperationID {
 		return step, fmt.Errorf("supply cleanup frozen identity changed")
 	}

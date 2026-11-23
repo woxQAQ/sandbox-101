@@ -131,7 +131,7 @@ func TestHavenSecretRestart(t *testing.T) {
 			}
 		}
 	}
-	rows, err := service.State.Database().Query("SELECT request FROM operations UNION ALL SELECT input FROM operation_steps UNION ALL SELECT body FROM sandbox_settings UNION ALL SELECT body FROM journal")
+	rows, err := service.State.Database().Query("SELECT value FROM command_environment UNION ALL SELECT header FROM command_environment UNION ALL SELECT placeholder FROM command_environment UNION ALL SELECT host FROM command_injection_hosts UNION ALL SELECT input FROM operation_steps UNION ALL SELECT value FROM sandbox_environment UNION ALL SELECT header FROM sandbox_secret_descriptors UNION ALL SELECT placeholder FROM sandbox_secret_descriptors UNION ALL SELECT host FROM sandbox_secret_hosts UNION ALL SELECT signed_payload FROM journal")
 	if err != nil {
 		t.Fatal(err)
 	}

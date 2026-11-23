@@ -15,7 +15,6 @@ import (
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/imageimport"
-	"github.com/woxQAQ/haven/operation"
 )
 
 func TestActualLayeredManifestVerification(t *testing.T) {
@@ -245,9 +244,7 @@ func TestActualLegacyNativeLayeredCatalogStillVerifies(t *testing.T) {
 	if err = loom.SealTree(out); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.DB.Exec("INSERT INTO images VALUES(?,?)", image, operation.Encode(m)); err != nil {
-		t.Fatal(err)
-	}
+	testfixture.PublishManifest(t, e.DB, m)
 	if err = m.Verify(out, image); err != nil {
 		t.Fatal(err)
 	}

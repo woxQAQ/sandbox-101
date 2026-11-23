@@ -55,7 +55,7 @@ func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (Dis
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -67,9 +67,7 @@ func LoadDiscard(ctx context.Context, query store.DBTX, operationID string) (Dis
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
-	}
+	step.State.Phase = record.Phase.String
 	if action != "discard" || candidate != step.Input.Source.Candidate || expected != step.Input.Request.ExpectedInstance {
 		return step, fmt.Errorf("discard identity changed")
 	}
@@ -105,11 +103,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.FailedOperationID, "op-") || !loom.ValidResourceID(request.ExpectedInstance, "run-") {
 		return empty, fmt.Errorf("%w: discard requires sandbox, failed operation, candidate instance and key", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request DiscardRequest
-	}{"discard", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	d.storeWriteMu.Lock()
 	defer d.storeWriteMu.Unlock()
 	closing := d.lifetime.Closing() || d.store.Reviewed
@@ -127,7 +121,7 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	if cached, found, err := operations.Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			d.dispatch(cached.ID)
 		}
@@ -181,40 +175,35 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		},
 	}
 	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
-		Child:       accepted,
-		Kind:        "discard",
-		Candidate:   source.Candidate,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "discard",
+		Candidate: source.Candidate,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
 	payload := operation.Encode(input)
-	currentMachine.Deleting = true
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "discard",
 		Action:              "discard",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: source.Candidate,
 		ExpectedInstance:    request.ExpectedInstance,
 		Status:              "pending",
-		Body: operation.Encode(DiscardState{
-			Phase: "admitted",
-		}),
-	})); err != nil {
+		Phase:               "admitted",
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
@@ -222,7 +211,8 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 		OperationID:  accepted.ID,
 		ResourceKind: "vm",
 		ResourceID:   source.Candidate,
-		Body:         payload,
+		StepKey:      "discard",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}
@@ -237,7 +227,6 @@ func (d *Deletion) AdmitDiscardForParent(ctx context.Context, request DiscardReq
 	if err = store.RequireOne(dbgen.New(tx).TransferOwnership(ctx, dbgen.TransferOwnershipParams{
 		ID:       source.Candidate,
 		Instance: current,
-		Body:     operation.Encode(currentMachine),
 		PreviousOwner: sql.NullString{
 			String: source.OperationID,
 			Valid:  true,
@@ -362,21 +351,14 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 	if err != nil {
 		return currentMachine, err
 	}
-	status, kind, tenant, requestHash := projection.Status, projection.ScopeKind, projection.ScopeID, projection.RequestHash
-	body, originalRequest := projection.Body, projection.Request
-	var result operation.Result
-	if err = json.Unmarshal(body, &result); err != nil {
-		return currentMachine, err
-	}
+	status, kind, tenant := projection.Status, projection.ScopeKind, projection.ScopeID
+	result, originalRequest := projection.Result, projection.Request
 	if status != "failed" || kind != "tenant" || tenant != request.TenantID || result.VMID != source.Candidate || result.SandboxID != request.SandboxID || result.ResourceReady {
 		return currentMachine, fmt.Errorf("discard public failure identity changed")
 	}
-	if operation.Digest(originalRequest) != requestHash {
-		return currentMachine, fmt.Errorf("discard original request checksum changed")
-	}
 	switch source.Action {
 	case "restore":
-		frozen, err := DecodeProvisionRequest[RestoreRequest](originalRequest)
+		frozen, err := originalRequest.ResourceFor("restore")
 		if err != nil {
 			return currentMachine, err
 		}
@@ -384,7 +366,7 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 			return currentMachine, fmt.Errorf("discard original restore request changed")
 		}
 	case "clone":
-		frozen, err := DecodeProvisionRequest[CloneRequest](originalRequest)
+		frozen, err := originalRequest.ResourceFor("clone")
 		if err != nil {
 			return currentMachine, err
 		}
@@ -392,7 +374,7 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 			return currentMachine, fmt.Errorf("discard original clone request changed")
 		}
 	default:
-		frozen, err := DecodeProvisionRequest[FreshRequest](originalRequest)
+		frozen, err := originalRequest.ResourceFor("claim")
 		if err != nil {
 			return currentMachine, err
 		}
@@ -400,35 +382,14 @@ func (d *Deletion) discardSource(ctx context.Context, tx *sql.Tx, input DiscardI
 			return currentMachine, fmt.Errorf("discard original cold request changed")
 		}
 	}
-	var instanceBody, versionBody []byte
-	if instanceBody, err = InstanceHistory(ctx, tx, GenerationIdentity{
-		VMID:        source.Candidate,
-		OperationID: source.OperationID,
-	}, request.ExpectedInstance); err != nil {
+	if request.ExpectedInstance != source.Input.Resource.Instance {
+		return currentMachine, fmt.Errorf("discard instance differs from candidate")
+	}
+	if err = VerifyInstance(ctx, tx, source.OperationID, source.Input.Resource, nil); err != nil {
 		return currentMachine, err
 	}
-	var instance VMRecord
-	if err = json.Unmarshal(instanceBody, &instance); err != nil {
+	if err = VerifyVersion(ctx, tx, source); err != nil {
 		return currentMachine, err
-	}
-	if !reflect.DeepEqual(instance.Resource, source.Input.Resource) || instance.Verified || instance.AgentReady {
-		return currentMachine, fmt.Errorf("discard instance is not the original undelivered candidate")
-	}
-	if versionBody, err = VersionHistory(ctx, tx, GenerationIdentity{
-		VMID:        source.Candidate,
-		OperationID: source.OperationID,
-	}, source.Key); err != nil {
-		return currentMachine, err
-	}
-	var version RetainedVersion
-	if err = json.Unmarshal(versionBody, &version); err != nil {
-		return currentMachine, err
-	}
-	if !reflect.DeepEqual(version, RetainedVersion{
-		Resource:     source.Input.Resource,
-		DiskIdentity: source.State.DiskIdentity,
-	}) {
-		return currentMachine, fmt.Errorf("discard version differs from failed intent")
 	}
 	if source.Input.Restore != nil {
 		if err = d.proofs.Snapshots().RestoreRelations(ctx, tx, source); err != nil {
@@ -448,9 +409,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 	if err != nil {
 		return currentMachine, err
 	}
-	if err = json.Unmarshal(current.Body, &currentMachine); err != nil {
-		return currentMachine, err
-	}
+	currentMachine = current.Record
 	if !current.Owned || current.Instance != input.CurrentInstance || current.Owner != step.OperationID || !currentMachine.Deleting || !reflect.DeepEqual(currentMachine.Resource, source.Input.Resource) || currentMachine.AgentReady || currentMachine.Verified && current.State != "stopped" {
 		return currentMachine, fmt.Errorf("discard lost current VM ownership")
 	}
@@ -466,23 +425,11 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 	if err != nil {
 		return currentMachine, err
 	}
-	parentStatus, kind, tenant, hash := projection.Status, projection.ScopeKind, projection.ScopeID, projection.RequestHash
-	request, parent := projection.Request, projection.Body
-	var frozen struct {
-		Action  string
-		Request DiscardRequest
-	}
-	var result operation.Result
-	if err = json.Unmarshal(request, &frozen); err != nil {
-		return currentMachine, err
-	}
-	if err = json.Unmarshal(parent, &result); err != nil {
-		return currentMachine, err
-	}
-	if operation.Terminal(parentStatus) || kind != "tenant" || tenant != input.Request.TenantID || operation.Digest(request) != hash || frozen.Action != "discard" || frozen.Request != input.Request || result.SandboxID != record.ID || result.VMID != source.Candidate {
+	result := projection.Result
+	if operation.Terminal(projection.Status) || projection.ScopeKind != "tenant" || projection.ScopeID != input.Request.TenantID || !projection.Request.Equal(input.Request.operationRequest()) || result.SandboxID != record.ID || result.VMID != source.Candidate {
 		return currentMachine, fmt.Errorf("discard operation identity changed")
 	}
-	var body []byte
+	var witnessHash string
 	for _, cleanup := range []struct {
 		id        string
 		operation string
@@ -492,7 +439,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 		{"blocked:" + source.OperationID, source.OperationID, "transferred", source.Input},
 		{"discard:" + step.OperationID, step.OperationID, "pending", input},
 	} {
-		if body, err = dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
+		if witnessHash, err = dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
 			ID:           cleanup.id,
 			OperationID:  cleanup.operation,
 			ResourceKind: "vm",
@@ -501,7 +448,7 @@ func (d *Deletion) discardProof(ctx context.Context, tx *sql.Tx, step DiscardSte
 		}); err != nil {
 			return currentMachine, err
 		}
-		if string(body) != string(operation.Encode(cleanup.input)) {
+		if witnessHash != operation.Digest(operation.Encode(cleanup.input)) {
 			return currentMachine, fmt.Errorf("discard cleanup responsibility changed")
 		}
 	}

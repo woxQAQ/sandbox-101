@@ -36,6 +36,74 @@ func (c *Captures) checkCapture(step CaptureStep) error {
 	return err
 }
 
+func transitionCapture(ctx context.Context, tx *sql.Tx, step CaptureStep, next CaptureState, status string) error {
+	if status == "succeeded" && step.Status != "running" {
+		return fmt.Errorf("capture completion requires running step")
+	}
+	current, err := readCapture(ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current.State, step.State) {
+		return fmt.Errorf("capture progress changed")
+	}
+	if err = operation.AdvancePhase(ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     status,
+		NextPhase:      next.Phase,
+	}); err != nil {
+		return err
+	}
+	q := dbgen.New(tx)
+	if next.Boundary != nil && step.State.Boundary == nil {
+		b := next.Boundary
+		if err = store.RequireOne(q.InsertCaptureBoundary(ctx, dbgen.InsertCaptureBoundaryParams{
+			OperationID:       step.OperationID,
+			Path:              b.Path,
+			ParentDevice:      int64(b.Parent.Device),
+			ParentInode:       int64(b.Parent.Inode),
+			ParentMode:        int64(b.Parent.Mode),
+			PublicationDevice: int64(b.Publication.Device),
+			PublicationInode:  int64(b.Publication.Inode),
+			PublicationMode:   int64(b.Publication.Mode),
+		})); err != nil {
+			return err
+		}
+	} else if !reflect.DeepEqual(next.Boundary, step.State.Boundary) {
+		return fmt.Errorf("capture boundary changed")
+	}
+	if err = store.RequireOne(q.UpdateCaptureProgress(ctx, dbgen.UpdateCaptureProgressParams{
+		OperationID:     step.OperationID,
+		ResumeRequired:  next.ResumeRequired,
+		Captured:        next.Captured,
+		Materialized:    next.Materialized,
+		ArtifactsSynced: next.ArtifactsSynced,
+	})); err != nil {
+		return err
+	}
+	if len(step.State.Files) == 0 {
+		for path, digest := range next.Files {
+			if err = store.RequireOne(q.InsertCaptureFile(ctx, dbgen.InsertCaptureFileParams{
+				OperationID: step.OperationID,
+				Path:        path,
+				Digest:      digest,
+			})); err != nil {
+				return err
+			}
+		}
+	} else if !reflect.DeepEqual(step.State.Files, next.Files) {
+		return fmt.Errorf("capture artifact digests changed")
+	}
+	return store.RequireOne(q.UpdateCaptureError(ctx, dbgen.UpdateCaptureErrorParams{
+		OperationID: step.OperationID,
+		StepError:   next.Error,
+	}))
+}
+
 func (c *Captures) saveCapture(ctx context.Context, step *CaptureStep, next CaptureState) error {
 	c.storeWriteMu.Lock()
 	defer c.storeWriteMu.Unlock()
@@ -49,13 +117,7 @@ func (c *Captures) saveCapture(ctx context.Context, step *CaptureStep, next Capt
 	if _, err = c.captureProof(ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionCapture(ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -148,17 +210,12 @@ func (c *Captures) failCapture(step *CaptureStep, cause error) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "snapshot",
 		ResourceID:   step.Input.Snapshot.ID,
-		Body:         operation.Encode(step.Input),
+		StepKey:      "capture",
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailUnchangedLiveStep(c.ctx, dbgen.FailUnchangedLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NextBody:     operation.Encode(next),
-	})); err != nil {
+	if err = transitionCapture(c.ctx, tx, *step, next, "failed"); err != nil {
 		return err
 	}
 	result := operation.Result{
@@ -167,7 +224,7 @@ func (c *Captures) failCapture(step *CaptureStep, cause error) error {
 		SnapshotID: step.Input.Snapshot.ID,
 		Error:      next.Error,
 	}
-	if err = operations.FailResult(c.ctx, step.OperationID, operation.Encode(result)); err != nil {
+	if err = operations.FailResult(c.ctx, step.OperationID, result); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).ReleaseOwnership(c.ctx, dbgen.ReleaseOwnershipParams{
@@ -361,17 +418,7 @@ func (c *Captures) runCapture(step CaptureStep) (runErr error) {
 			return err
 		}
 	}
-	manifest := Manifest{
-		Format:          1,
-		Backend:         step.Input.Backend,
-		Architecture:    step.Input.Architecture,
-		CPU:             step.Input.CPU,
-		Config:          r.Config,
-		MemoryMode:      "CopyOnWrite",
-		PublicationMode: "IndependentInodes",
-		Files:           step.State.Files,
-		Image:           operation.Encode(step.Input.Source.Input.Image),
-	}
+	manifest := captureManifest(step)
 	if err = loom.WriteJSON(filepath.Join(stage, "manifest.json"), manifest); err != nil {
 		return err
 	}
@@ -446,22 +493,25 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	cost := manifest.Config.Shape.MemoryMiB + manifest.Config.Shape.DiskMiB
 	next := step.State
 	next.Phase = "complete"
-	body, previousBody := operation.Encode(publication), operation.Encode(step.Input.Snapshot)
-	completed, previousState, cleanupBody := operation.Encode(next), operation.Encode(step.State), operation.Encode(step.Input)
+	body := operation.Encode(publication)
 
 	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).PublishSnapshot(c.ctx, dbgen.PublishSnapshotParams{
-		ID:           publication.ID,
-		SourceVm:     publication.SourceVM,
-		PreviousBody: previousBody,
-		NewBody:      body,
+		ID:                 publication.ID,
+		SourceVmID:         publication.SourceVM,
+		TenantID:           publication.TenantID,
+		CaptureOperationID: step.OperationID,
+		Directory:          publication.Dir,
+		SourceInstance:     publication.SourceInstance,
+		ManifestHash:       manifestHash(publication.Manifest),
 	})); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertSnapshotPublication(c.ctx, dbgen.InsertSnapshotPublicationParams{
-		SnapshotID: publication.ID,
-		TenantID:   publication.TenantID,
-		Body:       body,
+		SnapshotID:         publication.ID,
+		TenantID:           publication.TenantID,
+		CaptureOperationID: step.OperationID,
+		RecordHash:         operation.Digest(body),
 	})); err != nil {
 		return err
 	}
@@ -524,7 +574,8 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "capture",
 		ResourceID:   publication.SourceVM,
-		Body:         cleanupBody,
+		StepKey:      "capture",
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}
@@ -538,13 +589,7 @@ func (c *Captures) completeCapture(step CaptureStep, manifest Manifest) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(c.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture",
-		InputHash:    step.Hash,
-		PreviousBody: previousState,
-		NewBody:      completed,
-	})); err != nil {
+	if err = transitionCapture(c.ctx, tx, step, next, "succeeded"); err != nil {
 		return err
 	}
 	if err = operations.Complete(c.ctx, step.OperationID); err != nil {

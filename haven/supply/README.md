@@ -6,7 +6,7 @@ TemplateCatalog 从调用方的同一 DBTX 核对 catalog、永久 tenant、原 
 
 build 在 guest Exec 前持久化 warmup intent；warmup_inflight 的未知结果保留资源。refill 依据原零 slot reservation、generation、instance 与 link 交接 warm/image 责任。SupplyAdmission 在资源调用者事务中写 parent、credential、supply step、image holder、template intent/pool reservation 和 child link，不自行提交或派发。
 
-RawTarget 仅携带新 allocation 的 sandbox ID、budget 和父意图，不允许 activation credentials、复用 delivered sandbox 或已有 slot。RawProvisioner 由原 provisioning coordinator 提供，沿用原 admission 事务与连续 VM guard。`ProvisionRequest` 将 tenant/key、冻结请求字节和预检的 template/image/restore 来源一起传递；coordinator 从原请求字节计算幂等 hash，不接受独立指定的 hash。在原 allocation 事务中先复核来源，再核验 tenant/host budget，随后写入资源意图、归属和费用。模板授权属于 Supply，sandbox 当前归属通过调用方事务中的只读端口核验。
+RawTarget 仅携带新 allocation 的 sandbox ID、budget 和父意图，不允许 activation credentials、复用 delivered sandbox 或已有 slot。RawProvisioner 由原 provisioning coordinator 提供，沿用原 admission 事务与连续 VM guard。`ProvisionRequest` 携带已接纳的类型化请求和预检的 template/image/restore 来源。coordinator 在 tenant/key 作用域内按原参数判断重放。在原 allocation 事务中先复核来源，再核验 tenant/host budget，随后写入资源意图、归属和费用。模板授权属于 Supply，sandbox 当前归属通过调用方事务中的只读端口核验。
 
 SupplyCleanup 使用独立 node-scoped 意图，冻结原 source、pool、失败 capture 列表及已有 release receipt。它先完成 stop、capture discard 和 VM 回收，最后在原事务解除 collector 自己的 pool/image/fence；未知及完成写失败保留这些责任，重放使用原子操作 receipt。
 

@@ -2,9 +2,9 @@
 
 `image` 同时拥有导入、不可变发布、缓存与清理的用例和持久化。包内直接使用私有 sqlc 绑定，覆盖 `images`、`image_intents`、`image_caches` 及本能力的 step/cleanup/deletion 行族；没有公开 Repository。事务仍由原用例接纳或完成路径持有，资源效果、RequireOne、提交与 HEAD 的顺序不变。运行时和生成器读取同一 migration 目录。
 
-`Cache` 保留返回的 cache witness 与原始 `SourceOperation`，字段顺序和 JSON tags 与冻结记录一致。目录行只证明记录存在；原始 import step、返回 witness 和独立物理费用仍须分别核验。查询失败不能解释为没有依赖。按 source operation 查询 cache 时保留 JSON 值的原比较语义，不能把数字 ID 强制转换成字符串后匹配。
+`Cache` 关联原始 import operation 和按摘要保留的文件系统证明。按 source operation 查询 cache 使用资金归属列。清理前分别核验原 import step、返回的 witness 与独立物理费用。
 
-`LoadManifest` 校验冻结 manifest 的 digest 身份；`PublishedDigests` 提供已发布根；`LoadCacheRecord` 只解码目录 witness，原 import 与费用证明仍由能力内部核验。所有读取借用调用者提供的 DBTX，不补造 witness，也不另开连接。
+`LoadManifest` 通过当前发布指针读取不可变 manifest，并核验身份及摘要。import 的输出证明保留同一 manifest 版本，目录撤下后仍可读取。`PublishedDigests` 提供已发布根。`LoadCacheRecord` 从不可变 witness 的列重建文件身份和收据，import 与费用证明仍由能力内部核验。
 
 `VerifyFiles` 将目录中的 `image.json` 与冻结 manifest 逐字段比较，再执行 manifest 的文件核验。它不将文件系统扫描结果提升为目录发布权限。
 
@@ -12,7 +12,7 @@
 
 `image.Images` 负责接纳、导入、发布、失败留责、独立清理及 image GC 候选核验。它从唯一 store 借用数据库、不可变 origin 和 checkpoint 能力；通过 `ImageGuards` 为持久状态变更、镜像文件、节点幂等键及单次导入或清理操作取得对应的共享锁，并复用同一份 Workers。它没有根 Service/App 回指，也不拥有 writer 或 worker 生命周期。
 
-`ImageOptions` 仅包含宿主空间安全余量和构造时注入的故障 hook。测试切换故障阶段时控制注入端的状态，不修改生产服务的配置快照。`Resume` 按已有冻结 step 选择 cleanup、import，保持原优先级、重新加载和 guard 范围；启动只读校验使用同一组 loader。幂等 hash 冲突直接返回，不派发原 operation；匹配的请求才恢复其冻结工作。
+`ImageOptions` 仅包含宿主空间安全余量和构造时注入的故障 hook。测试切换故障阶段时控制注入端的状态，不修改生产服务的配置快照。`Resume` 按已有冻结 step 选择 cleanup、import，保持原优先级、重新加载和 guard 范围；启动只读校验使用同一组 loader。同键请求的类型或参数冲突时返回 `ErrConflict`，匹配的请求才恢复其冻结工作。
 
 ```mermaid
 flowchart TD
@@ -29,7 +29,7 @@ flowchart TD
     J --> F
 ```
 
-cache 物理费用从 import reservation 扣出后独立持有。清理 import work 不代表可以同时释放 cache 费用；最后一个消费者和原始返回证明均须重新核验。发布或清理的责任写入必须恰好一行，保留原 owner、resource、body/hash、费用值和 step 状态条件。intent body 的比较包含原始字节顺序。任一条件失败回滚整笔元数据交接，即使文件已经删除也保留 receipt、原责任及费用，供明确恢复使用。提交后 checkpoint 失败不宣称事务已回滚。
+cache 物理费用从 import reservation 扣出后独立持有。清理 import work 不代表可以同时释放 cache 费用；最后一个消费者和原始返回证明均须重新核验。发布或清理的责任写入必须恰好一行，保留原 owner、resource、证明摘要、费用值和 step 状态条件。任一条件失败回滚整笔元数据交接，即使文件已经删除也保留 receipt、原责任及费用，供明确恢复使用。提交后 checkpoint 失败不宣称事务已回滚。
 
 `Images.Inventory` 提供 import work 与 cache 的 roots、候选和未知项；全局 GC 结合其他资源关系决定是否继续。`CollectCandidate` 先验证 GC 冻结的 cache body 摘要或 import input hash，独立接纳仍再次核验当前责任。
 

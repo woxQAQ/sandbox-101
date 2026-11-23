@@ -40,38 +40,8 @@ func (r *Repository) Run(ctx context.Context, operationID string) error {
 	return store.RequireOne(r.queries.RunLiveOperation(ctx, operationID))
 }
 
-func (r *Repository) FailResult(ctx context.Context, operationID string, body []byte) error {
-	return store.RequireOne(r.queries.FailResult(ctx, dbgen.FailResultParams{
-		ID:         operationID,
-		Body:       body,
-		FinishedAt: clockNow(),
-	}))
-}
-
-// ResourceLinkRecord retains the persisted dependency payload and its identity.
-// The service verifies the decoded child against the original request hash.
-type ResourceLinkRecord struct {
-	Input     []byte
-	Hash      string
-	Status    string
-	Candidate string
-}
-
-func (r *Repository) ResourceLink(ctx context.Context, parent, key string) (ResourceLinkRecord, error) {
-	row, err := r.queries.GetResourceLinkStep(ctx, dbgen.GetResourceLinkStepParams{
-		OperationID: parent,
-		StepKey:     key,
-	})
-	return ResourceLinkRecord{
-		Input:     row.Input,
-		Hash:      row.InputHash,
-		Status:    row.Status,
-		Candidate: row.CandidateResourceID,
-	}, err
-}
-
-func (r *Repository) RequestHash(ctx context.Context, id string) (string, error) {
-	return r.queries.GetRequestHash(ctx, id)
+func (r *Repository) FailResult(ctx context.Context, operationID string, result Result) error {
+	return r.updateResult(ctx, operationID, "failed", result)
 }
 
 func (r *Repository) StepStatus(ctx context.Context, id, key string) (string, error) {
@@ -81,13 +51,11 @@ func (r *Repository) StepStatus(ctx context.Context, id, key string) (string, er
 	})
 }
 
-// LinkCompletion fixes the child status and body written to one pending parent
-// dependency. Completion still uses the original conditional SQL update.
+// LinkCompletion records the verified terminal child status on a pending parent link.
 type LinkCompletion struct {
 	OperationID string
 	StepKey     string
 	Status      string
-	Body        []byte
 }
 
 func (r *Repository) CompletePendingLink(ctx context.Context, completion LinkCompletion) error {
@@ -95,6 +63,5 @@ func (r *Repository) CompletePendingLink(ctx context.Context, completion LinkCom
 		OperationID: completion.OperationID,
 		StepKey:     completion.StepKey,
 		Status:      completion.Status,
-		Body:        completion.Body,
 	}))
 }

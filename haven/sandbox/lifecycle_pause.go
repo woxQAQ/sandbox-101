@@ -56,13 +56,7 @@ func (l *Lifecycle) markPauseCaptured(step *LifecycleStep, capture machine.Captu
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(l.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "lifecycle",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionLifecycle(l.ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -175,19 +169,10 @@ func (l *Lifecycle) completePause(step LifecycleStep) error {
 	settings.PausedUntil = time.Now().UTC().Add(l.opts.PausedTTL)
 	next := step.State
 	next.Phase = "complete"
-	if err = store.RequireOne(dbgen.New(tx).RestorePausedSandbox(l.ctx, dbgen.RestorePausedSandboxParams{
-		ID:           sandbox.ID,
-		Tenant:       sandbox.TenantID,
-		PreviousBody: operation.Encode(oldSandbox),
-		NextBody:     operation.Encode(sandbox),
-	})); err != nil {
+	if err = replaceSandbox(l.ctx, tx, oldSandbox, sandbox); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(l.ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    sandbox.ID,
-		PreviousBody: operation.Encode(step.Input.Settings),
-		NextBody:     operation.Encode(settings),
-	})); err != nil {
+	if err = replaceSettings(l.ctx, tx, sandbox.ID, step.Input.Settings, settings); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteFence(l.ctx, dbgen.DeleteFenceParams{
@@ -196,13 +181,10 @@ func (l *Lifecycle) completePause(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(l.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "lifecycle",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if step.Status != "running" {
+		return fmt.Errorf("pause completion requires running lifecycle")
+	}
+	if err = transitionLifecycle(l.ctx, tx, step, next, "succeeded"); err != nil {
 		return err
 	}
 	if err = l.fault("pause_completion_before_commit"); err != nil {

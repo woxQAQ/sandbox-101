@@ -82,6 +82,12 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 			if err != nil || binding.SnapshotID != capture.Input.Snapshot.ID {
 				t.Fatal("checkpoint rebound to another publication", binding, err)
 			}
+			if _, err = service.State.Database().ExecContext(ctx, "UPDATE operation_resource_requests SET expected_instance='different-instance' WHERE operation_id=?", link.ChildID); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = machine.LoadResourceLink(ctx, service.State.Database(), accepted.ID, "capture"); err == nil {
+				t.Fatal("parent accepted a different child request")
+			}
 		})
 	}
 }

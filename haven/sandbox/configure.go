@@ -154,16 +154,12 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 			return empty, noResource, false, fmt.Errorf("%w: configuration lacks original resource delivery witness", errs.ErrConflict)
 		}
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"configure", operation.SanitizedCommand(command)})
-	hash := operation.Digest(frozen)
+	frozen := operation.CommandRequest(operation.SanitizedCommand(command))
 	operations := operation.New(tx)
 	if cached, found, err := operations.Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   principal.TenantID,
-	}, key, hash); found || err != nil {
+	}, key, frozen); found || err != nil {
 		if err == nil {
 			var prior string
 			prior, err = operations.CredentialMAC(ctx, cached.ID)
@@ -197,16 +193,14 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	if current.State != "paused" {
 		input.PreviousSettings = &old
 	}
-	payload := operation.Encode(input)
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
 		Key:       key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, noResource, false, err
 	}
@@ -222,24 +216,20 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	paused := current.State == "paused"
 	var outcomes []operation.Outcome
 	if paused {
-		if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-			SandboxID:    current.ID,
-			PreviousBody: operation.Encode(old),
-			NextBody:     operation.Encode(prepared.Settings),
-		})); err != nil {
+		if err = replaceSettings(ctx, tx, current.ID, old, prepared.Settings); err != nil {
 			return empty, noResource, false, err
 		}
-		if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+		payload := operation.Encode(input)
+		if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 			OperationID:         accepted.ID,
 			StepKey:             "configuration",
 			Action:              "configure_paused",
-			InputHash:           operation.Digest(payload),
 			Input:               payload,
 			CandidateResourceID: current.ID,
 			ExpectedInstance:    current.Instance,
 			Status:              "succeeded",
-			Body:                operation.Encode("complete"),
-		})); err != nil {
+			Phase:               "complete",
+		}); err != nil {
 			return empty, noResource, false, err
 		}
 		if err = store.RequireOne(dbgen.New(tx).DeleteFence(ctx, dbgen.DeleteFenceParams{
@@ -254,17 +244,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 			AdoptResult: true,
 		})
 	} else {
-		if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-			OperationID:         accepted.ID,
-			StepKey:             "activation",
-			Action:              "activate",
-			InputHash:           operation.Digest(payload),
-			Input:               payload,
-			CandidateResourceID: current.VMID,
-			ExpectedInstance:    current.Instance,
-			Status:              "pending",
-			Body:                operation.Encode("admitted"),
-		})); err != nil {
+		if err = insertActivationStep(ctx, tx, accepted.ID, current.VMID, input); err != nil {
 			return empty, noResource, false, err
 		}
 	}
@@ -307,20 +287,10 @@ func (a *Activations) saveConfigurationIntent(step *ActivationStep) error {
 	if _, _, err = VerifyActivation(a.proofs, a.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(a.ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    step.Input.SandboxID,
-		PreviousBody: operation.Encode(step.Input.PreviousSettings),
-		NextBody:     operation.Encode(step.Input.Settings),
-	})); err != nil {
+	if err = replaceSettings(a.ctx, tx, step.Input.SandboxID, *step.Input.PreviousSettings, step.Input.Settings); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(a.ctx, dbgen.BeginPendingStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("configuration_saved"),
-	})); err != nil {
+	if err = transitionActivation(a.ctx, tx, *step, "configuration_saved", "running"); err != nil {
 		return err
 	}
 	if err = a.fault("configure_settings_before_commit"); err != nil {

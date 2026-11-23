@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,7 +18,6 @@ import (
 
 func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx, step SnapshotDeleteStep, admitting bool) ([]ResourceStep, error) {
 	var record SnapshotRecord
-	var publication SnapshotRecord
 	source := step.Input.Source
 	snapshot := source.Snapshot
 	request := step.Input.Request
@@ -39,34 +37,34 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 		holderKind = "active_use"
 		holderID = "checkpoint:" + snapshot.ID
 	}
-	var body []byte
-	if body, err = dbgen.New(tx).GetPublishedBody(ctx, dbgen.GetPublishedBodyParams{
+	var witnessHash string
+	row, err := dbgen.New(tx).GetPublishedBody(ctx, dbgen.GetPublishedBodyParams{
 		ID:         snapshot.ID,
 		SourceVmID: snapshot.SourceVM,
 		Deleting:   int64(deleting),
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(body, &record); err != nil {
+	if record, err = snapshotRecord(ctx, tx, row); err != nil {
 		return nil, err
 	}
 	if !reflect.DeepEqual(record, snapshot) {
 		return nil, fmt.Errorf("snapshot delete catalog changed")
 	}
-	if body, err = dbgen.New(tx).GetSnapshotPublication(ctx, dbgen.GetSnapshotPublicationParams{
-		SnapshotID: snapshot.ID,
-		TenantID:   snapshot.TenantID,
-	}); err != nil {
+	publicationHash, err := dbgen.New(tx).GetSnapshotPublication(ctx, dbgen.GetSnapshotPublicationParams{
+		SnapshotID:         snapshot.ID,
+		TenantID:           snapshot.TenantID,
+		CaptureOperationID: capture.OperationID,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(body, &publication); err != nil {
-		return nil, err
-	}
-	if !reflect.DeepEqual(publication, snapshot) {
+	if publicationHash != operation.Digest(operation.Encode(snapshot)) {
 		return nil, fmt.Errorf("snapshot publication changed")
 	}
 	operations := operation.New(tx)
-	if body, err = dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
+	if witnessHash, err = dbgen.New(tx).CleanupBody(ctx, dbgen.CleanupBodyParams{
 		ID:           "capture:" + capture.OperationID,
 		OperationID:  capture.OperationID,
 		ResourceKind: "capture",
@@ -75,7 +73,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 	}); err != nil {
 		return nil, fmt.Errorf("snapshot raw capture cleanup not retired: %w", err)
 	}
-	if string(body) != string(operation.Encode(capture.Input)) {
+	if witnessHash != capture.Hash {
 		return nil, fmt.Errorf("snapshot raw cleanup history changed")
 	}
 	backings, err := sd.proofs.Backings(ctx, tx, source)
@@ -94,27 +92,15 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 		return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 	}
 	if !admitting {
-		var original struct {
-			Action  string
-			Request SnapshotDeleteRequest
-		}
-		var result operation.Result
 		parent, err := operations.Projection(ctx, step.OperationID)
 		if err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal(parent.Request, &original); err != nil {
-			return nil, err
-		}
-		if err = json.Unmarshal(parent.Body, &result); err != nil {
-			return nil, err
-		}
-		if operation.Digest(parent.Request) != parent.RequestHash ||
+		result := parent.Result
+		if !parent.Request.Equal(request.operationRequest()) ||
 			operation.Terminal(parent.Status) ||
 			parent.ScopeKind != "tenant" ||
 			parent.ScopeID != request.TenantID ||
-			original.Action != "snapshot_delete" ||
-			original.Request != request ||
 			result.SnapshotID != snapshot.ID {
 			return nil, fmt.Errorf("snapshot delete parent identity changed")
 		}
@@ -173,7 +159,7 @@ func (sd *SnapshotDeletion) snapshotDeleteProof(ctx context.Context, tx *sql.Tx,
 			ResourceKind: "snapshot",
 			ResourceID:   snapshot.ID,
 			Status:       cleanupStatus,
-			Body:         operation.Encode(step.Input),
+			WitnessHash:  step.Hash,
 		}); err != nil || count != 1 {
 			return nil, fmt.Errorf("snapshot deletion responsibility changed: %v", err)
 		}
@@ -230,18 +216,11 @@ func (sd *SnapshotDeletion) checkSnapshotDelete(step SnapshotDeleteStep) error {
 func (sd *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
 	source := step.Input.Source
-	body, err := dbgen.New(sd.store.Database).GetDeletionReceipt(sd.ctx, dbgen.GetDeletionReceiptParams{
-		Path:        source.Snapshot.Dir,
-		OperationID: step.OperationID,
-		StepKey:     "snapshot_delete",
-	})
+	intent, err := store.LoadDeletionReceipt(sd.ctx, sd.store.Database, step.OperationID, "snapshot_delete", source.Snapshot.Dir)
 
 	if err == nil {
 		if step.Phase != "deleting" && step.Phase != "files_removed" {
 			return intent, fmt.Errorf("snapshot deletion receipt outside phase")
-		}
-		if err = json.Unmarshal(body, &intent); err != nil {
-			return intent, err
 		}
 		return intent, loom.VerifySnapshotDeletion(intent, source.Snapshot.Dir, source.Publication)
 	}
@@ -281,21 +260,18 @@ func (sd *SnapshotDeletion) snapshotDeleteReceipt(step *SnapshotDeleteStep) (loo
 			return intent, fmt.Errorf("snapshot retained memory differs from published inode")
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(sd.ctx, dbgen.InsertDeletionReceiptParams{
-		Path:        intent.Path,
-		OperationID: step.OperationID,
-		StepKey:     "snapshot_delete",
-		Body:        operation.Encode(intent),
-	})); err != nil {
+	if err = store.RecordDeletionReceipt(sd.ctx, tx, step.OperationID, "snapshot_delete", intent); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(sd.ctx, dbgen.BeginPendingStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "snapshot_delete",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("deleting"),
-	})); err != nil {
+	if err = operation.AdvancePhase(sd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "snapshot_delete",
+		InputHash:      step.Hash,
+		PreviousStatus: "pending",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "running",
+		NextPhase:      "deleting",
+	}); err != nil {
 		return intent, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -374,13 +350,15 @@ func (sd *SnapshotDeletion) markSnapshotRemoved(step *SnapshotDeleteStep) error 
 	if _, err = sd.snapshotDeleteProof(sd.ctx, tx, *step, false); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceRunningStepBody(sd.ctx, dbgen.ReplaceRunningStepBodyParams{
-		OperationID:  step.OperationID,
-		StepKey:      "snapshot_delete",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("files_removed"),
-	})); err != nil {
+	if err = operation.AdvancePhase(sd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "snapshot_delete",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "running",
+		NextPhase:      "files_removed",
+	}); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -414,13 +392,14 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 		return err
 	}
 	publication := step.Input.Source.Snapshot
-	body, previousState, completed := operation.Encode(publication), operation.Encode(step.Phase), operation.Encode("complete")
+	body := operation.Encode(publication)
 
 	operations := operation.New(tx)
 	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshotPublication(sd.ctx, dbgen.DeleteSnapshotPublicationParams{
-		SnapshotID: publication.ID,
-		TenantID:   publication.TenantID,
-		Body:       body,
+		SnapshotID:         publication.ID,
+		TenantID:           publication.TenantID,
+		CaptureOperationID: publication.OperationID,
+		RecordHash:         operation.Digest(body),
 	})); err != nil {
 		return err
 	}
@@ -445,9 +424,14 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshot(sd.ctx, dbgen.DeleteSnapshotParams{
-		ID:        publication.ID,
-		Published: 1,
-		Body:      body,
+		ID:                 publication.ID,
+		Published:          1,
+		CaptureOperationID: publication.OperationID,
+		TenantID:           publication.TenantID,
+		SourceVmID:         publication.SourceVM,
+		SourceInstance:     publication.SourceInstance,
+		Directory:          publication.Dir,
+		ManifestHash:       manifestHash(publication.Manifest),
 	})); err != nil {
 		return err
 	}
@@ -457,13 +441,15 @@ func (sd *SnapshotDeletion) completeSnapshotDelete(step SnapshotDeleteStep) erro
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(sd.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "snapshot_delete",
-		InputHash:    step.Hash,
-		PreviousBody: previousState,
-		NewBody:      completed,
-	})); err != nil {
+	if err = operation.AdvancePhase(sd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "snapshot_delete",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      "complete",
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(sd.ctx, step.OperationID); err != nil {

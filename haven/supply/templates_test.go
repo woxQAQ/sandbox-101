@@ -90,9 +90,7 @@ func TestHavenTemplateRootOwnerAndPublicationProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	corrupt := record
-	corrupt.Warmup = "unpublished fixture command"
-	if _, err = service.State.Database().Exec("UPDATE templates SET body=? WHERE id=?", operation.Encode(corrupt), spec.ID); err != nil {
+	if _, err = service.State.Database().Exec("UPDATE template_versions SET warmup=? WHERE operation_id=?", "unpublished fixture command", record.Version); err != nil {
 		t.Fatal(err)
 	}
 	before := runtime.Count("launch")

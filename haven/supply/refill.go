@@ -95,30 +95,16 @@ func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reser
 		return fmt.Errorf("refill candidate ownership changed")
 	}
 	reservation.Instance = source.State.Witness
-	body, err := operation.New(tx).LiveBody(s.ctx, step.OperationID)
+	result, err := operation.New(tx).LiveResult(s.ctx, step.OperationID)
 	if err != nil {
-		return err
-	}
-	var result operation.Result
-	if err = json.Unmarshal(body, &result); err != nil {
 		return err
 	}
 	result.VMID = reservation.VMID
 	result.ResourceReady = true
-	completed := operation.Encode(SupplyState{
+	completed := SupplyState{
 		Phase:      "complete",
 		SnapshotID: reservation.Template.SnapshotID,
 		FinishedAt: time.Now().UTC(),
-	})
-	previous, next := operation.Encode(original), operation.Encode(reservation)
-	previousState := operation.Encode(step.State)
-	if err = store.RequireOne(queries.InsertWarm(s.ctx, dbgen.InsertWarmParams{
-		VmID:            reservation.VMID,
-		TemplateID:      reservation.Template.ID,
-		SnapshotID:      reservation.Template.SnapshotID,
-		CreatedAtUnixNs: reservation.CreatedAt.UnixNano(),
-	})); err != nil {
-		return err
 	}
 	if err = quota.AddResourceReference(s.ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
@@ -129,9 +115,9 @@ func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reser
 		return err
 	}
 	if err = store.RequireOne(queries.MarkReady(s.ctx, dbgen.MarkReadyParams{
-		OperationID:  step.OperationID,
-		PreviousBody: previous,
-		NewBody:      next,
+		OperationID:     step.OperationID,
+		Instance:        reservation.Instance,
+		SourceInputHash: original.Source.InputHash,
 	})); err != nil {
 		return err
 	}
@@ -143,16 +129,10 @@ func (s *Supply) publishWarm(step SupplyStep, source machine.ResourceStep, reser
 	}); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(s.ctx, dbgen.CompleteUnchangedStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "supply",
-		InputHash:    step.Hash,
-		PreviousBody: previousState,
-		NewBody:      completed,
-	})); err != nil {
+	if err = transitionSupply(s.ctx, tx, step, completed, "succeeded"); err != nil {
 		return err
 	}
-	if _, _, err = VerifyReadyWarm(s.proofs, s.ctx, tx, step.OperationID); err != nil {
+	if _, _, err = VerifyReadyWarm(s.ctx, s.proofs, tx, step.OperationID); err != nil {
 		return err
 	}
 	if err = s.fault("warm_publication_before_commit"); err != nil {
@@ -294,10 +274,7 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"refill", input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	parent.Status = "failed"
 	parent.Result.Error = "refill admission exhausted"
@@ -307,31 +284,20 @@ func (s *Supply) recordRefillFailure(ctx context.Context, parent operation.State
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "failed",
-		Body:      operation.Encode(parent.Result),
+		Result:    parent.Result,
 	}); err != nil {
 		return operation.State{}, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
 		return operation.State{}, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         parent.ID,
-		StepKey:             "supply",
-		Action:              "refill",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
-		CandidateResourceID: input.Template.ID,
-		ExpectedInstance:    "",
-		Status:              "failed",
-		Body: operation.Encode(SupplyState{
-			Phase:      "failed",
-			FinishedAt: time.Now().UTC(),
-			Error:      parent.Result.Error,
-		}),
-	})); err != nil {
+	if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "failed", payload, SupplyState{
+		Phase:      "failed",
+		FinishedAt: time.Now().UTC(),
+		Error:      parent.Result.Error,
+	}); err != nil {
 		return operation.State{}, err
 	}
 	if err = s.committer.Complete(tx, operation.Outcome{
@@ -359,18 +325,15 @@ func RefillBackoff(ctx context.Context, database store.DBTX, template string, no
 		if attempt.Status == "succeeded" {
 			break
 		}
-		var intent SupplyInput
-		var state SupplyState
-		if err = json.Unmarshal(attempt.Input, &intent); err != nil {
-			return true, err
-		}
-		if err = json.Unmarshal(attempt.Body, &state); err != nil {
-			return true, err
-		}
 		if failures == 0 {
-			latest = state.FinishedAt
-			if latest.IsZero() {
+			if attempt.CompletedAt == "" {
+				var intent SupplyInput
+				if err = json.Unmarshal(attempt.Input, &intent); err != nil {
+					return true, err
+				}
 				latest = intent.CreatedAt
+			} else if latest, err = time.Parse(time.RFC3339Nano, attempt.CompletedAt); err != nil {
+				return true, err
 			}
 		}
 		failures++

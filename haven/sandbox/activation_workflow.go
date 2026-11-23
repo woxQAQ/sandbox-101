@@ -80,12 +80,12 @@ func (a *Activations) activate(vmID, acceptedOperation string) (runErr error) {
 	if err = a.backend.SetNetworkEnabled(a.ctx, resource, false); err != nil {
 		return err
 	}
-	if step.Input.PreviousSettings != nil && step.Phase == "admitted" {
+	if step.Input.PreviousSettings != nil && step.Phase == activationAdmitted {
 		if err = a.saveConfigurationIntent(&step); err != nil {
 			return err
 		}
 	}
-	if step.Phase == "admitted" || step.Phase == "configuration_saved" {
+	if step.Phase == activationAdmitted || step.Phase == "configuration_saved" {
 		if err = a.markActivation(&step, "off_intent"); err != nil {
 			return err
 		}
@@ -248,13 +248,7 @@ func (a *Activations) markActivation(step *ActivationStep, phase string) error {
 	if _, _, err = VerifyActivation(a.proofs, a.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(a.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NewBody:      operation.Encode(phase),
-	})); err != nil {
+	if err = transitionActivation(a.ctx, tx, *step, phase, "running"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -282,9 +276,9 @@ func (a *Activations) commitActivationPolicy(step ActivationStep, source machine
 		return err
 	}
 	policyRecord, lookup := machine.LoadPolicyWitness(a.ctx, tx, source.Candidate)
-	previous, instance, priorPolicy := policyRecord.OperationID, policyRecord.Instance, policyRecord.Body
+	previous, instance := policyRecord.OperationID, policyRecord.Instance
 	if lookup == nil && previous != step.OperationID {
-		if instance != source.State.Witness && string(priorPolicy) != "null" {
+		if instance != source.State.Witness && policyRecord.PolicyHash.Valid {
 			old, err := machine.LoadDirectRetirement(a.ctx, tx, previous)
 			if err != nil {
 				return err
@@ -324,7 +318,7 @@ func (a *Activations) commitActivationPolicy(step ActivationStep, source machine
 		VMID:        source.Candidate,
 		Instance:    source.State.Witness,
 		OperationID: step.OperationID,
-		Body:        operation.Encode(policy),
+		PolicyHash:  machine.InstalledPolicyHash(policy),
 	}); err != nil {
 		return err
 	}
@@ -371,17 +365,14 @@ func (a *Activations) completeActivation(step ActivationStep) error {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).PublishRunningSandbox(a.ctx, dbgen.PublishRunningSandboxParams{
-		Body:   operation.Encode(record),
-		ID:     record.ID,
-		Tenant: record.TenantID,
+		Instance:          record.Instance,
+		SourceOperationID: optionalID(record.SourceOperation),
+		ID:                record.ID,
+		Tenant:            record.TenantID,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(a.ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    record.ID,
-		PreviousBody: operation.Encode(step.Input.Settings),
-		NextBody:     operation.Encode(settings),
-	})); err != nil {
+	if err = replaceSettings(a.ctx, tx, record.ID, step.Input.Settings, settings); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteFence(a.ctx, dbgen.DeleteFenceParams{
@@ -390,13 +381,7 @@ func (a *Activations) completeActivation(step ActivationStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(a.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NewBody:      operation.Encode("complete"),
-	})); err != nil {
+	if err = transitionActivation(a.ctx, tx, step, "complete", "succeeded"); err != nil {
 		return err
 	}
 	if err = a.fault("activation_completion_before_commit"); err != nil {
@@ -446,7 +431,7 @@ func VerifyActivation(proofs machine.ResourceProofs, ctx context.Context, tx *sq
 	if err != nil {
 		return source, record, err
 	}
-	if record.SourceOperation != source.OperationID || record.VMID != source.Candidate || record.Instance != source.State.Witness || (record.State != "provisioning" && record.State != "running") {
+	if record.SourceOperation != source.OperationID || record.VMID != source.Candidate || record.Instance != source.State.Witness || (record.State != ownership.StateProvisioning && record.State != "running") {
 		return source, record, fmt.Errorf("activation sandbox ownership changed")
 	}
 	resource, current, owner, err := machine.LoadVM(ctx, tx, source)
@@ -468,17 +453,17 @@ func VerifyActivation(proofs machine.ResourceProofs, ctx context.Context, tx *sq
 		return source, record, err
 	}
 	expectedSettings := step.Input.Settings
-	if step.Input.PreviousSettings != nil && step.Phase == "admitted" {
+	if step.Input.PreviousSettings != nil && step.Phase == activationAdmitted {
 		expectedSettings = *step.Input.PreviousSettings
 	}
 	if !reflect.DeepEqual(settings, expectedSettings) || step.Input.Settings.Generation != step.OperationID {
 		return source, record, fmt.Errorf("activation desired settings changed")
 	}
-	identity, err := operation.New(tx).RequestIdentity(ctx, step.OperationID)
+	identity, err := operation.New(tx).Projection(ctx, step.OperationID)
 	if err != nil {
 		return source, record, err
 	}
-	if operation.Terminal(identity.Status) || identity.ScopeKind != "tenant" || identity.ScopeID != step.Input.RequestTenantID || operation.Digest(identity.Request) != identity.Hash {
+	if operation.Terminal(identity.Status) || identity.ScopeKind != "tenant" || identity.ScopeID != step.Input.RequestTenantID {
 		return source, record, fmt.Errorf("activation parent identity changed")
 	}
 	candidate, expected, err := operation.New(tx).StepTarget(ctx, step.OperationID, step.Key, step.Hash)

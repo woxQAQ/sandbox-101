@@ -238,6 +238,20 @@ type LifecycleStep struct {
 	State       LifecycleState
 }
 
+func transitionLifecycle(ctx context.Context, tx *sql.Tx, step LifecycleStep, next LifecycleState, status string) error {
+	return operation.AdvancePhase(ctx, tx, operation.PhaseChange{
+		OperationID:      step.OperationID,
+		StepKey:          "lifecycle",
+		InputHash:        step.Hash,
+		PreviousStatus:   step.Status,
+		PreviousPhase:    step.State.Phase,
+		PreviousSnapshot: step.State.SnapshotID,
+		NextStatus:       status,
+		NextPhase:        next.Phase,
+		NextSnapshot:     next.SnapshotID,
+	})
+}
+
 func LoadLifecycleStep(ctx context.Context, database store.DBTX, id string) (LifecycleStep, error) {
 	step := LifecycleStep{
 		OperationID: id,
@@ -249,7 +263,7 @@ func LoadLifecycleStep(ctx context.Context, database store.DBTX, id string) (Lif
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, instance := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -261,8 +275,9 @@ func LoadLifecycleStep(ctx context.Context, database store.DBTX, id string) (Lif
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
+	step.State = LifecycleState{
+		Phase:      record.Phase.String,
+		SnapshotID: record.ResultSnapshotID,
 	}
 	if action != step.Input.Command.Action || candidate != step.Input.Sandbox.ID || instance != step.Input.Sandbox.Instance {
 		return step, fmt.Errorf("lifecycle frozen identity changed")

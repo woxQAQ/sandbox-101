@@ -148,7 +148,7 @@ func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDi
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -160,9 +160,7 @@ func LoadCaptureDiscard(ctx context.Context, q store.DBTX, id string) (CaptureDi
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if action != "capture_discard" || candidate != step.Input.Source.Input.Snapshot.ID || expected != step.Input.Request.ExpectedInstance {
 		return step, fmt.Errorf("capture discard frozen identity changed")
 	}
@@ -216,29 +214,19 @@ func (cd *CaptureDiscard) captureDiscardProof(ctx context.Context, tx *sql.Tx, s
 		ResourceKind: "snapshot",
 		ResourceID:   snapshot.ID,
 		Status:       "pending",
-		Body:         operation.Encode(input),
+		WitnessHash:  operation.Digest(operation.Encode(input)),
 	})
 	if err != nil || count != 1 {
 		return fmt.Errorf("capture discard responsibility changed: %v", err)
 	}
-	var parent struct {
-		Action  string
-		Request CaptureDiscardRequest
-	}
 	// Decode the discard result independently; missing fields cannot inherit
 	// identity from the original failed capture result.
-	var result operation.Result
 	projection, err := operation.New(tx).Projection(ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
-	if err = json.Unmarshal(projection.Request, &parent); err != nil {
-		return err
-	}
-	if err = json.Unmarshal(projection.Body, &result); err != nil {
-		return err
-	}
-	if operation.Digest(projection.Request) != projection.RequestHash || operation.Terminal(projection.Status) || projection.ScopeKind != "tenant" || projection.ScopeID != request.TenantID || parent.Action != "capture_discard" || parent.Request != request || result.SnapshotID != snapshot.ID || result.VMID != resource.Candidate || result.SandboxID != record.ID {
+	result := projection.Result
+	if !projection.Request.Equal(request.operationRequest()) || operation.Terminal(projection.Status) || projection.ScopeKind != "tenant" || projection.ScopeID != request.TenantID || result.SnapshotID != snapshot.ID || result.VMID != resource.Candidate || result.SandboxID != record.ID {
 		return fmt.Errorf("capture discard parent identity changed")
 	}
 	return nil
@@ -266,7 +254,7 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 		return err
 	}
 	var record SnapshotRecord
-	if err = json.Unmarshal(publication.Body, &record); err != nil {
+	if record, err = snapshotRecord(ctx, tx, publication); err != nil {
 		return err
 	}
 	if publication.Published != 0 || publication.Deleting != expected.Deleting || !reflect.DeepEqual(record, snapshot) {
@@ -282,7 +270,7 @@ func verifyCaptureDiscardCustody(ctx context.Context, tx *sql.Tx, step CaptureDi
 	if err != nil {
 		return err
 	}
-	if string(body) != string(operation.Encode(source.Input)) {
+	if body != source.Hash {
 		return fmt.Errorf("capture discard original cleanup changed")
 	}
 	shape := resource.Input.Resource.Config.Shape

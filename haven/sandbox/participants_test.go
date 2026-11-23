@@ -60,7 +60,7 @@ func TestHavenCapabilityReadersBorrowReadOnlySnapshot(t *testing.T) {
 	if _, err = (sandbox.ActivationHistory{}).ReadActivationProof(ctx, tx, accepted.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("raw generation acquired an inferred activation proof: %v", err)
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE sandboxes SET body=body WHERE id=?", expected.ID); err == nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE sandboxes SET instance=instance WHERE id=?", expected.ID); err == nil {
 		t.Fatal("proof reader fixture did not enforce a read-only SQLite connection")
 	}
 }

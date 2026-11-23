@@ -71,9 +71,7 @@ func ColdServiceWithOptions(t *testing.T, options application.Options, factory f
 	if _, err = service.State.Database().Exec("INSERT INTO tenants(id,token_hash,max_sandboxes,max_storage_mib) VALUES(?,?,?,?)", "tenant", "fixture-hash", 10, 4096); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.State.Database().Exec("INSERT INTO images VALUES(?,?)", manifest.Digest, operation.Encode(manifest)); err != nil {
-		t.Fatal(err)
-	}
+	testfixture.PublishManifest(t, service.State.Database(), manifest)
 	service.Options.Fault = nil
 	_, err = service.Supply.AdmitTemplate(context.Background(), authorization.Principal{
 		TenantID: "tenant",

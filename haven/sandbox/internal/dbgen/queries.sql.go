@@ -7,30 +7,77 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
 
 const assignWarmSandbox = `-- name: AssignWarmSandbox :execrows
-UPDATE sandboxes SET body=?1 WHERE id=?2 AND tenant=?3 AND state='provisioning' AND body=?4
+UPDATE sandboxes SET operation_id=?1,slot_operation_id=?1,slot_input_hash=?2,creation_epoch=?3,created_at=?4,provision_source='warm'
+WHERE id=?5 AND tenant=?6 AND state='provisioning' AND source_operation_id=?7 AND vm_id=?8 AND instance=?9 AND slot_operation_id IS NULL AND template_id=?10 AND vcpus=?11 AND memory_mib=?12 AND disk_mib=?13
 `
 
 type AssignWarmSandboxParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
+	ClaimID           sql.NullString
+	SlotInputHash     sql.NullString
+	CreationEpoch     string
+	CreatedAt         string
+	ID                string
+	Tenant            string
+	SourceOperationID sql.NullString
+	VmID              string
+	Instance          string
+	TemplateID        string
+	Vcpus             int64
+	MemoryMib         int64
+	DiskMib           int64
 }
 
 func (q *Queries) AssignWarmSandbox(ctx context.Context, arg AssignWarmSandboxParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, assignWarmSandbox,
-		arg.NextBody,
+		arg.ClaimID,
+		arg.SlotInputHash,
+		arg.CreationEpoch,
+		arg.CreatedAt,
 		arg.ID,
 		arg.Tenant,
-		arg.PreviousBody,
+		arg.SourceOperationID,
+		arg.VmID,
+		arg.Instance,
+		arg.TemplateID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const clearEnvironment = `-- name: ClearEnvironment :exec
+DELETE FROM sandbox_environment WHERE sandbox_id=?
+`
+
+func (q *Queries) ClearEnvironment(ctx context.Context, sandboxID string) error {
+	_, err := q.db.ExecContext(ctx, clearEnvironment, sandboxID)
+	return err
+}
+
+const clearPolicyRules = `-- name: ClearPolicyRules :exec
+DELETE FROM sandbox_policy_rules WHERE sandbox_id=?
+`
+
+func (q *Queries) ClearPolicyRules(ctx context.Context, sandboxID string) error {
+	_, err := q.db.ExecContext(ctx, clearPolicyRules, sandboxID)
+	return err
+}
+
+const clearSecretDescriptors = `-- name: ClearSecretDescriptors :exec
+DELETE FROM sandbox_secret_descriptors WHERE sandbox_id=?
+`
+
+func (q *Queries) ClearSecretDescriptors(ctx context.Context, sandboxID string) error {
+	_, err := q.db.ExecContext(ctx, clearSecretDescriptors, sandboxID)
+	return err
 }
 
 const countSandboxSettings = `-- name: CountSandboxSettings :one
@@ -45,14 +92,19 @@ func (q *Queries) CountSandboxSettings(ctx context.Context, sandboxID string) (i
 }
 
 const deleteCheckpoint = `-- name: DeleteCheckpoint :execrows
-DELETE FROM checkpoint_bindings WHERE id=? AND tenant=? AND snapshot_id=? AND body=?
+DELETE FROM checkpoint_bindings WHERE id=? AND tenant=? AND snapshot_id=? AND sandbox_id=? AND template_id=? AND vcpus=? AND memory_mib=? AND disk_mib=? AND created_at=?
 `
 
 type DeleteCheckpointParams struct {
 	ID         string
 	Tenant     string
 	SnapshotID string
-	Body       []byte
+	SandboxID  string
+	TemplateID string
+	Vcpus      int64
+	MemoryMib  int64
+	DiskMib    int64
+	CreatedAt  string
 }
 
 func (q *Queries) DeleteCheckpoint(ctx context.Context, arg DeleteCheckpointParams) (int64, error) {
@@ -60,7 +112,12 @@ func (q *Queries) DeleteCheckpoint(ctx context.Context, arg DeleteCheckpointPara
 		arg.ID,
 		arg.Tenant,
 		arg.SnapshotID,
-		arg.Body,
+		arg.SandboxID,
+		arg.TemplateID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.CreatedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -86,16 +143,16 @@ func (q *Queries) DeleteFence(ctx context.Context, arg DeleteFenceParams) (int64
 }
 
 const deleteUnchangedSettings = `-- name: DeleteUnchangedSettings :execrows
-DELETE FROM sandbox_settings WHERE sandbox_id=? AND body=?
+DELETE FROM sandbox_settings WHERE sandbox_id=? AND generation=?
 `
 
 type DeleteUnchangedSettingsParams struct {
-	SandboxID string
-	Body      []byte
+	SandboxID  string
+	Generation string
 }
 
 func (q *Queries) DeleteUnchangedSettings(ctx context.Context, arg DeleteUnchangedSettingsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteUnchangedSettings, arg.SandboxID, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteUnchangedSettings, arg.SandboxID, arg.Generation)
 	if err != nil {
 		return 0, err
 	}
@@ -103,14 +160,25 @@ func (q *Queries) DeleteUnchangedSettings(ctx context.Context, arg DeleteUnchang
 }
 
 const getCheckpoint = `-- name: GetCheckpoint :one
-SELECT body FROM checkpoint_bindings WHERE id=?
+SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE id=?
 `
 
-func (q *Queries) GetCheckpoint(ctx context.Context, id string) ([]byte, error) {
+func (q *Queries) GetCheckpoint(ctx context.Context, id string) (CheckpointBinding, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpoint, id)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i CheckpointBinding
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.SnapshotID,
+		&i.OperationID,
+		&i.SandboxID,
+		&i.TemplateID,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getFence = `-- name: GetFence :one
@@ -125,7 +193,7 @@ func (q *Queries) GetFence(ctx context.Context, sandboxID string) (string, error
 }
 
 const getOwnedCheckpoint = `-- name: GetOwnedCheckpoint :one
-SELECT body FROM checkpoint_bindings WHERE id=? AND tenant=?
+SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE id=? AND tenant=?
 `
 
 type GetOwnedCheckpointParams struct {
@@ -133,15 +201,26 @@ type GetOwnedCheckpointParams struct {
 	Tenant string
 }
 
-func (q *Queries) GetOwnedCheckpoint(ctx context.Context, arg GetOwnedCheckpointParams) ([]byte, error) {
+func (q *Queries) GetOwnedCheckpoint(ctx context.Context, arg GetOwnedCheckpointParams) (CheckpointBinding, error) {
 	row := q.db.QueryRowContext(ctx, getOwnedCheckpoint, arg.ID, arg.Tenant)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i CheckpointBinding
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.SnapshotID,
+		&i.OperationID,
+		&i.SandboxID,
+		&i.TemplateID,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT state,body FROM sandboxes WHERE id=? AND tenant=?
+SELECT id, tenant, state, template_id, vcpus, memory_mib, disk_mib, creation_epoch, created_at, provision_source, last_error, operation_id, vm_id, instance, snapshot_id, source_operation_id, slot_operation_id, slot_input_hash FROM sandboxes WHERE id=? AND tenant=?
 `
 
 type GetSandboxParams struct {
@@ -149,31 +228,58 @@ type GetSandboxParams struct {
 	Tenant string
 }
 
-type GetSandboxRow struct {
-	State string
-	Body  []byte
-}
-
-func (q *Queries) GetSandbox(ctx context.Context, arg GetSandboxParams) (GetSandboxRow, error) {
+func (q *Queries) GetSandbox(ctx context.Context, arg GetSandboxParams) (Sandbox, error) {
 	row := q.db.QueryRowContext(ctx, getSandbox, arg.ID, arg.Tenant)
-	var i GetSandboxRow
-	err := row.Scan(&i.State, &i.Body)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.State,
+		&i.TemplateID,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.CreationEpoch,
+		&i.CreatedAt,
+		&i.ProvisionSource,
+		&i.LastError,
+		&i.OperationID,
+		&i.VmID,
+		&i.Instance,
+		&i.SnapshotID,
+		&i.SourceOperationID,
+		&i.SlotOperationID,
+		&i.SlotInputHash,
+	)
 	return i, err
 }
 
 const getSettings = `-- name: GetSettings :one
-SELECT body FROM sandbox_settings WHERE sandbox_id=?
+SELECT sandbox_id, generation, instance, active_epoch, ttl_seconds, on_expire, auto_renew, deadline, paused_until, policy_mode, max_connections, env_present FROM sandbox_settings WHERE sandbox_id=?
 `
 
-func (q *Queries) GetSettings(ctx context.Context, sandboxID string) ([]byte, error) {
+func (q *Queries) GetSettings(ctx context.Context, sandboxID string) (SandboxSetting, error) {
 	row := q.db.QueryRowContext(ctx, getSettings, sandboxID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i SandboxSetting
+	err := row.Scan(
+		&i.SandboxID,
+		&i.Generation,
+		&i.Instance,
+		&i.ActiveEpoch,
+		&i.TtlSeconds,
+		&i.OnExpire,
+		&i.AutoRenew,
+		&i.Deadline,
+		&i.PausedUntil,
+		&i.PolicyMode,
+		&i.MaxConnections,
+		&i.EnvPresent,
+	)
+	return i, err
 }
 
 const insertCheckpoint = `-- name: InsertCheckpoint :execrows
-INSERT INTO checkpoint_bindings(id,tenant,snapshot_id,operation_id,body) VALUES(?,?,?,?,?)
+INSERT INTO checkpoint_bindings(id,tenant,snapshot_id,operation_id,sandbox_id,template_id,vcpus,memory_mib,disk_mib,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)
 `
 
 type InsertCheckpointParams struct {
@@ -181,7 +287,12 @@ type InsertCheckpointParams struct {
 	Tenant      string
 	SnapshotID  string
 	OperationID string
-	Body        []byte
+	SandboxID   string
+	TemplateID  string
+	Vcpus       int64
+	MemoryMib   int64
+	DiskMib     int64
+	CreatedAt   string
 }
 
 func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointParams) (int64, error) {
@@ -190,8 +301,31 @@ func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointPara
 		arg.Tenant,
 		arg.SnapshotID,
 		arg.OperationID,
-		arg.Body,
+		arg.SandboxID,
+		arg.TemplateID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.CreatedAt,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertEnvironment = `-- name: InsertEnvironment :execrows
+INSERT INTO sandbox_environment(sandbox_id,name,value) VALUES(?,?,?)
+`
+
+type InsertEnvironmentParams struct {
+	SandboxID string
+	Name      string
+	Value     string
+}
+
+func (q *Queries) InsertEnvironment(ctx context.Context, arg InsertEnvironmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertEnvironment, arg.SandboxID, arg.Name, arg.Value)
 	if err != nil {
 		return 0, err
 	}
@@ -215,15 +349,54 @@ func (q *Queries) InsertFence(ctx context.Context, arg InsertFenceParams) (int64
 	return result.RowsAffected()
 }
 
+const insertPolicyRule = `-- name: InsertPolicyRule :execrows
+INSERT INTO sandbox_policy_rules(sandbox_id,kind,position,value) VALUES(?,?,?,?)
+`
+
+type InsertPolicyRuleParams struct {
+	SandboxID string
+	Kind      string
+	Position  int64
+	Value     string
+}
+
+func (q *Queries) InsertPolicyRule(ctx context.Context, arg InsertPolicyRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPolicyRule,
+		arg.SandboxID,
+		arg.Kind,
+		arg.Position,
+		arg.Value,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertSandbox = `-- name: InsertSandbox :execrows
-INSERT INTO sandboxes(id,tenant,state,body) VALUES(?,?,?,?)
+INSERT INTO sandboxes(id,tenant,state,template_id,vcpus,memory_mib,disk_mib,creation_epoch,created_at,provision_source,last_error,operation_id,vm_id,instance,snapshot_id,source_operation_id,slot_operation_id,slot_input_hash)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `
 
 type InsertSandboxParams struct {
-	ID     string
-	Tenant string
-	State  string
-	Body   []byte
+	ID                string
+	Tenant            string
+	State             string
+	TemplateID        string
+	Vcpus             int64
+	MemoryMib         int64
+	DiskMib           int64
+	CreationEpoch     string
+	CreatedAt         string
+	ProvisionSource   string
+	LastError         string
+	OperationID       sql.NullString
+	VmID              string
+	Instance          string
+	SnapshotID        string
+	SourceOperationID sql.NullString
+	SlotOperationID   sql.NullString
+	SlotInputHash     sql.NullString
 }
 
 func (q *Queries) InsertSandbox(ctx context.Context, arg InsertSandboxParams) (int64, error) {
@@ -231,7 +404,21 @@ func (q *Queries) InsertSandbox(ctx context.Context, arg InsertSandboxParams) (i
 		arg.ID,
 		arg.Tenant,
 		arg.State,
-		arg.Body,
+		arg.TemplateID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.CreationEpoch,
+		arg.CreatedAt,
+		arg.ProvisionSource,
+		arg.LastError,
+		arg.OperationID,
+		arg.VmID,
+		arg.Instance,
+		arg.SnapshotID,
+		arg.SourceOperationID,
+		arg.SlotOperationID,
+		arg.SlotInputHash,
 	)
 	if err != nil {
 		return 0, err
@@ -240,16 +427,87 @@ func (q *Queries) InsertSandbox(ctx context.Context, arg InsertSandboxParams) (i
 }
 
 const insertSandboxSettings = `-- name: InsertSandboxSettings :execrows
-INSERT INTO sandbox_settings(sandbox_id,body) VALUES(?,?)
+INSERT INTO sandbox_settings(sandbox_id,generation,instance,active_epoch,ttl_seconds,on_expire,auto_renew,deadline,paused_until,policy_mode,max_connections,env_present) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 `
 
 type InsertSandboxSettingsParams struct {
-	SandboxID string
-	Body      []byte
+	SandboxID      string
+	Generation     string
+	Instance       string
+	ActiveEpoch    string
+	TtlSeconds     int64
+	OnExpire       string
+	AutoRenew      bool
+	Deadline       string
+	PausedUntil    string
+	PolicyMode     string
+	MaxConnections int64
+	EnvPresent     bool
 }
 
 func (q *Queries) InsertSandboxSettings(ctx context.Context, arg InsertSandboxSettingsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSandboxSettings, arg.SandboxID, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertSandboxSettings,
+		arg.SandboxID,
+		arg.Generation,
+		arg.Instance,
+		arg.ActiveEpoch,
+		arg.TtlSeconds,
+		arg.OnExpire,
+		arg.AutoRenew,
+		arg.Deadline,
+		arg.PausedUntil,
+		arg.PolicyMode,
+		arg.MaxConnections,
+		arg.EnvPresent,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertSecretDescriptor = `-- name: InsertSecretDescriptor :execrows
+INSERT INTO sandbox_secret_descriptors(sandbox_id,name,header,placeholder) VALUES(?,?,?,?)
+`
+
+type InsertSecretDescriptorParams struct {
+	SandboxID   string
+	Name        string
+	Header      string
+	Placeholder string
+}
+
+func (q *Queries) InsertSecretDescriptor(ctx context.Context, arg InsertSecretDescriptorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertSecretDescriptor,
+		arg.SandboxID,
+		arg.Name,
+		arg.Header,
+		arg.Placeholder,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertSecretHost = `-- name: InsertSecretHost :execrows
+INSERT INTO sandbox_secret_hosts(sandbox_id,name,position,host) VALUES(?,?,?,?)
+`
+
+type InsertSecretHostParams struct {
+	SandboxID string
+	Name      string
+	Position  int64
+	Host      string
+}
+
+func (q *Queries) InsertSecretHost(ctx context.Context, arg InsertSecretHostParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertSecretHost,
+		arg.SandboxID,
+		arg.Name,
+		arg.Position,
+		arg.Host,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -289,22 +547,33 @@ func (q *Queries) ListCapabilitySubjects(ctx context.Context, includeRetired boo
 }
 
 const listCheckpoints = `-- name: ListCheckpoints :many
-SELECT body FROM checkpoint_bindings ORDER BY id
+SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings ORDER BY id
 `
 
-func (q *Queries) ListCheckpoints(ctx context.Context) ([][]byte, error) {
+func (q *Queries) ListCheckpoints(ctx context.Context) ([]CheckpointBinding, error) {
 	rows, err := q.db.QueryContext(ctx, listCheckpoints)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items [][]byte
+	var items []CheckpointBinding
 	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
+		var i CheckpointBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.Tenant,
+			&i.SnapshotID,
+			&i.OperationID,
+			&i.SandboxID,
+			&i.TemplateID,
+			&i.Vcpus,
+			&i.MemoryMib,
+			&i.DiskMib,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, body)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -316,14 +585,13 @@ func (q *Queries) ListCheckpoints(ctx context.Context) ([][]byte, error) {
 }
 
 const listLeaseCandidates = `-- name: ListLeaseCandidates :many
-SELECT s.id,s.tenant,s.state,c.body FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state IN ('running','paused') ORDER BY s.id
+SELECT s.id,s.tenant,s.state FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state IN ('running','paused') ORDER BY s.id
 `
 
 type ListLeaseCandidatesRow struct {
 	ID     string
 	Tenant string
 	State  string
-	Body   []byte
 }
 
 func (q *Queries) ListLeaseCandidates(ctx context.Context) ([]ListLeaseCandidatesRow, error) {
@@ -335,12 +603,7 @@ func (q *Queries) ListLeaseCandidates(ctx context.Context) ([]ListLeaseCandidate
 	var items []ListLeaseCandidatesRow
 	for rows.Next() {
 		var i ListLeaseCandidatesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Tenant,
-			&i.State,
-			&i.Body,
-		); err != nil {
+		if err := rows.Scan(&i.ID, &i.Tenant, &i.State); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -419,40 +682,216 @@ func (q *Queries) ListSandboxIDs(ctx context.Context) ([]ListSandboxIDsRow, erro
 }
 
 const publishRunningSandbox = `-- name: PublishRunningSandbox :execrows
-UPDATE sandboxes SET state='running',body=? WHERE id=? AND tenant=? AND state IN ('provisioning','running')
+UPDATE sandboxes SET state='running', last_error='', operation_id=NULL WHERE id=? AND tenant=? AND state IN ('provisioning','running') AND source_operation_id=? AND instance=?
 `
 
 type PublishRunningSandboxParams struct {
-	Body   []byte
-	ID     string
-	Tenant string
+	ID                string
+	Tenant            string
+	SourceOperationID sql.NullString
+	Instance          string
 }
 
 func (q *Queries) PublishRunningSandbox(ctx context.Context, arg PublishRunningSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, publishRunningSandbox, arg.Body, arg.ID, arg.Tenant)
+	result, err := q.db.ExecContext(ctx, publishRunningSandbox,
+		arg.ID,
+		arg.Tenant,
+		arg.SourceOperationID,
+		arg.Instance,
+	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const replacePausedBody = `-- name: ReplacePausedBody :execrows
-UPDATE sandboxes SET body=?1 WHERE id=?2 AND tenant=?3 AND state='paused' AND body=?4
+const publishSandboxInstance = `-- name: PublishSandboxInstance :execrows
+UPDATE sandboxes SET instance=? WHERE id=? AND tenant=? AND state='provisioning' AND source_operation_id=? AND vm_id=?
 `
 
-type ReplacePausedBodyParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
+type PublishSandboxInstanceParams struct {
+	Instance          string
+	ID                string
+	Tenant            string
+	SourceOperationID sql.NullString
+	VmID              string
 }
 
-func (q *Queries) ReplacePausedBody(ctx context.Context, arg ReplacePausedBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replacePausedBody,
-		arg.NextBody,
+func (q *Queries) PublishSandboxInstance(ctx context.Context, arg PublishSandboxInstanceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, publishSandboxInstance,
+		arg.Instance,
 		arg.ID,
 		arg.Tenant,
-		arg.PreviousBody,
+		arg.SourceOperationID,
+		arg.VmID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const readEnvironment = `-- name: ReadEnvironment :many
+SELECT name,value FROM sandbox_environment WHERE sandbox_id=? ORDER BY name
+`
+
+type ReadEnvironmentRow struct {
+	Name  string
+	Value string
+}
+
+func (q *Queries) ReadEnvironment(ctx context.Context, sandboxID string) ([]ReadEnvironmentRow, error) {
+	rows, err := q.db.QueryContext(ctx, readEnvironment, sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadEnvironmentRow
+	for rows.Next() {
+		var i ReadEnvironmentRow
+		if err := rows.Scan(&i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readPolicyRules = `-- name: ReadPolicyRules :many
+SELECT kind,value FROM sandbox_policy_rules WHERE sandbox_id=? ORDER BY kind,position
+`
+
+type ReadPolicyRulesRow struct {
+	Kind  string
+	Value string
+}
+
+func (q *Queries) ReadPolicyRules(ctx context.Context, sandboxID string) ([]ReadPolicyRulesRow, error) {
+	rows, err := q.db.QueryContext(ctx, readPolicyRules, sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadPolicyRulesRow
+	for rows.Next() {
+		var i ReadPolicyRulesRow
+		if err := rows.Scan(&i.Kind, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readSecretDescriptors = `-- name: ReadSecretDescriptors :many
+SELECT d.name,d.header,d.placeholder,h.host FROM sandbox_secret_descriptors d
+LEFT JOIN sandbox_secret_hosts h ON h.sandbox_id=d.sandbox_id AND h.name=d.name
+WHERE d.sandbox_id=? ORDER BY d.name,h.position
+`
+
+type ReadSecretDescriptorsRow struct {
+	Name        string
+	Header      string
+	Placeholder string
+	Host        sql.NullString
+}
+
+func (q *Queries) ReadSecretDescriptors(ctx context.Context, sandboxID string) ([]ReadSecretDescriptorsRow, error) {
+	rows, err := q.db.QueryContext(ctx, readSecretDescriptors, sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadSecretDescriptorsRow
+	for rows.Next() {
+		var i ReadSecretDescriptorsRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.Header,
+			&i.Placeholder,
+			&i.Host,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const replaceSandbox = `-- name: ReplaceSandbox :execrows
+UPDATE sandboxes SET state=?1,template_id=?2,vcpus=?3,memory_mib=?4,disk_mib=?5,
+ creation_epoch=?6,created_at=?7,provision_source=?8,last_error=?9,
+ operation_id=?10,vm_id=?11,instance=?12,snapshot_id=?13,source_operation_id=?14,slot_operation_id=?15,slot_input_hash=?16
+WHERE id=?17 AND tenant=?18 AND state=?19 AND source_operation_id IS ?20 AND instance=?21 AND operation_id IS ?22
+`
+
+type ReplaceSandboxParams struct {
+	State             string
+	TemplateID        string
+	Vcpus             int64
+	MemoryMib         int64
+	DiskMib           int64
+	CreationEpoch     string
+	CreatedAt         string
+	ProvisionSource   string
+	LastError         string
+	OperationID       sql.NullString
+	VmID              string
+	Instance          string
+	SnapshotID        string
+	SourceOperationID sql.NullString
+	SlotOperationID   sql.NullString
+	SlotInputHash     sql.NullString
+	ID                string
+	Tenant            string
+	PreviousState     string
+	PreviousSource    sql.NullString
+	PreviousInstance  string
+	PreviousOperation sql.NullString
+}
+
+func (q *Queries) ReplaceSandbox(ctx context.Context, arg ReplaceSandboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceSandbox,
+		arg.State,
+		arg.TemplateID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.CreationEpoch,
+		arg.CreatedAt,
+		arg.ProvisionSource,
+		arg.LastError,
+		arg.OperationID,
+		arg.VmID,
+		arg.Instance,
+		arg.SnapshotID,
+		arg.SourceOperationID,
+		arg.SlotOperationID,
+		arg.SlotInputHash,
+		arg.ID,
+		arg.Tenant,
+		arg.PreviousState,
+		arg.PreviousSource,
+		arg.PreviousInstance,
+		arg.PreviousOperation,
 	)
 	if err != nil {
 		return 0, err
@@ -461,90 +900,38 @@ func (q *Queries) ReplacePausedBody(ctx context.Context, arg ReplacePausedBodyPa
 }
 
 const replaceSettings = `-- name: ReplaceSettings :execrows
-UPDATE sandbox_settings SET body=?1 WHERE sandbox_id=?2 AND body=?3
+UPDATE sandbox_settings SET generation=?,instance=?,active_epoch=?,ttl_seconds=?,on_expire=?,auto_renew=?,deadline=?,paused_until=?,policy_mode=?,max_connections=?,env_present=? WHERE sandbox_id=?
 `
 
 type ReplaceSettingsParams struct {
-	NextBody     []byte
-	SandboxID    string
-	PreviousBody []byte
+	Generation     string
+	Instance       string
+	ActiveEpoch    string
+	TtlSeconds     int64
+	OnExpire       string
+	AutoRenew      bool
+	Deadline       string
+	PausedUntil    string
+	PolicyMode     string
+	MaxConnections int64
+	EnvPresent     bool
+	SandboxID      string
 }
 
 func (q *Queries) ReplaceSettings(ctx context.Context, arg ReplaceSettingsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceSettings, arg.NextBody, arg.SandboxID, arg.PreviousBody)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const restorePausedSandbox = `-- name: RestorePausedSandbox :execrows
-UPDATE sandboxes SET state='paused',body=?1 WHERE id=?2 AND tenant=?3 AND state='terminated' AND body=?4
-`
-
-type RestorePausedSandboxParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
-}
-
-func (q *Queries) RestorePausedSandbox(ctx context.Context, arg RestorePausedSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, restorePausedSandbox,
-		arg.NextBody,
-		arg.ID,
-		arg.Tenant,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const retireTerminatedBody = `-- name: RetireTerminatedBody :execrows
-UPDATE sandboxes SET body=?1 WHERE id=?2 AND tenant=?3 AND state='terminated' AND body=?4
-`
-
-type RetireTerminatedBodyParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
-}
-
-func (q *Queries) RetireTerminatedBody(ctx context.Context, arg RetireTerminatedBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, retireTerminatedBody,
-		arg.NextBody,
-		arg.ID,
-		arg.Tenant,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const reuseSandboxForProvision = `-- name: ReuseSandboxForProvision :execrows
-UPDATE sandboxes SET state='provisioning',body=?1 WHERE id=?2 AND tenant=?3 AND state=?4 AND body=?5
-`
-
-type ReuseSandboxForProvisionParams struct {
-	NewBody       []byte
-	ID            string
-	Tenant        string
-	PreviousState string
-	PreviousBody  []byte
-}
-
-func (q *Queries) ReuseSandboxForProvision(ctx context.Context, arg ReuseSandboxForProvisionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reuseSandboxForProvision,
-		arg.NewBody,
-		arg.ID,
-		arg.Tenant,
-		arg.PreviousState,
-		arg.PreviousBody,
+	result, err := q.db.ExecContext(ctx, replaceSettings,
+		arg.Generation,
+		arg.Instance,
+		arg.ActiveEpoch,
+		arg.TtlSeconds,
+		arg.OnExpire,
+		arg.AutoRenew,
+		arg.Deadline,
+		arg.PausedUntil,
+		arg.PolicyMode,
+		arg.MaxConnections,
+		arg.EnvPresent,
+		arg.SandboxID,
 	)
 	if err != nil {
 		return 0, err
@@ -563,102 +950,52 @@ func (q *Queries) SandboxOwner(ctx context.Context, id string) (string, error) {
 	return tenant, err
 }
 
+const setSandboxError = `-- name: SetSandboxError :execrows
+UPDATE sandboxes SET last_error=? WHERE id=? AND tenant=? AND source_operation_id=? AND instance=?
+`
+
+type SetSandboxErrorParams struct {
+	LastError         string
+	ID                string
+	Tenant            string
+	SourceOperationID sql.NullString
+	Instance          string
+}
+
+func (q *Queries) SetSandboxError(ctx context.Context, arg SetSandboxErrorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSandboxError,
+		arg.LastError,
+		arg.ID,
+		arg.Tenant,
+		arg.SourceOperationID,
+		arg.Instance,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const terminateLiveSandbox = `-- name: TerminateLiveSandbox :execrows
-UPDATE sandboxes SET state='terminated',body=? WHERE id=? AND tenant=? AND state!='terminated'
+UPDATE sandboxes SET state='terminated',operation_id=?1 WHERE id=?2 AND tenant=?3 AND state!='terminated' AND source_operation_id IS ?4 AND instance=?5
 `
 
 type TerminateLiveSandboxParams struct {
-	Body   []byte
-	ID     string
-	Tenant string
+	OperationID       sql.NullString
+	ID                string
+	Tenant            string
+	SourceOperationID sql.NullString
+	Instance          string
 }
 
 func (q *Queries) TerminateLiveSandbox(ctx context.Context, arg TerminateLiveSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, terminateLiveSandbox, arg.Body, arg.ID, arg.Tenant)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const terminatePausedSandbox = `-- name: TerminatePausedSandbox :execrows
-UPDATE sandboxes SET state='terminated',body=?1 WHERE id=?2 AND tenant=?3 AND state='paused' AND body=?4
-`
-
-type TerminatePausedSandboxParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
-}
-
-func (q *Queries) TerminatePausedSandbox(ctx context.Context, arg TerminatePausedSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, terminatePausedSandbox,
-		arg.NextBody,
+	result, err := q.db.ExecContext(ctx, terminateLiveSandbox,
+		arg.OperationID,
 		arg.ID,
 		arg.Tenant,
-		arg.PreviousBody,
+		arg.SourceOperationID,
+		arg.Instance,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const terminateUnallocatedSandbox = `-- name: TerminateUnallocatedSandbox :execrows
-UPDATE sandboxes SET state='terminated',body=?1 WHERE id=?2 AND tenant=?3 AND state='provisioning' AND body=?4
-`
-
-type TerminateUnallocatedSandboxParams struct {
-	NextBody     []byte
-	ID           string
-	Tenant       string
-	PreviousBody []byte
-}
-
-func (q *Queries) TerminateUnallocatedSandbox(ctx context.Context, arg TerminateUnallocatedSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, terminateUnallocatedSandbox,
-		arg.NextBody,
-		arg.ID,
-		arg.Tenant,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateProvisioningSandboxBody = `-- name: UpdateProvisioningSandboxBody :execrows
-UPDATE sandboxes SET body=? WHERE id=? AND tenant=? AND state='provisioning'
-`
-
-type UpdateProvisioningSandboxBodyParams struct {
-	Body   []byte
-	ID     string
-	Tenant string
-}
-
-func (q *Queries) UpdateProvisioningSandboxBody(ctx context.Context, arg UpdateProvisioningSandboxBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateProvisioningSandboxBody, arg.Body, arg.ID, arg.Tenant)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateSandboxBody = `-- name: UpdateSandboxBody :execrows
-UPDATE sandboxes SET body=? WHERE id=? AND tenant=?
-`
-
-type UpdateSandboxBodyParams struct {
-	Body   []byte
-	ID     string
-	Tenant string
-}
-
-func (q *Queries) UpdateSandboxBody(ctx context.Context, arg UpdateSandboxBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateSandboxBody, arg.Body, arg.ID, arg.Tenant)
 	if err != nil {
 		return 0, err
 	}

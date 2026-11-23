@@ -43,11 +43,10 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 	}
 	unlock := c.nodeIdempotencyLocks.Lock(c.nodeID, key)
 	defer unlock()
-	request := operation.Encode(struct {
-		Action  string
-		Options types.GCOptions
-	}{"gc", options})
-	hash := operation.Digest(request)
+	request := operation.Request{
+		Action: "gc",
+		GC:     &options,
+	}
 	if !options.DryRun {
 		if key == "" || len(key) > 256 {
 			return empty, fmt.Errorf("%w: GC mutation requires key", errs.ErrInvalid)
@@ -55,7 +54,7 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 		if cached, found, err := operation.New(c.store.Database).Cached(ctx, operation.Scope{
 			Kind: "node",
 			ID:   c.nodeID,
-		}, key, hash); found || err != nil {
+		}, key, request); found || err != nil {
 			if err != nil {
 				return empty, err
 			}
@@ -141,25 +140,23 @@ func (c *Collector) Collect(ctx context.Context, principal authorization.Princip
 				ScopeKind: "node",
 				ScopeID:   c.nodeID,
 				Key:       key,
-				Hash:      hash,
 				Request:   request,
 				Status:    "pending",
-				Body:      operation.Encode(accepted.Result),
+				Result:    accepted.Result,
 			})
 			if err == nil {
-				err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+				err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 					OperationID:         accepted.ID,
 					StepKey:             "gc",
 					Action:              "gc",
-					InputHash:           operation.Digest(payload),
 					Input:               payload,
 					CandidateResourceID: input.StoreID,
-					ExpectedInstance:    "",
 					Status:              "pending",
-					Body: operation.Encode(progress{
-						Report: report,
-					}),
-				}))
+					Phase:               "admitted",
+				})
+				if err == nil {
+					err = store.RequireOne(dbgen.New(tx).InsertGCProgress(ctx, accepted.ID))
+				}
 			}
 			if err == nil {
 				err = c.fault("gc_admission_before_commit")

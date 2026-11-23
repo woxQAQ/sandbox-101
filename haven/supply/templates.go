@@ -3,7 +3,6 @@ package supply
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -50,22 +49,33 @@ func (tc *TemplateCatalog) Fresh(ctx context.Context, tenant, id string) (Templa
 
 func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (TemplateRecord, error) {
 	var record TemplateRecord
-	published, err := tc.queries.GetOwnedTemplate(ctx, dbgen.GetOwnedTemplateParams{
-		ID:     id,
-		Tenant: tenant,
+	err := store.ReadSnapshot(ctx, tc.database, func(tx *sql.Tx) error {
+		var err error
+		record, err = NewTemplateCatalog(tx).readOwned(ctx, tenant, id)
+		return err
 	})
+	return record, err
+}
+
+func (tc *TemplateCatalog) readOwned(ctx context.Context, tenant, id string) (TemplateRecord, error) {
+	var record TemplateRecord
+	version, err := tc.queries.GetTemplate(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, fmt.Errorf("%w: template not found", errs.ErrNotFound)
 	}
 	if err != nil {
 		return record, err
 	}
-	if err = json.Unmarshal(published.Body, &record); err != nil {
+	record, err = loadTemplateVersion(ctx, tc.database, version)
+	if err != nil {
 		return record, err
+	}
+	if record.TenantID != tenant {
+		return TemplateRecord{}, fmt.Errorf("%w: template not found", errs.ErrNotFound)
 	}
 	owner, err := tc.queries.GetPublisher(ctx, dbgen.GetPublisherParams{
 		TemplateID:           id,
-		PublishedOperationID: published.PublishedOperationID,
+		PublishedOperationID: version,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return record, fmt.Errorf("%w: template permanent ownership proof is missing", errs.ErrManualRecovery)
@@ -73,7 +83,7 @@ func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templa
 	if err != nil {
 		return record, err
 	}
-	proof, err := LoadSupply(ctx, tc.database, published.PublishedOperationID)
+	proof, err := LoadSupply(ctx, tc.database, version)
 	if err != nil {
 		return record, fmt.Errorf("%w: template immutable publication step is missing", errs.ErrManualRecovery)
 	}
@@ -83,7 +93,7 @@ func (tc *TemplateCatalog) Owned(ctx context.Context, tenant, id string) (Templa
 	expected := proof.Input.Template
 	expected.State = "ready"
 	expected.SnapshotID = proof.State.SnapshotID
-	if record.ID != id || record.TenantID != tenant || record.Version != published.PublishedOperationID || owner.Status != "succeeded" || proof.Status != "succeeded" || proof.State.Phase != "complete" || !reflect.DeepEqual(record, expected) {
+	if record.ID != id || record.TenantID != tenant || record.Version != version || owner.Status != "succeeded" || proof.Status != "succeeded" || proof.State.Phase != "complete" || !reflect.DeepEqual(record, expected) {
 		return record, fmt.Errorf("%w: template immutable publication differs from catalog", errs.ErrManualRecovery)
 	}
 	return record, nil
@@ -293,10 +303,7 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, i
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{input.Command.Action, input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
@@ -304,29 +311,18 @@ func (s *Supply) admitTemplatePut(ctx context.Context, parent operation.State, i
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(parent.Result),
+		Result:    parent.Result,
 	}); err != nil {
 		return operation.State{}, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
 		return operation.State{}, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         parent.ID,
-		StepKey:             "supply",
-		Action:              "template_put",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
-		CandidateResourceID: input.Template.ID,
-		ExpectedInstance:    "",
-		Status:              "pending",
-		Body: operation.Encode(SupplyState{
-			Phase: "admitted",
-		}),
-	})); err != nil {
+	if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "pending", payload, SupplyState{
+		Phase: "admitted",
+	}); err != nil {
 		return operation.State{}, err
 	}
 	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
@@ -513,18 +509,14 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	if operation.Terminal(parent.Status) || parent.ScopeKind != "tenant" || parent.ScopeID != input.RequestTenantID {
 		return operation.Result{}, fmt.Errorf("template result authority changed")
 	}
-	var result operation.Result
-	if err = json.Unmarshal(parent.Body, &result); err != nil {
-		return operation.Result{}, err
-	}
+	result := parent.Result
 	result.TemplateID = desired.ID
 	result.SnapshotID = snapshot
-	completed := operation.Encode(SupplyState{
+	completed := SupplyState{
 		FinishedAt: time.Now().UTC(),
 		Phase:      "complete",
 		SnapshotID: snapshot,
-	})
-	previousState := operation.Encode(step.State)
+	}
 	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "image",
 		ID:         desired.Config.Image,
@@ -533,13 +525,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 	}); err != nil {
 		return operation.Result{}, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(ctx, dbgen.CompleteUnchangedStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "supply",
-		InputHash:    step.Hash,
-		PreviousBody: previousState,
-		NewBody:      completed,
-	})); err != nil {
+	if err = transitionSupply(ctx, tx, step, completed, "succeeded"); err != nil {
 		return operation.Result{}, err
 	}
 	return result, nil

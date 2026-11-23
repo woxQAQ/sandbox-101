@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -161,18 +160,30 @@ type ProvisionIntent struct {
 // sandbox and quota writes. It borrows the existing admission transaction.
 func AdmitProvisionIntent(ctx context.Context, tx *sql.Tx, intent ProvisionIntent) error {
 	payload := operation.Encode(intent.Input)
-	return store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err := store.RequireOne(dbgen.New(tx).InsertResourceStep(ctx, dbgen.InsertResourceStepParams{
 		OperationID:         intent.OperationID,
-		StepKey:             "resource",
 		Action:              intent.Action,
 		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: intent.Input.Resource.VMID,
 		ExpectedInstance:    intent.ExpectedInstance,
-		Status:              "pending",
-		Body: operation.Encode(ResourceState{
-			Phase: "admitted",
-		}),
+	})); err != nil {
+		return err
+	}
+	var snapshot string
+	if intent.Input.Restore != nil {
+		snapshot = intent.Input.Restore.Snapshot.ID
+	}
+	return store.RequireOne(dbgen.New(tx).InsertResourceProgress(ctx, dbgen.InsertResourceProgressParams{
+		OperationID: intent.OperationID,
+		RestoreSnapshotID: sql.NullString{
+			String: snapshot,
+			Valid:  snapshot != "",
+		},
+		BackingHolder: sql.NullString{
+			String: intent.Input.BackingHolder,
+			Valid:  intent.Input.BackingHolder != "",
+		},
 	}))
 }
 
@@ -198,13 +209,7 @@ func (p *Provisioning) markPhase(step *ResourceStep, phase string) error {
 	if _, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(p.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(p.ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if (step.Action == "cold_start" || step.Action == "clone" || step.Action == "restore") && (phase == "prepared" || phase == "launch_intent") {
@@ -224,20 +229,7 @@ func (p *Provisioning) markPhase(step *ResourceStep, phase string) error {
 		}
 	}
 	if step.Action == "cold_start" && phase == "prepared" {
-		previous := RetainedVersion{
-			Resource:     step.Input.Resource,
-			DiskIdentity: step.State.DiskIdentity,
-		}
-		version := RetainedVersion{
-			Resource:     step.Input.Resource,
-			DiskIdentity: next.DiskIdentity,
-		}
-		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
-			VmID:         step.Candidate,
-			OperationID:  step.OperationID,
-			PreviousBody: operation.Encode(previous),
-			NewBody:      operation.Encode(version),
-		})); err != nil {
+		if err = recordVersionDisk(p.ctx, tx, step, next.DiskIdentity); err != nil {
 			return err
 		}
 	}
@@ -285,20 +277,11 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 	if err = p.handoff.BlockActivation(p.ctx, tx, step.OperationID); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(p.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-		InputHash:   step.Hash,
-		Body:        operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(p.ctx, tx, current, next, "failed"); err != nil {
 		return errors.Join(cause, err)
 	}
-	var result operation.Result
-	status, body, err := operation.New(tx).ResultState(p.ctx, step.OperationID)
+	status, result, err := operation.New(tx).ResultState(p.ctx, step.OperationID)
 	if err != nil {
-		return errors.Join(cause, err)
-	}
-	if err = json.Unmarshal(body, &result); err != nil {
 		return errors.Join(cause, err)
 	}
 	var outcomes []operation.Outcome
@@ -315,7 +298,8 @@ func (p *Provisioning) failStep(step ResourceStep, cause error) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "vm",
 		ResourceID:   step.Candidate,
-		Body:         operation.Encode(step.Input),
+		StepKey:      step.Key,
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return errors.Join(cause, err)
 	}
@@ -352,7 +336,6 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	if err != nil {
 		return err
 	}
-	currentMachine.Verified, currentMachine.AgentReady, currentMachine.Observation = true, true, &observation
 	r := currentMachine.Resource
 	if err = store.RequireOne(dbgen.New(tx).CompleteStart(p.ctx, dbgen.CompleteStartParams{
 		ID:              r.VMID,
@@ -361,15 +344,16 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 			String: step.OperationID,
 			Valid:  true,
 		},
-		Body: operation.Encode(currentMachine),
+		ObservationHash: observationHash(&observation),
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceInstanceBody(p.ctx, dbgen.ReplaceInstanceBodyParams{
-		ID:          r.Instance,
-		VmID:        r.VMID,
-		OperationID: step.OperationID,
-		Body:        operation.Encode(currentMachine),
+	if err = store.RequireOne(dbgen.New(tx).PublishInstanceObservation(p.ctx, dbgen.PublishInstanceObservationParams{
+		ID:              r.Instance,
+		VmID:            r.VMID,
+		OperationID:     step.OperationID,
+		ResourceHash:    operation.Digest(operation.Encode(r)),
+		ObservationHash: observationHash(&observation),
 	})); err != nil {
 		return err
 	}
@@ -438,16 +422,11 @@ func (p *Provisioning) completeCold(step ResourceStep, observation loom.Observat
 	}
 	next := current.State
 	next.Phase, next.Witness, next.Observation = "complete", r.Instance, &observation
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(p.ctx, dbgen.CompleteRunningStepByInputParams{
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-		InputHash:   step.Hash,
-		Body:        operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(p.ctx, tx, current, next, "succeeded"); err != nil {
 		return err
 	}
 	result.ResourceReady = true
-	if err = operation.New(tx).RunResult(p.ctx, step.OperationID, operation.Encode(result)); err != nil {
+	if err = operation.New(tx).RunResult(p.ctx, step.OperationID, result); err != nil {
 		return err
 	}
 	if err = p.fault("completion_before_commit"); err != nil {

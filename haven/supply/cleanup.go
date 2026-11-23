@@ -148,15 +148,16 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 	}
 	releaseKey := sc.nodeIdempotencyLocks.Lock(sc.nodeID, key)
 	defer releaseKey()
-	frozen := operation.Encode(struct {
-		Action  string
-		Request SupplyCleanupRequest
-	}{"supply_cleanup", request})
-	hash := operation.Digest(frozen)
+	frozen := operation.Request{
+		Action: "supply_cleanup",
+		Resource: &operation.ResourceRequest{
+			SourceOperationID: request.OperationID,
+		},
+	}
 	if cached, found, err := operation.New(sc.store.Database).Cached(ctx, operation.Scope{
 		Kind: "node",
 		ID:   sc.nodeID,
-	}, key, hash); found || err != nil {
+	}, key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			sc.dispatch(cached.ID)
 		}
@@ -271,14 +272,7 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 			return empty, fmt.Errorf("%w: supply pool responsibility was selected or changed", errs.ErrConflict)
 		}
 		if status == "ready" {
-			if _, _, err = VerifyReadyWarm(sc.proofs, ctx, tx, original.OperationID); err != nil {
-				return empty, err
-			}
-			if err = store.RequireOne(dbgen.New(tx).RemoveWarm(ctx, dbgen.RemoveWarmParams{
-				VmID:       reservation.VMID,
-				TemplateID: reservation.Template.ID,
-				SnapshotID: reservation.Template.SnapshotID,
-			})); err != nil {
+			if _, _, err = VerifyReadyWarm(ctx, sc.proofs, tx, original.OperationID); err != nil {
 				return empty, err
 			}
 			if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
@@ -290,8 +284,9 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 				return empty, err
 			}
 			if err = store.RequireOne(dbgen.New(tx).MarkReadyCleanup(ctx, dbgen.MarkReadyCleanupParams{
-				OperationID: original.OperationID,
-				Body:        operation.Encode(reservation),
+				OperationID:     original.OperationID,
+				Instance:        reservation.Instance,
+				SourceInputHash: reservation.Source.InputHash,
 			})); err != nil {
 				return empty, err
 			}
@@ -314,24 +309,22 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 		ScopeKind: "node",
 		ScopeID:   sc.nodeID,
 		Key:       key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "supply_cleanup",
 		Action:              "supply_cleanup",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: source.Candidate,
 		ExpectedInstance:    source.Input.Resource.Instance,
 		Status:              "pending",
-		Body:                operation.Encode("admitted"),
-	})); err != nil {
+		Phase:               "admitted",
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
@@ -339,7 +332,8 @@ func (sc *SupplyCleanup) AdmitSupplyCleanup(ctx context.Context, principal autho
 		OperationID:  accepted.ID,
 		ResourceKind: "supply_cleanup",
 		ResourceID:   source.Candidate,
-		Body:         payload,
+		StepKey:      "supply_cleanup",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}
@@ -608,9 +602,10 @@ func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
 			return fmt.Errorf("supply cleanup pool slot changed")
 		}
 		if err = store.RequireOne(dbgen.New(tx).DeleteReservation(sc.ctx, dbgen.DeleteReservationParams{
-			OperationID: original.OperationID,
-			Status:      "cleanup",
-			Body:        operation.Encode(reservation),
+			OperationID:     original.OperationID,
+			Status:          "cleanup",
+			Instance:        reservation.Instance,
+			SourceInputHash: reservation.Source.InputHash,
 		})); err != nil {
 			return err
 		}
@@ -648,13 +643,15 @@ func (sc *SupplyCleanup) completeSupplyCleanup(step SupplyCleanupStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(sc.ctx, dbgen.CompleteUnchangedStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "supply_cleanup",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NewBody:      operation.Encode("complete"),
-	})); err != nil {
+	if err = operation.AdvancePhase(sc.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "supply_cleanup",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      "complete",
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(sc.ctx, step.OperationID); err != nil {

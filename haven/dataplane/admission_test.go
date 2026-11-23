@@ -17,9 +17,7 @@ import (
 	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
-	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
-	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/types"
 )
@@ -219,34 +217,15 @@ func TestHavenDataAdmissionRepeatsFinalGuard(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "configuration_provenance":
-				settings, err := sandbox.LoadSettings(ctx, service.State.Database(), sandboxView.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				settings.Env["UNPUBLISHED"] = "private-fixture"
-				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), sandboxView.ID); err != nil {
+				if _, err = service.State.Database().Exec("INSERT INTO sandbox_environment(sandbox_id,name,value) VALUES(?,'UNPUBLISHED','private-fixture')", sandboxView.ID); err != nil {
 					t.Fatal(err)
 				}
 			case "unverified_instance":
-				source, err := service.Catalog.ResourceForData(ctx, sandboxView)
-				if err != nil {
-					t.Fatal(err)
-				}
-				vm, _, _, err := machine.LoadVM(ctx, service.State.Database(), source)
-				if err != nil {
-					t.Fatal(err)
-				}
-				vm.Verified = false
-				if _, err = service.State.Database().Exec("UPDATE vms SET body=? WHERE id=?", operation.Encode(vm), sandboxView.VMID); err != nil {
+				if _, err = service.State.Database().Exec("UPDATE vms SET verified=0 WHERE id=?", sandboxView.VMID); err != nil {
 					t.Fatal(err)
 				}
 			case "deadline":
-				settings, err := sandbox.LoadSettings(ctx, service.State.Database(), sandboxView.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				settings.Deadline = time.Now().Add(-time.Second)
-				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), sandboxView.ID); err != nil {
+				if _, err = service.State.Database().Exec("UPDATE sandbox_settings SET deadline=? WHERE sandbox_id=?", time.Now().Add(-time.Second).Format(time.RFC3339Nano), sandboxView.ID); err != nil {
 					t.Fatal(err)
 				}
 			case "shutdown":

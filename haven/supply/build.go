@@ -2,7 +2,6 @@ package supply
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -17,13 +16,7 @@ import (
 )
 
 func (s *Supply) setSupplyState(step *SupplyStep, next SupplyState) error {
-	if err := store.RequireOne(dbgen.New(s.store.Database).AdvanceLiveStep(s.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "supply",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err := transitionSupply(s.ctx, s.store.Database, *step, next, "running"); err != nil {
 		return err
 	}
 	step.State = next
@@ -285,12 +278,8 @@ func (s *Supply) failSupply(step SupplyStep) error {
 	if pending != 0 {
 		return nil
 	}
-	body, err := operations.LiveBody(s.ctx, step.OperationID)
+	result, err := operations.LiveResult(s.ctx, step.OperationID)
 	if err != nil {
-		return err
-	}
-	var result operation.Result
-	if err = json.Unmarshal(body, &result); err != nil {
 		return err
 	}
 	result.Error = "supply workflow failed; owned resources retained"
@@ -298,12 +287,7 @@ func (s *Supply) failSupply(step SupplyStep) error {
 	next.Phase = "failed"
 	next.Error = result.Error
 	next.FinishedAt = time.Now().UTC()
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(s.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "supply",
-		InputHash:   step.Hash,
-		Body:        operation.Encode(next),
-	})); err != nil {
+	if err = transitionSupply(s.ctx, tx, current, next, "failed"); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(s.ctx, dbgen.InsertCleanupIntentParams{
@@ -311,7 +295,8 @@ func (s *Supply) failSupply(step SupplyStep) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "supply",
 		ResourceID:   step.Input.SandboxID,
-		Body:         operation.Encode(step.Input),
+		StepKey:      "supply",
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}

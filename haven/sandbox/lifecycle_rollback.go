@@ -13,8 +13,6 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/quota"
-	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
-	"github.com/woxQAQ/haven/store"
 )
 
 func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
@@ -181,10 +179,7 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.St
 	next.SnapshotID = checkpoint.SnapshotID
 	desired := settings
 	desired.Generation = parent.ID
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{input.Command.Action, input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
@@ -192,45 +187,32 @@ func (l *Lifecycle) admitPausedRollback(ctx context.Context, parent operation.St
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "succeeded",
-		Body:      operation.Encode(parent.Result),
+		Result:    parent.Result,
 	}); err != nil {
 		return empty, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         parent.ID,
 		StepKey:             "lifecycle",
 		Action:              "rollback",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: current.ID,
 		ExpectedInstance:    "",
 		Status:              "succeeded",
-		Body: operation.Encode(LifecycleState{
-			Phase:      "complete",
-			SnapshotID: checkpoint.SnapshotID,
-		}),
-	})); err != nil {
+		Phase:               "complete",
+		SnapshotID:          checkpoint.SnapshotID,
+	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplacePausedBody(ctx, dbgen.ReplacePausedBodyParams{
-		ID:           current.ID,
-		Tenant:       input.OwnerTenantID,
-		PreviousBody: operation.Encode(current),
-		NextBody:     operation.Encode(next),
-	})); err != nil {
+	if err = replaceSandbox(ctx, tx, current, next); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    current.ID,
-		PreviousBody: operation.Encode(settings),
-		NextBody:     operation.Encode(desired),
-	})); err != nil {
+	if err = replaceSettings(ctx, tx, current.ID, settings, desired); err != nil {
 		return empty, err
 	}
 	if current.SnapshotID != checkpoint.SnapshotID {

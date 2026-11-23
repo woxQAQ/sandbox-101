@@ -113,6 +113,25 @@ func TestHavenImageReplayDoesNotRunConflictingRequest(t *testing.T) {
 	}
 }
 
+func TestImageReplayRejectsMissingRequestDetails(t *testing.T) {
+	service := newImageFixture(t)
+	id, options := testfixture.SeedPendingImageImport(t, service.State)
+	ctx := t.Context()
+	if _, err := service.State.Database().ExecContext(ctx, "DELETE FROM operation_import_requests WHERE operation_id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.Images.AdmitImport(ctx, authorization.Principal{
+		Root:     true,
+		TenantID: "root",
+	}, "original", options)
+	if !errors.Is(err, errs.ErrManualRecovery) {
+		t.Fatal("incomplete admission did not retain its key", err)
+	}
+	if worker := service.Workers.State(id); worker.Active || worker.Completed {
+		t.Fatal("dispatched incomplete admission", worker)
+	}
+}
+
 type imageFixture struct {
 	State            *store.State
 	Images           *image.Images

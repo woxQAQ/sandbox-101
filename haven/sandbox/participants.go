@@ -172,11 +172,12 @@ func (DeletionHandoff) RestorePausedSandbox(ctx context.Context, tx *sql.Tx, des
 
 func (DeletionHandoff) TerminateSandbox(ctx context.Context, tx *sql.Tx, termination machine.SandboxTermination) error {
 	record := termination.Sandbox
-	record.State, record.OperationID = "terminated", termination.OperationID
 	return store.RequireOne(dbgen.New(tx).TerminateLiveSandbox(ctx, dbgen.TerminateLiveSandboxParams{
-		ID:     record.ID,
-		Tenant: termination.TenantID,
-		Body:   operation.Encode(record),
+		ID:                record.ID,
+		Tenant:            termination.TenantID,
+		OperationID:       optionalID(termination.OperationID),
+		SourceOperationID: optionalID(record.SourceOperation),
+		Instance:          record.Instance,
 	}))
 }
 
@@ -213,22 +214,18 @@ func (ProvisionHistory) VerifyProvisionIntent(proofs machine.ResourceProofs, ctx
 type ProvisionHandoff struct{}
 
 func (ProvisionHandoff) PublishInstance(ctx context.Context, tx *sql.Tx, record ownership.Sandbox, instance string) error {
-	record.Instance = instance
-	return store.RequireOne(dbgen.New(tx).UpdateProvisioningSandboxBody(ctx, dbgen.UpdateProvisioningSandboxBodyParams{
-		Body:   operation.Encode(record),
-		ID:     record.ID,
-		Tenant: record.TenantID,
+	return store.RequireOne(dbgen.New(tx).PublishSandboxInstance(ctx, dbgen.PublishSandboxInstanceParams{
+		Instance:          instance,
+		SourceOperationID: optionalID(record.SourceOperation),
+		VmID:              record.VMID,
+		ID:                record.ID,
+		Tenant:            record.TenantID,
 	}))
 }
 
 func (ProvisionHandoff) BlockActivation(ctx context.Context, tx *sql.Tx, id string) error {
 	if activation, lookup := LoadActivation(ctx, tx, id); lookup == nil && !operation.Terminal(activation.Status) {
-		if err := store.RequireOne(dbgen.New(tx).FailLiveStep(ctx, dbgen.FailLiveStepParams{
-			OperationID: id,
-			StepKey:     activation.Key,
-			InputHash:   activation.Hash,
-			Body:        operation.Encode("blocked"),
-		})); err != nil {
+		if err := transitionActivation(ctx, tx, activation, "blocked", "failed"); err != nil {
 			return err
 		}
 	} else if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
@@ -243,7 +240,6 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 	var empty operation.State
 	request := admission.Request
 	tenantID, frozen := request.TenantID, request.Frozen
-	hash := operation.Digest(frozen)
 	selected, manifest, restore := request.Template, request.Image, request.Restore
 	claim, target := admission.Claim, admission.Target
 	if err := p.verifyProvisionSources(ctx, tx, admission); err != nil {
@@ -293,6 +289,12 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		resource.Disk = filepath.Join(resource.Dir, "versions", accepted.ID, "disk.raw")
 		resource.RestoreDir = filepath.Join(resource.Dir, "versions", accepted.ID, "restore")
 	}
+	childAdmission := machine.ResourceAdmission{
+		Child:     accepted,
+		Kind:      action,
+		Candidate: resource.VMID,
+		Request:   frozen,
+	}
 	input := machine.ResourceInput{
 		SlotBudget:    budget,
 		DiskKey:       resource.VMID,
@@ -337,12 +339,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		input.SlotOperation = target.SlotOperation
 		input.SlotAssignment = current.SlotAssignment
 		input.FailureSlotDestination = failure
-		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, machine.ResourceAdmission{
-			Child:       accepted,
-			Kind:        action,
-			Candidate:   resource.VMID,
-			RequestHash: hash,
-		}); err != nil {
+		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, childAdmission); err != nil {
 			return empty, err
 		}
 	}
@@ -367,7 +364,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		TenantID:        request.TenantID,
 		OperationID:     accepted.ID,
 		VMID:            resource.VMID,
-		State:           "provisioning",
+		State:           ownership.StateProvisioning,
 		SourceOperation: accepted.ID,
 	}
 	currentMachine := machine.VMRecord{
@@ -378,10 +375,9 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    accepted.Status,
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
@@ -393,22 +389,11 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		return empty, err
 	}
 	if !reuseSlot {
-		if err = store.RequireOne(dbgen.New(tx).InsertSandbox(ctx, dbgen.InsertSandboxParams{
-			ID:     destination.ID,
-			Tenant: destination.TenantID,
-			State:  destination.State,
-			Body:   operation.Encode(destination),
-		})); err != nil {
+		if err = insertSandbox(ctx, tx, destination); err != nil {
 			return empty, err
 		}
 	} else {
-		if err = store.RequireOne(dbgen.New(tx).ReuseSandboxForProvision(ctx, dbgen.ReuseSandboxForProvisionParams{
-			ID:            destination.ID,
-			Tenant:        destination.TenantID,
-			PreviousState: target.Sandbox.State,
-			PreviousBody:  operation.Encode(target.Sandbox),
-			NewBody:       operation.Encode(destination),
-		})); err != nil {
+		if err = replaceSandbox(ctx, tx, target.Sandbox, destination); err != nil {
 			return empty, err
 		}
 		if err = quota.MoveCostReference(ctx, tx, quota.CostReference{
@@ -422,12 +407,7 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 		}
 	}
 	if target != nil && !reuseSlot && target.Parent != nil {
-		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, machine.ResourceAdmission{
-			Child:       accepted,
-			Kind:        action,
-			Candidate:   resource.VMID,
-			RequestHash: hash,
-		}); err != nil {
+		if err = machine.AdmitResourceParent(ctx, tx, target.Parent, childAdmission); err != nil {
 			return empty, err
 		}
 	}

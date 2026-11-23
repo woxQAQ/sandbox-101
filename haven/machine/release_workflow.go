@@ -2,7 +2,6 @@ package machine
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -165,16 +164,9 @@ func (d *Deletion) runRelease(step ResourceStep) error {
 
 func (d *Deletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error) {
 	var intent loom.DeletionIntent
-	body, err := dbgen.New(d.store.Database).GetDeletionReceipt(d.ctx, dbgen.GetDeletionReceiptParams{
-		Path:        step.Input.Resource.Dir,
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-	})
+	intent, err := store.LoadDeletionReceipt(d.ctx, d.store.Database, step.OperationID, step.Key, step.Input.Resource.Dir)
 
 	if err == nil {
-		if err = json.Unmarshal(body, &intent); err != nil {
-			return intent, err
-		}
 		if intent.Format != 1 || intent.Path != step.Input.Resource.Dir || !intent.Dir {
 			return intent, fmt.Errorf("deletion receipt differs from frozen candidate")
 		}
@@ -241,12 +233,7 @@ func (d *Deletion) deletionIntent(step ResourceStep) (loom.DeletionIntent, error
 	if _, err = d.releaseProof(tx, step); err != nil {
 		return intent, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(d.ctx, dbgen.InsertDeletionReceiptParams{
-		Path:        intent.Path,
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-		Body:        operation.Encode(intent),
-	})); err != nil {
+	if err = store.RecordDeletionReceipt(d.ctx, tx, step.OperationID, step.Key, intent); err != nil {
 		return intent, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -419,12 +406,7 @@ func (d *Deletion) completeRelease(step ResourceStep) error {
 	}
 	next := step.State
 	next.Phase = "complete"
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStepByInput(d.ctx, dbgen.CompleteRunningStepByInputParams{
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-		InputHash:   step.Hash,
-		Body:        operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(d.ctx, tx, current, next, "succeeded"); err != nil {
 		return err
 	}
 	if err = operation.New(tx).Complete(d.ctx, step.OperationID); err != nil {
@@ -460,21 +442,14 @@ func (d *Deletion) markRelease(step *ResourceStep, phase string) error {
 	if _, err = d.releaseProof(tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(d.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(d.ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if phase == "stopped" {
-		currentMachine, _, _, err := LoadVM(d.ctx, tx, *step)
+		_, _, _, err := LoadVM(d.ctx, tx, *step)
 		if err != nil {
 			return err
 		}
-		currentMachine.AgentReady, currentMachine.Verified, currentMachine.Observation = false, true, nil
 		if err = store.RequireOne(dbgen.New(tx).RecordStopped(d.ctx, dbgen.RecordStoppedParams{
 			ID:              step.Candidate,
 			CurrentInstance: step.ExpectedInstance,
@@ -482,7 +457,6 @@ func (d *Deletion) markRelease(step *ResourceStep, phase string) error {
 				String: step.OperationID,
 				Valid:  true,
 			},
-			Body: operation.Encode(currentMachine),
 		})); err != nil {
 			return err
 		}

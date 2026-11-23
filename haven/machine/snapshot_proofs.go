@@ -44,10 +44,10 @@ func (proofs SnapshotProofs) LoadSnapshotSource(ctx context.Context, query store
 	if err != nil {
 		return source, err
 	}
-	if err = json.Unmarshal(row.Body, &source.Snapshot); err != nil {
+	if source.Snapshot, err = snapshotRecord(ctx, query, row.Snapshot); err != nil {
 		return source, err
 	}
-	if row.Published != 1 || row.Deleting != 0 || row.SourceKind != "capture" || source.Snapshot.ID != id || source.Snapshot.TenantID != tenant || source.Snapshot.OperationID != row.SourceOperationID || source.Snapshot.Manifest == nil {
+	if row.Snapshot.Published != 1 || row.Snapshot.Deleting != 0 || row.SourceKind != "capture" || source.Snapshot.ID != id || source.Snapshot.TenantID != tenant || source.Snapshot.OperationID != row.SourceOperationID || source.Snapshot.Manifest == nil {
 		return source, fmt.Errorf("%w: snapshot publication/provenance incomplete", errs.ErrManualRecovery)
 	}
 	capture, err := LoadCapture(ctx, query, row.SourceOperationID)
@@ -125,14 +125,14 @@ func (proofs SnapshotProofs) SnapshotPublication(ctx context.Context, query stor
 	if err != nil {
 		return source, err
 	}
-	if err = json.Unmarshal(row.Body, &source.Snapshot); err != nil {
+	if source.Snapshot, err = snapshotRecord(ctx, query, row.Snapshot); err != nil {
 		return source, err
 	}
 	capture, err := LoadCapture(ctx, query, row.SourceOperationID)
 	if err != nil {
 		return source, err
 	}
-	if row.Published != 1 || row.Deleting != 0 || row.SourceKind != "capture" || capture.State.Boundary == nil || source.Snapshot.ID != id {
+	if row.Snapshot.Published != 1 || row.Snapshot.Deleting != 0 || row.SourceKind != "capture" || capture.State.Boundary == nil || source.Snapshot.ID != id {
 		return source, fmt.Errorf("snapshot delete requires unmarked published capture")
 	}
 	source.CaptureOperation = row.SourceOperationID

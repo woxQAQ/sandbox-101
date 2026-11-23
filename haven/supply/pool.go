@@ -3,14 +3,14 @@ package supply
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
@@ -23,18 +23,29 @@ func LoadPoolReservation(ctx context.Context, query store.DBTX, id string) (Pool
 	if err != nil {
 		return reservation, row.Status, err
 	}
-	if err = json.Unmarshal(row.Body, &reservation); err != nil {
+	template, err := loadTemplateVersion(ctx, query, row.TemplateVersion)
+	if err != nil {
 		return reservation, row.Status, err
 	}
-	if reservation.Template.ID != row.TemplateID || reservation.Template.Version != row.TemplateVersion || reservation.VMID != row.VmID {
-		return reservation, row.Status, fmt.Errorf("pool reservation frozen identity changed")
+	if template.ID != row.TemplateID {
+		return reservation, row.Status, fmt.Errorf("pool reservation frozen template changed")
 	}
-	return reservation, row.Status, nil
+	return PoolReservation{
+		Template:  template,
+		VMID:      row.VmID,
+		SandboxID: row.SandboxID,
+		Instance:  row.Instance,
+		CreatedAt: time.Unix(0, row.CreatedAtUnixNs).UTC(),
+		Source: ownership.GenerationRef{
+			OperationID: row.SourceOperationID,
+			InputHash:   row.SourceInputHash,
+		},
+	}, row.Status, nil
 }
 
 // ValidateWarmCatalog checks every ready allocation against its original refill
 // and permanent template owner before the caller selects a candidate.
-func ValidateWarmCatalog(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, selectedTemplate TemplateRecord) error {
+func ValidateWarmCatalog(ctx context.Context, proofs machine.ResourceProofs, tx *sql.Tx, selectedTemplate TemplateRecord) error {
 	queries := dbgen.New(tx)
 	ids, err := queries.ListWarmVMs(ctx, selectedTemplate.ID)
 	if err != nil {
@@ -45,7 +56,7 @@ func ValidateWarmCatalog(proofs machine.ResourceProofs, ctx context.Context, tx 
 		if lookup != nil {
 			return fmt.Errorf("%w: ready warm pool provenance missing", errs.ErrManualRecovery)
 		}
-		selected, _, err := VerifyReadyWarm(proofs, ctx, tx, poolID)
+		selected, _, err := VerifyReadyWarm(ctx, proofs, tx, poolID)
 		if err != nil {
 			return err
 		}
@@ -58,10 +69,9 @@ func ValidateWarmCatalog(proofs machine.ResourceProofs, ctx context.Context, tx 
 
 // ReadyWarm distinguishes an empty pool from a selected entry whose retained
 // publication cannot be verified. Only the former permits cold fallback.
-func ReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, template TemplateRecord) (string, PoolReservation, machine.ResourceStep, bool, error) {
+func ReadyWarm(ctx context.Context, proofs machine.ResourceProofs, tx *sql.Tx, template TemplateRecord) (string, PoolReservation, machine.ResourceStep, bool, error) {
 	id, err := dbgen.New(tx).FirstReady(ctx, dbgen.FirstReadyParams{
 		TemplateID:      template.ID,
-		SnapshotID:      template.SnapshotID,
 		TemplateVersion: template.Version,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -70,7 +80,7 @@ func ReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, t
 	if err != nil {
 		return "", PoolReservation{}, machine.ResourceStep{}, false, err
 	}
-	reservation, source, err := VerifyReadyWarm(proofs, ctx, tx, id)
+	reservation, source, err := VerifyReadyWarm(ctx, proofs, tx, id)
 	return id, reservation, source, true, err
 }
 
@@ -78,14 +88,6 @@ func ReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, t
 // transaction. It cannot commit or dispatch the accepted activation.
 func SelectWarm(ctx context.Context, tx *sql.Tx, id string, reservation PoolReservation) error {
 	queries := dbgen.New(tx)
-	if err := store.RequireOne(queries.ConsumeWarm(ctx, dbgen.ConsumeWarmParams{
-		VmID:            reservation.VMID,
-		TemplateID:      reservation.Template.ID,
-		SnapshotID:      reservation.Template.SnapshotID,
-		CreatedAtUnixNs: reservation.CreatedAt.UnixNano(),
-	})); err != nil {
-		return err
-	}
 	if err := quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
 		Kind:       "vm",
 		ID:         reservation.VMID,
@@ -95,16 +97,20 @@ func SelectWarm(ctx context.Context, tx *sql.Tx, id string, reservation PoolRese
 		return err
 	}
 	return store.RequireOne(queries.SelectReservation(ctx, dbgen.SelectReservationParams{
-		OperationID: id,
-		Body:        operation.Encode(reservation),
+		OperationID:     id,
+		VmID:            reservation.VMID,
+		Instance:        reservation.Instance,
+		SourceInputHash: reservation.Source.InputHash,
+		TemplateVersion: reservation.Template.Version,
 	}))
 }
 
-func RetireSelectedReservation(ctx context.Context, tx *sql.Tx, id string, expected []byte) error {
+func RetireSelectedReservation(ctx context.Context, tx *sql.Tx, id string, expected PoolReservation) error {
 	return store.RequireOne(dbgen.New(tx).DeleteReservation(ctx, dbgen.DeleteReservationParams{
-		OperationID: id,
-		Status:      "selected",
-		Body:        expected,
+		OperationID:     id,
+		Status:          "selected",
+		Instance:        expected.Instance,
+		SourceInputHash: expected.Source.InputHash,
 	}))
 }
 
@@ -151,7 +157,7 @@ func ObsoleteWarmCandidates(ctx context.Context, query store.DBTX) ([]types.GCIt
 
 // VerifyReadyWarm verifies the original refill publication, generation and zero-slot
 // funding before a selection or collector can transfer the pool responsibility.
-func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql.Tx, id string) (PoolReservation, machine.ResourceStep, error) {
+func VerifyReadyWarm(ctx context.Context, proofs machine.ResourceProofs, tx *sql.Tx, id string) (PoolReservation, machine.ResourceStep, error) {
 	queries := dbgen.New(tx)
 	reservation, status, err := LoadPoolReservation(ctx, tx, id)
 	if err != nil {
@@ -181,7 +187,10 @@ func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql
 	if input.SandboxID != reservation.SandboxID || input.TenantID != reservation.Template.TenantID {
 		return reservation, source, fmt.Errorf("warm resource sandbox or tenant differs from reservation")
 	}
-	warmBudget := quota.SlotBudget{Kind: "sandbox_slot", Units: 0}
+	warmBudget := quota.SlotBudget{
+		Kind:  "sandbox_slot",
+		Units: 0,
+	}
 	if input.SlotBudget != warmBudget {
 		return reservation, source, fmt.Errorf("warm resource requires a zero-unit sandbox slot budget")
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/woxQAQ/haven/gc/internal/dbgen"
@@ -14,6 +15,7 @@ import (
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/supply"
 	"github.com/woxQAQ/haven/types"
 )
@@ -91,7 +93,18 @@ func (c *Collector) inventory(ctx context.Context) (types.GCReport, error) {
 		return report, err
 	}
 	for _, item := range controls {
-		if operation.Digest(item.Input) != item.InputHash {
+		valid := operation.Digest(item.Input) == item.InputHash
+		if item.Action == "resource_link" {
+			_, _, lookup := machine.LoadResourceLink(ctx, c.store.Database, item.OperationID, strings.TrimPrefix(item.StepKey, "link:"))
+			valid = lookup == nil
+		} else if item.StepKey == "resource" {
+			_, lookup := machine.LoadResourceStep(ctx, c.store.Database, item.OperationID)
+			valid = lookup == nil
+		} else if item.StepKey == "warm_claim" {
+			_, lookup := sandbox.LoadWarmClaim(ctx, c.store.Database, item.OperationID)
+			valid = lookup == nil
+		}
+		if !valid {
 			report.Blocked = true
 			report.Deferred = append(report.Deferred, types.GCItem{
 				Kind:   "step",

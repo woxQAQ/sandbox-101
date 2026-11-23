@@ -10,22 +10,45 @@ import (
 	"database/sql"
 )
 
-const claimCurrentBody = `-- name: ClaimCurrentBody :execrows
-UPDATE vms SET operation_id=?1,body=?2
-WHERE id=?3 AND current_instance=?4 AND operation_id IS NULL
+const claimForDeletion = `-- name: ClaimForDeletion :execrows
+UPDATE vms SET operation_id=?1,deleting=1
+WHERE id=?2 AND current_instance=?3 AND operation_id IS NULL
 `
 
-type ClaimCurrentBodyParams struct {
+type ClaimForDeletionParams struct {
 	Owner    sql.NullString
-	Body     []byte
 	ID       string
 	Instance string
 }
 
-func (q *Queries) ClaimCurrentBody(ctx context.Context, arg ClaimCurrentBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, claimCurrentBody,
+func (q *Queries) ClaimForDeletion(ctx context.Context, arg ClaimForDeletionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimForDeletion, arg.Owner, arg.ID, arg.Instance)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const claimRestoreGeneration = `-- name: ClaimRestoreGeneration :execrows
+UPDATE vms SET operation_id=?1,generation_operation_id=?2,directory=?3,resource_hash=?4,verified=0,agent_ready=0,deleting=0,observation_hash=NULL
+WHERE id=?5 AND operation_id IS NULL AND current_instance=?6 AND state='stopped'
+`
+
+type ClaimRestoreGenerationParams struct {
+	Owner                 sql.NullString
+	GenerationOperationID string
+	Directory             string
+	ResourceHash          string
+	ID                    string
+	Instance              string
+}
+
+func (q *Queries) ClaimRestoreGeneration(ctx context.Context, arg ClaimRestoreGenerationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimRestoreGeneration,
 		arg.Owner,
-		arg.Body,
+		arg.GenerationOperationID,
+		arg.Directory,
+		arg.ResourceHash,
 		arg.ID,
 		arg.Instance,
 	)
@@ -73,37 +96,12 @@ func (q *Queries) ClaimStopped(ctx context.Context, arg ClaimStoppedParams) (int
 	return result.RowsAffected()
 }
 
-const claimStoppedBody = `-- name: ClaimStoppedBody :execrows
-UPDATE vms SET operation_id=?1,body=?2
-WHERE id=?3 AND operation_id IS NULL AND current_instance=?4 AND state='stopped'
-`
-
-type ClaimStoppedBodyParams struct {
-	Owner    sql.NullString
-	Body     []byte
-	ID       string
-	Instance string
-}
-
-func (q *Queries) ClaimStoppedBody(ctx context.Context, arg ClaimStoppedBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, claimStoppedBody,
-		arg.Owner,
-		arg.Body,
-		arg.ID,
-		arg.Instance,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completeStart = `-- name: CompleteStart :execrows
-UPDATE vms SET state='running',operation_id=NULL,body=? WHERE id=? AND current_instance=? AND operation_id=? AND state='created'
+UPDATE vms SET state='running',operation_id=NULL,verified=1,agent_ready=1,observation_hash=? WHERE id=? AND current_instance=? AND operation_id=? AND state='created'
 `
 
 type CompleteStartParams struct {
-	Body            []byte
+	ObservationHash sql.NullString
 	ID              string
 	CurrentInstance string
 	OperationID     sql.NullString
@@ -111,7 +109,7 @@ type CompleteStartParams struct {
 
 func (q *Queries) CompleteStart(ctx context.Context, arg CompleteStartParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeStart,
-		arg.Body,
+		arg.ObservationHash,
 		arg.ID,
 		arg.CurrentInstance,
 		arg.OperationID,
@@ -123,23 +121,17 @@ func (q *Queries) CompleteStart(ctx context.Context, arg CompleteStartParams) (i
 }
 
 const completeStop = `-- name: CompleteStop :execrows
-UPDATE vms SET state='stopped',operation_id=NULL,body=? WHERE id=? AND operation_id=? AND current_instance=?
+UPDATE vms SET state='stopped',operation_id=NULL,verified=1,agent_ready=0,observation_hash=NULL WHERE id=? AND operation_id=? AND current_instance=?
 `
 
 type CompleteStopParams struct {
-	Body            []byte
 	ID              string
 	OperationID     sql.NullString
 	CurrentInstance string
 }
 
 func (q *Queries) CompleteStop(ctx context.Context, arg CompleteStopParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeStop,
-		arg.Body,
-		arg.ID,
-		arg.OperationID,
-		arg.CurrentInstance,
-	)
+	result, err := q.db.ExecContext(ctx, completeStop, arg.ID, arg.OperationID, arg.CurrentInstance)
 	if err != nil {
 		return 0, err
 	}
@@ -302,14 +294,16 @@ func (q *Queries) CountVersions(ctx context.Context, vmID string) (int64, error)
 }
 
 const createCandidate = `-- name: CreateCandidate :execrows
-INSERT INTO vms(id,slot,current_instance,state,operation_id,body) VALUES(?,?,'','creating',?,?)
+INSERT INTO vms(id,slot,current_instance,state,operation_id,generation_operation_id,directory,resource_hash) VALUES(?,?,'','creating',?,?,?,?)
 `
 
 type CreateCandidateParams struct {
-	ID          string
-	Slot        int64
-	OperationID sql.NullString
-	Body        []byte
+	ID                    string
+	Slot                  int64
+	OperationID           sql.NullString
+	GenerationOperationID string
+	Directory             string
+	ResourceHash          string
 }
 
 func (q *Queries) CreateCandidate(ctx context.Context, arg CreateCandidateParams) (int64, error) {
@@ -317,7 +311,9 @@ func (q *Queries) CreateCandidate(ctx context.Context, arg CreateCandidateParams
 		arg.ID,
 		arg.Slot,
 		arg.OperationID,
-		arg.Body,
+		arg.GenerationOperationID,
+		arg.Directory,
+		arg.ResourceHash,
 	)
 	if err != nil {
 		return 0, err
@@ -362,14 +358,14 @@ func (q *Queries) DeleteInstance(ctx context.Context, arg DeleteInstanceParams) 
 }
 
 const deleteMatchingNetworkPolicy = `-- name: DeleteMatchingNetworkPolicy :execrows
-DELETE FROM network_policies WHERE vm_id=? AND instance=? AND operation_id=? AND body=?
+DELETE FROM network_policies WHERE vm_id=?1 AND instance=?2 AND operation_id=?3 AND policy_hash IS ?4
 `
 
 type DeleteMatchingNetworkPolicyParams struct {
 	VmID        string
 	Instance    string
 	OperationID string
-	Body        []byte
+	PolicyHash  sql.NullString
 }
 
 func (q *Queries) DeleteMatchingNetworkPolicy(ctx context.Context, arg DeleteMatchingNetworkPolicyParams) (int64, error) {
@@ -377,7 +373,7 @@ func (q *Queries) DeleteMatchingNetworkPolicy(ctx context.Context, arg DeleteMat
 		arg.VmID,
 		arg.Instance,
 		arg.OperationID,
-		arg.Body,
+		arg.PolicyHash,
 	)
 	if err != nil {
 		return 0, err
@@ -404,17 +400,31 @@ func (q *Queries) DeleteNetworkPolicy(ctx context.Context, arg DeleteNetworkPoli
 }
 
 const deleteSnapshot = `-- name: DeleteSnapshot :execrows
-DELETE FROM snapshots WHERE id=? AND published=? AND deleting=1 AND body=?
+DELETE FROM snapshots WHERE id=?1 AND published=?2 AND deleting=1 AND capture_operation_id=?3 AND tenant_id=?4 AND source_vm_id=?5 AND source_instance=?6 AND directory=?7 AND manifest_hash IS ?8
 `
 
 type DeleteSnapshotParams struct {
-	ID        string
-	Published int64
-	Body      []byte
+	ID                 string
+	Published          int64
+	CaptureOperationID string
+	TenantID           string
+	SourceVmID         string
+	SourceInstance     string
+	Directory          string
+	ManifestHash       sql.NullString
 }
 
 func (q *Queries) DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteSnapshot, arg.ID, arg.Published, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteSnapshot,
+		arg.ID,
+		arg.Published,
+		arg.CaptureOperationID,
+		arg.TenantID,
+		arg.SourceVmID,
+		arg.SourceInstance,
+		arg.Directory,
+		arg.ManifestHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -422,17 +432,23 @@ func (q *Queries) DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) 
 }
 
 const deleteSnapshotPublication = `-- name: DeleteSnapshotPublication :execrows
-DELETE FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND body=?
+DELETE FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND capture_operation_id=? AND record_hash=?
 `
 
 type DeleteSnapshotPublicationParams struct {
-	SnapshotID string
-	TenantID   string
-	Body       []byte
+	SnapshotID         string
+	TenantID           string
+	CaptureOperationID string
+	RecordHash         string
 }
 
 func (q *Queries) DeleteSnapshotPublication(ctx context.Context, arg DeleteSnapshotPublicationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteSnapshotPublication, arg.SnapshotID, arg.TenantID, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteSnapshotPublication,
+		arg.SnapshotID,
+		arg.TenantID,
+		arg.CaptureOperationID,
+		arg.RecordHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -494,7 +510,7 @@ func (q *Queries) DeleteVersion(ctx context.Context, arg DeleteVersionParams) (i
 }
 
 const getCapture = `-- name: GetCapture :one
-SELECT published,deleting,body FROM snapshots WHERE id=? AND source_vm_id=?
+SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE id=? AND source_vm_id=?
 `
 
 type GetCaptureParams struct {
@@ -502,44 +518,57 @@ type GetCaptureParams struct {
 	SourceVmID string
 }
 
-type GetCaptureRow struct {
-	Published int64
-	Deleting  int64
-	Body      []byte
-}
-
-func (q *Queries) GetCapture(ctx context.Context, arg GetCaptureParams) (GetCaptureRow, error) {
+func (q *Queries) GetCapture(ctx context.Context, arg GetCaptureParams) (Snapshot, error) {
 	row := q.db.QueryRowContext(ctx, getCapture, arg.ID, arg.SourceVmID)
-	var i GetCaptureRow
-	err := row.Scan(&i.Published, &i.Deleting, &i.Body)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.SourceVmID,
+		&i.TenantID,
+		&i.CaptureOperationID,
+		&i.SourceInstance,
+		&i.Directory,
+		&i.Published,
+		&i.Deleting,
+		&i.ManifestHash,
+	)
 	return i, err
 }
 
 const getCurrent = `-- name: GetCurrent :one
-SELECT current_instance, state, operation_id, body FROM vms WHERE id = ?
+SELECT v.id, v.slot, v.current_instance, v.state, v.operation_id, v.generation_operation_id, v.directory, v.resource_hash, v.verified, v.agent_ready, v.deleting, v.observation_hash,s.input,s.input_hash FROM vms v LEFT JOIN operation_steps s ON s.operation_id=v.generation_operation_id AND s.step_key='resource' WHERE v.id=?
 `
 
 type GetCurrentRow struct {
-	CurrentInstance string
-	State           string
-	OperationID     sql.NullString
-	Body            []byte
+	Vm        Vm
+	Input     []byte
+	InputHash sql.NullString
 }
 
 func (q *Queries) GetCurrent(ctx context.Context, id string) (GetCurrentRow, error) {
 	row := q.db.QueryRowContext(ctx, getCurrent, id)
 	var i GetCurrentRow
 	err := row.Scan(
-		&i.CurrentInstance,
-		&i.State,
-		&i.OperationID,
-		&i.Body,
+		&i.Vm.ID,
+		&i.Vm.Slot,
+		&i.Vm.CurrentInstance,
+		&i.Vm.State,
+		&i.Vm.OperationID,
+		&i.Vm.GenerationOperationID,
+		&i.Vm.Directory,
+		&i.Vm.ResourceHash,
+		&i.Vm.Verified,
+		&i.Vm.AgentReady,
+		&i.Vm.Deleting,
+		&i.Vm.ObservationHash,
+		&i.Input,
+		&i.InputHash,
 	)
 	return i, err
 }
 
 const getInstance = `-- name: GetInstance :one
-SELECT body FROM instances WHERE id = ? AND vm_id = ? AND operation_id = ?
+SELECT resource_hash,observation_hash FROM instances WHERE id = ? AND vm_id = ? AND operation_id = ?
 `
 
 type GetInstanceParams struct {
@@ -548,27 +577,32 @@ type GetInstanceParams struct {
 	OperationID string
 }
 
-func (q *Queries) GetInstance(ctx context.Context, arg GetInstanceParams) ([]byte, error) {
+type GetInstanceRow struct {
+	ResourceHash    string
+	ObservationHash sql.NullString
+}
+
+func (q *Queries) GetInstance(ctx context.Context, arg GetInstanceParams) (GetInstanceRow, error) {
 	row := q.db.QueryRowContext(ctx, getInstance, arg.ID, arg.VmID, arg.OperationID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i GetInstanceRow
+	err := row.Scan(&i.ResourceHash, &i.ObservationHash)
+	return i, err
 }
 
 const getNetworkPolicy = `-- name: GetNetworkPolicy :one
-SELECT operation_id,instance,body FROM network_policies WHERE vm_id=?
+SELECT operation_id,instance,policy_hash FROM network_policies WHERE vm_id=?
 `
 
 type GetNetworkPolicyRow struct {
 	OperationID string
 	Instance    string
-	Body        []byte
+	PolicyHash  sql.NullString
 }
 
 func (q *Queries) GetNetworkPolicy(ctx context.Context, vmID string) (GetNetworkPolicyRow, error) {
 	row := q.db.QueryRowContext(ctx, getNetworkPolicy, vmID)
 	var i GetNetworkPolicyRow
-	err := row.Scan(&i.OperationID, &i.Instance, &i.Body)
+	err := row.Scan(&i.OperationID, &i.Instance, &i.PolicyHash)
 	return i, err
 }
 
@@ -588,24 +622,8 @@ func (q *Queries) GetNetworkPolicyOwner(ctx context.Context, vmID string) (GetNe
 	return i, err
 }
 
-const getOwnedBody = `-- name: GetOwnedBody :one
-SELECT s.body FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?
-`
-
-type GetOwnedBodyParams struct {
-	ID       string
-	TenantID string
-}
-
-func (q *Queries) GetOwnedBody(ctx context.Context, arg GetOwnedBodyParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getOwnedBody, arg.ID, arg.TenantID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
-}
-
 const getOwnedPublication = `-- name: GetOwnedPublication :one
-SELECT s.body,s.published,s.deleting,o.source_operation_id,o.source_kind
+SELECT s.id, s.source_vm_id, s.tenant_id, s.capture_operation_id, s.source_instance, s.directory, s.published, s.deleting, s.manifest_hash,o.source_operation_id,o.source_kind
 FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?
 `
 
@@ -615,9 +633,7 @@ type GetOwnedPublicationParams struct {
 }
 
 type GetOwnedPublicationRow struct {
-	Body              []byte
-	Published         int64
-	Deleting          int64
+	Snapshot          Snapshot
 	SourceOperationID string
 	SourceKind        string
 }
@@ -626,17 +642,49 @@ func (q *Queries) GetOwnedPublication(ctx context.Context, arg GetOwnedPublicati
 	row := q.db.QueryRowContext(ctx, getOwnedPublication, arg.ID, arg.TenantID)
 	var i GetOwnedPublicationRow
 	err := row.Scan(
-		&i.Body,
-		&i.Published,
-		&i.Deleting,
+		&i.Snapshot.ID,
+		&i.Snapshot.SourceVmID,
+		&i.Snapshot.TenantID,
+		&i.Snapshot.CaptureOperationID,
+		&i.Snapshot.SourceInstance,
+		&i.Snapshot.Directory,
+		&i.Snapshot.Published,
+		&i.Snapshot.Deleting,
+		&i.Snapshot.ManifestHash,
 		&i.SourceOperationID,
 		&i.SourceKind,
 	)
 	return i, err
 }
 
+const getOwnedSnapshot = `-- name: GetOwnedSnapshot :one
+SELECT s.id, s.source_vm_id, s.tenant_id, s.capture_operation_id, s.source_instance, s.directory, s.published, s.deleting, s.manifest_hash FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?
+`
+
+type GetOwnedSnapshotParams struct {
+	ID       string
+	TenantID string
+}
+
+func (q *Queries) GetOwnedSnapshot(ctx context.Context, arg GetOwnedSnapshotParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getOwnedSnapshot, arg.ID, arg.TenantID)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.SourceVmID,
+		&i.TenantID,
+		&i.CaptureOperationID,
+		&i.SourceInstance,
+		&i.Directory,
+		&i.Published,
+		&i.Deleting,
+		&i.ManifestHash,
+	)
+	return i, err
+}
+
 const getPublishedBody = `-- name: GetPublishedBody :one
-SELECT body FROM snapshots WHERE id=? AND published=1 AND deleting=? AND source_vm_id=?
+SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE id=? AND published=1 AND deleting=? AND source_vm_id=?
 `
 
 type GetPublishedBodyParams struct {
@@ -645,73 +693,42 @@ type GetPublishedBodyParams struct {
 	SourceVmID string
 }
 
-func (q *Queries) GetPublishedBody(ctx context.Context, arg GetPublishedBodyParams) ([]byte, error) {
+func (q *Queries) GetPublishedBody(ctx context.Context, arg GetPublishedBodyParams) (Snapshot, error) {
 	row := q.db.QueryRowContext(ctx, getPublishedBody, arg.ID, arg.Deleting, arg.SourceVmID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
-}
-
-const getRetainedInstance = `-- name: GetRetainedInstance :one
-SELECT operation_id, body FROM instances WHERE id = ? AND vm_id = ?
-`
-
-type GetRetainedInstanceParams struct {
-	ID   string
-	VmID string
-}
-
-type GetRetainedInstanceRow struct {
-	OperationID string
-	Body        []byte
-}
-
-func (q *Queries) GetRetainedInstance(ctx context.Context, arg GetRetainedInstanceParams) (GetRetainedInstanceRow, error) {
-	row := q.db.QueryRowContext(ctx, getRetainedInstance, arg.ID, arg.VmID)
-	var i GetRetainedInstanceRow
-	err := row.Scan(&i.OperationID, &i.Body)
-	return i, err
-}
-
-const getRetainedVersion = `-- name: GetRetainedVersion :one
-SELECT step_key, body FROM resource_versions WHERE vm_id = ? AND operation_id = ?
-`
-
-type GetRetainedVersionParams struct {
-	VmID        string
-	OperationID string
-}
-
-type GetRetainedVersionRow struct {
-	StepKey string
-	Body    []byte
-}
-
-func (q *Queries) GetRetainedVersion(ctx context.Context, arg GetRetainedVersionParams) (GetRetainedVersionRow, error) {
-	row := q.db.QueryRowContext(ctx, getRetainedVersion, arg.VmID, arg.OperationID)
-	var i GetRetainedVersionRow
-	err := row.Scan(&i.StepKey, &i.Body)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.SourceVmID,
+		&i.TenantID,
+		&i.CaptureOperationID,
+		&i.SourceInstance,
+		&i.Directory,
+		&i.Published,
+		&i.Deleting,
+		&i.ManifestHash,
+	)
 	return i, err
 }
 
 const getSnapshotPublication = `-- name: GetSnapshotPublication :one
-SELECT body FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=?
+SELECT record_hash FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND capture_operation_id=?
 `
 
 type GetSnapshotPublicationParams struct {
-	SnapshotID string
-	TenantID   string
+	SnapshotID         string
+	TenantID           string
+	CaptureOperationID string
 }
 
-func (q *Queries) GetSnapshotPublication(ctx context.Context, arg GetSnapshotPublicationParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getSnapshotPublication, arg.SnapshotID, arg.TenantID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+func (q *Queries) GetSnapshotPublication(ctx context.Context, arg GetSnapshotPublicationParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotPublication, arg.SnapshotID, arg.TenantID, arg.CaptureOperationID)
+	var record_hash string
+	err := row.Scan(&record_hash)
+	return record_hash, err
 }
 
 const getVersion = `-- name: GetVersion :one
-SELECT body FROM resource_versions WHERE vm_id = ? AND operation_id = ? AND step_key = ?
+SELECT instance,resource_hash,disk_device,disk_inode,disk_mode FROM resource_versions WHERE vm_id = ? AND operation_id = ? AND step_key = ?
 `
 
 type GetVersionParams struct {
@@ -720,11 +737,25 @@ type GetVersionParams struct {
 	StepKey     string
 }
 
-func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) ([]byte, error) {
+type GetVersionRow struct {
+	Instance     string
+	ResourceHash string
+	DiskDevice   sql.NullInt64
+	DiskInode    sql.NullInt64
+	DiskMode     sql.NullInt64
+}
+
+func (q *Queries) GetVersion(ctx context.Context, arg GetVersionParams) (GetVersionRow, error) {
 	row := q.db.QueryRowContext(ctx, getVersion, arg.VmID, arg.OperationID, arg.StepKey)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i GetVersionRow
+	err := row.Scan(
+		&i.Instance,
+		&i.ResourceHash,
+		&i.DiskDevice,
+		&i.DiskInode,
+		&i.DiskMode,
+	)
+	return i, err
 }
 
 const insertBacking = `-- name: InsertBacking :execrows
@@ -764,14 +795,14 @@ func (q *Queries) InsertCaptureOwner(ctx context.Context, arg InsertCaptureOwner
 }
 
 const insertInstance = `-- name: InsertInstance :execrows
-INSERT INTO instances(id,vm_id,operation_id,body) VALUES(?,?,?,?)
+INSERT INTO instances(id,vm_id,operation_id,resource_hash) VALUES(?,?,?,?)
 `
 
 type InsertInstanceParams struct {
-	ID          string
-	VmID        string
-	OperationID string
-	Body        []byte
+	ID           string
+	VmID         string
+	OperationID  string
+	ResourceHash string
 }
 
 func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) (int64, error) {
@@ -779,7 +810,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.ID,
 		arg.VmID,
 		arg.OperationID,
-		arg.Body,
+		arg.ResourceHash,
 	)
 	if err != nil {
 		return 0, err
@@ -788,17 +819,27 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 }
 
 const insertSnapshot = `-- name: InsertSnapshot :execrows
-INSERT INTO snapshots(id,source_vm_id,published,deleting,body) VALUES(?,?,0,0,?)
+INSERT INTO snapshots(id,source_vm_id,tenant_id,capture_operation_id,source_instance,directory,published,deleting) VALUES(?,?,?,?,?,?,0,0)
 `
 
 type InsertSnapshotParams struct {
-	ID         string
-	SourceVmID string
-	Body       []byte
+	ID                 string
+	SourceVmID         string
+	TenantID           string
+	CaptureOperationID string
+	SourceInstance     string
+	Directory          string
 }
 
 func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSnapshot, arg.ID, arg.SourceVmID, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertSnapshot,
+		arg.ID,
+		arg.SourceVmID,
+		arg.TenantID,
+		arg.CaptureOperationID,
+		arg.SourceInstance,
+		arg.Directory,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -806,17 +847,23 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const insertSnapshotPublication = `-- name: InsertSnapshotPublication :execrows
-INSERT INTO snapshot_publications(snapshot_id,tenant_id,body) VALUES(?,?,?)
+INSERT INTO snapshot_publications(snapshot_id,tenant_id,capture_operation_id,record_hash) VALUES(?,?,?,?)
 `
 
 type InsertSnapshotPublicationParams struct {
-	SnapshotID string
-	TenantID   string
-	Body       []byte
+	SnapshotID         string
+	TenantID           string
+	CaptureOperationID string
+	RecordHash         string
 }
 
 func (q *Queries) InsertSnapshotPublication(ctx context.Context, arg InsertSnapshotPublicationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSnapshotPublication, arg.SnapshotID, arg.TenantID, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertSnapshotPublication,
+		arg.SnapshotID,
+		arg.TenantID,
+		arg.CaptureOperationID,
+		arg.RecordHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -842,22 +889,22 @@ func (q *Queries) InsertSourceLease(ctx context.Context, arg InsertSourceLeasePa
 }
 
 const insertVersion = `-- name: InsertVersion :execrows
-INSERT INTO resource_versions(vm_id,operation_id,step_key,body) VALUES(?,?,?,?)
+INSERT INTO resource_versions(vm_id,operation_id,step_key,instance,resource_hash) VALUES(?,?,'resource',?,?)
 `
 
 type InsertVersionParams struct {
-	VmID        string
-	OperationID string
-	StepKey     string
-	Body        []byte
+	VmID         string
+	OperationID  string
+	Instance     string
+	ResourceHash string
 }
 
 func (q *Queries) InsertVersion(ctx context.Context, arg InsertVersionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertVersion,
 		arg.VmID,
 		arg.OperationID,
-		arg.StepKey,
-		arg.Body,
+		arg.Instance,
+		arg.ResourceHash,
 	)
 	if err != nil {
 		return 0, err
@@ -893,12 +940,12 @@ func (q *Queries) ListBackingPaths(ctx context.Context) ([]string, error) {
 }
 
 const listCurrentBodies = `-- name: ListCurrentBodies :many
-SELECT id,body FROM vms ORDER BY id
+SELECT id,directory FROM vms ORDER BY id
 `
 
 type ListCurrentBodiesRow struct {
-	ID   string
-	Body []byte
+	ID        string
+	Directory string
 }
 
 func (q *Queries) ListCurrentBodies(ctx context.Context) ([]ListCurrentBodiesRow, error) {
@@ -910,7 +957,7 @@ func (q *Queries) ListCurrentBodies(ctx context.Context) ([]ListCurrentBodiesRow
 	var items []ListCurrentBodiesRow
 	for rows.Next() {
 		var i ListCurrentBodiesRow
-		if err := rows.Scan(&i.ID, &i.Body); err != nil {
+		if err := rows.Scan(&i.ID, &i.Directory); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -952,30 +999,28 @@ func (q *Queries) ListSlots(ctx context.Context) ([]int64, error) {
 }
 
 const listSnapshots = `-- name: ListSnapshots :many
-SELECT id,body,published,deleting FROM snapshots ORDER BY id
+SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots ORDER BY id
 `
 
-type ListSnapshotsRow struct {
-	ID        string
-	Body      []byte
-	Published int64
-	Deleting  int64
-}
-
-func (q *Queries) ListSnapshots(ctx context.Context) ([]ListSnapshotsRow, error) {
+func (q *Queries) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 	rows, err := q.db.QueryContext(ctx, listSnapshots)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSnapshotsRow
+	var items []Snapshot
 	for rows.Next() {
-		var i ListSnapshotsRow
+		var i Snapshot
 		if err := rows.Scan(
 			&i.ID,
-			&i.Body,
+			&i.SourceVmID,
+			&i.TenantID,
+			&i.CaptureOperationID,
+			&i.SourceInstance,
+			&i.Directory,
 			&i.Published,
 			&i.Deleting,
+			&i.ManifestHash,
 		); err != nil {
 			return nil, err
 		}
@@ -1057,16 +1102,55 @@ func (q *Queries) MarkFailedDeleting(ctx context.Context, id string) (int64, err
 }
 
 const markPublishedDeleting = `-- name: MarkPublishedDeleting :execrows
-UPDATE snapshots SET deleting=1 WHERE id=? AND published=1 AND deleting=0 AND body=?
+UPDATE snapshots SET deleting=1 WHERE id=? AND published=1 AND deleting=0 AND capture_operation_id=? AND tenant_id=? AND source_vm_id=? AND source_instance=? AND directory=? AND manifest_hash=?
 `
 
 type MarkPublishedDeletingParams struct {
-	ID   string
-	Body []byte
+	ID                 string
+	CaptureOperationID string
+	TenantID           string
+	SourceVmID         string
+	SourceInstance     string
+	Directory          string
+	ManifestHash       sql.NullString
 }
 
 func (q *Queries) MarkPublishedDeleting(ctx context.Context, arg MarkPublishedDeletingParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markPublishedDeleting, arg.ID, arg.Body)
+	result, err := q.db.ExecContext(ctx, markPublishedDeleting,
+		arg.ID,
+		arg.CaptureOperationID,
+		arg.TenantID,
+		arg.SourceVmID,
+		arg.SourceInstance,
+		arg.Directory,
+		arg.ManifestHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const publishInstanceObservation = `-- name: PublishInstanceObservation :execrows
+UPDATE instances SET observation_hash=? WHERE id=? AND vm_id=? AND operation_id=? AND resource_hash=? AND observation_hash IS NULL
+`
+
+type PublishInstanceObservationParams struct {
+	ObservationHash sql.NullString
+	ID              string
+	VmID            string
+	OperationID     string
+	ResourceHash    string
+}
+
+func (q *Queries) PublishInstanceObservation(ctx context.Context, arg PublishInstanceObservationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, publishInstanceObservation,
+		arg.ObservationHash,
+		arg.ID,
+		arg.VmID,
+		arg.OperationID,
+		arg.ResourceHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -1074,23 +1158,28 @@ func (q *Queries) MarkPublishedDeleting(ctx context.Context, arg MarkPublishedDe
 }
 
 const publishSnapshot = `-- name: PublishSnapshot :execrows
-UPDATE snapshots SET published=1,body=?1
-WHERE id=?2 AND source_vm_id=?3 AND published=0 AND deleting=0 AND body=?4
+UPDATE snapshots SET published=1,manifest_hash=? WHERE id=? AND source_vm_id=? AND capture_operation_id=? AND tenant_id=? AND source_instance=? AND directory=? AND published=0 AND deleting=0
 `
 
 type PublishSnapshotParams struct {
-	NewBody      []byte
-	ID           string
-	SourceVm     string
-	PreviousBody []byte
+	ManifestHash       sql.NullString
+	ID                 string
+	SourceVmID         string
+	CaptureOperationID string
+	TenantID           string
+	SourceInstance     string
+	Directory          string
 }
 
 func (q *Queries) PublishSnapshot(ctx context.Context, arg PublishSnapshotParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, publishSnapshot,
-		arg.NewBody,
+		arg.ManifestHash,
 		arg.ID,
-		arg.SourceVm,
-		arg.PreviousBody,
+		arg.SourceVmID,
+		arg.CaptureOperationID,
+		arg.TenantID,
+		arg.SourceInstance,
+		arg.Directory,
 	)
 	if err != nil {
 		return 0, err
@@ -1117,22 +1206,47 @@ func (q *Queries) RecordCreatedInstance(ctx context.Context, arg RecordCreatedIn
 }
 
 const recordStopped = `-- name: RecordStopped :execrows
-UPDATE vms SET state='stopped',body=? WHERE id=? AND current_instance=? AND operation_id=?
+UPDATE vms SET state='stopped',verified=1,agent_ready=0,observation_hash=NULL WHERE id=? AND current_instance=? AND operation_id=?
 `
 
 type RecordStoppedParams struct {
-	Body            []byte
 	ID              string
 	CurrentInstance string
 	OperationID     sql.NullString
 }
 
 func (q *Queries) RecordStopped(ctx context.Context, arg RecordStoppedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recordStopped,
-		arg.Body,
-		arg.ID,
-		arg.CurrentInstance,
+	result, err := q.db.ExecContext(ctx, recordStopped, arg.ID, arg.CurrentInstance, arg.OperationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordVersionDisk = `-- name: RecordVersionDisk :execrows
+UPDATE resource_versions SET disk_device=?,disk_inode=?,disk_mode=?
+WHERE vm_id=? AND operation_id=? AND step_key='resource' AND instance=? AND resource_hash=? AND disk_device IS NULL
+`
+
+type RecordVersionDiskParams struct {
+	DiskDevice   sql.NullInt64
+	DiskInode    sql.NullInt64
+	DiskMode     sql.NullInt64
+	VmID         string
+	OperationID  string
+	Instance     string
+	ResourceHash string
+}
+
+func (q *Queries) RecordVersionDisk(ctx context.Context, arg RecordVersionDiskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordVersionDisk,
+		arg.DiskDevice,
+		arg.DiskInode,
+		arg.DiskMode,
+		arg.VmID,
 		arg.OperationID,
+		arg.Instance,
+		arg.ResourceHash,
 	)
 	if err != nil {
 		return 0, err
@@ -1176,63 +1290,13 @@ func (q *Queries) ReleaseStoppedOwnership(ctx context.Context, arg ReleaseStoppe
 	return result.RowsAffected()
 }
 
-const replaceInstanceBody = `-- name: ReplaceInstanceBody :execrows
-UPDATE instances SET body=? WHERE id=? AND vm_id=? AND operation_id=?
-`
-
-type ReplaceInstanceBodyParams struct {
-	Body        []byte
-	ID          string
-	VmID        string
-	OperationID string
-}
-
-func (q *Queries) ReplaceInstanceBody(ctx context.Context, arg ReplaceInstanceBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceInstanceBody,
-		arg.Body,
-		arg.ID,
-		arg.VmID,
-		arg.OperationID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const replaceVersionBody = `-- name: ReplaceVersionBody :execrows
-UPDATE resource_versions SET body=?1
-WHERE vm_id=?2 AND operation_id=?3 AND body=?4
-`
-
-type ReplaceVersionBodyParams struct {
-	NewBody      []byte
-	VmID         string
-	OperationID  string
-	PreviousBody []byte
-}
-
-func (q *Queries) ReplaceVersionBody(ctx context.Context, arg ReplaceVersionBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceVersionBody,
-		arg.NewBody,
-		arg.VmID,
-		arg.OperationID,
-		arg.PreviousBody,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const transferOwnership = `-- name: TransferOwnership :execrows
-UPDATE vms SET operation_id=?1,body=?2
-WHERE id=?3 AND operation_id=?4 AND current_instance=?5
+UPDATE vms SET operation_id=?1,deleting=1
+WHERE id=?2 AND operation_id=?3 AND current_instance=?4
 `
 
 type TransferOwnershipParams struct {
 	NextOwner     sql.NullString
-	Body          []byte
 	ID            string
 	PreviousOwner sql.NullString
 	Instance      string
@@ -1241,7 +1305,6 @@ type TransferOwnershipParams struct {
 func (q *Queries) TransferOwnership(ctx context.Context, arg TransferOwnershipParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, transferOwnership,
 		arg.NextOwner,
-		arg.Body,
 		arg.ID,
 		arg.PreviousOwner,
 		arg.Instance,
@@ -1253,14 +1316,15 @@ func (q *Queries) TransferOwnership(ctx context.Context, arg TransferOwnershipPa
 }
 
 const upsertNetworkPolicy = `-- name: UpsertNetworkPolicy :execrows
-INSERT INTO network_policies(vm_id,instance,operation_id,body) VALUES(?,?,?,?) ON CONFLICT(vm_id) DO UPDATE SET instance=excluded.instance,operation_id=excluded.operation_id,body=excluded.body
+INSERT INTO network_policies(vm_id,instance,operation_id,policy_hash,retirement_step) VALUES(?1,?2,?3,?4,CASE WHEN ?4 IS NOT NULL THEN 'direct_retirement' END)
+ON CONFLICT(vm_id) DO UPDATE SET instance=excluded.instance,operation_id=excluded.operation_id,policy_hash=excluded.policy_hash,retirement_step=excluded.retirement_step
 `
 
 type UpsertNetworkPolicyParams struct {
 	VmID        string
 	Instance    string
 	OperationID string
-	Body        []byte
+	PolicyHash  sql.NullString
 }
 
 func (q *Queries) UpsertNetworkPolicy(ctx context.Context, arg UpsertNetworkPolicyParams) (int64, error) {
@@ -1268,7 +1332,7 @@ func (q *Queries) UpsertNetworkPolicy(ctx context.Context, arg UpsertNetworkPoli
 		arg.VmID,
 		arg.Instance,
 		arg.OperationID,
-		arg.Body,
+		arg.PolicyHash,
 	)
 	if err != nil {
 		return 0, err

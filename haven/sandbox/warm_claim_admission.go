@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/internal/errs"
@@ -38,12 +39,12 @@ type WarmClaimAdmission struct {
 // Admit borrows the caller's tenant request guard and selects a ready warm
 // allocation atomically. A false found result permits the original cold path.
 func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (operation.State, bool, error) {
-	principal, key, admission := request.Principal, request.Key, request.Admission
+	tenantID, key, admission := request.Principal.TenantID, request.Key, request.Admission
 	selectedTemplate, restore := request.Template, request.Restore
 	var empty operation.State
 	wc.storeWriteMu.Lock()
 	defer wc.storeWriteMu.Unlock()
-	if err := wc.gate.Check(); err != nil {
+	if err := wc.admissionGate.Check(); err != nil {
 		return empty, false, err
 	}
 	tx, err := wc.store.Database.BeginTx(ctx, nil)
@@ -53,50 +54,49 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	current, err := supply.NewTemplateCatalog(tx).Owned(ctx, selectedTemplate.TenantID, selectedTemplate.ID)
+	current, err := supply.NewTemplateCatalog(tx).Owned(ctx, tenantID, admission.Command.TemplateID)
 	if err != nil {
 		return empty, false, err
 	}
 	if !reflect.DeepEqual(current, selectedTemplate) {
 		return empty, false, fmt.Errorf("%w: warm claim template version changed", errs.ErrConflict)
 	}
-	if err = supply.ValidateWarmCatalog(wc.proofs, ctx, tx, selectedTemplate); err != nil {
+	if err = supply.ValidateWarmCatalog(ctx, wc.proofs, tx, selectedTemplate); err != nil {
 		return empty, false, err
 	}
-	poolID, selected, source, found, err := supply.ReadyWarm(wc.proofs, ctx, tx, selectedTemplate)
+	poolID, selected, source, found, err := supply.ReadyWarm(ctx, wc.proofs, tx, selectedTemplate)
 	if !found || err != nil {
 		return empty, false, err
 	}
-	currentRestore, err := wc.proofs.Snapshots().LoadSnapshotSource(ctx, tx, selectedTemplate.TenantID, selectedTemplate.SnapshotID)
+	currentRestore, err := wc.proofs.Snapshots().LoadSnapshotSource(ctx, tx, tenantID, selectedTemplate.SnapshotID)
 	if err != nil {
 		return empty, false, err
 	}
-	if !reflect.DeepEqual(currentRestore, restore) {
+	if !reflect.DeepEqual(currentRestore, restore) || !reflect.DeepEqual(source.Input.Restore, &restore) {
 		return empty, false, fmt.Errorf("%w: warm fallback source publication changed", errs.ErrConflict)
 	}
-	tenant, err := authorization.New(tx).Limits(ctx, selectedTemplate.TenantID)
+	limits, err := authorization.LoadTenantLimits(ctx, tx, tenantID)
 	if err != nil {
 		return empty, false, err
 	}
-	usage, err := quota.TenantUsage(ctx, tx, selectedTemplate.TenantID)
+	usage, err := quota.TenantUsage(ctx, tx, tenantID)
 	if err != nil {
 		return empty, false, err
 	}
-	if usage.Slots >= tenant.MaxSandboxes || usage.StorageMiB > tenant.MaxStorageMiB {
+	if usage.Slots >= limits.MaxSandboxes || usage.StorageMiB > limits.MaxStorageMiB {
 		return empty, false, fmt.Errorf("%w: tenant claim quota exhausted", errs.ErrExhausted)
 	}
-	destination, err := LoadSandbox(ctx, tx, selected.SandboxID, selectedTemplate.TenantID)
+	pooledSandbox, err := LoadSandbox(ctx, tx, selected.SandboxID, tenantID)
 	if err != nil {
 		return empty, false, err
 	}
-	previous := destination
-	if destination.State != "provisioning" || destination.SourceOperation != source.OperationID || destination.Instance != selected.Instance || destination.SlotAssignment != nil {
+	if pooledSandbox.State != ownership.StateProvisioning || pooledSandbox.SourceOperation != source.OperationID || pooledSandbox.Instance != selected.Instance || pooledSandbox.SlotAssignment != nil {
 		return empty, false, fmt.Errorf("%w: warm allocation current sandbox identity changed", errs.ErrManualRecovery)
 	}
 	accepted := operation.State{
 		ID:     operation.NewID("op-"),
 		Key:    key,
-		Status: "pending",
+		Status: operation.StatusPending,
 		Result: operation.Result{
 			SandboxID:     selected.SandboxID,
 			VMID:          selected.VMID,
@@ -107,7 +107,7 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	settings := admission.Settings
 	settings.Generation = accepted.ID
 	input := WarmClaimInput{
-		RequestTenantID: principal.TenantID,
+		RequestTenantID: tenantID,
 		Command:         admission.Command,
 		PoolID:          poolID,
 		Pool:            selected,
@@ -115,19 +115,13 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 		Settings:        settings,
 		Restore:         restore,
 	}
-	payload := operation.Encode(input)
-	hash := operation.Digest(payload)
-	destination.OperationID = accepted.ID
-	destination.SlotAssignment = &ownership.GenerationRef{
-		OperationID: accepted.ID,
-		InputHash:   hash,
-	}
-	destination.Identity = NewSandboxBirth(selectedTemplate, "warm")
+	hash := operation.Digest(operation.Encode(input))
+	birth := NewSandboxBirth(selectedTemplate, warmAttempt)
 	activation := ActivationInput{
-		Attempt:           "warm",
+		Attempt:           warmAttempt,
 		AllowFallback:     true,
-		RequestTenantID:   principal.TenantID,
-		TenantID:          selectedTemplate.TenantID,
+		RequestTenantID:   tenantID,
+		TenantID:          tenantID,
 		SandboxID:         selected.SandboxID,
 		ResourceOperation: source.OperationID,
 		ResourceHash:      source.Hash,
@@ -135,47 +129,40 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 		Settings:          settings,
 		ResetIdentity:     true,
 	}
-	activationPayload := operation.Encode(activation)
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"claim", admission.Command})
+	frozen := operation.CommandRequest(admission.Command)
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        accepted.ID,
-		ScopeKind: "tenant",
-		ScopeID:   principal.TenantID,
+		ScopeKind: operation.ScopeTenant,
+		ScopeID:   tenantID,
 		Key:       key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
-		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Status:    accepted.Status,
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, false, err
 	}
 	if err = operations.InsertCredential(ctx, accepted.ID, admission.MAC); err != nil {
 		return empty, false, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	queries := dbgen.New(tx)
+	if err = store.RequireOne(queries.InsertWarmClaimStep(ctx, dbgen.InsertWarmClaimStepParams{
 		OperationID:         accepted.ID,
-		StepKey:             "warm_claim",
-		Action:              "claim",
 		InputHash:           hash,
-		Input:               payload,
 		CandidateResourceID: selected.SandboxID,
 		ExpectedInstance:    selected.Instance,
-		Status:              "pending",
-		Body: operation.Encode(WarmClaimState{
-			Phase: "selected",
-		}),
+	})); err != nil {
+		return empty, false, err
+	}
+	if err = store.RequireOne(queries.InsertWarmClaim(ctx, dbgen.InsertWarmClaimParams{
+		OperationID:       accepted.ID,
+		RefillOperationID: poolID,
+		SourceOperationID: source.OperationID,
 	})); err != nil {
 		return empty, false, err
 	}
 
-	if err = store.RequireOne(dbgen.New(tx).InsertSandboxSettings(ctx, dbgen.InsertSandboxSettingsParams{
-		SandboxID: selected.SandboxID,
-		Body:      operation.Encode(settings),
-	})); err != nil {
+	if err = insertSettings(ctx, tx, selected.SandboxID, settings); err != nil {
 		return empty, false, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertFence(ctx, dbgen.InsertFenceParams{
@@ -184,37 +171,36 @@ func (wc *WarmClaims) Admit(ctx context.Context, request WarmClaimRequest) (oper
 	})); err != nil {
 		return empty, false, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         accepted.ID,
-		StepKey:             "activation:warm",
-		Action:              "activate",
-		InputHash:           operation.Digest(activationPayload),
-		Input:               activationPayload,
-		CandidateResourceID: selected.VMID,
-		ExpectedInstance:    selected.Instance,
-		Status:              "pending",
-		Body:                operation.Encode("admitted"),
-	})); err != nil {
+	if err = insertActivationStep(ctx, tx, accepted.ID, selected.VMID, activation); err != nil {
 		return empty, false, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).AssignWarmSandbox(ctx, dbgen.AssignWarmSandboxParams{
-		ID:           destination.ID,
-		Tenant:       selectedTemplate.TenantID,
-		PreviousBody: operation.Encode(previous),
-		NextBody:     operation.Encode(destination),
+		ID:                selected.SandboxID,
+		Tenant:            tenantID,
+		VmID:              selected.VMID,
+		Instance:          selected.Instance,
+		SourceOperationID: optionalID(source.OperationID),
+		ClaimID:           optionalID(accepted.ID),
+		SlotInputHash:     optionalID(hash),
+		TemplateID:        birth.TemplateID,
+		Vcpus:             int64(birth.Shape.VCPUs),
+		MemoryMib:         birth.Shape.MemoryMiB,
+		DiskMib:           birth.Shape.DiskMiB,
+		CreationEpoch:     birth.Epoch,
+		CreatedAt:         birth.CreatedAt.Format(time.RFC3339Nano),
 	})); err != nil {
 		return empty, false, err
 	}
-	if err = quota.ChargeWarmSlot(ctx, tx, selectedTemplate.TenantID, selected.SandboxID, source.Input.SlotOperation); err != nil {
+	if err = quota.ChargeWarmSlot(ctx, tx, tenantID, selected.SandboxID, source.Input.SlotOperation); err != nil {
 		return empty, false, err
 	}
 	if err = supply.SelectWarm(ctx, tx, poolID, selected); err != nil {
 		return empty, false, err
 	}
-	if err = machine.PinSnapshotSource(ctx, tx, selectedTemplate.TenantID, machine.SourceLease{
+	if err = machine.PinSnapshotSource(ctx, tx, tenantID, machine.SourceLease{
 		SnapshotID:  selectedTemplate.SnapshotID,
 		OperationID: accepted.ID,
-		StepKey:     "warm_claim",
+		StepKey:     warmClaimStepKey,
 	}); err != nil {
 		return empty, false, err
 	}
@@ -241,7 +227,7 @@ func (admission *WarmClaimAdmission) ValidateProvisionTarget(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	if claim.State.Phase != "warm_retired" || operation.Terminal(claim.Status) || record.State != "terminated" || holder != "claim:"+admission.ParentID || record.ID != claim.Input.Pool.SandboxID || source.Snapshot.ID != claim.Input.Restore.Snapshot.ID {
+	if claim.State.Phase != warmRetired || operation.Terminal(claim.Status) || record.State != "terminated" || holder != "claim:"+admission.ParentID || record.ID != claim.Input.Pool.SandboxID || source.Snapshot.ID != claim.Input.Restore.Snapshot.ID {
 		return nil, fmt.Errorf("%w: fallback target differs from retired warm responsibility", errs.ErrConflict)
 	}
 	released, status, err := machine.LoadResourceLink(ctx, tx, admission.ParentID, "warm_release")
@@ -283,11 +269,11 @@ func (admission *WarmClaimAdmission) AdmitResource(ctx context.Context, tx *sql.
 		if err != nil {
 			return err
 		}
-		if kind != "release" || candidate != step.Input.Pool.VMID || step.State.Phase != "warm_failed" || activation.Status != "failed" || activation.Input.Attempt != "warm" || activation.Input.ResourceOperation != step.Input.Source.OperationID {
+		if kind != "release" || candidate != step.Input.Pool.VMID || step.State.Phase != warmFailed || activation.Status != "failed" || activation.Input.Attempt != warmAttempt || activation.Input.ResourceOperation != step.Input.Source.OperationID {
 			return fmt.Errorf("%w: warm release lacks original failed attempt", errs.ErrConflict)
 		}
 	case "fallback":
-		if kind != "clone" || step.State.Phase != "warm_retired" {
+		if kind != "clone" || step.State.Phase != warmRetired {
 			return fmt.Errorf("%w: fallback has no completed warm retirement", errs.ErrConflict)
 		}
 	default:

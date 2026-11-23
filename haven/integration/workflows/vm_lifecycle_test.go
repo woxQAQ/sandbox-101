@@ -287,14 +287,14 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 		condition string
 	}{
 		{"vm", "UPDATE", "vms", "NEW.state='running'"},
-		{"instance", "UPDATE", "instances", "json_extract(NEW.body,'$.agent_ready')=1"},
-		{"sandbox", "UPDATE", "sandboxes", "json_extract(NEW.body,'$.instance')!=''"},
+		{"instance", "UPDATE", "instances", "NEW.observation_hash IS NOT NULL"},
+		{"sandbox", "UPDATE", "sandboxes", "NEW.instance!=''"},
 		{"disk", "INSERT", "quota_resources", "NEW.kind='vm_disk'"},
 		{"pending-ref", "DELETE", "quota_refs", "OLD.kind='pending_storage'"},
 		{"pending-cost", "DELETE", "quota_resources", "OLD.kind='pending_storage'"},
 		{"source-ref", "DELETE", "resource_refs", "OLD.holder_kind='step'"},
 		{"witness", "UPDATE", "operation_steps", "NEW.status='succeeded'"},
-		{"parent", "UPDATE", "operations", "json_extract(NEW.body,'$.resource_ready')=1"},
+		{"parent", "UPDATE", "operations", "NEW.resource_ready=1"},
 	} {
 		for _, mode := range []string{
 			"ABORT,'fixture completion rejection'",
@@ -313,7 +313,7 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 				}
 				coldResponsibility(t, service, operation, false)
 				var ready int
-				if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM instances WHERE json_extract(body,'$.agent_ready')=1").Scan(&ready); err != nil || ready != 0 {
+				if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM instances WHERE observation_hash IS NOT NULL").Scan(&ready); err != nil || ready != 0 {
 					t.Fatal("instance became ready outside completion transaction", ready, err)
 				}
 				if backend.Count("launch") != 1 {
@@ -372,8 +372,8 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if good.Status != "succeeded" {
 		t.Fatal("new request did not complete", good.State)
 	}
-	var witnessBefore []byte
-	if err = service.State.Database().QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessBefore); err != nil {
+	witnessBefore, err := machine.LoadResourceStep(context.Background(), service.State.Database(), current.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneServiceWithFault(t, service, backend, func(point string) error {
@@ -404,8 +404,8 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 	if err != nil || !bytes.Equal(operation.Encode(parentAfterCleanup), parentFailureBytes) {
 		t.Fatal("independent cleanup rewrote its failed parent's public result", err)
 	}
-	var witnessAfter []byte
-	if err = service.State.Database().QueryRow("SELECT body FROM operation_steps WHERE operation_id=?", current.ID).Scan(&witnessAfter); err != nil || !bytes.Equal(witnessBefore, witnessAfter) {
+	witnessAfter, err := machine.LoadResourceStep(context.Background(), service.State.Database(), current.ID)
+	if err != nil || !bytes.Equal(operation.Encode(witnessBefore), operation.Encode(witnessAfter)) {
 		t.Fatal("cleanup rewrote historical generation proof", err)
 	}
 	old, err := service.OperationMonitor.GetForTenant(context.Background(), "tenant", failed.ID)

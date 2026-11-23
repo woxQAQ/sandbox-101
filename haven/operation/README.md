@@ -4,7 +4,9 @@ operation 保存 operation 的公共身份、幂等、终态、通用链接头�
 
 HTTP 严格解码 `types.Command`。`NewIntent` 复制公开字段，宿主恢复与配置工作流可另外设置 `ObservedGeneration`。`Intent` 保持原 JSON 字段顺序，以便同键重试能核对已存 MAC。环境值与注入描述使用 `types.EnvVar` 和 `types.Injection`，进入持久请求前由业务入口净化 secret。
 
-`AcceptedCommand` 与 `LoadPublication` 保留原冻结结果读取。`Monitor` 提供通用状态与等待；`sandbox.OperationViews.Get` 按调用者权限返回 operation 视图。
+`Repository.Cached` 在同一读快照按作用域和幂等 key 查找操作，并比较接纳时的类型化请求参数。携带凭据的公开命令另以 `operation_request_macs` 核对 principal 与原始命令，secret 真值只经调用者重新提供。
+
+`AcceptedCommand` 读取接纳时冻结的公开命令。`LoadPublication` 在同一读事务中组合原请求、类型化结果、当时的资源字段与模板版本，并核对终态提交时记录的响应摘要。`Monitor` 提供通用状态与等待，`sandbox.OperationViews.Get` 按调用者权限返回 operation 视图。
 
 `ValidateDelivery` 按成功动作检查必需对象。claim 和生命周期命令交付对应 sandbox，fork 交付与冻结 ID 顺序一致的所有分支，checkpoint 创建交付 checkpoint，模板发布与 refill 交付模板。checkpoint 删除允许对象已解除绑定。提交投影、读取原 publication 和启动核验共用此检查。失败操作保留已获得的部分结果。
 

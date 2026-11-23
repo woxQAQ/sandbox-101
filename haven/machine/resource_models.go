@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
@@ -71,7 +72,18 @@ type ResourceStep struct {
 }
 
 func LoadResourceStep(ctx context.Context, query store.DBTX, id string) (ResourceStep, error) {
-	row, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
+	var step ResourceStep
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		step, err = readResourceStep(ctx, tx, id)
+		return err
+	})
+	return step, err
+}
+
+func readResourceStep(ctx context.Context, tx *sql.Tx, id string) (ResourceStep, error) {
+	q := dbgen.New(tx)
+	row, err := q.GetStep(ctx, dbgen.GetStepParams{
 		OperationID: id,
 		StepKey:     "resource",
 	})
@@ -87,7 +99,7 @@ func LoadResourceStep(ctx context.Context, query store.DBTX, id string) (Resourc
 		Candidate:        row.CandidateResourceID,
 		ExpectedInstance: row.ExpectedInstance,
 	}
-	input, body := row.Input, row.Body
+	input := row.Input
 	if err != nil {
 		return step, err
 	}
@@ -97,13 +109,105 @@ func LoadResourceStep(ctx context.Context, query store.DBTX, id string) (Resourc
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
+	progress, err := q.GetResourceProgress(ctx, id)
+	if err != nil {
+		return step, fmt.Errorf("resource progress missing for %s: %v", id, err)
 	}
+	snapshot := ""
+	if step.Input.Restore != nil {
+		snapshot = step.Input.Restore.Snapshot.ID
+	}
+	if progress.RestoreSnapshotID.String != snapshot || progress.BackingHolder.String != step.Input.BackingHolder {
+		return step, fmt.Errorf("resource backing provenance changed")
+	}
+	step.State = ResourceState{
+		Phase:          row.Phase.String,
+		BackingReady:   progress.BackingReady,
+		RestoreBlocked: progress.RestoreBlocked,
+		Witness:        progress.ResultInstance,
+		Error:          progress.Error,
+	}
+	if progress.DiskDevice.Valid {
+		step.State.DiskIdentity = &loom.FileIdentity{
+			Device: uint64(progress.DiskDevice.Int64),
+			Inode:  uint64(progress.DiskInode.Int64),
+			Mode:   uint32(progress.DiskMode.Int64),
+		}
+	}
+	if progress.MaterialsHash.Valid {
+		step.State.Materials, err = readMaterials(ctx, q, id, step.Input.Resource)
+		if err != nil {
+			return step, fmt.Errorf("resource restore proof unavailable: %v", err)
+		}
+		if operation.Digest(operation.Encode(step.State.Materials)) != progress.MaterialsHash.String {
+			return step, fmt.Errorf("resource restore proof changed")
+		}
+	}
+	step.State.Observation = launchObservation(progress)
 	if step.Input.Resource.VMID != step.Candidate || step.Input.TenantID == "" || step.Input.SandboxID == "" || step.Input.Resource.Instance == "" {
 		return step, fmt.Errorf("resource step candidate proof missing")
 	}
 	return step, nil
+}
+
+func transitionResource(ctx context.Context, tx *sql.Tx, step ResourceStep, next ResourceState, status string) error {
+	current, err := readResourceStep(ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if current.Hash != step.Hash || !reflect.DeepEqual(current.State, step.State) {
+		return fmt.Errorf("resource step %s changed before transition", step.OperationID)
+	}
+	device, inode, mode := diskColumns(next.DiskIdentity)
+	params := dbgen.SetResourceProgressParams{
+		OperationID:    step.OperationID,
+		BackingReady:   next.BackingReady,
+		RestoreBlocked: next.RestoreBlocked,
+		DiskDevice:     device,
+		DiskInode:      inode,
+		DiskMode:       mode,
+		ResultInstance: next.Witness,
+		Error:          next.Error,
+	}
+	q := dbgen.New(tx)
+	if !reflect.DeepEqual(step.State.Materials, next.Materials) {
+		if err = replaceMaterials(ctx, q, step, next.Materials); err != nil {
+			return err
+		}
+	}
+	if next.Materials != nil {
+		params.MaterialsHash = sql.NullString{
+			String: operation.Digest(operation.Encode(next.Materials)),
+			Valid:  true,
+		}
+	}
+	if o := next.Observation; o != nil {
+		params.ObservationPresent = true
+		params.Alive = o.Alive
+		params.Paused = o.Paused
+		params.Booted = o.Booted
+		params.Configured = o.Configured
+		params.Pid = int64(o.PID)
+		params.StartTime = int64(o.StartTime)
+		params.Network = o.Network
+	}
+	if err = store.RequireOne(q.SetResourceProgress(ctx, params)); err != nil {
+		return err
+	}
+	return store.RequireOne(q.TransitionResource(ctx, dbgen.TransitionResourceParams{
+		OperationID:    step.OperationID,
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		NextStatus:     status,
+		PreviousPhase: sql.NullString{
+			String: step.State.Phase,
+			Valid:  true,
+		},
+		NextPhase: sql.NullString{
+			String: next.Phase,
+			Valid:  true,
+		},
+	}))
 }
 
 func SlotDestinationHolder(destination *QuotaDestination) string {
@@ -144,58 +248,147 @@ type RestoreRequest struct {
 	StopOperationID  string `json:"stop_operation_id"`
 }
 
-// A request type fixes the action used by every writer and reader.
-type provisionAction interface {
-	// provisionAction identifies the provision operation encoded by the request.
-	provisionAction() string
+type provisionRequest interface {
+	FreshRequest | CloneRequest | RestoreRequest
+	// operationRequest fixes the resource action and parameters used for replay.
+	operationRequest() operation.Request
 }
 
-// The action and field order are part of the hashed operation request. Claim
-// is present only for admissions that also freeze a sanitized sandbox command.
-type provisionRequest[T provisionAction] struct {
-	Action  string
-	Request T
-	Claim   *operation.Intent `json:"Claim,omitempty"`
+// FreezeProvisionRequest binds the original resource parameters and optional tenant command.
+func FreezeProvisionRequest[T provisionRequest](request T, claim *operation.Intent) operation.Request {
+	r := request.operationRequest()
+	r.Command = claim
+	return r
 }
 
-func (FreshRequest) provisionAction() string {
-	return "claim"
-}
-
-func (CloneRequest) provisionAction() string {
-	return "clone"
-}
-
-func (RestoreRequest) provisionAction() string {
-	return "restore"
-}
-
-func FreezeProvisionRequest[T provisionAction](request T, claim *operation.Intent) []byte {
-	return operation.Encode(provisionRequest[T]{
-		Action:  request.provisionAction(),
-		Request: request,
-		Claim:   claim,
-	})
-}
-
-func DecodeProvisionRequest[T provisionAction](body []byte) (T, error) {
-	var frozen provisionRequest[T]
-	if err := json.Unmarshal(body, &frozen); err != nil {
-		return frozen.Request, err
+func (r FreshRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "claim",
+		Resource: &operation.ResourceRequest{
+			TenantID:   r.TenantID,
+			Key:        r.Key,
+			TemplateID: r.TemplateID,
+		},
 	}
-	if frozen.Action != frozen.Request.provisionAction() {
-		return frozen.Request, fmt.Errorf("unexpected provision request action %q", frozen.Action)
+}
+
+func (r CloneRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "clone",
+		Resource: &operation.ResourceRequest{
+			TenantID:   r.TenantID,
+			Key:        r.Key,
+			SnapshotID: r.SnapshotID,
+		},
 	}
-	return frozen.Request, nil
+}
+
+func (r RestoreRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "restore",
+		Resource: &operation.ResourceRequest{
+			TenantID:         r.TenantID,
+			Key:              r.Key,
+			SandboxID:        r.SandboxID,
+			SnapshotID:       r.SnapshotID,
+			ExpectedInstance: r.ExpectedInstance,
+			StopOperationID:  r.StopOperationID,
+		},
+	}
+}
+
+func (r ReleaseRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "release",
+		Resource: &operation.ResourceRequest{
+			TenantID:  r.TenantID,
+			Key:       r.Key,
+			SandboxID: r.SandboxID,
+		},
+	}
+}
+
+func (r StopRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "stop",
+		Resource: &operation.ResourceRequest{
+			TenantID:         r.TenantID,
+			Key:              r.Key,
+			SandboxID:        r.SandboxID,
+			ExpectedInstance: r.ExpectedInstance,
+		},
+	}
+}
+
+func (r CaptureRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "snapshot",
+		Resource: &operation.ResourceRequest{
+			TenantID:         r.TenantID,
+			Key:              r.Key,
+			SandboxID:        r.SandboxID,
+			ExpectedInstance: r.ExpectedInstance,
+		},
+	}
+}
+
+func (r CaptureCleanupRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "capture_cleanup",
+		Resource: &operation.ResourceRequest{
+			TenantID:          r.TenantID,
+			Key:               r.Key,
+			SourceOperationID: r.CaptureOperationID,
+			StopOperationID:   r.StopOperationID,
+		},
+	}
+}
+
+func (r CaptureDiscardRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "capture_discard",
+		Resource: &operation.ResourceRequest{
+			TenantID:          r.TenantID,
+			Key:               r.Key,
+			SandboxID:         r.SandboxID,
+			SourceOperationID: r.FailedOperationID,
+			ExpectedInstance:  r.ExpectedInstance,
+			StopOperationID:   r.StopOperationID,
+		},
+	}
+}
+
+func (r DiscardRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "discard",
+		Resource: &operation.ResourceRequest{
+			TenantID:          r.TenantID,
+			Key:               r.Key,
+			SandboxID:         r.SandboxID,
+			ExpectedInstance:  r.ExpectedInstance,
+			SourceOperationID: r.FailedOperationID,
+		},
+	}
+}
+
+func (r SnapshotDeleteRequest) operationRequest() operation.Request {
+	return operation.Request{
+		Action: "snapshot_delete",
+		Resource: &operation.ResourceRequest{
+			TenantID:   r.TenantID,
+			Key:        r.Key,
+			SnapshotID: r.SnapshotID,
+		},
+	}
 }
 
 // ResourceAdmission carries one child's frozen identity through the parent
 // transaction. Its fields are required facts, not optional execution modes.
 type ResourceAdmission struct {
-	Child       operation.State
-	Kind        string
-	Candidate   string
-	RequestHash string
+	Child     operation.State
+	Kind      string
+	Candidate string
+	Request   operation.Request
 }
 
 // ResourceParent joins a control workflow to a resource admission transaction.

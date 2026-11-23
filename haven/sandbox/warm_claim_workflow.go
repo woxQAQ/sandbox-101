@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -18,16 +17,18 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
-func (wc *WarmClaims) setWarmClaimPhase(step *WarmClaimStep, phase string) error {
-	if err := store.RequireOne(dbgen.New(wc.store.Database).AdvanceLiveStep(wc.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "warm_claim",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody: operation.Encode(WarmClaimState{
-			Phase: phase,
-		}),
-	})); err != nil {
+func transitionWarmClaim(ctx context.Context, query store.DBTX, step WarmClaimStep, phase warmClaimPhase, status string) error {
+	return store.RequireOne(dbgen.New(query).TransitionWarmClaim(ctx, dbgen.TransitionWarmClaimParams{
+		OperationID:   step.OperationID,
+		InputHash:     step.Hash,
+		PreviousPhase: optionalID(string(step.State.Phase)),
+		NextPhase:     optionalID(string(phase)),
+		NextStatus:    status,
+	}))
+}
+
+func (wc *WarmClaims) setWarmClaimPhase(step *WarmClaimStep, phase warmClaimPhase) error {
+	if err := transitionWarmClaim(wc.ctx, wc.store.Database, *step, phase, "running"); err != nil {
 		return err
 	}
 	step.State.Phase = phase
@@ -51,14 +52,14 @@ func (wc *WarmClaims) seedFallbackActivation(step WarmClaimStep, source machine.
 	if err != nil {
 		return err
 	}
-	if latest.Input.Attempt == "golden" {
+	if latest.Input.Attempt == goldenAttempt {
 		return nil
 	}
 	current, err := LoadWarmClaim(wc.ctx, tx, step.OperationID)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(current, step) || step.State.Phase != "warm_retired" || latest.Status != "failed" || latest.Input.Attempt != "warm" {
+	if !reflect.DeepEqual(current, step) || step.State.Phase != warmRetired || latest.Status != "failed" || latest.Input.Attempt != warmAttempt {
 		return fmt.Errorf("%w: fallback activation no longer owns warm retirement", errs.ErrConflict)
 	}
 	fence, err := LifecycleFence(wc.ctx, tx, step.Input.Pool.SandboxID)
@@ -72,7 +73,7 @@ func (wc *WarmClaims) seedFallbackActivation(step WarmClaimStep, source machine.
 		return fmt.Errorf("fallback lacks successful frozen clone witness")
 	}
 	input := ActivationInput{
-		Attempt:           "golden",
+		Attempt:           goldenAttempt,
 		RequestTenantID:   step.Input.RequestTenantID,
 		TenantID:          step.Input.Pool.Template.TenantID,
 		SandboxID:         step.Input.Pool.SandboxID,
@@ -82,18 +83,7 @@ func (wc *WarmClaims) seedFallbackActivation(step WarmClaimStep, source machine.
 		Settings:          step.Input.Settings,
 		ResetIdentity:     true,
 	}
-	payload := operation.Encode(input)
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(wc.ctx, dbgen.InsertStepParams{
-		OperationID:         step.OperationID,
-		StepKey:             "activation:golden",
-		Action:              "activate",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
-		CandidateResourceID: source.Candidate,
-		ExpectedInstance:    source.State.Witness,
-		Status:              "pending",
-		Body:                operation.Encode("admitted"),
-	})); err != nil {
+	if err = insertActivationStep(wc.ctx, tx, step.OperationID, source.Candidate, input); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -111,7 +101,7 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 	if operation.Terminal(step.Status) {
 		return nil
 	}
-	if step.State.Phase == "selected" {
+	if step.State.Phase == warmSelected {
 		err := wc.activations.activateVM(step.Input.Pool.VMID, step.OperationID)
 		activation, lookup := LoadActivation(wc.ctx, wc.store.Database, step.OperationID)
 		if lookup != nil {
@@ -123,11 +113,11 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 		if activation.Status != "failed" {
 			return err
 		}
-		if err = wc.setWarmClaimPhase(&step, "warm_failed"); err != nil {
+		if err = wc.setWarmClaimPhase(&step, warmFailed); err != nil {
 			return err
 		}
 	}
-	if step.State.Phase == "warm_failed" {
+	if step.State.Phase == warmFailed {
 		if _, _, lookup := machine.LoadResourceLink(wc.ctx, wc.store.Database, step.OperationID, "warm_release"); errors.Is(lookup, sql.ErrNoRows) {
 			parent := &WarmClaimAdmission{
 				ParentID: step.OperationID,
@@ -147,11 +137,11 @@ func (wc *WarmClaims) runWarmClaim(step WarmClaimStep) (runErr error) {
 		if _, err := wc.runResourceLink(step.OperationID, "warm_release"); err != nil {
 			return err
 		}
-		if err := wc.setWarmClaimPhase(&step, "warm_retired"); err != nil {
+		if err := wc.setWarmClaimPhase(&step, warmRetired); err != nil {
 			return err
 		}
 	}
-	if step.State.Phase != "warm_retired" {
+	if step.State.Phase != warmRetired {
 		return fmt.Errorf("unsupported warm claim phase")
 	}
 	if _, _, lookup := machine.LoadResourceLink(wc.ctx, wc.store.Database, step.OperationID, "fallback"); errors.Is(lookup, sql.ErrNoRows) {
@@ -230,7 +220,7 @@ func RetireWarmClaimLease(ctx context.Context, tx *sql.Tx, parent WarmClaimStep)
 	return machine.ReleaseSnapshotSource(ctx, tx, parent.Input.Pool.Template.TenantID, machine.SourceLease{
 		SnapshotID:  parent.Input.Restore.Snapshot.ID,
 		OperationID: parent.OperationID,
-		StepKey:     "warm_claim",
+		StepKey:     warmClaimStepKey,
 	})
 }
 
@@ -248,8 +238,8 @@ func CompleteWarmClaim(ctx context.Context, tx *sql.Tx, activation ActivationSte
 		return fmt.Errorf("warm completion current claim changed")
 	}
 	switch activation.Input.Attempt {
-	case "warm":
-		if parent.State.Phase != "selected" || activation.Input.ResourceOperation != parent.Input.Source.OperationID || activation.Input.ExpectedInstance != parent.Input.Pool.Instance {
+	case warmAttempt:
+		if parent.State.Phase != warmSelected || activation.Input.ResourceOperation != parent.Input.Source.OperationID || activation.Input.ExpectedInstance != parent.Input.Pool.Instance {
 			return fmt.Errorf("warm completion original selection changed")
 		}
 		reservation, status, err := supply.LoadPoolReservation(ctx, tx, parent.Input.PoolID)
@@ -259,15 +249,15 @@ func CompleteWarmClaim(ctx context.Context, tx *sql.Tx, activation ActivationSte
 		if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) {
 			return fmt.Errorf("warm completion pool responsibility changed")
 		}
-		if err = supply.RetireSelectedReservation(ctx, tx, parent.Input.PoolID, operation.Encode(reservation)); err != nil {
+		if err = supply.RetireSelectedReservation(ctx, tx, parent.Input.PoolID, reservation); err != nil {
 			return err
 		}
-	case "golden":
+	case goldenAttempt:
 		link, status, err := machine.LoadResourceLink(ctx, tx, parent.OperationID, "fallback")
 		if err != nil {
 			return err
 		}
-		if status != "succeeded" || parent.State.Phase != "warm_retired" || link.ChildID != activation.Input.ResourceOperation {
+		if status != "succeeded" || parent.State.Phase != warmRetired || link.ChildID != activation.Input.ResourceOperation {
 			return fmt.Errorf("fallback completion lacks original clone handoff")
 		}
 		released, status, err := machine.LoadResourceLink(ctx, tx, parent.OperationID, "warm_release")
@@ -293,32 +283,20 @@ func CompleteWarmClaim(ctx context.Context, tx *sql.Tx, activation ActivationSte
 	if err = RetireWarmClaimLease(ctx, tx, parent); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(ctx, dbgen.CompleteUnchangedStepParams{
-		OperationID:  parent.OperationID,
-		StepKey:      "warm_claim",
-		InputHash:    parent.Hash,
-		PreviousBody: operation.Encode(parent.State),
-		NewBody: operation.Encode(WarmClaimState{
-			Phase: "complete",
-		}),
-	})); err != nil {
+	if err = transitionWarmClaim(ctx, tx, parent, warmComplete, "succeeded"); err != nil {
 		return err
 	}
 	resource, err := machine.LoadResourceStep(ctx, tx, activation.Input.ResourceOperation)
 	if err != nil {
 		return err
 	}
-	body, err := operation.New(tx).LiveBody(ctx, parent.OperationID)
+	result, err := operation.New(tx).LiveResult(ctx, parent.OperationID)
 	if err != nil {
-		return err
-	}
-	var result operation.Result
-	if err = json.Unmarshal(body, &result); err != nil {
 		return err
 	}
 	result.VMID = resource.Candidate
 	result.ResourceReady = true
-	return operation.New(tx).ReplaceLiveBody(ctx, parent.OperationID, operation.Encode(result))
+	return operation.New(tx).ReplaceLiveResult(ctx, parent.OperationID, result)
 }
 
 func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
@@ -351,7 +329,7 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 	if err != nil {
 		return err
 	}
-	known = known || (activation.Input.Attempt == "golden" && activation.Status == "failed")
+	known = known || (activation.Input.Attempt == goldenAttempt && activation.Status == "failed")
 	if !known {
 		return nil
 	}
@@ -363,26 +341,15 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 		return nil
 	}
 	operations := operation.New(tx)
-	status, body, err := operations.ResultState(wc.ctx, step.OperationID)
+	status, result, err := operations.ResultState(wc.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(wc.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "warm_claim",
-		InputHash:   step.Hash,
-		Body: operation.Encode(WarmClaimState{
-			Phase: "failed",
-		}),
-	})); err != nil {
+	if err = transitionWarmClaim(wc.ctx, tx, current, warmClaimFailed, "failed"); err != nil {
 		return err
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return err
-		}
 		result.Error = "warm claim fallback failed; resource responsibility retained"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
@@ -395,7 +362,8 @@ func (wc *WarmClaims) failWarmClaim(step WarmClaimStep) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "warm_claim",
 		ResourceID:   step.Input.Pool.SandboxID,
-		Body:         operation.Encode(step.Input),
+		StepKey:      warmClaimStepKey,
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}
@@ -429,7 +397,7 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]o
 		if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) || release.Input.Sandbox.VMID != reservation.VMID {
 			return nil, fmt.Errorf("release superseded pool responsibility changed")
 		}
-		if err = supply.RetireSelectedReservation(wc.ctx, tx, parent.Input.PoolID, operation.Encode(reservation)); err != nil {
+		if err = supply.RetireSelectedReservation(wc.ctx, tx, parent.Input.PoolID, reservation); err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -440,27 +408,16 @@ func (wc *WarmClaims) RetireSupersededIn(tx *sql.Tx, release LifecycleStep) ([]o
 	}
 	operations := operation.New(tx)
 	if !operation.Terminal(parent.Status) {
-		if err = store.RequireOne(dbgen.New(tx).FailLiveStep(wc.ctx, dbgen.FailLiveStepParams{
-			OperationID: parent.OperationID,
-			StepKey:     "warm_claim",
-			InputHash:   parent.Hash,
-			Body: operation.Encode(WarmClaimState{
-				Phase: "superseded",
-			}),
-		})); err != nil {
+		if err = transitionWarmClaim(wc.ctx, tx, parent, warmSuperseded, "failed"); err != nil {
 			return nil, err
 		}
 	}
-	state, body, err := operations.ResultState(wc.ctx, parent.OperationID)
+	state, result, err := operations.ResultState(wc.ctx, parent.OperationID)
 	if err != nil {
 		return nil, err
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(state) {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return nil, err
-		}
 		result.Error = "warm claim superseded by release"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     parent.OperationID,

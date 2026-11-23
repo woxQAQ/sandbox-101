@@ -3,19 +3,23 @@ package sandbox_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/woxQAQ/haven/authorization"
 	"github.com/woxQAQ/haven/egress"
+	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/internal/testapp"
+	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/supply"
+	"github.com/woxQAQ/haven/types"
 )
 
 func TestHavenWarmClaimAndFallback(t *testing.T) {
@@ -25,7 +29,8 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 		true,
 	} {
 		t.Run(fmt.Sprint(fallback), func(t *testing.T) {
-			service, runtime, guest := testapp.GoldenSupplyFixture(t, 1)
+			faults := &testfixture.SnapshotFaults{}
+			service, runtime, guest := testapp.GoldenSupplyFixtureWithFault(t, 1, faults.Check)
 			principal := authorization.Principal{
 				TenantID: "tenant",
 			}
@@ -42,6 +47,12 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 			before := runtime.Counts["launch"]
 			runtime.Mu.Unlock()
 			if fallback {
+				faults.Set(func(point string) error {
+					if point == "admission_before_commit" {
+						return errs.ErrInterrupted
+					}
+					return nil
+				})
 				guest.Before = func(name string, resource loom.Resource) error {
 					if name == "activate" && resource.VMID == refill.Result.VMID {
 						return fmt.Errorf("explicit rejected warm instance")
@@ -49,16 +60,43 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 					return nil
 				}
 			}
-			claimed, err := service.CommandAdmission.Execute(ctx, principal, "claim", operation.Intent{
+			command := operation.Intent{
 				Action:     "claim",
 				TemplateID: "golden",
 				Policy: egress.Policy{
 					Mode: "none",
 				},
-			})
+			}
+			admitted, err := service.CommandAdmission.Execute(ctx, principal, "claim", command)
+			if fallback {
+				if !errors.Is(err, errs.ErrInterrupted) || operation.Terminal(admitted.Status) {
+					t.Fatalf("expected interruption after warm release, got %+v, %v", admitted, err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			var slots int
+			if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM pool_slots WHERE operation_id=?", refill.ID).Scan(&slots); err != nil || slots != 0 {
+				t.Fatalf("expected retired refill slot, got %d, %v", slots, err)
+			}
+			published, err := service.TemplateCatalog.GetTemplate(ctx, principal, "golden")
 			if err != nil {
-				reason := service.Workers.State(claimed.ID).Err
-				t.Fatal(claimed, reason, err)
+				t.Fatal(err)
+			}
+			if _, err = service.CommandAdmission.Execute(ctx, principal, "replace-golden", operation.Intent{
+				Action: "template_put",
+				Template: &types.Template{
+					ID:    published.ID,
+					Image: published.Image,
+					Shape: published.Shape,
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			service = testapp.ReopenCloneService(t, service, service.Options.Backend)
+			claimed, err := service.CommandAdmission.Execute(ctx, principal, "claim", command)
+			if err != nil || claimed.ID != admitted.ID {
+				t.Fatal("claim replay after template replacement", claimed, err)
 			}
 			sandbox, err := service.Dataplane.Ready(ctx, principal, claimed.Result.SandboxID)
 			if err != nil || sandbox.State != "running" || sandbox.ID != refill.Result.SandboxID || (sandbox.VMID == refill.Result.VMID) == fallback {
@@ -75,7 +113,9 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				t.Fatal("unexpected launches", before, after, wanted)
 			}
 			db := service.State.Database()
-			tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			tx, err := db.BeginTx(ctx, &sql.TxOptions{
+				ReadOnly: true,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

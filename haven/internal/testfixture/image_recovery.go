@@ -45,10 +45,10 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 		},
 	}
 	id := operation.NewID("op-")
-	request := operation.Encode(struct {
-		Action  string
-		Options imageimport.ImageImportOptions
-	}{"image_import", options})
+	request := operation.Request{
+		Action: "image_import",
+		Import: &options,
+	}
 	// Intent retirement compares the original bytes, including field order.
 	input := fmt.Appendf(nil, `{"request_tenant_id":"root","options":%s,"plan":%s,"work":%s,"target":%s,"reservation":%d}`, operation.Encode(options), operation.Encode(plan), operation.Encode(filepath.Join(state.Directory(), "imports", id)), operation.Encode(filepath.Join(state.Directory(), "images", options.Digest[7:])), int64(64<<20))
 	tx, err := state.Database().BeginTx(ctx, nil)
@@ -64,26 +64,26 @@ func SeedPendingImageImport(t *testing.T, state *store.State) (string, imageimpo
 		ScopeKind: "node",
 		ScopeID:   state.Identity().Identity,
 		Key:       "original",
-		Hash:      operation.Digest(request),
 		Request:   request,
 		Status:    "pending",
-		Body:      operation.Encode(operation.Result{}),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = InsertStep(ctx, tx, operation.Step{
-		OperationID: id,
-		Key:         "image_import",
-		Action:      "image_import",
-		Hash:        operation.Digest(input),
-		Input:       input,
-		Candidate:   options.Digest,
-		Status:      "pending",
-		Body:        []byte(`{"phase":"admitted"}`),
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
+		OperationID:         id,
+		StepKey:             "image_import",
+		Action:              "image_import",
+		Input:               input,
+		CandidateResourceID: options.Digest,
+		Status:              "pending",
+		Phase:               "admitted",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO image_intents(digest,operation_id,layout,body) VALUES(?,?,?,?)`, options.Digest, id, options.Materialization, input); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO image_import_progress(operation_id) VALUES(?)", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO image_intents(digest,operation_id,layout,input_hash) VALUES(?,?,?,?)`, options.Digest, id, options.Materialization, operation.Digest(input)); err != nil {
 		t.Fatal(err)
 	}
 	if err = quota.Reserve(ctx, tx, quota.Reservation{

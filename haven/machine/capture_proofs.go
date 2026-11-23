@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -48,7 +47,7 @@ func CaptureCleanupProof(ctx context.Context, tx *sql.Tx, step CaptureStep, targ
 	if err != nil {
 		return err
 	}
-	if string(body) != string(operation.Encode(step.Input)) {
+	if body != step.Hash {
 		return fmt.Errorf("raw capture cleanup input changed")
 	}
 	count, err := quota.CountResourceReference(ctx, tx, quota.ResourceReference{
@@ -159,9 +158,7 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 	if err != nil {
 		return currentMachine, err
 	}
-	if err = json.Unmarshal(current.Body, &currentMachine); err != nil {
-		return currentMachine, err
-	}
+	currentMachine = current.Record
 	if !current.Owned || current.Instance != source.State.Witness || current.Owner != step.OperationID || current.State != "running" || currentMachine.Deleting || !currentMachine.Verified || !currentMachine.AgentReady || !reflect.DeepEqual(currentMachine.Resource, source.Input.Resource) {
 		return currentMachine, fmt.Errorf("capture current instance ownership changed")
 	}
@@ -169,20 +166,8 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 	if err != nil {
 		return currentMachine, err
 	}
-	request, parent := projection.Request, projection.Body
-	hash, tenant, scope, status := projection.RequestHash, projection.ScopeID, projection.ScopeKind, projection.Status
-	var frozen struct {
-		Action  string
-		Request CaptureRequest
-	}
-	var result operation.Result
-	if err = json.Unmarshal(request, &frozen); err != nil {
-		return currentMachine, err
-	}
-	if err = json.Unmarshal(parent, &result); err != nil {
-		return currentMachine, err
-	}
-	if operation.Digest(request) != hash || scope != "tenant" || tenant != input.Request.TenantID || operation.Terminal(status) || frozen.Action != "snapshot" || frozen.Request != input.Request || result.SnapshotID != publication.ID || result.VMID != source.Candidate || result.SandboxID != sandboxRecord.ID {
+	result := projection.Result
+	if !projection.Request.Equal(input.Request.operationRequest()) || projection.ScopeKind != "tenant" || projection.ScopeID != input.Request.TenantID || operation.Terminal(projection.Status) || result.SnapshotID != publication.ID || result.VMID != source.Candidate || result.SandboxID != sandboxRecord.ID {
 		return currentMachine, fmt.Errorf("capture parent identity changed")
 	}
 	var record SnapshotRecord
@@ -193,28 +178,14 @@ func (c *Captures) captureProof(ctx context.Context, tx *sql.Tx, step CaptureSte
 	if err != nil {
 		return currentMachine, err
 	}
-	if err = json.Unmarshal(stored.Body, &record); err != nil {
+	if record, err = snapshotRecord(ctx, tx, stored); err != nil {
 		return currentMachine, err
 	}
 	if stored.Published != 0 || stored.Deleting != 0 || !reflect.DeepEqual(record, publication) {
 		return currentMachine, fmt.Errorf("capture unpublished destination changed")
 	}
-	versionBody, err := VersionHistory(ctx, tx, GenerationIdentity{
-		VMID:        source.Candidate,
-		OperationID: source.OperationID,
-	}, source.Key)
-	if err != nil {
+	if err = VerifyVersion(ctx, tx, source); err != nil {
 		return currentMachine, err
-	}
-	var version RetainedVersion
-	if err = json.Unmarshal(versionBody, &version); err != nil {
-		return currentMachine, err
-	}
-	if !reflect.DeepEqual(version, RetainedVersion{
-		Resource:     source.Input.Resource,
-		DiskIdentity: source.State.DiskIdentity,
-	}) {
-		return currentMachine, fmt.Errorf("capture source version proof changed")
 	}
 	manifest, err := image.LoadManifest(ctx, tx, source.Input.Resource.Config.Image)
 	if err != nil || !reflect.DeepEqual(manifest, source.Input.Image) {

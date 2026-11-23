@@ -37,15 +37,11 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if request.TenantID == "" || request.SandboxID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.ExpectedInstance, "run-") {
 		return empty, fmt.Errorf("%w: capture requires tenant, sandbox, key and expected instance", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request CaptureRequest
-	}{"snapshot", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	if cached, found, err := operation.New(c.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			c.dispatch(cached.ID)
 		}
@@ -72,7 +68,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			c.dispatch(cached.ID)
 		}
@@ -108,7 +104,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if owner != "" || instance != request.ExpectedInstance || currentMachine.Deleting || !currentMachine.Verified || !currentMachine.AgentReady || !reflect.DeepEqual(currentMachine.Resource, source.Input.Resource) {
 		return empty, fmt.Errorf("%w: capture source is busy or unverified", errs.ErrConflict)
 	}
-	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)
+	limits, err := authorization.LoadTenantLimits(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -118,7 +114,7 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	if err != nil {
 		return empty, err
 	}
-	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || usage.StorageMiB > tenant.MaxStorageMiB || cost > tenant.MaxStorageMiB-usage.StorageMiB {
+	if limits.MaxSandboxes < 0 || limits.MaxStorageMiB < 0 || usage.Slots > limits.MaxSandboxes || usage.StorageMiB > limits.MaxStorageMiB || cost > limits.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("%w: capture tenant quota exhausted", errs.ErrExhausted)
 	}
 	held, err := quota.ReservedBytes(ctx, tx)
@@ -158,10 +154,10 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 	}
 	payload := operation.Encode(input)
 	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
-		Child:       accepted,
-		Kind:        "capture",
-		Candidate:   publication.ID,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "capture",
+		Candidate: publication.ID,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
@@ -171,26 +167,25 @@ func (c *Captures) AdmitForParent(ctx context.Context, request CaptureRequest, p
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "capture",
 		Action:              "snapshot",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: publication.ID,
 		ExpectedInstance:    request.ExpectedInstance,
 		Status:              "pending",
-		Body: operation.Encode(CaptureState{
-			Phase: "admitted",
-		}),
-	})); err != nil {
+		Phase:               "admitted",
+	}); err != nil {
+		return empty, err
+	}
+	if err = store.RequireOne(dbgen.New(tx).InsertCaptureProgress(ctx, accepted.ID)); err != nil {
 		return empty, err
 	}
 	if err = admitCapturePublication(ctx, tx, publication); err != nil {

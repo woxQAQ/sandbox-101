@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -189,25 +188,10 @@ func (l *Lifecycle) restoreActivation(step LifecycleStep, child machine.Resource
 		Settings:          settings,
 		ResetIdentity:     false,
 	}
-	payload := operation.Encode(input)
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(l.ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    input.SandboxID,
-		PreviousBody: operation.Encode(step.Input.Settings),
-		NextBody:     operation.Encode(settings),
-	})); err != nil {
+	if err = replaceSettings(l.ctx, tx, input.SandboxID, step.Input.Settings, settings); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(l.ctx, dbgen.InsertStepParams{
-		OperationID:         step.OperationID,
-		StepKey:             "activation",
-		Action:              "activate",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
-		CandidateResourceID: child.Candidate,
-		ExpectedInstance:    child.State.Witness,
-		Status:              "pending",
-		Body:                operation.Encode("admitted"),
-	})); err != nil {
+	if err = insertActivationStep(l.ctx, tx, step.OperationID, child.Candidate, input); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -275,27 +259,18 @@ func (l *Lifecycle) finishResumeFailure(step LifecycleStep) error {
 		return err
 	}
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(l.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "lifecycle",
-		InputHash:   step.Hash,
-		Body: operation.Encode(LifecycleState{
-			Phase:      "failed",
-			SnapshotID: sandboxRecord.SnapshotID,
-		}),
-	})); err != nil {
+	if err = transitionLifecycle(l.ctx, tx, current, LifecycleState{
+		Phase:      "failed",
+		SnapshotID: sandboxRecord.SnapshotID,
+	}, "failed"); err != nil {
 		return err
 	}
-	status, body, err := operations.ResultState(l.ctx, step.OperationID)
+	status, result, err := operations.ResultState(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return err
-		}
 		result.Error = "resume failed; sleep snapshot retained"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
@@ -441,19 +416,10 @@ func RestorePausedSandbox(ctx context.Context, tx *sql.Tx, destination *machine.
 	restored := parent.Input.Sandbox
 	desired := parent.Input.Settings
 	desired.Generation = parent.OperationID
-	if err = store.RequireOne(dbgen.New(tx).RestorePausedSandbox(ctx, dbgen.RestorePausedSandboxParams{
-		ID:           destination.ID,
-		Tenant:       parent.Input.OwnerTenantID,
-		PreviousBody: operation.Encode(current),
-		NextBody:     operation.Encode(restored),
-	})); err != nil {
+	if err = replaceSandbox(ctx, tx, current, restored); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    destination.ID,
-		PreviousBody: operation.Encode(settings),
-		NextBody:     operation.Encode(desired),
-	})); err != nil {
+	if err = replaceSettings(ctx, tx, destination.ID, settings, desired); err != nil {
 		return err
 	}
 	return nil

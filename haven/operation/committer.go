@@ -59,14 +59,14 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 	repository := New(tx)
 	for _, outcome := range outcomes {
 		if outcome.Frozen {
-			status, body, err := repository.ResultState(ctx, outcome.ID)
+			status, result, err := repository.ResultState(ctx, outcome.ID)
 			if err != nil {
 				return err
 			}
 			if !Terminal(status) || (status == "failed") != outcome.Failed {
 				return fmt.Errorf("%w: admission outcome changed before completion %s", errs.ErrManualRecovery, outcome.ID)
 			}
-			if !outcome.AdoptResult && !bytes.Equal(body, Encode(outcome.Result)) {
+			if !outcome.AdoptResult && !bytes.Equal(Encode(result), Encode(outcome.Result)) {
 				return fmt.Errorf("%w: admission result changed before completion %s", errs.ErrManualRecovery, outcome.ID)
 			}
 			continue
@@ -74,11 +74,11 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 		var err error
 		switch {
 		case outcome.Failed:
-			err = repository.FailResult(ctx, outcome.ID, Encode(outcome.Result))
+			err = repository.FailResult(ctx, outcome.ID, outcome.Result)
 		case outcome.AdoptResult:
 			err = repository.Complete(ctx, outcome.ID)
 		default:
-			err = repository.CompleteResult(ctx, outcome.ID, Encode(outcome.Result))
+			err = repository.CompleteResult(ctx, outcome.ID, outcome.Result)
 		}
 		if err != nil {
 			return err
@@ -96,7 +96,7 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 		if err != nil {
 			return err
 		}
-		if err = repository.Publish(ctx, outcome.ID, Encode(view)); err != nil {
+		if err = publish(ctx, tx, outcome.ID, view); err != nil {
 			return err
 		}
 	}
@@ -104,36 +104,54 @@ func (committer *Committer) Complete(tx *sql.Tx, outcomes ...Outcome) error {
 }
 
 // Admission fixes an operation's scoped request identity and initial result.
-// Request and Body are the original encoded bytes supplied by its workflow.
 type Admission struct {
 	ID        string
 	ScopeKind string
 	ScopeID   string
 	Key       string
-	Hash      string
 	Status    string
-	Request   []byte
-	Body      []byte
+	Request   Request
+	Result    Result
 }
 
 func (r *Repository) Insert(ctx context.Context, admission Admission) error {
+	kind, err := admission.Request.kind()
+	if err != nil {
+		return err
+	}
 	created := clockNow()
 	finished := ""
 	if Terminal(admission.Status) {
 		finished = created
 	}
-	return store.RequireOne(r.queries.InsertOperation(ctx, dbgen.InsertOperationParams{
-		ID:          admission.ID,
-		ScopeKind:   admission.ScopeKind,
-		ScopeID:     admission.ScopeID,
-		IdemKey:     admission.Key,
-		RequestHash: admission.Hash,
-		Request:     admission.Request,
-		Status:      admission.Status,
-		Body:        admission.Body,
-		CreatedAt:   created,
-		FinishedAt:  finished,
-	}))
+	result := admission.Result
+	return r.resultTransaction(ctx, func(q *dbgen.Queries) error {
+		if err := store.RequireOne(q.InsertOperation(ctx, dbgen.InsertOperationParams{
+			ID:                 admission.ID,
+			ScopeKind:          admission.ScopeKind,
+			ScopeID:            admission.ScopeID,
+			IdemKey:            admission.Key,
+			Action:             admission.Request.Action,
+			RequestKind:        kind,
+			Status:             admission.Status,
+			ResultSandboxID:    result.SandboxID,
+			ResultVmID:         result.VMID,
+			ResultImageDigest:  result.ImageDigest,
+			ResultTemplateID:   result.TemplateID,
+			ResultCheckpointID: result.CheckpointID,
+			ResultSnapshotID:   result.SnapshotID,
+			ResourceReady:      result.ResourceReady,
+			ResultError:        result.Error,
+			CreatedAt:          created,
+			FinishedAt:         finished,
+		})); err != nil {
+			return err
+		}
+		if err := insertRequest(ctx, q, admission); err != nil {
+			return err
+		}
+		return insertResultSandboxes(ctx, q, admission.ID, result.SandboxIDs)
+	})
 }
 
 func (r *Repository) InsertCredential(ctx context.Context, operationID, mac string) error {
@@ -156,12 +174,8 @@ func (r *Repository) PublicationEligible(ctx context.Context, operationID string
 	return activate != 0, err
 }
 
-func (r *Repository) CompleteResult(ctx context.Context, operationID string, body []byte) error {
-	return store.RequireOne(r.queries.CompleteResult(ctx, dbgen.CompleteResultParams{
-		ID:         operationID,
-		Body:       body,
-		FinishedAt: clockNow(),
-	}))
+func (r *Repository) CompleteResult(ctx context.Context, operationID string, result Result) error {
+	return r.updateResult(ctx, operationID, "succeeded", result)
 }
 
 func (r *Repository) CompletePending(ctx context.Context, operationID string) error {

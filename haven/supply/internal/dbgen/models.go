@@ -3,3 +3,16 @@
 //   sqlc v1.30.0
 
 package dbgen
+
+type PoolSlot struct {
+	OperationID       string
+	TemplateID        string
+	TemplateVersion   string
+	SandboxID         string
+	VmID              string
+	SourceOperationID string
+	SourceInputHash   string
+	Instance          string
+	CreatedAtUnixNs   int64
+	Status            string
+}

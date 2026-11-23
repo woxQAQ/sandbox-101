@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -26,7 +25,17 @@ type LeaseCandidate struct {
 }
 
 func LeaseCandidates(ctx context.Context, query store.DBTX) ([]LeaseCandidate, error) {
-	rows, err := dbgen.New(query).ListLeaseCandidates(ctx)
+	var candidates []LeaseCandidate
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		candidates, err = leaseCandidates(ctx, tx)
+		return err
+	})
+	return candidates, err
+}
+
+func leaseCandidates(ctx context.Context, tx *sql.Tx) ([]LeaseCandidate, error) {
+	rows, err := dbgen.New(tx).ListLeaseCandidates(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +46,7 @@ func LeaseCandidates(ctx context.Context, query store.DBTX) ([]LeaseCandidate, e
 			TenantID: row.Tenant,
 			State:    row.State,
 		}
-		if err = json.Unmarshal(row.Body, &candidate.Settings); err != nil {
+		if candidate.Settings, err = readSettings(ctx, tx, row.ID); err != nil {
 			return nil, err
 		}
 		candidates = append(candidates, candidate)
@@ -48,15 +57,20 @@ func LeaseCandidates(ctx context.Context, query store.DBTX) ([]LeaseCandidate, e
 // RenewActivityLease extends the verified configuration under the caller's
 // continuous configuration guard. Admission, binding checks and checkpointing
 // remain with the data caller; the original settings body is the CAS witness.
-func RenewActivityLease(ctx context.Context, query store.DBTX, id string, previous Settings) (time.Time, error) {
+func RenewActivityLease(ctx context.Context, db store.WorkflowDatabase, id string, previous Settings) (time.Time, error) {
 	next := previous
 	next.Deadline = time.Now().UTC().Add(time.Duration(next.TTLSeconds) * time.Second)
-	err := store.RequireOne(dbgen.New(query).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    id,
-		PreviousBody: operation.Encode(previous),
-		NextBody:     operation.Encode(next),
-	}))
-	return next.Deadline, err
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err = replaceSettings(ctx, tx, id, previous, next); err != nil {
+		return time.Time{}, err
+	}
+	return next.Deadline, tx.Commit()
 }
 
 func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
@@ -148,10 +162,7 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 			VMID:      current.VMID,
 		},
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"renew", operation.SanitizedCommand(command)})
+	frozen := operation.CommandRequest(operation.SanitizedCommand(command))
 	input := operation.Encode(struct {
 		Sandbox ownership.Sandbox
 		Before  Settings
@@ -163,34 +174,28 @@ func (l *Lifecycle) AdmitRenew(ctx context.Context, principal authorization.Prin
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
 		Key:       key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "succeeded",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
 	if err = operations.InsertCredential(ctx, accepted.ID, mac); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "lease",
 		Action:              "renew",
-		InputHash:           operation.Digest(input),
 		Input:               input,
 		CandidateResourceID: current.ID,
 		ExpectedInstance:    current.Instance,
 		Status:              "succeeded",
-		Body:                operation.Encode("complete"),
-	})); err != nil {
+		Phase:               "complete",
+	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    current.ID,
-		PreviousBody: operation.Encode(settings),
-		NextBody:     operation.Encode(next),
-	})); err != nil {
+	if err = replaceSettings(ctx, tx, current.ID, settings, next); err != nil {
 		return empty, err
 	}
 	if err = l.fault("renew_before_commit"); err != nil {

@@ -3,7 +3,6 @@ package gc
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -26,33 +25,30 @@ func (c *Collector) internalSnapshot(ctx context.Context, source machine.Snapsho
 	if len(entries) != 1 {
 		return false, false, fmt.Errorf("snapshot has ambiguous control publication")
 	}
-	entry := entries[0]
-	if operation.Digest(entry.Input) != entry.InputHash {
-		return false, false, fmt.Errorf("snapshot control link checksum changed")
-	}
-	var link machine.ResourceLink
-	if err = json.Unmarshal(entry.Input, &link); err != nil {
+	parentID := entries[0]
+	link, status, err := machine.LoadResourceLink(ctx, c.store.Database, parentID, "capture")
+	if err != nil {
 		return false, false, err
 	}
-	if link.Kind != "capture" || link.Candidate != source.Snapshot.ID {
+	if link.ChildID != source.CaptureOperation || link.Kind != "capture" || link.Candidate != source.Snapshot.ID {
 		return false, false, fmt.Errorf("snapshot control link identity changed")
 	}
-	if lifecycle, err := sandbox.LoadLifecycleStep(ctx, c.store.Database, entry.OperationID); err == nil {
+	if lifecycle, err := sandbox.LoadLifecycleStep(ctx, c.store.Database, parentID); err == nil {
 		if lifecycle.Input.OwnerTenantID != source.Snapshot.TenantID || (lifecycle.Input.Command.Action != "pause" && lifecycle.Input.Command.Action != "checkpoint") {
 			return false, false, fmt.Errorf("snapshot lifecycle publication scope changed")
 		}
-		return true, operation.Terminal(lifecycle.Status) && entry.Status == "succeeded", nil
+		return true, operation.Terminal(lifecycle.Status) && status == "succeeded", nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return false, false, err
 	}
-	supply, err := supply.LoadSupply(ctx, c.store.Database, entry.OperationID)
+	supply, err := supply.LoadSupply(ctx, c.store.Database, parentID)
 	if err != nil {
 		return false, false, err
 	}
 	if supply.Input.Command.Action != "template_build" || supply.Input.Template.TenantID != source.Snapshot.TenantID {
 		return false, false, fmt.Errorf("snapshot supply publication scope changed")
 	}
-	return true, operation.Terminal(supply.Status) && entry.Status == "succeeded", nil
+	return true, operation.Terminal(supply.Status) && status == "succeeded", nil
 }
 
 func (c *Collector) snapshotCandidate(ctx context.Context, record machine.SnapshotRecord) (bool, string, error) {

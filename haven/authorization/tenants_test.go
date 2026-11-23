@@ -49,7 +49,7 @@ func TestHavenTenantCredentialUpdateRejectsSQL(t *testing.T) {
 			if _, err := service.Authentication.Authenticate(ctx, next.Token); err == nil {
 				t.Fatal("rejected update activated a replacement credential")
 			}
-			limits, err := authorization.New(service.State.Database()).Limits(ctx, original.ID)
+			limits, err := authorization.LoadTenantLimits(ctx, service.State.Database(), original.ID)
 			if err != nil || limits.MaxSandboxes != original.MaxSandboxes || limits.MaxStorageMiB != original.MaxStorageMiB {
 				t.Fatal("rejected update changed the budget", limits, err)
 			}

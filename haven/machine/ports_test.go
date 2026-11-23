@@ -31,16 +31,16 @@ func TestMissingCapabilityPortsRetainIntentAndResponsibility(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	payload := []byte(`{"action":"snapshot"}`)
 	if err = operation.New(state.Database()).Insert(ctx, operation.Admission{
 		ID:        "retained",
 		ScopeKind: "node",
 		ScopeID:   state.Identity().Identity,
 		Key:       "retained",
-		Hash:      operation.Digest(payload),
-		Request:   payload,
-		Status:    "pending",
-		Body:      operation.Encode(operation.Result{}),
+		Request: operation.Request{
+			Action:   "snapshot",
+			Resource: &operation.ResourceRequest{},
+		},
+		Status: "pending",
 	}); err != nil {
 		t.Fatal(err)
 	}

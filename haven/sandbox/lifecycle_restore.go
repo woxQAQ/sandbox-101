@@ -14,8 +14,6 @@ import (
 	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/quota"
-	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
-	"github.com/woxQAQ/haven/store"
 )
 
 func (p *Provisioning) AdmitRestore(ctx context.Context, request machine.RestoreRequest) (operation.State, error) {
@@ -29,11 +27,10 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		return empty, fmt.Errorf("%w: restore requires scoped snapshot, stopped instance, stop proof and key", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			p.dispatch(cached.ID)
 		}
@@ -73,7 +70,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			p.dispatch(cached.ID)
 		}
@@ -154,7 +151,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	if refs != 1 || instances != 1+int64(len(prior.Input.Ancestors)) || versions != instances {
 		return empty, fmt.Errorf("restore target has unrecorded resource users or versions")
 	}
-	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)
+	limits, err := authorization.LoadTenantLimits(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -163,7 +160,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		return empty, err
 	}
 	shape := config.Shape
-	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || usage.StorageMiB > tenant.MaxStorageMiB || shape.DiskMiB > tenant.MaxStorageMiB-usage.StorageMiB {
+	if limits.MaxSandboxes < 0 || limits.MaxStorageMiB < 0 || usage.Slots > limits.MaxSandboxes || usage.StorageMiB > limits.MaxStorageMiB || shape.DiskMiB > limits.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("restore tenant peak quota exhausted")
 	}
 	held, err := quota.ReservedBytes(ctx, tx)
@@ -216,10 +213,10 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		StopOperation:  request.StopOperationID,
 	}
 	if err = machine.AdmitResourceParent(ctx, tx, parent, machine.ResourceAdmission{
-		Child:       accepted,
-		Kind:        "restore",
-		Candidate:   resource.VMID,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "restore",
+		Candidate: resource.VMID,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
@@ -236,10 +233,9 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
@@ -258,13 +254,7 @@ func (p *Provisioning) AdmitRestoreWithParent(ctx context.Context, request machi
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReuseSandboxForProvision(ctx, dbgen.ReuseSandboxForProvisionParams{
-		ID:            destination.ID,
-		Tenant:        request.TenantID,
-		PreviousState: previous.State,
-		PreviousBody:  operation.Encode(previous),
-		NewBody:       operation.Encode(destination),
-	})); err != nil {
+	if err = replaceSandbox(ctx, tx, previous, destination); err != nil {
 		return empty, err
 	}
 	if err = machine.RetainGenerationIntent(ctx, tx, accepted.ID, currentMachine); err != nil {

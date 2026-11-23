@@ -62,7 +62,7 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 				t.Fatal("fixture did not reach physical deletion before metadata rejection", err)
 			}
 			var stepStatus, phase string
-			if err = service.State.Database().QueryRow("SELECT status,json_extract(body,'$.phase') FROM operation_steps WHERE operation_id=? AND step_key='image_cleanup'", collector.ID).Scan(&stepStatus, &phase); err != nil || stepStatus != "running" || phase != "removed" {
+			if err = service.State.Database().QueryRow("SELECT status,phase FROM operation_steps WHERE operation_id=? AND step_key='image_cleanup'", collector.ID).Scan(&stepStatus, &phase); err != nil || stepStatus != "running" || phase != "removed" {
 				t.Fatal("collector did not retain the physical deletion proof", stepStatus, phase, err)
 			}
 			var storageBytes int64

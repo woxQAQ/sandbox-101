@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -161,6 +162,16 @@ func (step CaptureStep) sourceVMID() string {
 }
 
 func LoadCapture(ctx context.Context, query store.DBTX, operationID string) (CaptureStep, error) {
+	var step CaptureStep
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		step, err = readCapture(ctx, tx, operationID)
+		return err
+	})
+	return step, err
+}
+
+func readCapture(ctx context.Context, query *sql.Tx, operationID string) (CaptureStep, error) {
 	step := CaptureStep{
 		OperationID: operationID,
 	}
@@ -171,7 +182,7 @@ func LoadCapture(ctx context.Context, query store.DBTX, operationID string) (Cap
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	action, candidate, instance := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -183,8 +194,38 @@ func LoadCapture(ctx context.Context, query store.DBTX, operationID string) (Cap
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
+	queries := dbgen.New(query)
+	progress, err := queries.ReadCaptureProgress(ctx, operationID)
+	if err != nil {
+		return step, fmt.Errorf("cannot read capture progress for %s: %v", operationID, err)
+	}
+	step.State = CaptureState{
+		Phase:           record.Phase.String,
+		Error:           record.StepError,
+		ResumeRequired:  progress.ResumeRequired,
+		Captured:        progress.Captured,
+		Materialized:    progress.Materialized,
+		ArtifactsSynced: progress.ArtifactsSynced,
+	}
+	b, err := queries.GetCaptureBoundary(ctx, operationID)
+	if err == nil {
+		step.State.Boundary = &loom.CaptureBoundary{
+			Path:        b.Path,
+			Parent:      fileIdentity(b.ParentDevice, b.ParentInode, b.ParentMode),
+			Publication: fileIdentity(b.PublicationDevice, b.PublicationInode, b.PublicationMode),
+		}
+	} else if err != sql.ErrNoRows {
 		return step, err
+	}
+	files, err := queries.ListCaptureFiles(ctx, operationID)
+	if err != nil {
+		return step, err
+	}
+	if len(files) > 0 {
+		step.State.Files = make(map[string]string, len(files))
+		for _, file := range files {
+			step.State.Files[file.Path] = file.Digest
+		}
 	}
 	if action != "snapshot" || candidate != step.Input.Snapshot.ID || instance != step.Input.Request.ExpectedInstance || !loom.ValidResourceID(candidate, "snap-") {
 		return step, fmt.Errorf("capture identity changed")

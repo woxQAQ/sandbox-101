@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +36,7 @@ import (
 	"github.com/woxQAQ/haven/egress"
 	"github.com/woxQAQ/haven/guest"
 	"github.com/woxQAQ/haven/internal/application"
+	"github.com/woxQAQ/haven/internal/testfixture"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/loom/host"
 	"github.com/woxQAQ/haven/loom/unixsocket"
@@ -709,11 +709,8 @@ func seedFixtureImage(t *testing.T, root string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(manifest)
-	if err == nil {
-		_, err = database.Exec("INSERT INTO images VALUES(?,?)", manifest.Digest, body)
-	}
-	err = errors.Join(err, database.Close())
+	testfixture.PublishManifest(t, database, manifest)
+	err = database.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

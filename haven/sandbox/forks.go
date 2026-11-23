@@ -230,6 +230,16 @@ type ForkStep struct {
 }
 
 func LoadFork(ctx context.Context, query store.DBTX, id string) (ForkStep, error) {
+	var step ForkStep
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		step, err = readFork(ctx, tx, id)
+		return err
+	})
+	return step, err
+}
+
+func readFork(ctx context.Context, query *sql.Tx, id string) (ForkStep, error) {
 	step := ForkStep{
 		OperationID: id,
 	}
@@ -240,7 +250,7 @@ func LoadFork(ctx context.Context, query store.DBTX, id string) (ForkStep, error
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -252,8 +262,34 @@ func LoadFork(ctx context.Context, query store.DBTX, id string) (ForkStep, error
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
+	progress, err := dbgen.New(query).ReadForkProgress(ctx, id)
+	if err != nil {
+		return step, fmt.Errorf("cannot read fork progress for %s: %v", id, err)
+	}
+	step.State = ForkState{
+		Phase:    record.Phase.String,
+		Error:    record.StepError,
+		Snapshot: step.Input.Snapshot,
+	}
+	if progress.CaptureOperationID.Valid {
+		if step.Input.Snapshot != nil {
+			return step, fmt.Errorf("fork has conflicting snapshot sources")
+		}
+		source, err := machine.CapturePublication(ctx, query, progress.CaptureOperationID.String)
+		if err != nil {
+			return step, err
+		}
+		if operation.Digest(operation.Encode(source)) != progress.PublicationHash.String {
+			return step, fmt.Errorf("fork original capture publication changed")
+		}
+		step.State.Snapshot = &source
+	}
+	for index := int64(0); index < progress.ChildCount; index++ {
+		link, _, err := machine.LoadResourceLink(ctx, query, id, fmt.Sprintf("branch:%d", index))
+		if err != nil {
+			return step, fmt.Errorf("cannot read fork %s branch %d: %v", id, index, err)
+		}
+		step.State.Children = append(step.State.Children, link.ChildID)
 	}
 	if action != "fork" || candidate != id || expected != "" || step.Input.Command.Action != "fork" || len(step.Input.Targets) < 1 || len(step.Input.Targets) > 32 || len(step.Input.Targets) != step.Input.Command.Count || (step.Input.Source == nil) == (step.Input.Snapshot == nil) {
 		return step, fmt.Errorf("fork group source or batch identity changed")
@@ -338,9 +374,12 @@ func (admission *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql
 	if request.Kind != "clone" || request.Child.Result.SandboxID != admission.Target.ID {
 		return fmt.Errorf("%w: fork branch resource identity changed", errs.ErrConflict)
 	}
+	if err := matchSettings(ctx, tx, admission.Target.ID, admission.Group.Input.Settings); err != nil {
+		return err
+	}
 	if err := store.RequireOne(dbgen.New(tx).DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
-		SandboxID: admission.Target.ID,
-		Body:      operation.Encode(admission.Group.Input.Settings),
+		SandboxID:  admission.Target.ID,
+		Generation: admission.Group.Input.Settings.Generation,
 	})); err != nil {
 		return err
 	}
@@ -362,6 +401,45 @@ func forkTargetIDs(input ForkInput) []string {
 	return ids
 }
 
+func transitionFork(ctx context.Context, tx *sql.Tx, step ForkStep, next ForkState, status string) error {
+	current, err := readFork(ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current.State, step.State) {
+		return fmt.Errorf("fork progress changed")
+	}
+	if err = operation.AdvancePhase(ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "fork_group",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     status,
+		NextPhase:      next.Phase,
+	}); err != nil {
+		return err
+	}
+	var captureID, hash sql.NullString
+	if step.Input.Snapshot == nil && next.Snapshot != nil {
+		captureID = optionalID(next.Snapshot.CaptureOperation)
+		hash = optionalID(operation.Digest(operation.Encode(next.Snapshot)))
+	}
+	q := dbgen.New(tx)
+	if err = store.RequireOne(q.SaveForkProgress(ctx, dbgen.SaveForkProgressParams{
+		OperationID:        step.OperationID,
+		CaptureOperationID: captureID,
+		PublicationHash:    hash,
+		ChildCount:         int64(len(next.Children)),
+	})); err != nil {
+		return err
+	}
+	return store.RequireOne(q.SetForkError(ctx, dbgen.SetForkErrorParams{
+		OperationID: step.OperationID,
+		StepError:   next.Error,
+	}))
+}
+
 func (f *Forks) saveFork(step *ForkStep, state ForkState) error {
 	f.storeWriteMu.Lock()
 	defer f.storeWriteMu.Unlock()
@@ -372,19 +450,13 @@ func (f *Forks) saveFork(step *ForkStep, state ForkState) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "fork_group",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(state),
-	})); err != nil {
+	if err = transitionFork(f.ctx, tx, *step, state, "running"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	step.State = state
+	step.State, step.Status = state, "running"
 	return f.store.Checkpoint()
 }
 

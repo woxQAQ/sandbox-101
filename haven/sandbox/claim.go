@@ -14,6 +14,8 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
+const claimAction = "claim"
+
 // ClaimAdmission carries the prepared command and its identity for claim retries.
 type ClaimAdmission struct {
 	PreparedCommand
@@ -32,7 +34,7 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 	if principal.TenantID == "" || principal.SandboxID != "" {
 		return empty, fmt.Errorf("%w: claim requires tenant authority without sandbox scope", errs.ErrInvalid)
 	}
-	if command.Action != "claim" || command.TemplateID == "" {
+	if command.Action != claimAction || command.TemplateID == "" {
 		return empty, fmt.Errorf("%w: claim requires the claim action and a template", errs.ErrInvalid)
 	}
 	if key == "" || len(key) > 256 {

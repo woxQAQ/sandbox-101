@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 
 	"github.com/woxQAQ/haven/loom"
@@ -20,12 +21,6 @@ type VMRecord struct {
 	Verified    bool              `json:"verified"`
 	AgentReady  bool              `json:"agent_ready"`
 	Deleting    bool              `json:"deleting"`
-}
-
-// RetainedVersion retains the admitted resource and disk identity for one generation.
-type RetainedVersion struct {
-	Resource     loom.Resource      `json:"resource"`
-	DiskIdentity *loom.FileIdentity `json:"disk_identity,omitempty"`
 }
 
 // VMRoot retains the catalog identity even when the serialized resource has
@@ -45,14 +40,10 @@ func VMRoots(ctx context.Context, query store.DBTX, directory string) ([]VMRoot,
 	}
 	var roots []VMRoot
 	for _, row := range rows {
-		var record VMRecord
-		if err := json.Unmarshal(row.Body, &record); err != nil {
-			return roots, err
-		}
 		roots = append(roots, VMRoot{
 			ID:         row.ID,
-			Directory:  record.Resource.Dir,
-			Consistent: record.Resource.VMID == row.ID && record.Resource.Dir == filepath.Join(directory, "vms", row.ID),
+			Directory:  row.Directory,
+			Consistent: row.Directory == filepath.Join(directory, "vms", row.ID),
 		})
 	}
 	return roots, nil
@@ -71,14 +62,16 @@ type RestoreGenerationClaim struct {
 }
 
 func ClaimRestoreGeneration(ctx context.Context, query store.DBTX, claim RestoreGenerationClaim) error {
-	return store.RequireOne(dbgen.New(query).ClaimStoppedBody(ctx, dbgen.ClaimStoppedBodyParams{
+	return store.RequireOne(dbgen.New(query).ClaimRestoreGeneration(ctx, dbgen.ClaimRestoreGenerationParams{
 		ID:       claim.VM.Resource.VMID,
 		Instance: claim.ExpectedInstance,
 		Owner: sql.NullString{
 			String: claim.OperationID,
 			Valid:  true,
 		},
-		Body: operation.Encode(claim.VM),
+		GenerationOperationID: claim.OperationID,
+		Directory:             claim.VM.Resource.Dir,
+		ResourceHash:          operation.Digest(operation.Encode(claim.VM.Resource)),
 	}))
 }
 
@@ -90,50 +83,143 @@ type CurrentOwnership struct {
 	State    string
 	Owner    string
 	Owned    bool // Preserves SQL NULL independently of the owner string.
-	Body     []byte
+	Record   VMRecord
 }
 
 // Repository reads current ownership and retained generation facts through the
 // caller's database or transaction. Generated SQL types stay inside this package.
 
 func LoadOwnership(ctx context.Context, query store.DBTX, id string) (CurrentOwnership, error) {
+	var result CurrentOwnership
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		result, err = readOwnership(ctx, tx, id)
+		return err
+	})
+	return result, err
+}
+
+func readOwnership(ctx context.Context, query *sql.Tx, id string) (CurrentOwnership, error) {
 	row, err := dbgen.New(query).GetCurrent(ctx, id)
 	if err != nil {
 		return CurrentOwnership{}, err
 	}
+	vm := row.Vm
+	var input ResourceInput
+	if !row.InputHash.Valid || operation.Digest(row.Input) != row.InputHash.String {
+		return CurrentOwnership{}, fmt.Errorf("VM generation input missing or changed")
+	}
+	if err = json.Unmarshal(row.Input, &input); err != nil {
+		return CurrentOwnership{}, err
+	}
+	if input.Resource.VMID != id || input.Resource.Dir != vm.Directory || int64(input.Resource.Slot) != vm.Slot || operation.Digest(operation.Encode(input.Resource)) != vm.ResourceHash {
+		return CurrentOwnership{}, fmt.Errorf("VM generation allocation changed")
+	}
+	record := VMRecord{
+		Resource:   input.Resource,
+		Verified:   vm.Verified == 1,
+		AgentReady: vm.AgentReady == 1,
+		Deleting:   vm.Deleting == 1,
+	}
+	if vm.ObservationHash.Valid {
+		progress, err := dbgen.New(query).GetResourceProgress(ctx, vm.GenerationOperationID)
+		if err != nil {
+			return CurrentOwnership{}, fmt.Errorf("VM launch history unavailable: %v", err)
+		}
+		record.Observation = launchObservation(progress)
+		if observationHash(record.Observation) != vm.ObservationHash {
+			return CurrentOwnership{}, fmt.Errorf("VM launch observation changed")
+		}
+	}
 	return CurrentOwnership{
-		Instance: row.CurrentInstance,
-		State:    row.State,
-		Owner:    row.OperationID.String,
-		Owned:    row.OperationID.Valid,
-		Body:     row.Body,
+		Instance: vm.CurrentInstance,
+		State:    vm.State,
+		Owner:    vm.OperationID.String,
+		Owned:    vm.OperationID.Valid,
+		Record:   record,
 	}, nil
 }
 
-// GenerationIdentity identifies a retained birth independently of current VM
-// ownership. Instance witnesses and version step keys remain explicit inputs.
-type GenerationIdentity struct {
-	VMID        string
-	OperationID string
+func observationHash(observation *loom.Observation) sql.NullString {
+	if observation == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{
+		String: operation.Digest(operation.Encode(observation)),
+		Valid:  true,
+	}
 }
 
-// InstanceHistory requires the original instance, VM and operation identities together.
-func InstanceHistory(ctx context.Context, query store.DBTX, generation GenerationIdentity, instance string) ([]byte, error) {
-	return dbgen.New(query).GetInstance(ctx, dbgen.GetInstanceParams{
-		ID:          instance,
-		VmID:        generation.VMID,
-		OperationID: generation.OperationID,
+// VerifyInstance binds the original allocation and its published launch observation to their retained hashes.
+func VerifyInstance(ctx context.Context, query store.DBTX, operationID string, resource loom.Resource, observation *loom.Observation) error {
+	row, err := dbgen.New(query).GetInstance(ctx, dbgen.GetInstanceParams{
+		ID:          resource.Instance,
+		VmID:        resource.VMID,
+		OperationID: operationID,
 	})
+	if err != nil {
+		return err
+	}
+	if row.ResourceHash != operation.Digest(operation.Encode(resource)) || row.ObservationHash != observationHash(observation) {
+		return fmt.Errorf("retained instance birth proof changed")
+	}
+	return nil
 }
 
-// VersionHistory reads the retained version named by the original operation and step.
-// Missing history remains an error; the current VM row is never substituted.
-func VersionHistory(ctx context.Context, query store.DBTX, generation GenerationIdentity, stepKey string) ([]byte, error) {
-	return dbgen.New(query).GetVersion(ctx, dbgen.GetVersionParams{
-		VmID:        generation.VMID,
-		OperationID: generation.OperationID,
-		StepKey:     stepKey,
+// VerifyVersion checks the independently retained binding against the frozen step and disk witness.
+func VerifyVersion(ctx context.Context, query store.DBTX, step ResourceStep) error {
+	row, err := dbgen.New(query).GetVersion(ctx, dbgen.GetVersionParams{
+		VmID:        step.Candidate,
+		OperationID: step.OperationID,
+		StepKey:     step.Key,
 	})
+	if err != nil {
+		return err
+	}
+	resource := step.Input.Resource
+	if row.Instance != resource.Instance || row.ResourceHash != operation.Digest(operation.Encode(resource)) {
+		return fmt.Errorf("retained resource generation identity changed")
+	}
+	device, inode, mode := diskColumns(step.State.DiskIdentity)
+	if row.DiskDevice != device || row.DiskInode != inode || row.DiskMode != mode {
+		return fmt.Errorf("retained generation disk identity changed")
+	}
+	return nil
+}
+
+// Linux dev_t and ino_t retain all 64 bits in SQLite's signed INTEGER storage.
+func diskColumns(identity *loom.FileIdentity) (device, inode, mode sql.NullInt64) {
+	if identity != nil {
+		device = sql.NullInt64{
+			Int64: int64(identity.Device),
+			Valid: true,
+		}
+		inode = sql.NullInt64{
+			Int64: int64(identity.Inode),
+			Valid: true,
+		}
+		mode = sql.NullInt64{
+			Int64: int64(identity.Mode),
+			Valid: true,
+		}
+	}
+	return
+}
+
+func recordVersionDisk(ctx context.Context, tx *sql.Tx, step *ResourceStep, disk *loom.FileIdentity) error {
+	if disk == nil || step.State.DiskIdentity != nil {
+		return fmt.Errorf("disk publication requires a new generation witness")
+	}
+	device, inode, mode := diskColumns(disk)
+	return store.RequireOne(dbgen.New(tx).RecordVersionDisk(ctx, dbgen.RecordVersionDiskParams{
+		VmID:         step.Candidate,
+		OperationID:  step.OperationID,
+		Instance:     step.Input.Resource.Instance,
+		ResourceHash: operation.Digest(operation.Encode(step.Input.Resource)),
+		DiskDevice:   device,
+		DiskInode:    inode,
+		DiskMode:     mode,
+	}))
 }
 
 func VersionRoots(ctx context.Context, query store.DBTX) ([]string, error) {

@@ -139,13 +139,7 @@ func (f *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) err
 	state := step.State
 	state.Phase = "captured"
 	state.Snapshot = &source
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "fork_group",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(state),
-	})); err != nil {
+	if err = transitionFork(f.ctx, tx, *step, state, "running"); err != nil {
 		return err
 	}
 	if err = f.fault("fork_capture_before_commit"); err != nil {
@@ -154,7 +148,7 @@ func (f *Forks) captureForkSource(step *ForkStep, link machine.ResourceLink) err
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	step.State = state
+	step.State, step.Status = state, "running"
 	return f.store.Checkpoint()
 }
 
@@ -239,13 +233,7 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 	state := step.State
 	state.Phase = "allocated"
 	state.Children = children
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(f.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "fork_group",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(state),
-	})); err != nil {
+	if err = transitionFork(f.ctx, tx, *step, state, "running"); err != nil {
 		return err
 	}
 	if err = f.fault("fork_allocation_before_commit"); err != nil {
@@ -254,7 +242,7 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	step.State = state
+	step.State, step.Status = state, "running"
 	f.forkSecrets(*step)
 	if err = f.store.Checkpoint(); err != nil {
 		return err
@@ -371,13 +359,7 @@ func (f *Forks) completeFork(step ForkStep) error {
 		status = "failed"
 		state.Phase = "failed"
 	}
-	if err = store.RequireOne(dbgen.New(tx).FinishLiveStep(f.ctx, dbgen.FinishLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "fork_group",
-		InputHash:   step.Hash,
-		Status:      status,
-		Body:        operation.Encode(state),
-	})); err != nil {
+	if err = transitionFork(f.ctx, tx, step, state, status); err != nil {
 		return err
 	}
 	if err = f.committer.Complete(tx, operation.Outcome{
@@ -525,19 +507,10 @@ func (admission forkCleanupAdmission) retireDiscard(ctx context.Context, tx *sql
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    target.ID,
-		PreviousBody: operation.Encode(settings),
-		NextBody:     operation.Encode(desired),
-	})); err != nil {
+	if err = replaceSettings(ctx, tx, target.ID, settings, desired); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).RetireTerminatedBody(ctx, dbgen.RetireTerminatedBodyParams{
-		ID:           target.ID,
-		Tenant:       target.TenantID,
-		PreviousBody: operation.Encode(sandbox),
-		NextBody:     operation.Encode(next),
-	})); err != nil {
+	if err = replaceSandbox(ctx, tx, sandbox, next); err != nil {
 		return err
 	}
 	return nil

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -13,36 +12,16 @@ import (
 	"github.com/woxQAQ/haven/ephemeral"
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/operation/internal/dbgen"
-	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/types"
 )
+
+const ScopeTenant = "tenant"
 
 // Scope keeps an operation's durable authorization kind and identity together.
 // The caller must still establish authority before querying that scope.
 type Scope struct {
 	Kind string
 	ID   string
-}
-
-// RequestIdentity keeps the original request alongside its current status.
-// Readers verify the stored bytes; current resource ownership cannot replace it.
-type RequestIdentity struct {
-	Status    string
-	ScopeKind string
-	ScopeID   string
-	Hash      string
-	Request   []byte
-}
-
-func (r *Repository) RequestIdentity(ctx context.Context, id string) (RequestIdentity, error) {
-	row, err := r.queries.GetRequestIdentity(ctx, id)
-	return RequestIdentity{
-		Status:    row.Status,
-		ScopeKind: row.ScopeKind,
-		ScopeID:   row.ScopeID,
-		Hash:      row.RequestHash,
-		Request:   row.Request,
-	}, err
 }
 
 func (r *Repository) StepTarget(ctx context.Context, id, key, hash string) (candidate, expected string, err error) {
@@ -54,15 +33,16 @@ func (r *Repository) StepTarget(ctx context.Context, id, key, hash string) (cand
 	return row.CandidateResourceID, row.ExpectedInstance, err
 }
 
-func (r *Repository) LiveBody(ctx context.Context, id string) ([]byte, error) {
-	return r.queries.GetLiveOperationBody(ctx, id)
+func (r *Repository) LiveResult(ctx context.Context, id string) (Result, error) {
+	status, result, err := r.ResultState(ctx, id)
+	if err == nil && Terminal(status) {
+		return Result{}, sql.ErrNoRows
+	}
+	return result, err
 }
 
-func (r *Repository) ReplaceLiveBody(ctx context.Context, id string, body []byte) error {
-	return store.RequireOne(r.queries.ReplaceLiveOperationBody(ctx, dbgen.ReplaceLiveOperationBodyParams{
-		Body: body,
-		ID:   id,
-	}))
+func (r *Repository) ReplaceLiveResult(ctx context.Context, id string, result Result) error {
+	return r.updateResult(ctx, id, "", result)
 }
 
 // CommandIdentity binds credential-bearing retries to the original authenticated
@@ -136,23 +116,25 @@ func (ci *CommandIdentity) MatchCredentials(operationID, mac string) error {
 	return nil
 }
 
-// AcceptedCommand reads the sanitized immutable request envelope. It does not
-// infer an action from the current object or a later operation.
-func AcceptedCommand(request []byte) (types.Command, error) {
-	var command types.Command
-	var envelope struct {
-		Request json.RawMessage
-		Claim   json.RawMessage
+// AcceptedCommand projects the original tenant command, including commands served by provisioning.
+func AcceptedCommand(request Request) (types.Command, error) {
+	c := request.Command
+	if c == nil {
+		return types.Command{}, fmt.Errorf("%w: public operation lacks accepted command", errs.ErrManualRecovery)
 	}
-	if err := json.Unmarshal(request, &envelope); err != nil {
-		return command, err
-	}
-	payload := envelope.Request
-	if len(envelope.Claim) > 0 {
-		payload = envelope.Claim
-	}
-	if err := json.Unmarshal(payload, &command); err != nil {
-		return command, err
+	command := types.Command{
+		Action:        c.Action,
+		Template:      c.Template,
+		SandboxID:     c.SandboxID,
+		CheckpointID:  c.CheckpointID,
+		TemplateID:    c.TemplateID,
+		TTLSeconds:    c.TTLSeconds,
+		OnExpire:      c.OnExpire,
+		AutoRenew:     c.AutoRenew,
+		LeaseDeadline: c.LeaseDeadline,
+		Env:           c.Env,
+		Policy:        c.Policy,
+		Count:         c.Count,
 	}
 	if command.Action == "" {
 		return command, fmt.Errorf("%w: public operation lacks accepted command", errs.ErrManualRecovery)

@@ -43,13 +43,13 @@ func (db *DirectBindings) InstallDirect(ctx context.Context, binding egress.Bind
 	if err != nil {
 		return nil, err
 	}
-	operationID, instance, body := policyRecord.OperationID, policyRecord.Instance, policyRecord.Body
+	operationID, instance := policyRecord.OperationID, policyRecord.Instance
 	step, err := machine.LoadDirectRetirement(ctx, db.database, operationID)
 	if err != nil {
 		return nil, err
 	}
 	source := step.Input.Source
-	if operation.Terminal(step.Status) || step.State.Phase != "armed" || record.SourceOperation != source.OperationID || record.Instance != instance || instance != source.State.Witness || binding.VSockPath != guest.Socket(source.Input.Resource) || string(body) != string(operation.Encode(expected)) || !reflect.DeepEqual(expected, step.Input.Policy) {
+	if operation.Terminal(step.Status) || step.State.Phase != "armed" || record.SourceOperation != source.OperationID || record.Instance != instance || instance != source.State.Witness || binding.VSockPath != guest.Socket(source.Input.Resource) || policyRecord.PolicyHash != machine.InstalledPolicyHash(expected) || !reflect.DeepEqual(expected, step.Input.Policy) {
 		return nil, fmt.Errorf("%w: direct binding differs from original activation instance", errs.ErrConflict)
 	}
 	settings, err := LoadSettings(ctx, db.database, record.ID)

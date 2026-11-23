@@ -2,10 +2,11 @@ package operation
 
 import (
 	"context"
-	"encoding/json"
+	"database/sql"
 	"fmt"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/operation/internal/dbgen"
 	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/types"
 )
@@ -21,7 +22,7 @@ func ProjectionHeader(ctx context.Context, query store.DBTX, id string) (types.O
 		return out, result, err
 	}
 	out.ID, out.Key, out.TenantID, out.Status = source.ID, source.Key, source.ScopeID, source.Status
-	if source.ScopeKind != "tenant" {
+	if source.ScopeKind != ScopeTenant {
 		return out, result, fmt.Errorf("%w: operation not found", errs.ErrNotFound)
 	}
 	command, err := AcceptedCommand(source.Request)
@@ -29,9 +30,7 @@ func ProjectionHeader(ctx context.Context, query store.DBTX, id string) (types.O
 		return out, result, err
 	}
 	out.Command = command
-	if err = json.Unmarshal(source.Body, &result); err != nil {
-		return out, result, err
-	}
+	result = source.Result
 	out.CreatedAt, out.FinishedAt, err = repository.Times(ctx, id)
 	if err != nil {
 		return out, result, err
@@ -90,59 +89,74 @@ func ValidateDelivery(view types.Operation) error {
 // view from current resources and rejects persisted transport fields or tokens.
 func LoadPublication(ctx context.Context, query store.DBTX, id string) (types.Operation, error) {
 	var view types.Operation
-	body, err := New(query).Publication(ctx, id)
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		view, err = readPublication(ctx, tx, id)
+		return err
+	})
+	return view, err
+}
+
+func readPublication(ctx context.Context, tx *sql.Tx, id string) (types.Operation, error) {
+	q := dbgen.New(tx)
+	record, err := q.GetPublication(ctx, id)
+	if err != nil {
+		return types.Operation{}, err
+	}
+	view, result, err := ProjectionHeader(ctx, tx, id)
 	if err != nil {
 		return view, err
 	}
-	if err := json.Unmarshal(body, &view); err != nil {
+	view.ChargeTenantID = record.ChargeTenantID
+	if err = readPublishedObjects(ctx, q, record, &view); err != nil {
 		return view, err
 	}
-	if view.ID != id || view.Result.OperationID != id || (view.Status != "succeeded" && view.Status != "failed") || view.Result.Tokens != nil || view.Error != nil {
-		return view, fmt.Errorf("%w: frozen delivery identity or transport fields changed", errs.ErrManualRecovery)
+	if !Terminal(view.Status) || Digest(Encode(view)) != record.ResponseHash {
+		return view, fmt.Errorf("%w: frozen delivery differs from accepted operation %s", errs.ErrManualRecovery, id)
 	}
-	return view, ValidateDelivery(view)
+	if err = ValidateDelivery(view); err != nil {
+		return view, err
+	}
+	if c := view.Result.Checkpoint; c != nil && c.ID != result.CheckpointID {
+		return view, fmt.Errorf("frozen checkpoint identity changed")
+	}
+	if t := view.Result.Template; t != nil && t.ID != result.TemplateID {
+		return view, fmt.Errorf("frozen template identity changed")
+	}
+	return view, nil
 }
 
-// PublicationProof contains only frozen operation identity and delivery. Recovery
-// validates this history without reconstructing results from current resources.
-type PublicationProof struct {
-	ID          string
-	Key         string
-	ScopeKind   string
-	ScopeID     string
-	Status      string
-	CreatedAt   string
-	FinishedAt  string
-	Publication []byte
-	Request     []byte
-	Result      []byte
-}
-
-func (r *Repository) PublicationProofs(ctx context.Context) ([]PublicationProof, error) {
-	rows, err := r.queries.ListPublicationProofs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PublicationProof, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, PublicationProof{
-			ID:          row.ID,
-			Key:         row.IdemKey,
-			ScopeKind:   row.ScopeKind,
-			ScopeID:     row.ScopeID,
-			Status:      row.Status,
-			CreatedAt:   row.CreatedAt,
-			FinishedAt:  row.FinishedAt,
-			Publication: row.Publication,
-			Request:     row.Request,
-			Result:      row.Result,
-		})
-	}
-	return out, nil
-}
-
-func (r *Repository) MissingPublications(ctx context.Context) (int64, error) {
-	return r.queries.CountMissingPublications(ctx)
+// ValidateHistory checks accepted requests, including private work that can resume without a publication.
+func (r *Repository) ValidateHistory(ctx context.Context) error {
+	return store.ReadSnapshot(ctx, r.database, func(tx *sql.Tx) error {
+		q := dbgen.New(tx)
+		missing, err := q.CountMissingPublications(ctx)
+		if err != nil {
+			return err
+		}
+		if missing != 0 {
+			return fmt.Errorf("terminal public operation lacks frozen result")
+		}
+		unpublished, err := q.ListUnpublishedOperations(ctx)
+		if err != nil {
+			return err
+		}
+		for _, row := range unpublished {
+			if _, err = readRequest(ctx, q, row); err != nil {
+				return fmt.Errorf("invalid request for %s: %w", row.ID, err)
+			}
+		}
+		ids, err := q.ListPublicationIDs(ctx)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err = readPublication(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *Repository) RecoverySteps(ctx context.Context) ([]Step, error) {
@@ -161,13 +175,12 @@ func (r *Repository) RecoverySteps(ctx context.Context) ([]Step, error) {
 			Candidate:        row.CandidateResourceID,
 			ExpectedInstance: row.ExpectedInstance,
 			Input:            row.Input,
-			Body:             row.Body,
 		})
 	}
 	return out, nil
 }
 
-func (r *Repository) ResultState(ctx context.Context, id string) (status string, body []byte, err error) {
-	row, err := r.queries.GetResultState(ctx, id)
-	return row.Status, row.Body, err
+func (r *Repository) ResultState(ctx context.Context, id string) (string, Result, error) {
+	row, err := r.Projection(ctx, id)
+	return row.Status, row.Result, err
 }

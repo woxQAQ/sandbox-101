@@ -42,7 +42,7 @@ type WarmClaims struct {
 	store                 store.Workflow
 	ctx                   context.Context
 	storeWriteMu          execution.Guard
-	gate                  execution.AdmissionGate
+	admissionGate         execution.AdmissionGate
 	sandboxConfigLocks    *execution.KeyedLocks[string]
 	sandboxLifecycleLocks *execution.KeyedLocks[string]
 	workers               *execution.Workers
@@ -67,7 +67,7 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 		},
 		ctx:                   dependencies.Workers.Context(),
 		storeWriteMu:          dependencies.StoreWriteMu,
-		gate:                  dependencies.Gate,
+		admissionGate:         dependencies.Gate,
 		sandboxConfigLocks:    dependencies.SandboxConfigLocks,
 		sandboxLifecycleLocks: dependencies.SandboxLifecycleLocks,
 		workers:               dependencies.Workers,
@@ -155,8 +155,21 @@ type WarmClaimInput struct {
 	Restore         machine.SnapshotSource `json:"restore"`
 }
 
+const warmClaimStepKey = "warm_claim"
+
+type warmClaimPhase string
+
+const (
+	warmSelected    warmClaimPhase = "selected"
+	warmFailed      warmClaimPhase = "warm_failed"
+	warmRetired     warmClaimPhase = "warm_retired"
+	warmComplete    warmClaimPhase = "complete"
+	warmClaimFailed warmClaimPhase = "failed"
+	warmSuperseded  warmClaimPhase = "superseded"
+)
+
 type WarmClaimState struct {
-	Phase string `json:"phase"`
+	Phase warmClaimPhase `json:"phase"`
 }
 
 type WarmClaimStep struct {
@@ -168,37 +181,83 @@ type WarmClaimStep struct {
 }
 
 func LoadWarmClaim(ctx context.Context, query store.DBTX, id string) (WarmClaimStep, error) {
+	var step WarmClaimStep
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		var err error
+		step, err = readWarmClaim(ctx, tx, id)
+		return err
+	})
+	return step, err
+}
+
+func readWarmClaim(ctx context.Context, query *sql.Tx, id string) (WarmClaimStep, error) {
 	step := WarmClaimStep{
 		OperationID: id,
 	}
 	record, err := dbgen.New(query).GetStep(ctx, dbgen.GetStepParams{
 		OperationID: id,
-		StepKey:     "warm_claim",
+		StepKey:     warmClaimStepKey,
 	})
 	if err != nil {
-		record = dbgen.GetStepRow{}
+		return step, err
 	}
-	input, body := record.Input, record.Body
-	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
-	step.Hash, step.Status = record.InputHash, record.Status
+	row, err := dbgen.New(query).GetWarmClaimInputs(ctx, id)
+	if err != nil {
+		return step, fmt.Errorf("%w: missing frozen warm claim inputs: %v", errs.ErrManualRecovery, err)
+	}
+	if operation.Digest(row.Activation) != row.ActivationHash {
+		return step, fmt.Errorf("warm claim activation or request changed")
+	}
+	var activation ActivationInput
+	if err = json.Unmarshal(row.Activation, &activation); err != nil {
+		return step, err
+	}
+	parent, err := operation.New(query).Projection(ctx, id)
 	if err != nil {
 		return step, err
 	}
-	if operation.Digest(input) != step.Hash {
+	command := parent.Request.Command
+	if command == nil || parent.Request.Resource != nil || parent.Request.Action != claimAction {
+		return step, fmt.Errorf("warm claim command missing or changed")
+	}
+	refill, err := supply.LoadSupply(ctx, query, row.RefillOperationID)
+	if err != nil {
+		return step, fmt.Errorf("%w: missing warm refill history: %v", errs.ErrManualRecovery, err)
+	}
+	source, err := machine.LoadResourceStep(ctx, query, row.SourceOperationID)
+	if err != nil || source.Input.Restore == nil {
+		return step, fmt.Errorf("%w: missing warm resource history: %v", errs.ErrManualRecovery, err)
+	}
+	step.Input = WarmClaimInput{
+		RequestTenantID: row.ScopeID,
+		Command:         *command,
+		PoolID:          refill.OperationID,
+		Pool: supply.PoolReservation{
+			Template:  refill.Input.Template,
+			CreatedAt: refill.Input.CreatedAt,
+			SandboxID: refill.Input.SandboxID,
+			VMID:      source.Candidate,
+			Instance:  source.State.Witness,
+			Source: ownership.GenerationRef{
+				OperationID: source.OperationID,
+				InputHash:   source.Hash,
+			},
+		},
+		Source:   source,
+		Settings: activation.Settings,
+		Restore:  *source.Input.Restore,
+	}
+	step.Hash, step.Status = record.InputHash, record.Status
+	step.State.Phase = warmClaimPhase(row.Phase.String)
+	if operation.Digest(operation.Encode(step.Input)) != step.Hash {
 		return step, fmt.Errorf("warm claim checksum changed")
 	}
-	if err = json.Unmarshal(input, &step.Input); err != nil {
-		return step, err
-	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
-		return step, err
-	}
 	switch step.State.Phase {
-	case "selected", "warm_failed", "warm_retired", "complete", "failed", "superseded":
+	case warmSelected, warmFailed, warmRetired, warmComplete, warmClaimFailed, warmSuperseded:
 	default:
 		return step, fmt.Errorf("warm claim phase is unsupported")
 	}
-	if action != "claim" || candidate != step.Input.Pool.SandboxID || expected != step.Input.Pool.Instance || step.Input.Pool.Source.OperationID != step.Input.Source.OperationID || step.Input.Pool.Source.InputHash != step.Input.Source.Hash {
+	if record.Action != claimAction || command.Action != claimAction || record.CandidateResourceID != refill.Input.SandboxID || record.ExpectedInstance != source.State.Witness || activation.ExpectedInstance != source.State.Witness || activation.ResourceHash != source.Hash || activation.ResourceOperation != source.OperationID {
 		return step, fmt.Errorf("warm claim frozen resource identity changed")
 	}
 	return step, nil
@@ -226,7 +285,10 @@ func CurrentSlotBudget(ctx context.Context, query store.DBTX, record ownership.S
 	if original.Status != "succeeded" || original.State.Witness == "" || original.State.Witness != claim.Input.Pool.Instance {
 		return quota.SlotBudget{}, fmt.Errorf("%w: selected warm instance lacks its refill witness", errs.ErrManualRecovery)
 	}
-	warmBudget := quota.SlotBudget{Kind: "sandbox_slot", Units: 0}
+	warmBudget := quota.SlotBudget{
+		Kind:  "sandbox_slot",
+		Units: 0,
+	}
 	if original.Input.SlotBudget != warmBudget {
 		return quota.SlotBudget{}, fmt.Errorf("%w: warm refill did not start with a zero-unit sandbox slot budget", errs.ErrManualRecovery)
 	}
@@ -252,7 +314,7 @@ func validateWarmSlotDestination(ctx context.Context, tx *sql.Tx, resource machi
 	if err != nil {
 		return err
 	}
-	if operation.Terminal(parent.Status) || parent.State.Phase != "warm_failed" || destination.Kind != "claim" || destination.ID != parent.Input.Pool.SandboxID || destination.ID != resource.Input.SandboxID || parent.Input.Source.OperationID != resource.Input.SourceOperation || parent.Input.Source.State.Witness != resource.ExpectedInstance || parent.Input.Pool.Template.TenantID != resource.Input.TenantID {
+	if operation.Terminal(parent.Status) || parent.State.Phase != warmFailed || destination.Kind != "claim" || destination.ID != parent.Input.Pool.SandboxID || destination.ID != resource.Input.SandboxID || parent.Input.Source.OperationID != resource.Input.SourceOperation || parent.Input.Source.State.Witness != resource.ExpectedInstance || parent.Input.Pool.Template.TenantID != resource.Input.TenantID {
 		return fmt.Errorf("warm pending slot destination changed")
 	}
 	link, _, err := machine.LoadResourceLink(ctx, tx, parent.OperationID, "warm_release")
@@ -266,7 +328,7 @@ func validateWarmSlotDestination(ctx context.Context, tx *sql.Tx, resource machi
 	if err != nil {
 		return err
 	}
-	if activation.Status != "failed" || activation.Input.Attempt != "warm" || !activation.Input.AllowFallback {
+	if activation.Status != "failed" || activation.Input.Attempt != warmAttempt || !activation.Input.AllowFallback {
 		return fmt.Errorf("warm retirement failed activation proof missing")
 	}
 	return nil
@@ -284,5 +346,5 @@ func RetireSelectedPool(ctx context.Context, tx *sql.Tx, resource machine.Resour
 	if status != "selected" || !reflect.DeepEqual(reservation, parent.Input.Pool) || reservation.VMID != resource.Candidate {
 		return fmt.Errorf("retired warm pool responsibility changed")
 	}
-	return supply.RetireSelectedReservation(ctx, tx, parent.Input.PoolID, operation.Encode(reservation))
+	return supply.RetireSelectedReservation(ctx, tx, parent.Input.PoolID, reservation)
 }

@@ -57,7 +57,7 @@ func TestHavenRenewRejectedWriteKeepsLeaseAndRequest(t *testing.T) {
 				if rejection == "ABORT" {
 					raise = "RAISE(ABORT,'lease write rejected')"
 				}
-				if _, err = service.State.Database().ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_renew BEFORE UPDATE OF body ON sandbox_settings BEGIN SELECT %s; END", raise)); err != nil {
+				if _, err = service.State.Database().ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_renew BEFORE UPDATE OF deadline ON sandbox_settings BEGIN SELECT %s; END", raise)); err != nil {
 					t.Fatal(err)
 				}
 				command := operation.Intent{
@@ -195,20 +195,16 @@ func TestHavenRenewReplayRequiresTerminalOperation(t *testing.T) {
 			VMID:      claim.Result.VMID,
 		},
 	}
-	request := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{command.Action, command})
+	request := operation.CommandRequest(command)
 	operations := operation.New(service.State.Database())
 	if err = operations.Insert(ctx, operation.Admission{
 		ID:        original.ID,
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
 		Key:       original.Key,
-		Hash:      operation.Digest(request),
 		Request:   request,
 		Status:    original.Status,
-		Body:      operation.Encode(original.Result),
+		Result:    original.Result,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +274,7 @@ func TestHavenLeaseReaper(t *testing.T) {
 				settings.Deadline = deadline
 				settings.OnExpire = state
 			}
-			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET body=? WHERE sandbox_id=?", operation.Encode(settings), id)); err != nil {
+			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE sandbox_settings SET deadline=?,paused_until=?,on_expire=? WHERE sandbox_id=?", settings.Deadline.Format(time.RFC3339Nano), settings.PausedUntil.Format(time.RFC3339Nano), settings.OnExpire, id)); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = service.Lifecycle.AdmitRenew(ctx, principal, "late-renew", operation.Intent{

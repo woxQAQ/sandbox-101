@@ -29,11 +29,10 @@ func (p *Provisioning) AdmitCold(ctx context.Context, request machine.FreshReque
 		return empty, fmt.Errorf("%w: tenant, template and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			p.dispatch(cached.ID)
 		}
@@ -73,11 +72,10 @@ func (p *Provisioning) AdmitClone(ctx context.Context, request machine.CloneRequ
 		return empty, fmt.Errorf("%w: clone requires tenant, snapshot and key", errs.ErrInvalid)
 	}
 	frozen := machine.FreezeProvisionRequest(request, nil)
-	hash := operation.Digest(frozen)
 	if cached, found, err := operation.New(p.store.Database).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			p.dispatch(cached.ID)
 		}
@@ -130,7 +128,6 @@ func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) 
 	var empty operation.State
 	request, claim := admission.Request, admission.Claim
 	tenantID, key := request.TenantID, request.Key
-	hash := operation.Digest(request.Frozen)
 	free, err := loom.FreeBytes(p.store.Directory)
 	if err != nil {
 		return empty, err
@@ -159,7 +156,7 @@ func (p *Provisioning) Admit(ctx context.Context, admission ProvisionAdmission) 
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   tenantID,
-	}, key, hash); found || err != nil {
+	}, key, request.Frozen); found || err != nil {
 		if claim != nil && found && err == nil && !operation.Terminal(cached.Status) {
 			p.registry.SetOperationSecrets(cached.ID, claim.Secrets)
 		}
@@ -270,7 +267,7 @@ type provisionBudget struct {
 func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, admission ProvisionAdmission, free int64) (provisionBudget, error) {
 	var empty provisionBudget
 	request, target := admission.Request, admission.Target
-	tenant, err := authorization.New(tx).Limits(ctx, request.TenantID)
+	limits, err := authorization.LoadTenantLimits(ctx, tx, request.TenantID)
 	if err != nil {
 		return empty, err
 	}
@@ -278,7 +275,7 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 	if err != nil {
 		return empty, err
 	}
-	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 {
+	if limits.MaxSandboxes < 0 || limits.MaxStorageMiB < 0 {
 		return empty, fmt.Errorf("invalid tenant budget")
 	}
 	budget := provisionBudget{
@@ -299,7 +296,7 @@ func (p *Provisioning) checkProvisionBudget(ctx context.Context, tx *sql.Tx, adm
 		newSlots = 0
 	}
 	shape := request.Template.Config.Shape
-	if usage.Slots > tenant.MaxSandboxes || newSlots > tenant.MaxSandboxes-usage.Slots || usage.StorageMiB > tenant.MaxStorageMiB || shape.DiskMiB > tenant.MaxStorageMiB-usage.StorageMiB {
+	if usage.Slots > limits.MaxSandboxes || newSlots > limits.MaxSandboxes-usage.Slots || usage.StorageMiB > limits.MaxStorageMiB || shape.DiskMiB > limits.MaxStorageMiB-usage.StorageMiB {
 		return empty, fmt.Errorf("%w: tenant quota exhausted", errs.ErrExhausted)
 	}
 	reserved, err := quota.ReservedCapacity(ctx, tx)
@@ -325,7 +322,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 	}
 	switch step.Action {
 	case "restore":
-		frozen, err := machine.DecodeProvisionRequest[machine.RestoreRequest](request)
+		frozen, err := request.ResourceFor("restore")
 		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
@@ -340,7 +337,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("restore stop history changed")
 		}
 	case "clone":
-		frozen, err := machine.DecodeProvisionRequest[machine.CloneRequest](request)
+		frozen, err := request.ResourceFor("clone")
 		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
@@ -348,7 +345,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 			return machine.VMRecord{}, ownership.Sandbox{}, result, fmt.Errorf("clone request differs from frozen source")
 		}
 	case "cold_start":
-		frozen, err := machine.DecodeProvisionRequest[machine.FreshRequest](request)
+		frozen, err := request.ResourceFor("claim")
 		if err != nil {
 			return machine.VMRecord{}, ownership.Sandbox{}, result, err
 		}
@@ -365,7 +362,7 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 	if err != nil {
 		return machine.VMRecord{}, record, result, err
 	}
-	if record.OperationID != step.OperationID || record.SourceOperation != step.OperationID || record.VMID != step.Candidate || record.State != "provisioning" {
+	if record.OperationID != step.OperationID || record.SourceOperation != step.OperationID || record.VMID != step.Candidate || record.State != ownership.StateProvisioning {
 		return machine.VMRecord{}, record, result, fmt.Errorf("cold sandbox destination changed")
 	}
 	currentMachine, instance, owner, err := machine.LoadVM(ctx, tx, step)
@@ -394,26 +391,11 @@ func VerifyProvisionIntent(proofs machine.ResourceProofs, ctx context.Context, t
 	if err != nil || !reflect.DeepEqual(manifest, step.Input.Image) {
 		return currentMachine, record, result, fmt.Errorf("image publication proof changed: %v", err)
 	}
-	var candidateBody, versionBody []byte
-	if candidateBody, err = machine.InstanceHistory(ctx, tx, machine.GenerationIdentity{
-		VMID:        currentMachine.Resource.VMID,
-		OperationID: step.OperationID,
-	}, currentMachine.Resource.Instance); err != nil {
+	if err = machine.VerifyInstance(ctx, tx, step.OperationID, currentMachine.Resource, nil); err != nil {
 		return currentMachine, record, result, err
 	}
-	var candidate machine.VMRecord
-	if err = json.Unmarshal(candidateBody, &candidate); err != nil || !reflect.DeepEqual(candidate.Resource, currentMachine.Resource) {
-		return currentMachine, record, result, fmt.Errorf("instance candidate changed: %v", err)
-	}
-	if versionBody, err = machine.VersionHistory(ctx, tx, machine.GenerationIdentity{
-		VMID:        step.Candidate,
-		OperationID: step.OperationID,
-	}, step.Key); err != nil {
+	if err = machine.VerifyVersion(ctx, tx, step); err != nil {
 		return currentMachine, record, result, err
-	}
-	var version machine.RetainedVersion
-	if err = json.Unmarshal(versionBody, &version); err != nil || !reflect.DeepEqual(version.Resource, currentMachine.Resource) || !reflect.DeepEqual(version.DiskIdentity, step.State.DiskIdentity) {
-		return currentMachine, record, result, fmt.Errorf("resource version changed: %v", err)
 	}
 	shape := currentMachine.Resource.Config.Shape
 	vmBytes := step.Input.RuntimeBytes

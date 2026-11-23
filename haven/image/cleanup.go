@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -41,6 +42,16 @@ type (
 )
 
 func loadImageCleanup(ctx context.Context, q store.DBTX, id string) (imageCleanupStep, error) {
+	var step imageCleanupStep
+	err := store.ReadSnapshot(ctx, q, func(tx *sql.Tx) error {
+		var err error
+		step, err = readImageCleanup(ctx, tx, id)
+		return err
+	})
+	return step, err
+}
+
+func readImageCleanup(ctx context.Context, q *sql.Tx, id string) (imageCleanupStep, error) {
 	step := imageCleanupStep{
 		OperationID: id,
 	}
@@ -51,7 +62,7 @@ func loadImageCleanup(ctx context.Context, q store.DBTX, id string) (imageCleanu
 	if err != nil {
 		return step, err
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if operation.Digest(payload) != step.Hash {
@@ -60,8 +71,22 @@ func loadImageCleanup(ctx context.Context, q store.DBTX, id string) (imageCleanu
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
+	step.State.Phase = record.Phase.String
+	paths, err := dbgen.New(q).CleanupHistoryPaths(ctx, id)
+	if err != nil {
 		return step, err
+	}
+	for _, path := range paths {
+		intent, err := store.ReadDeletionHistory(ctx, q, id, "image_cleanup", path)
+		if err != nil {
+			return step, err
+		}
+		step.State.Intents = append(step.State.Intents, intent)
+	}
+	if len(paths) > 0 || record.ReceiptsHash.Valid || step.State.Phase != "admitted" {
+		if !record.ReceiptsHash.Valid || len(paths) == 0 || operation.Digest(operation.Encode(step.State.Intents)) != record.ReceiptsHash.String {
+			return step, fmt.Errorf("image cleanup receipt sequence changed")
+		}
 	}
 	if action != "image_cleanup" || candidate != step.Input.ResourceID || expected != "" || ((step.Input.Source == nil) == (step.Input.Cache == nil)) {
 		return step, fmt.Errorf("image cleanup authority identity changed")
@@ -95,15 +120,18 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 	}
 	unlock := i.nodeIdempotencyLocks.Lock(i.nodeID, key)
 	defer unlock()
-	frozen := operation.Encode(struct {
-		Action  string
-		Request ImageCleanupRequest
-	}{"image_cleanup", request})
-	hash := operation.Digest(frozen)
+	frozen := operation.Request{
+		Action: "image_cleanup",
+		Resource: &operation.ResourceRequest{
+			SourceOperationID: request.ImportOperationID,
+			CacheBuilder:      request.CacheBuilder,
+			CacheDiffID:       request.CacheDiffID,
+		},
+	}
 	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
 		Kind: "node",
 		ID:   i.nodeID,
-	}, key, hash); found || err != nil {
+	}, key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			i.dispatch(cached.ID)
 		}
@@ -198,26 +226,22 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 		ScopeKind: "node",
 		ScopeID:   i.nodeID,
 		Key:       key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "image_cleanup",
 		Action:              "image_cleanup",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: input.ResourceID,
 		ExpectedInstance:    "",
 		Status:              "pending",
-		Body: operation.Encode(imageCleanupState{
-			Phase: "admitted",
-		}),
-	})); err != nil {
+		Phase:               "admitted",
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
@@ -225,7 +249,8 @@ func (i *Images) AdmitCleanup(ctx context.Context, principal authorization.Princ
 		OperationID:  accepted.ID,
 		ResourceKind: input.Kind,
 		ResourceID:   input.ResourceID,
-		Body:         payload,
+		StepKey:      "image_cleanup",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}

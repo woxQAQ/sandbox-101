@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -113,10 +112,7 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	next.State = "terminated"
 	next.OperationID = ""
 	parent.Result.SnapshotID = current.SnapshotID
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"release", input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
@@ -124,30 +120,26 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "succeeded",
-		Body:      operation.Encode(parent.Result),
+		Result:    parent.Result,
 	}); err != nil {
 		return empty, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         parent.ID,
 		StepKey:             "lifecycle",
 		Action:              "release",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: current.ID,
 		ExpectedInstance:    "",
 		Status:              "succeeded",
-		Body: operation.Encode(LifecycleState{
-			Phase:      "complete",
-			SnapshotID: current.SnapshotID,
-		}),
-	})); err != nil {
+		Phase:               "complete",
+		SnapshotID:          current.SnapshotID,
+	}); err != nil {
 		return empty, err
 	}
 	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
@@ -187,19 +179,10 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).TerminatePausedSandbox(ctx, dbgen.TerminatePausedSandboxParams{
-		ID:           current.ID,
-		Tenant:       input.OwnerTenantID,
-		PreviousBody: operation.Encode(current),
-		NextBody:     operation.Encode(next),
-	})); err != nil {
+	if err = replaceSandbox(ctx, tx, current, next); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    current.ID,
-		PreviousBody: operation.Encode(settings),
-		NextBody:     operation.Encode(desired),
-	})); err != nil {
+	if err = replaceSettings(ctx, tx, current.ID, settings, desired); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
@@ -207,7 +190,8 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 		OperationID:  parent.ID,
 		ResourceKind: "snapshot",
 		ResourceID:   current.SnapshotID,
-		Body:         operation.Encode(snapshot),
+		StepKey:      "lifecycle",
+		WitnessHash:  operation.Digest(operation.Encode(snapshot)),
 	})); err != nil {
 		return empty, err
 	}
@@ -221,10 +205,10 @@ func (l *Lifecycle) admitPausedRelease(ctx context.Context, admission *Lifecycle
 	}
 	if upper != nil {
 		if err = upper.AdmitResource(ctx, tx, machine.ResourceAdmission{
-			Child:       parent,
-			Kind:        "lifecycle",
-			Candidate:   input.Sandbox.ID,
-			RequestHash: operation.Digest(frozen),
+			Child:     parent,
+			Kind:      "lifecycle",
+			Candidate: input.Sandbox.ID,
+			Request:   frozen,
 		}); err != nil {
 			return empty, err
 		}
@@ -299,7 +283,8 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 			OperationID:  step.OperationID,
 			ResourceKind: "snapshot",
 			ResourceID:   sleepSnapshot,
-			Body:         operation.Encode(source),
+			StepKey:      "lifecycle",
+			WitnessHash:  operation.Digest(operation.Encode(source)),
 		})); err != nil {
 			return nil, err
 		}
@@ -310,26 +295,17 @@ func (l *Lifecycle) retireSupersededLifecycle(tx *sql.Tx, step LifecycleStep) ([
 		}
 	}
 	if !operation.Terminal(prior.Status) {
-		if err = store.RequireOne(dbgen.New(tx).FailLiveStep(l.ctx, dbgen.FailLiveStepParams{
-			OperationID: id,
-			StepKey:     "lifecycle",
-			InputHash:   prior.Hash,
-			Body: operation.Encode(LifecycleState{
-				Phase: "superseded",
-			}),
-		})); err != nil {
+		if err = transitionLifecycle(l.ctx, tx, prior, LifecycleState{
+			Phase: "superseded",
+		}, "failed"); err != nil {
 			return nil, err
 		}
 	}
-	status, body, err := operations.ResultState(l.ctx, id)
+	status, result, err := operations.ResultState(l.ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if !operation.Terminal(status) {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return nil, err
-		}
 		result.Error = "sandbox operation superseded by release"
 		return []operation.Outcome{
 			{

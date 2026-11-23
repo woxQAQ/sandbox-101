@@ -29,19 +29,16 @@ func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, operationID string, in
 		return err
 	}
 
-	if err := store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err := operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         operationID,
 		StepKey:             "direct_retirement",
 		Action:              "direct_retirement",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: source.Candidate,
 		ExpectedInstance:    source.State.Witness,
 		Status:              "pending",
-		Body: operation.Encode(DirectRetirementState{
-			Phase: "armed",
-		}),
-	})); err != nil {
+		Phase:               "armed",
+	}); err != nil {
 		return err
 	}
 	return store.RequireOne(dbgen.New(tx).InsertArmedCleanup(ctx, dbgen.InsertArmedCleanupParams{
@@ -49,7 +46,8 @@ func ArmDirectRetirement(ctx context.Context, tx *sql.Tx, operationID string, in
 		OperationID:  operationID,
 		ResourceKind: "direct_policy",
 		ResourceID:   source.Candidate,
-		Body:         payload,
+		StepKey:      "direct_retirement",
+		WitnessHash:  operation.Digest(payload),
 	}))
 }
 
@@ -83,13 +81,7 @@ func CompleteDirectReplacement(ctx context.Context, tx *sql.Tx, replacement Dire
 		RetiredBy: newOperation,
 	}
 
-	if err = store.RequireOne(dbgen.New(tx).CompletePendingStep(ctx, dbgen.CompletePendingStepParams{
-		OperationID:  old.OperationID,
-		StepKey:      "direct_retirement",
-		InputHash:    old.Hash,
-		PreviousBody: operation.Encode(old.State),
-		NextBody:     operation.Encode(state),
-	})); err != nil {
+	if err = transitionDirect(ctx, tx, old, state, "succeeded"); err != nil {
 		return err
 	}
 	return store.RequireOne(dbgen.New(tx).TransitionDirectCleanup(ctx, dbgen.TransitionDirectCleanupParams{
@@ -130,7 +122,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 		if err == nil {
 			var policy NetworkPolicyRecord
 			policy, err = LoadPolicyWitness(ctx, tx, source.Candidate)
-			if err == nil && (policy.OperationID != operationID || policy.Instance != source.State.Witness || string(policy.Body) != string(operation.Encode(step.Input.Policy))) {
+			if err == nil && (policy.OperationID != operationID || policy.Instance != source.State.Witness || policy.PolicyHash != InstalledPolicyHash(step.Input.Policy)) {
 				err = fmt.Errorf("%w: direct retirement policy ownership changed", errs.ErrConflict)
 			}
 		}
@@ -139,13 +131,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 				Phase: "pending",
 			}
 
-			err = store.RequireOne(dbgen.New(tx).BeginPendingStep(ctx, dbgen.BeginPendingStepParams{
-				OperationID:  operationID,
-				StepKey:      "direct_retirement",
-				InputHash:    step.Hash,
-				PreviousBody: operation.Encode(step.State),
-				NextBody:     operation.Encode(next),
-			}))
+			err = transitionDirect(ctx, tx, step, next, "running")
 
 			if err == nil {
 				err = store.RequireOne(dbgen.New(tx).TransitionDirectCleanup(ctx, dbgen.TransitionDirectCleanupParams{
@@ -217,7 +203,7 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 		VMID:        resource.VMID,
 		Instance:    resource.Instance,
 		OperationID: operationID,
-		Body:        operation.Encode(step.Input.Policy),
+		PolicyHash:  InstalledPolicyHash(step.Input.Policy),
 	}); err != nil {
 		return err
 	}
@@ -229,15 +215,9 @@ func (dp *DirectPolicies) retireDirect(ctx context.Context, operationID string) 
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  operationID,
-		StepKey:      "direct_retirement",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody: operation.Encode(DirectRetirementState{
-			Phase: "complete",
-		}),
-	})); err != nil {
+	if err = transitionDirect(ctx, tx, step, DirectRetirementState{
+		Phase: "complete",
+	}, "succeeded"); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -270,16 +250,10 @@ func retireDirectGenerations(ctx context.Context, tx *sql.Tx, generations []Reso
 		if !known {
 			return fmt.Errorf("direct retirement source generation lacks reclamation proof")
 		}
-		if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(ctx, dbgen.CompleteUnchangedStepParams{
-			OperationID:  id,
-			StepKey:      "direct_retirement",
-			InputHash:    step.Hash,
-			PreviousBody: operation.Encode(step.State),
-			NewBody: operation.Encode(DirectRetirementState{
-				Phase:     "reclaimed",
-				RetiredBy: retirement,
-			}),
-		})); err != nil {
+		if err = transitionDirect(ctx, tx, step, DirectRetirementState{
+			Phase:     "reclaimed",
+			RetiredBy: retirement,
+		}, "succeeded"); err != nil {
 			return err
 		}
 		if err = store.RequireOne(dbgen.New(tx).CompleteLiveDirectCleanup(ctx, dbgen.CompleteLiveDirectCleanupParams{

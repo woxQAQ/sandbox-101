@@ -17,6 +17,59 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
+func TestHavenConfigureRollsBackIncompleteRequest(t *testing.T) {
+	service, _, _, _ := testapp.SandboxFixture(t)
+	ctx := t.Context()
+	principal := authorization.Principal{
+		TenantID: "tenant",
+	}
+	claim := (testfixture.SandboxClaims{
+		App: service,
+	}).Claim(t, "claim", nil, egress.Policy{
+		Mode: "none",
+	})
+	id := claim.Result.SandboxID
+	command := operation.Intent{
+		Action:    "configure",
+		SandboxID: id,
+		Policy: egress.Policy{
+			Mode: "proxy",
+			AllowedHosts: []string{
+				"first.invalid",
+				"second.invalid",
+			},
+		},
+	}
+	db := service.State.Database()
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER reject_second_rule BEFORE INSERT ON command_policy_rules WHEN NEW.position=1 BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Sandboxes.AdmitConfigure(ctx, principal, "configure-rules", command); err == nil {
+		t.Fatal("admitted an incomplete command")
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM operations WHERE scope_id='tenant' AND idem_key='configure-rules'`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("rejected command retained its key", count, err)
+	}
+	if _, err := db.ExecContext(ctx, "DROP TRIGGER reject_second_rule"); err != nil {
+		t.Fatal(err)
+	}
+	done, err := service.CommandAdmission.Execute(ctx, principal, "configure-rules", command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := service.OperationViews.Get(ctx, principal, done.ID)
+	if err != nil || !reflect.DeepEqual(view.Command.Policy, command.Policy) {
+		t.Fatal("retry changed command policy", view.Command.Policy, err)
+	}
+	if _, err = db.ExecContext(ctx, "DELETE FROM command_policy_rules WHERE operation_id=? AND position=1", done.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.OperationViews.Get(ctx, principal, done.ID); err == nil {
+		t.Fatal("accepted a truncated policy as the original command")
+	}
+}
+
 func TestHavenConfigureFailureMatrix(t *testing.T) {
 	testutil.ParallelLifecycle(t)
 	for _, stage := range []string{
@@ -91,11 +144,11 @@ func TestHavenConfigureFailureMatrix(t *testing.T) {
 					return nil
 				}
 			case "save_intent":
-				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandbox_settings WHEN json_extract(NEW.body,'$.env.REVISION')='new' BEGIN SELECT RAISE(ABORT,'private settings refusal'); END`
+				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandbox_settings WHEN EXISTS(SELECT 1 FROM sandbox_environment WHERE sandbox_id=NEW.sandbox_id AND name='REVISION' AND value='new') BEGIN SELECT RAISE(ABORT,'private settings refusal'); END`
 			case "running_save":
-				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandboxes WHEN json_extract(NEW.body,'$.last_error') IS NULL BEGIN SELECT RAISE(ABORT,'private running refusal'); END`
+				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandboxes WHEN NEW.last_error='' BEGIN SELECT RAISE(ABORT,'private running refusal'); END`
 			case "final_settings":
-				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandbox_settings WHEN json_extract(NEW.body,'$.active_epoch') IS NOT NULL AND json_extract(NEW.body,'$.env.REVISION')='new' BEGIN SELECT RAISE(ABORT,'private final settings refusal'); END`
+				statement = `CREATE TRIGGER deny_config BEFORE UPDATE ON sandbox_settings WHEN NEW.active_epoch<>'' AND EXISTS(SELECT 1 FROM sandbox_environment WHERE sandbox_id=NEW.sandbox_id AND name='REVISION' AND value='new') BEGIN SELECT RAISE(ABORT,'private final settings refusal'); END`
 			case "fence_delete":
 				statement = `CREATE TRIGGER deny_config BEFORE DELETE ON sandbox_operation_fences BEGIN SELECT RAISE(ABORT,'private fence refusal'); END`
 			case "fence_ignored":

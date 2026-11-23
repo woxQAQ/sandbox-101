@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,18 +30,11 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil {
 		return err
 	}
-	var input snapshotDeleteInput
-	if err = json.Unmarshal(cleanup.Body, &input); err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(input.Source, source) {
-		return fmt.Errorf("snapshot retained fee provenance changed")
-	}
 	step, err := LoadSnapshotDelete(ctx, tx, cleanup.OperationID)
 	if err != nil {
 		return err
 	}
-	if step.Status != "succeeded" || step.Phase != "complete" || !reflect.DeepEqual(step.Input, input) {
+	if step.Status != "succeeded" || step.Phase != "complete" || step.Hash != cleanup.WitnessHash || !reflect.DeepEqual(step.Input.Source, source) {
 		return fmt.Errorf("snapshot fee retirement lacks completed deletion")
 	}
 	publication := source.Snapshot
@@ -50,18 +42,8 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	if err != nil {
 		return err
 	}
-	var request struct {
-		Action  string
-		Request SnapshotDeleteRequest
-	}
-	var result operation.Result
-	if err = json.Unmarshal(parent.Request, &request); err != nil {
-		return err
-	}
-	if err = json.Unmarshal(parent.Body, &result); err != nil {
-		return err
-	}
-	if operation.Digest(parent.Request) != parent.RequestHash || parent.Status != "succeeded" || parent.ScopeKind != "tenant" || parent.ScopeID != publication.TenantID || request.Action != "snapshot_delete" || request.Request != input.Request || result.SnapshotID != publication.ID {
+	result := parent.Result
+	if !parent.Request.Equal(step.Input.Request.operationRequest()) || parent.Status != "succeeded" || parent.ScopeKind != "tenant" || parent.ScopeID != publication.TenantID || result.SnapshotID != publication.ID {
 		return fmt.Errorf("snapshot retained deletion parent changed")
 	}
 	refs, err := quota.CountResourceHolders(ctx, tx, "snapshot", publication.ID)
@@ -90,16 +72,8 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 			return fmt.Errorf("snapshot fee retirement physical absence unconfirmed: %v", err)
 		}
 	}
-	body, err := dbgen.New(tx).GetDeletionReceipt(ctx, dbgen.GetDeletionReceiptParams{
-		Path:        publication.Dir,
-		OperationID: cleanup.OperationID,
-		StepKey:     "snapshot_delete",
-	})
+	intent, err := store.LoadDeletionReceipt(ctx, tx, cleanup.OperationID, "snapshot_delete", publication.Dir)
 	if err != nil {
-		return err
-	}
-	var intent loom.DeletionIntent
-	if err = json.Unmarshal(body, &intent); err != nil {
 		return err
 	}
 	if err = loom.VerifySnapshotDeletion(intent, publication.Dir, source.Publication); err != nil {
@@ -120,7 +94,7 @@ func RetireDeletedSnapshot(ctx context.Context, tx *sql.Tx, source SnapshotSourc
 	count, err = dbgen.New(tx).CountCompletedCleanup(ctx, dbgen.CountCompletedCleanupParams{
 		ID:          "capture:" + source.CaptureOperation,
 		OperationID: source.CaptureOperation,
-		Body:        operation.Encode(capture.Input),
+		WitnessHash: capture.Hash,
 	})
 
 	if err != nil || count != 1 {

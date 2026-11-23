@@ -289,10 +289,7 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 			return fmt.Errorf("%w: fork source snapshot changed before admission", errs.ErrConflict)
 		}
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"fork", input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	state := ForkState{
 		Phase: "admitted",
@@ -307,27 +304,28 @@ func (admission *forkAdmission) admitIntent(ctx context.Context, tx *sql.Tx) err
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       admission.Parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(admission.Parent.Result),
+		Result:    admission.Parent.Result,
 	}); err != nil {
 		return err
 	}
 	if err := operations.InsertCredential(ctx, admission.Parent.ID, admission.MAC); err != nil {
 		return err
 	}
-	if err := store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err := operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         admission.Parent.ID,
 		StepKey:             "fork_group",
 		Action:              "fork",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: admission.Parent.ID,
 		ExpectedInstance:    "",
 		Status:              "pending",
-		Body:                operation.Encode(state),
-	})); err != nil {
+		Phase:               state.Phase,
+	}); err != nil {
+		return err
+	}
+	if err := store.RequireOne(dbgen.New(tx).InsertForkProgress(ctx, admission.Parent.ID)); err != nil {
 		return err
 	}
 	if err := quota.AddResourceReference(ctx, tx, quota.ResourceReference{
@@ -373,7 +371,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 	acceptedOperation, input := admission.Parent, admission.Input
 	free, capacity := admission.Free, admission.capacity
 	budget := forkFunding(input)
-	tenant, err := authorization.New(tx).Limits(ctx, input.OwnerTenantID)
+	limits, err := authorization.LoadTenantLimits(ctx, tx, input.OwnerTenantID)
 	if err != nil {
 		return err
 	}
@@ -387,7 +385,7 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 		captureStorage = shape.MemoryMiB + shape.DiskMiB
 		captureBytes = (2*shape.MemoryMiB + shape.DiskMiB + 224) << 20
 	}
-	if tenant.MaxSandboxes < 0 || tenant.MaxStorageMiB < 0 || usage.Slots > tenant.MaxSandboxes || int64(len(input.Targets)) > tenant.MaxSandboxes-usage.Slots || usage.StorageMiB > tenant.MaxStorageMiB || budget.Storage+captureStorage > tenant.MaxStorageMiB-usage.StorageMiB {
+	if limits.MaxSandboxes < 0 || limits.MaxStorageMiB < 0 || usage.Slots > limits.MaxSandboxes || int64(len(input.Targets)) > limits.MaxSandboxes-usage.Slots || usage.StorageMiB > limits.MaxStorageMiB || budget.Storage+captureStorage > limits.MaxStorageMiB-usage.StorageMiB {
 		return fmt.Errorf("%w: fork batch exceeds tenant quota", errs.ErrExhausted)
 	}
 	reserved, err := quota.ReservedCapacity(ctx, tx)
@@ -398,18 +396,10 @@ func (admission *forkAdmission) reserveTargets(ctx context.Context, tx *sql.Tx) 
 		return fmt.Errorf("%w: fork batch exceeds host reservation", errs.ErrExhausted)
 	}
 	for _, target := range input.Targets {
-		if err := store.RequireOne(dbgen.New(tx).InsertSandbox(ctx, dbgen.InsertSandboxParams{
-			ID:     target.ID,
-			Tenant: target.TenantID,
-			State:  target.State,
-			Body:   operation.Encode(target),
-		})); err != nil {
+		if err := insertSandbox(ctx, tx, target); err != nil {
 			return err
 		}
-		if err := store.RequireOne(dbgen.New(tx).InsertSandboxSettings(ctx, dbgen.InsertSandboxSettingsParams{
-			SandboxID: target.ID,
-			Body:      operation.Encode(input.Settings),
-		})); err != nil {
+		if err := insertSettings(ctx, tx, target.ID, input.Settings); err != nil {
 			return err
 		}
 		if err := quota.AddCost(ctx, tx, quota.Cost{
@@ -538,12 +528,7 @@ func retireUnallocatedFork(ctx context.Context, tx *sql.Tx, step ForkStep) error
 		}); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).TerminateUnallocatedSandbox(ctx, dbgen.TerminateUnallocatedSandboxParams{
-			ID:           target.ID,
-			Tenant:       target.TenantID,
-			PreviousBody: operation.Encode(current),
-			NextBody:     operation.Encode(terminated),
-		})); err != nil {
+		if err = replaceSandbox(ctx, tx, current, terminated); err != nil {
 			return err
 		}
 	}

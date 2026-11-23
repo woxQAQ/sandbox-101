@@ -158,7 +158,7 @@ func LoadStop(ctx context.Context, database store.DBTX, id string) (StopStep, er
 	if err != nil {
 		record = dbgen.GetStepRow{}
 	}
-	input, body := record.Input, record.Body
+	input := record.Input
 	candidate, expected, action := record.CandidateResourceID, record.ExpectedInstance, record.Action
 	step.Hash, step.Status = record.InputHash, record.Status
 	if err != nil {
@@ -170,9 +170,7 @@ func LoadStop(ctx context.Context, database store.DBTX, id string) (StopStep, er
 	if err = json.Unmarshal(input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if action != "stop" || candidate != step.Input.Request.SandboxID || expected != step.Input.Request.ExpectedInstance {
 		return step, fmt.Errorf("stop frozen identity changed")
 	}

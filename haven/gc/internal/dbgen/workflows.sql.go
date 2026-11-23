@@ -7,26 +7,21 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
 
-const completeLiveStep = `-- name: CompleteLiveStep :execrows
-UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key=? AND status IN ('pending','running') AND input_hash=?
+const advanceGCProgress = `-- name: AdvanceGCProgress :execrows
+UPDATE gc_progress SET next_candidate=?1 WHERE operation_id=?2 AND next_candidate=?3
 `
 
-type CompleteLiveStepParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
+type AdvanceGCProgressParams struct {
+	NextCandidate     int64
+	OperationID       string
+	PreviousCandidate int64
 }
 
-func (q *Queries) CompleteLiveStep(ctx context.Context, arg CompleteLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeLiveStep,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-	)
+func (q *Queries) AdvanceGCProgress(ctx context.Context, arg AdvanceGCProgressParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, advanceGCProgress, arg.NextCandidate, arg.OperationID, arg.PreviousCandidate)
 	if err != nil {
 		return 0, err
 	}
@@ -67,8 +62,19 @@ func (q *Queries) GetCleanupKindStatus(ctx context.Context, arg GetCleanupKindSt
 	return status, err
 }
 
+const getGCProgress = `-- name: GetGCProgress :one
+SELECT next_candidate FROM gc_progress WHERE operation_id=?
+`
+
+func (q *Queries) GetGCProgress(ctx context.Context, operationID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getGCProgress, operationID)
+	var next_candidate int64
+	err := row.Scan(&next_candidate)
+	return next_candidate, err
+}
+
 const getStep = `-- name: GetStep :one
-SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,body
+SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,completed_at
 FROM operation_steps WHERE operation_id=? AND step_key=?
 `
 
@@ -86,7 +92,7 @@ type GetStepRow struct {
 	Input               []byte
 	CandidateResourceID string
 	ExpectedInstance    string
-	Body                []byte
+	CompletedAt         string
 }
 
 func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, error) {
@@ -101,38 +107,42 @@ func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, e
 		&i.Input,
 		&i.CandidateResourceID,
 		&i.ExpectedInstance,
-		&i.Body,
+		&i.CompletedAt,
 	)
 	return i, err
 }
 
-const insertStep = `-- name: InsertStep :execrows
-INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance,status,body) VALUES(?,?,?,?,?,?,?,?,?)
+const insertGCOutcome = `-- name: InsertGCOutcome :execrows
+INSERT INTO gc_outcomes(operation_id,disposition,ordinal,kind,resource_id,tenant_id,cache_builder,cache_diff_id,proof,child_operation_id,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 `
 
-type InsertStepParams struct {
-	OperationID         string
-	StepKey             string
-	Action              string
-	InputHash           string
-	Input               []byte
-	CandidateResourceID string
-	ExpectedInstance    string
-	Status              string
-	Body                []byte
+type InsertGCOutcomeParams struct {
+	OperationID      string
+	Disposition      string
+	Ordinal          int64
+	Kind             string
+	ResourceID       string
+	TenantID         string
+	CacheBuilder     string
+	CacheDiffID      string
+	Proof            string
+	ChildOperationID string
+	Reason           string
 }
 
-func (q *Queries) InsertStep(ctx context.Context, arg InsertStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertStep,
+func (q *Queries) InsertGCOutcome(ctx context.Context, arg InsertGCOutcomeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGCOutcome,
 		arg.OperationID,
-		arg.StepKey,
-		arg.Action,
-		arg.InputHash,
-		arg.Input,
-		arg.CandidateResourceID,
-		arg.ExpectedInstance,
-		arg.Status,
-		arg.Body,
+		arg.Disposition,
+		arg.Ordinal,
+		arg.Kind,
+		arg.ResourceID,
+		arg.TenantID,
+		arg.CacheBuilder,
+		arg.CacheDiffID,
+		arg.Proof,
+		arg.ChildOperationID,
+		arg.Reason,
 	)
 	if err != nil {
 		return 0, err
@@ -140,35 +150,35 @@ func (q *Queries) InsertStep(ctx context.Context, arg InsertStepParams) (int64, 
 	return result.RowsAffected()
 }
 
-const listCaptureLinks = `-- name: ListCaptureLinks :many
-SELECT operation_id,input_hash,input,status FROM operation_steps WHERE action='resource_link' AND step_key='link:capture' AND json_extract(input,'$.child_id')=(CAST(?1 AS TEXT)||'')
+const insertGCProgress = `-- name: InsertGCProgress :execrows
+INSERT INTO gc_progress(operation_id) VALUES(?)
 `
 
-type ListCaptureLinksRow struct {
-	OperationID string
-	InputHash   string
-	Input       []byte
-	Status      string
+func (q *Queries) InsertGCProgress(ctx context.Context, operationID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGCProgress, operationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
-func (q *Queries) ListCaptureLinks(ctx context.Context, childID string) ([]ListCaptureLinksRow, error) {
-	rows, err := q.db.QueryContext(ctx, listCaptureLinks, childID)
+const listCaptureLinks = `-- name: ListCaptureLinks :many
+SELECT parent_operation_id FROM resource_links WHERE child_operation_id=? AND step_key='link:capture'
+`
+
+func (q *Queries) ListCaptureLinks(ctx context.Context, childOperationID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listCaptureLinks, childOperationID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListCaptureLinksRow
+	var items []string
 	for rows.Next() {
-		var i ListCaptureLinksRow
-		if err := rows.Scan(
-			&i.OperationID,
-			&i.InputHash,
-			&i.Input,
-			&i.Status,
-		); err != nil {
+		var parent_operation_id string
+		if err := rows.Scan(&parent_operation_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, parent_operation_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -211,12 +221,64 @@ func (q *Queries) ListFailedSupplySteps(ctx context.Context) ([]ListFailedSupply
 	return items, nil
 }
 
+const listGCOutcomes = `-- name: ListGCOutcomes :many
+SELECT disposition,ordinal,kind,resource_id,tenant_id,cache_builder,cache_diff_id,proof,child_operation_id,reason FROM gc_outcomes WHERE operation_id=? ORDER BY disposition,ordinal
+`
+
+type ListGCOutcomesRow struct {
+	Disposition      string
+	Ordinal          int64
+	Kind             string
+	ResourceID       string
+	TenantID         string
+	CacheBuilder     string
+	CacheDiffID      string
+	Proof            string
+	ChildOperationID string
+	Reason           string
+}
+
+func (q *Queries) ListGCOutcomes(ctx context.Context, operationID string) ([]ListGCOutcomesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGCOutcomes, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGCOutcomesRow
+	for rows.Next() {
+		var i ListGCOutcomesRow
+		if err := rows.Scan(
+			&i.Disposition,
+			&i.Ordinal,
+			&i.Kind,
+			&i.ResourceID,
+			&i.TenantID,
+			&i.CacheBuilder,
+			&i.CacheDiffID,
+			&i.Proof,
+			&i.ChildOperationID,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGCStepInputs = `-- name: ListGCStepInputs :many
-SELECT operation_id,input_hash,input,status,action FROM operation_steps ORDER BY rowid
+SELECT operation_id,step_key,input_hash,input,status,action FROM operation_steps ORDER BY rowid
 `
 
 type ListGCStepInputsRow struct {
 	OperationID string
+	StepKey     string
 	InputHash   string
 	Input       []byte
 	Status      string
@@ -234,6 +296,7 @@ func (q *Queries) ListGCStepInputs(ctx context.Context) ([]ListGCStepInputsRow, 
 		var i ListGCStepInputsRow
 		if err := rows.Scan(
 			&i.OperationID,
+			&i.StepKey,
 			&i.InputHash,
 			&i.Input,
 			&i.Status,
@@ -311,23 +374,27 @@ func (q *Queries) ListSuccessfulStops(ctx context.Context, arg ListSuccessfulSto
 	return items, nil
 }
 
-const recordLiveStepProgress = `-- name: RecordLiveStepProgress :execrows
-UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND status IN ('pending','running')
+const setGCStatus = `-- name: SetGCStatus :execrows
+UPDATE operation_steps SET status=?1,phase=?2,completed_at=?3 WHERE operation_id=?4 AND step_key='gc' AND input_hash=?5 AND status=?6 AND status IN ('pending','running')
 `
 
-type RecordLiveStepProgressParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
+type SetGCStatusParams struct {
+	NextStatus     string
+	NextPhase      sql.NullString
+	CompletedAt    string
+	OperationID    string
+	InputHash      string
+	PreviousStatus string
 }
 
-func (q *Queries) RecordLiveStepProgress(ctx context.Context, arg RecordLiveStepProgressParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recordLiveStepProgress,
-		arg.Body,
+func (q *Queries) SetGCStatus(ctx context.Context, arg SetGCStatusParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setGCStatus,
+		arg.NextStatus,
+		arg.NextPhase,
+		arg.CompletedAt,
 		arg.OperationID,
-		arg.StepKey,
 		arg.InputHash,
+		arg.PreviousStatus,
 	)
 	if err != nil {
 		return 0, err

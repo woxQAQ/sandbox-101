@@ -48,15 +48,14 @@ type SnapshotSource struct {
 
 // admitCapturePublication joins the catalog and permanent owner in the caller's transaction.
 func admitCapturePublication(ctx context.Context, tx *sql.Tx, record SnapshotRecord) error {
-	body, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
 	queries := dbgen.New(tx)
-	if err = store.RequireOne(queries.InsertSnapshot(ctx, dbgen.InsertSnapshotParams{
-		ID:         record.ID,
-		SourceVmID: record.SourceVM,
-		Body:       body,
+	if err := store.RequireOne(queries.InsertSnapshot(ctx, dbgen.InsertSnapshotParams{
+		ID:                 record.ID,
+		SourceVmID:         record.SourceVM,
+		TenantID:           record.TenantID,
+		CaptureOperationID: record.OperationID,
+		SourceInstance:     record.SourceInstance,
+		Directory:          record.Dir,
 	})); err != nil {
 		return err
 	}
@@ -77,44 +76,117 @@ type SnapshotRoot struct {
 	Deleting  bool
 }
 
-func LoadOwnedSnapshot(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotRecord, error) {
-	var record SnapshotRecord
-	body, err := dbgen.New(query).GetOwnedBody(ctx, dbgen.GetOwnedBodyParams{
-		ID:       id,
-		TenantID: tenant,
-	})
+func captureManifest(step CaptureStep) Manifest {
+	return Manifest{
+		Format:          1,
+		Backend:         step.Input.Backend,
+		Architecture:    step.Input.Architecture,
+		CPU:             step.Input.CPU,
+		Config:          step.Input.Source.Input.Resource.Config,
+		MemoryMode:      "CopyOnWrite",
+		PublicationMode: "IndependentInodes",
+		Files:           step.State.Files,
+		Image:           operation.Encode(step.Input.Source.Input.Image),
+	}
+}
+
+func manifestHash(m *Manifest) sql.NullString {
+	if m == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{
+		String: operation.Digest(operation.Encode(m)),
+		Valid:  true,
+	}
+}
+
+// CapturePublication reads the original capture independently of the current snapshot catalog.
+func CapturePublication(ctx context.Context, q store.DBTX, id string) (SnapshotSource, error) {
+	step, err := LoadCapture(ctx, q, id)
 	if err != nil {
-		return record, err
+		return SnapshotSource{}, err
 	}
-	if err = json.Unmarshal(body, &record); err != nil {
-		return record, err
+	if step.Status != "succeeded" || step.State.Phase != "complete" || step.State.Boundary == nil {
+		return SnapshotSource{}, fmt.Errorf("capture %s lacks a completed publication", id)
 	}
-	if record.ID != id || record.TenantID != tenant {
-		return record, fmt.Errorf("snapshot provenance inconsistent")
+	manifest := captureManifest(step)
+	snapshot := step.Input.Snapshot
+	snapshot.Manifest = &manifest
+	return SnapshotSource{
+		Snapshot:         snapshot,
+		CaptureOperation: id,
+		CaptureHash:      step.Hash,
+		Publication:      step.State.Boundary.Publication,
+	}, nil
+}
+
+func snapshotRecord(ctx context.Context, q store.DBTX, row dbgen.Snapshot) (SnapshotRecord, error) {
+	record := SnapshotRecord{
+		ID:             row.ID,
+		TenantID:       row.TenantID,
+		OperationID:    row.CaptureOperationID,
+		SourceVM:       row.SourceVmID,
+		SourceInstance: row.SourceInstance,
+		Dir:            row.Directory,
+	}
+	if row.ManifestHash.Valid {
+		source, err := CapturePublication(ctx, q, row.CaptureOperationID)
+		if err != nil {
+			return record, err
+		}
+		record.Manifest = source.Snapshot.Manifest
+		if !reflect.DeepEqual(record, source.Snapshot) || manifestHash(record.Manifest) != row.ManifestHash {
+			return record, fmt.Errorf("snapshot manifest differs from its capture")
+		}
 	}
 	return record, nil
 }
 
-func SnapshotRoots(ctx context.Context, query store.DBTX) ([]SnapshotRoot, error) {
-	rows, err := dbgen.New(query).ListSnapshots(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var roots []SnapshotRoot
-	for _, row := range rows {
-		var record SnapshotRecord
-		if err := json.Unmarshal(row.Body, &record); err != nil {
-			return roots, err
-		}
-		roots = append(roots, SnapshotRoot{
-			ID:        row.ID,
-			Record:    record,
-			Hash:      operation.Digest(row.Body),
-			Published: row.Published == 1,
-			Deleting:  row.Deleting != 0,
+func LoadOwnedSnapshot(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotRecord, error) {
+	var record SnapshotRecord
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		row, err := dbgen.New(tx).GetOwnedSnapshot(ctx, dbgen.GetOwnedSnapshotParams{
+			ID:       id,
+			TenantID: tenant,
 		})
-	}
-	return roots, nil
+		if err != nil {
+			return err
+		}
+		record, err = snapshotRecord(ctx, tx, row)
+		if err != nil {
+			return err
+		}
+		if record.ID != id || record.TenantID != tenant {
+			return fmt.Errorf("snapshot provenance inconsistent")
+		}
+		return nil
+	})
+	return record, err
+}
+
+func SnapshotRoots(ctx context.Context, query store.DBTX) ([]SnapshotRoot, error) {
+	var roots []SnapshotRoot
+	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
+		rows, err := dbgen.New(tx).ListSnapshots(ctx)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			record, err := snapshotRecord(ctx, tx, row)
+			if err != nil {
+				return err
+			}
+			roots = append(roots, SnapshotRoot{
+				ID:        row.ID,
+				Record:    record,
+				Hash:      operation.Digest(operation.Encode(record)),
+				Published: row.Published == 1,
+				Deleting:  row.Deleting != 0,
+			})
+		}
+		return nil
+	})
+	return roots, err
 }
 
 func SnapshotReaders(ctx context.Context, query store.DBTX, id string) (int64, error) {
@@ -131,8 +203,14 @@ func (proofs SnapshotProofs) Backings(ctx context.Context, tx *sql.Tx, source Sn
 	var result []ResourceStep
 	for _, holder := range holders {
 		id, err := dbgen.New(tx).RestoreBackingOperation(ctx, dbgen.RestoreBackingOperationParams{
-			HolderID:   holder,
-			SnapshotID: source.Snapshot.ID,
+			BackingHolder: sql.NullString{
+				String: holder,
+				Valid:  true,
+			},
+			RestoreSnapshotID: sql.NullString{
+				String: source.Snapshot.ID,
+				Valid:  true,
+			},
 		})
 		if err != nil {
 			return nil, err

@@ -50,7 +50,7 @@ func TestHavenStoreExclusiveOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = transaction.Exec("INSERT INTO tenants VALUES('tenant','hash',0,0); INSERT INTO vms VALUES('vm',1,'','created',NULL,x'7b7d')"); err != nil {
+	if _, err = transaction.Exec("INSERT INTO tenants VALUES('tenant','hash',0,0); INSERT INTO operations(id,scope_kind,scope_id,idem_key,action,request_kind,status,created_at,finished_at) VALUES('op','node','node','key','gc','gc','running','created',''); INSERT INTO operation_gc_requests VALUES('op',0,1,100); INSERT INTO vms(id,slot,current_instance,state,generation_operation_id,directory,resource_hash) VALUES('vm',1,'','created','op','dir','hash')"); err != nil {
 		_ = transaction.Rollback()
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 			case "foreign-trigger":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "CREATE TRIGGER foreign_guard BEFORE UPDATE ON operations BEGIN SELECT 1; END")
 			case "dangling-reference":
-				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA foreign_keys=OFF; INSERT INTO vms VALUES('dangling',1,'','created','missing',x'7b7d')")
+				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA foreign_keys=OFF; INSERT INTO vms(id,slot,current_instance,state,generation_operation_id,directory,resource_hash) VALUES('dangling',1,'','created','missing','dir','hash')")
 			case "recovery-gate":
 				err = os.WriteFile(filepath.Join(directory, "RECOVERY_REQUIRED"), []byte("review required"), 0o600)
 			case "missing-key":

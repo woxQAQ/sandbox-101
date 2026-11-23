@@ -486,7 +486,7 @@ func TestHavenDirectRetirementCompletionAtomicity(t *testing.T) {
 			}
 			source := retirement.Input.Source
 			policy, err := machine.LoadPolicyWitness(ctx, service.State.Database(), source.Candidate)
-			if err != nil || policy.OperationID != claim.ID || policy.Instance != source.State.Witness || string(policy.Body) != string(operation.Encode(retirement.Input.Policy)) {
+			if err != nil || policy.OperationID != claim.ID || policy.Instance != source.State.Witness || policy.PolicyHash != machine.InstalledPolicyHash(retirement.Input.Policy) {
 				t.Fatal("failed completion partially removed policy ownership", policy, err)
 			}
 			var cleanup string

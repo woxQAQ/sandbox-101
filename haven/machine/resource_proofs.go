@@ -102,35 +102,11 @@ func (proofs ResourceProofs) VerifyGenerationAt(ctx context.Context, tx *sql.Tx,
 		return fmt.Errorf("completed generation lacks historical witness")
 	}
 
-	body, err := VersionHistory(ctx, tx, GenerationIdentity{
-		VMID:        source.Candidate,
-		OperationID: source.OperationID,
-	}, source.Key)
-	if err != nil {
+	if err := VerifyVersion(ctx, tx, source); err != nil {
 		return err
 	}
-	var version RetainedVersion
-	if err := json.Unmarshal(body, &version); err != nil {
+	if err := VerifyInstance(ctx, tx, source.OperationID, source.Input.Resource, source.State.Observation); err != nil {
 		return err
-	}
-	if !reflect.DeepEqual(version, RetainedVersion{
-		Resource:     source.Input.Resource,
-		DiskIdentity: source.State.DiskIdentity,
-	}) {
-		return fmt.Errorf("retained version identity changed")
-	}
-	if body, err = InstanceHistory(ctx, tx, GenerationIdentity{
-		VMID:        source.Candidate,
-		OperationID: source.OperationID,
-	}, source.State.Witness); err != nil {
-		return err
-	}
-	var instance VMRecord
-	if err := json.Unmarshal(body, &instance); err != nil {
-		return err
-	}
-	if !instance.Verified || !instance.AgentReady || !reflect.DeepEqual(instance.Resource, source.Input.Resource) || !reflect.DeepEqual(instance.Observation, source.State.Observation) {
-		return fmt.Errorf("retained instance birth proof changed")
 	}
 	count, err := quota.CountStorageCostReference(ctx, tx, quota.CostIdentity{
 		TenantID:        source.Input.TenantID,
@@ -246,9 +222,7 @@ func LoadVM(ctx context.Context, database store.DBTX, step ResourceStep) (VMReco
 	if err != nil {
 		return record, "", "", err
 	}
-	if err = json.Unmarshal(current.Body, &record); err != nil {
-		return record, "", "", err
-	}
+	record = current.Record
 	if !reflect.DeepEqual(record.Resource, step.Input.Resource) {
 		return record, "", "", fmt.Errorf("VM candidate resource changed")
 	}

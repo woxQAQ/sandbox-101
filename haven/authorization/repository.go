@@ -45,8 +45,8 @@ type Limits struct {
 	MaxStorageMiB int64
 }
 
-func (r *Repository) Limits(ctx context.Context, id string) (Limits, error) {
-	row, err := r.queries.GetTenantLimits(ctx, id)
+func LoadTenantLimits(ctx context.Context, db store.DBTX, tenantID string) (Limits, error) {
+	row, err := dbgen.New(db).GetTenantLimits(ctx, tenantID)
 	return Limits{
 		MaxSandboxes:  row.MaxSandboxes,
 		MaxStorageMiB: row.MaxStorageMib,

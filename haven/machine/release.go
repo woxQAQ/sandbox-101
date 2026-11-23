@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -39,11 +38,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if request.Key == "" || len(request.Key) > 256 || request.TenantID == "" || request.SandboxID == "" {
 		return empty, fmt.Errorf("%w: tenant, sandbox and a key of 1..256 bytes are required", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request ReleaseRequest
-	}{"release", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	d.storeWriteMu.Lock()
 	defer d.storeWriteMu.Unlock()
 	closing := d.lifetime.Closing() || d.store.Reviewed
@@ -61,7 +56,7 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	if cached, found, err := operations.Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			d.dispatch(cached.ID)
 		}
@@ -173,10 +168,10 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		}
 	}
 	if err = AdmitResourceParent(ctx, tx, parent, ResourceAdmission{
-		Child:       accepted,
-		Kind:        "release",
-		Candidate:   record.VMID,
-		RequestHash: hash,
+		Child:     accepted,
+		Kind:      "release",
+		Candidate: record.VMID,
+		Request:   frozen,
 	}); err != nil {
 		return empty, err
 	}
@@ -185,27 +180,19 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    accepted.Status,
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
 	payload := operation.Encode(input)
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-		OperationID:         accepted.ID,
-		StepKey:             "resource",
-		Action:              "release",
-		InputHash:           operation.Digest(payload),
-		Input:               payload,
-		CandidateResourceID: record.VMID,
-		ExpectedInstance:    source.State.Witness,
-		Status:              "pending",
-		Body: operation.Encode(ResourceState{
-			Phase: "admitted",
-		}),
-	})); err != nil {
+	if err = AdmitProvisionIntent(ctx, tx, ProvisionIntent{
+		OperationID:      accepted.ID,
+		Action:           "release",
+		ExpectedInstance: source.State.Witness,
+		Input:            input,
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
@@ -213,7 +200,8 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 		OperationID:  accepted.ID,
 		ResourceKind: "vm",
 		ResourceID:   record.VMID,
-		Body:         payload,
+		StepKey:      "resource",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}
@@ -224,15 +212,13 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 	}); err != nil {
 		return empty, err
 	}
-	currentMachine.Deleting = true
-	if err = store.RequireOne(dbgen.New(tx).ClaimCurrentBody(ctx, dbgen.ClaimCurrentBodyParams{
+	if err = store.RequireOne(dbgen.New(tx).ClaimForDeletion(ctx, dbgen.ClaimForDeletionParams{
 		ID:       record.VMID,
 		Instance: source.State.Witness,
 		Owner: sql.NullString{
 			String: accepted.ID,
 			Valid:  true,
 		},
-		Body: operation.Encode(currentMachine),
 	})); err != nil {
 		return empty, err
 	}
@@ -283,16 +269,12 @@ func (d *Deletion) AdmitReleaseForParent(ctx context.Context, request ReleaseReq
 			return empty, err
 		}
 	}
-	parentStatus, parentBody, err := operations.ResultState(ctx, source.OperationID)
+	parentStatus, result, err := operations.ResultState(ctx, source.OperationID)
 	if err != nil {
 		return empty, err
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(parentStatus) {
-		var result operation.Result
-		if err = json.Unmarshal(parentBody, &result); err != nil {
-			return empty, err
-		}
 		result.Error = "released before sandbox delivery"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     source.OperationID,
@@ -389,62 +371,34 @@ func (d *Deletion) releaseProof(tx *sql.Tx, step ResourceStep) (VMRecord, error)
 	if err != nil {
 		return currentMachine, err
 	}
-	if string(cleanup) != string(operation.Encode(step.Input)) {
+	if cleanup != step.Hash {
 		return currentMachine, fmt.Errorf("cleanup frozen input changed")
 	}
 	projection, err := operations.Projection(d.ctx, step.OperationID)
 	if err != nil {
 		return currentMachine, err
 	}
-	request, parentBody := projection.Request, projection.Body
-	requestHash, kind, tenant, status := projection.RequestHash, projection.ScopeKind, projection.ScopeID, projection.Status
-	var frozen struct {
-		Action  string
-		Request ReleaseRequest
+	result := projection.Result
+	tenant := projection.ScopeID
+	original := ReleaseRequest{
+		TenantID:  step.Input.TenantID,
+		Key:       projection.Key,
+		SandboxID: record.ID,
 	}
-	if err = json.Unmarshal(request, &frozen); err != nil {
-		return currentMachine, err
-	}
-	var result operation.Result
-	if err = json.Unmarshal(parentBody, &result); err != nil {
-		return currentMachine, err
-	}
-	if operation.Digest(request) != requestHash || kind != "tenant" || tenant != step.Input.TenantID || operation.Terminal(status) || frozen.Action != "release" || frozen.Request.TenantID != tenant || frozen.Request.SandboxID != record.ID || result.SandboxID != record.ID || result.VMID != step.Candidate {
+	if !projection.Request.Equal(original.operationRequest()) || projection.ScopeKind != "tenant" || projection.ScopeID != step.Input.TenantID || operation.Terminal(projection.Status) || result.SandboxID != record.ID || result.VMID != step.Candidate {
 		return currentMachine, fmt.Errorf("release operation identity changed")
 	}
 	if err = d.validateStep(source); err != nil {
 		return currentMachine, err
 	}
-	retained, err := queries.GetRetainedVersion(d.ctx, dbgen.GetRetainedVersionParams{
-		VmID:        step.Candidate,
-		OperationID: source.OperationID,
-	})
-	if err != nil {
+	if err = VerifyVersion(d.ctx, tx, source); err != nil {
 		return currentMachine, err
 	}
-	var version RetainedVersion
-	if err = json.Unmarshal(retained.Body, &version); err != nil {
-		return currentMachine, err
-	}
-	if retained.StepKey != source.Key || !reflect.DeepEqual(version, RetainedVersion{
-		Resource:     source.Input.Resource,
-		DiskIdentity: source.State.DiskIdentity,
-	}) {
-		return currentMachine, fmt.Errorf("release resource version birth proof changed")
-	}
-	birth, err := queries.GetRetainedInstance(d.ctx, dbgen.GetRetainedInstanceParams{
-		ID:   step.ExpectedInstance,
-		VmID: step.Candidate,
-	})
-	if err != nil {
-		return currentMachine, err
-	}
-	var historical VMRecord
-	if err = json.Unmarshal(birth.Body, &historical); err != nil {
-		return currentMachine, err
-	}
-	if birth.OperationID != source.OperationID || !historical.Verified || !historical.AgentReady || historical.Deleting || !reflect.DeepEqual(historical.Resource, source.Input.Resource) || !reflect.DeepEqual(historical.Observation, source.State.Observation) {
+	if step.ExpectedInstance != source.Input.Resource.Instance || source.State.Observation == nil {
 		return currentMachine, fmt.Errorf("release instance birth proof changed")
+	}
+	if err = VerifyInstance(d.ctx, tx, source.OperationID, source.Input.Resource, source.State.Observation); err != nil {
+		return currentMachine, err
 	}
 	if err = CheckTransferredCaptures(d.ctx, tx, step); err != nil {
 		return currentMachine, err

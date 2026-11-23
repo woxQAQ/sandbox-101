@@ -7,19 +7,68 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
 
 const appendJournal = `-- name: AppendJournal :execrows
-INSERT INTO journal(body,hash) VALUES(?,?)
+INSERT INTO journal(signed_payload,hash) VALUES(?,?)
 `
 
 type AppendJournalParams struct {
-	Body []byte
-	Hash string
+	SignedPayload []byte
+	Hash          string
 }
 
 func (q *Queries) AppendJournal(ctx context.Context, arg AppendJournalParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, appendJournal, arg.Body, arg.Hash)
+	result, err := q.db.ExecContext(ctx, appendJournal, arg.SignedPayload, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const claimDeletion = `-- name: ClaimDeletion :execrows
+INSERT INTO deletion_intents(path,operation_id,step_key,receipt_hash) VALUES(?,?,?,?)
+`
+
+type ClaimDeletionParams struct {
+	Path        string
+	OperationID string
+	StepKey     string
+	ReceiptHash string
+}
+
+func (q *Queries) ClaimDeletion(ctx context.Context, arg ClaimDeletionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimDeletion,
+		arg.Path,
+		arg.OperationID,
+		arg.StepKey,
+		arg.ReceiptHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteMatchingReceipt = `-- name: DeleteMatchingReceipt :execrows
+DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=? AND receipt_hash=?
+`
+
+type DeleteMatchingReceiptParams struct {
+	Path        string
+	OperationID string
+	StepKey     string
+	ReceiptHash string
+}
+
+func (q *Queries) DeleteMatchingReceipt(ctx context.Context, arg DeleteMatchingReceiptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteMatchingReceipt,
+		arg.Path,
+		arg.OperationID,
+		arg.StepKey,
+		arg.ReceiptHash,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -94,13 +143,73 @@ func (q *Queries) InitializeMetadata(ctx context.Context, arg InitializeMetadata
 	return err
 }
 
+const insertDeletionNode = `-- name: InsertDeletionNode :execrows
+INSERT INTO deletion_nodes(operation_id,step_key,receipt_path,relative_path,device,inode,mode) VALUES(?,?,?,?,?,?,?)
+`
+
+type InsertDeletionNodeParams struct {
+	OperationID  string
+	StepKey      string
+	ReceiptPath  string
+	RelativePath string
+	Device       int64
+	Inode        int64
+	Mode         int64
+}
+
+func (q *Queries) InsertDeletionNode(ctx context.Context, arg InsertDeletionNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertDeletionNode,
+		arg.OperationID,
+		arg.StepKey,
+		arg.ReceiptPath,
+		arg.RelativePath,
+		arg.Device,
+		arg.Inode,
+		arg.Mode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertDeletionReceipt = `-- name: InsertDeletionReceipt :execrows
+INSERT INTO deletion_history(path,operation_id,step_key,format,directory,receipt_hash,ordinal)
+VALUES(?1,?2,?3,?4,?5,?6,
+ (SELECT COUNT(*) FROM deletion_history WHERE operation_id=?2 AND step_key=?3))
+`
+
+type InsertDeletionReceiptParams struct {
+	Path        string
+	OperationID string
+	StepKey     string
+	Format      int64
+	Directory   bool
+	ReceiptHash string
+}
+
+func (q *Queries) InsertDeletionReceipt(ctx context.Context, arg InsertDeletionReceiptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertDeletionReceipt,
+		arg.Path,
+		arg.OperationID,
+		arg.StepKey,
+		arg.Format,
+		arg.Directory,
+		arg.ReceiptHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const listJournal = `-- name: ListJournal :many
-SELECT body,hash FROM journal ORDER BY seq
+SELECT signed_payload,hash FROM journal ORDER BY seq
 `
 
 type ListJournalRow struct {
-	Body []byte
-	Hash string
+	SignedPayload []byte
+	Hash          string
 }
 
 func (q *Queries) ListJournal(ctx context.Context) ([]ListJournalRow, error) {
@@ -112,7 +221,76 @@ func (q *Queries) ListJournal(ctx context.Context) ([]ListJournalRow, error) {
 	var items []ListJournalRow
 	for rows.Next() {
 		var i ListJournalRow
-		if err := rows.Scan(&i.Body, &i.Hash); err != nil {
+		if err := rows.Scan(&i.SignedPayload, &i.Hash); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveDeletionHash = `-- name: LiveDeletionHash :one
+SELECT receipt_hash FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?
+`
+
+type LiveDeletionHashParams struct {
+	Path        string
+	OperationID string
+	StepKey     string
+}
+
+func (q *Queries) LiveDeletionHash(ctx context.Context, arg LiveDeletionHashParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, liveDeletionHash, arg.Path, arg.OperationID, arg.StepKey)
+	var receipt_hash string
+	err := row.Scan(&receipt_hash)
+	return receipt_hash, err
+}
+
+const readDeletionReceipt = `-- name: ReadDeletionReceipt :many
+SELECT r.format,r.directory,r.receipt_hash,n.relative_path,n.device,n.inode,n.mode FROM deletion_history r
+LEFT JOIN deletion_nodes n ON n.receipt_path=r.path AND n.operation_id=r.operation_id AND n.step_key=r.step_key WHERE r.path=? AND r.operation_id=? AND r.step_key=?
+`
+
+type ReadDeletionReceiptParams struct {
+	Path        string
+	OperationID string
+	StepKey     string
+}
+
+type ReadDeletionReceiptRow struct {
+	Format       int64
+	Directory    bool
+	ReceiptHash  string
+	RelativePath sql.NullString
+	Device       sql.NullInt64
+	Inode        sql.NullInt64
+	Mode         sql.NullInt64
+}
+
+func (q *Queries) ReadDeletionReceipt(ctx context.Context, arg ReadDeletionReceiptParams) ([]ReadDeletionReceiptRow, error) {
+	rows, err := q.db.QueryContext(ctx, readDeletionReceipt, arg.Path, arg.OperationID, arg.StepKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadDeletionReceiptRow
+	for rows.Next() {
+		var i ReadDeletionReceiptRow
+		if err := rows.Scan(
+			&i.Format,
+			&i.Directory,
+			&i.ReceiptHash,
+			&i.RelativePath,
+			&i.Device,
+			&i.Inode,
+			&i.Mode,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

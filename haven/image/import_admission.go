@@ -36,15 +36,14 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 	}
 	unlock := i.nodeIdempotencyLocks.Lock(i.nodeID, key)
 	defer unlock()
-	frozen := operation.Encode(struct {
-		Action  string
-		Options imageimport.ImageImportOptions
-	}{"image_import", options})
-	hash := operation.Digest(frozen)
+	frozen := operation.Request{
+		Action: "image_import",
+		Import: &options,
+	}
 	if cached, found, err := operation.New(i.database).Cached(ctx, operation.Scope{
 		Kind: "node",
 		ID:   i.nodeID,
-	}, key, hash); found || err != nil {
+	}, key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			i.dispatch(cached.ID)
 		}
@@ -144,24 +143,25 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 		ScopeKind: "node",
 		ScopeID:   i.nodeID,
 		Key:       key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    accepted.Status,
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "image_import",
 		Action:              "image_import",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: options.Digest,
 		ExpectedInstance:    "",
 		Status:              accepted.Status,
-		Body:                operation.Encode(state),
-	})); err != nil {
+		Phase:               state.Phase,
+	}); err != nil {
+		return empty, err
+	}
+	if err = store.RequireOne(catalog.InsertImportProgress(ctx, accepted.ID)); err != nil {
 		return empty, err
 	}
 	if input.Existing == nil {
@@ -176,7 +176,7 @@ func (i *Images) AdmitImport(ctx context.Context, principal authorization.Princi
 			Digest:      options.Digest,
 			OperationID: accepted.ID,
 			Layout:      options.Materialization,
-			Body:        payload,
+			InputHash:   operation.Digest(payload),
 		})); err != nil {
 			return empty, err
 		}

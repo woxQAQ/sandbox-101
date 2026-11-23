@@ -7,7 +7,51 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
+
+const advancePhase = `-- name: AdvancePhase :execrows
+UPDATE operation_steps SET status=?1,phase=?2,result_snapshot_id=?3 WHERE operation_id=?4 AND step_key=?5 AND input_hash=?6 AND status=?7 AND phase=?8 AND result_snapshot_id=?9 AND status IN ('pending','running')
+`
+
+type AdvancePhaseParams struct {
+	NextStatus       string
+	NextPhase        sql.NullString
+	NextSnapshot     string
+	OperationID      string
+	StepKey          string
+	InputHash        string
+	PreviousStatus   string
+	PreviousPhase    sql.NullString
+	PreviousSnapshot string
+}
+
+func (q *Queries) AdvancePhase(ctx context.Context, arg AdvancePhaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, advancePhase,
+		arg.NextStatus,
+		arg.NextPhase,
+		arg.NextSnapshot,
+		arg.OperationID,
+		arg.StepKey,
+		arg.InputHash,
+		arg.PreviousStatus,
+		arg.PreviousPhase,
+		arg.PreviousSnapshot,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const clearResultSandboxes = `-- name: ClearResultSandboxes :exec
+DELETE FROM operation_result_sandboxes WHERE operation_id=?
+`
+
+func (q *Queries) ClearResultSandboxes(ctx context.Context, operationID string) error {
+	_, err := q.db.ExecContext(ctx, clearResultSandboxes, operationID)
+	return err
+}
 
 const completeLiveOperation = `-- name: CompleteLiveOperation :execrows
 UPDATE operations SET status='succeeded',finished_at=? WHERE id=? AND status IN ('pending','running')
@@ -27,23 +71,17 @@ func (q *Queries) CompleteLiveOperation(ctx context.Context, arg CompleteLiveOpe
 }
 
 const completePendingLink = `-- name: CompletePendingLink :execrows
-UPDATE operation_steps SET status=?,body=? WHERE operation_id=? AND step_key=? AND status='pending'
+UPDATE operation_steps SET status=? WHERE operation_id=? AND step_key=? AND action='resource_link' AND status='pending'
 `
 
 type CompletePendingLinkParams struct {
 	Status      string
-	Body        []byte
 	OperationID string
 	StepKey     string
 }
 
 func (q *Queries) CompletePendingLink(ctx context.Context, arg CompletePendingLinkParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completePendingLink,
-		arg.Status,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
-	)
+	result, err := q.db.ExecContext(ctx, completePendingLink, arg.Status, arg.OperationID, arg.StepKey)
 	if err != nil {
 		return 0, err
 	}
@@ -67,24 +105,6 @@ func (q *Queries) CompletePendingOperation(ctx context.Context, arg CompletePend
 	return result.RowsAffected()
 }
 
-const completeResult = `-- name: CompleteResult :execrows
-UPDATE operations SET status='succeeded',finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
-`
-
-type CompleteResultParams struct {
-	FinishedAt string
-	Body       []byte
-	ID         string
-}
-
-func (q *Queries) CompleteResult(ctx context.Context, arg CompleteResultParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeResult, arg.FinishedAt, arg.Body, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const countMissingPublications = `-- name: CountMissingPublications :one
 SELECT COUNT(*) FROM operations o LEFT JOIN operation_publications p ON p.operation_id=o.id
 WHERE o.status IN ('succeeded','failed') AND p.operation_id IS NULL
@@ -99,46 +119,154 @@ func (q *Queries) CountMissingPublications(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const failResult = `-- name: FailResult :execrows
-UPDATE operations SET status='failed',finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
+const getCommand = `-- name: GetCommand :one
+SELECT operation_id, claim_action, observed_generation, sandbox_id, checkpoint_id, template_id, ttl_seconds, on_expire, auto_renew, lease_deadline, policy_mode, max_connections, branch_count, has_template, policy_rule_count, environment_count FROM operation_commands WHERE operation_id=?
 `
 
-type FailResultParams struct {
-	FinishedAt string
-	Body       []byte
-	ID         string
-}
-
-func (q *Queries) FailResult(ctx context.Context, arg FailResultParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failResult, arg.FinishedAt, arg.Body, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const finishLiveOperation = `-- name: FinishLiveOperation :execrows
-UPDATE operations SET status=?,finished_at=?,body=? WHERE id=? AND status IN ('pending','running')
-`
-
-type FinishLiveOperationParams struct {
-	Status     string
-	FinishedAt string
-	Body       []byte
-	ID         string
-}
-
-func (q *Queries) FinishLiveOperation(ctx context.Context, arg FinishLiveOperationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, finishLiveOperation,
-		arg.Status,
-		arg.FinishedAt,
-		arg.Body,
-		arg.ID,
+func (q *Queries) GetCommand(ctx context.Context, operationID string) (OperationCommand, error) {
+	row := q.db.QueryRowContext(ctx, getCommand, operationID)
+	var i OperationCommand
+	err := row.Scan(
+		&i.OperationID,
+		&i.ClaimAction,
+		&i.ObservedGeneration,
+		&i.SandboxID,
+		&i.CheckpointID,
+		&i.TemplateID,
+		&i.TtlSeconds,
+		&i.OnExpire,
+		&i.AutoRenew,
+		&i.LeaseDeadline,
+		&i.PolicyMode,
+		&i.MaxConnections,
+		&i.BranchCount,
+		&i.HasTemplate,
+		&i.PolicyRuleCount,
+		&i.EnvironmentCount,
 	)
+	return i, err
+}
+
+const getCommandEnv = `-- name: GetCommandEnv :many
+SELECT operation_id, name, value, guest, header, placeholder, host_count FROM command_environment WHERE operation_id=? ORDER BY name
+`
+
+func (q *Queries) GetCommandEnv(ctx context.Context, operationID string) ([]CommandEnvironment, error) {
+	rows, err := q.db.QueryContext(ctx, getCommandEnv, operationID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []CommandEnvironment
+	for rows.Next() {
+		var i CommandEnvironment
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Name,
+			&i.Value,
+			&i.Guest,
+			&i.Header,
+			&i.Placeholder,
+			&i.HostCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCommandHosts = `-- name: GetCommandHosts :many
+SELECT operation_id, name, position, host FROM command_injection_hosts WHERE operation_id=? ORDER BY name,position
+`
+
+func (q *Queries) GetCommandHosts(ctx context.Context, operationID string) ([]CommandInjectionHost, error) {
+	rows, err := q.db.QueryContext(ctx, getCommandHosts, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CommandInjectionHost
+	for rows.Next() {
+		var i CommandInjectionHost
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Name,
+			&i.Position,
+			&i.Host,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCommandRules = `-- name: GetCommandRules :many
+SELECT operation_id, kind, position, value FROM command_policy_rules WHERE operation_id=? ORDER BY kind,position
+`
+
+func (q *Queries) GetCommandRules(ctx context.Context, operationID string) ([]CommandPolicyRule, error) {
+	rows, err := q.db.QueryContext(ctx, getCommandRules, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CommandPolicyRule
+	for rows.Next() {
+		var i CommandPolicyRule
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Kind,
+			&i.Position,
+			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCommandTemplate = `-- name: GetCommandTemplate :one
+SELECT operation_id, id, tenant_id, image, vcpus, memory_mib, disk_mib, snapshot_id, state, target_warm, warmup FROM command_templates WHERE operation_id=?
+`
+
+func (q *Queries) GetCommandTemplate(ctx context.Context, operationID string) (CommandTemplate, error) {
+	row := q.db.QueryRowContext(ctx, getCommandTemplate, operationID)
+	var i CommandTemplate
+	err := row.Scan(
+		&i.OperationID,
+		&i.ID,
+		&i.TenantID,
+		&i.Image,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.SnapshotID,
+		&i.State,
+		&i.TargetWarm,
+		&i.Warmup,
+	)
+	return i, err
 }
 
 const getCredentialMAC = `-- name: GetCredentialMAC :one
@@ -152,45 +280,31 @@ func (q *Queries) GetCredentialMAC(ctx context.Context, operationID string) (str
 	return request_mac, err
 }
 
-const getLiveOperationBody = `-- name: GetLiveOperationBody :one
-SELECT body FROM operations WHERE id=? AND status IN ('pending','running')
-`
-
-func (q *Queries) GetLiveOperationBody(ctx context.Context, id string) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getLiveOperationBody, id)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
-}
-
 const getOperationProjection = `-- name: GetOperationProjection :one
-SELECT id, idem_key, scope_kind, scope_id, request_hash, request, status, body
-FROM operations WHERE id=?
+SELECT id, scope_kind, scope_id, idem_key, "action", request_kind, status, result_sandbox_id, result_vm_id, result_image_digest, result_template_id, result_checkpoint_id, result_snapshot_id, resource_ready, result_error, created_at, finished_at FROM operations WHERE id=?
 `
 
-type GetOperationProjectionRow struct {
-	ID          string
-	IdemKey     string
-	ScopeKind   string
-	ScopeID     string
-	RequestHash string
-	Request     []byte
-	Status      string
-	Body        []byte
-}
-
-func (q *Queries) GetOperationProjection(ctx context.Context, id string) (GetOperationProjectionRow, error) {
+func (q *Queries) GetOperationProjection(ctx context.Context, id string) (Operation, error) {
 	row := q.db.QueryRowContext(ctx, getOperationProjection, id)
-	var i GetOperationProjectionRow
+	var i Operation
 	err := row.Scan(
 		&i.ID,
-		&i.IdemKey,
 		&i.ScopeKind,
 		&i.ScopeID,
-		&i.RequestHash,
-		&i.Request,
+		&i.IdemKey,
+		&i.Action,
+		&i.RequestKind,
 		&i.Status,
-		&i.Body,
+		&i.ResultSandboxID,
+		&i.ResultVmID,
+		&i.ResultImageDigest,
+		&i.ResultTemplateID,
+		&i.ResultCheckpointID,
+		&i.ResultSnapshotID,
+		&i.ResourceReady,
+		&i.ResultError,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
@@ -225,25 +339,92 @@ func (q *Queries) GetPublicStatus(ctx context.Context, id string) (string, error
 }
 
 const getPublication = `-- name: GetPublication :one
-SELECT body FROM operation_publications WHERE operation_id=?
+SELECT operation_id, response_hash, charge_tenant_id, template_version_id, template_state FROM operation_publications WHERE operation_id=?
 `
 
-func (q *Queries) GetPublication(ctx context.Context, operationID string) ([]byte, error) {
+func (q *Queries) GetPublication(ctx context.Context, operationID string) (OperationPublication, error) {
 	row := q.db.QueryRowContext(ctx, getPublication, operationID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+	var i OperationPublication
+	err := row.Scan(
+		&i.OperationID,
+		&i.ResponseHash,
+		&i.ChargeTenantID,
+		&i.TemplateVersionID,
+		&i.TemplateState,
+	)
+	return i, err
 }
 
-const getRequestHash = `-- name: GetRequestHash :one
-SELECT request_hash FROM operations WHERE id=?
+const getPublishedCheckpoint = `-- name: GetPublishedCheckpoint :one
+SELECT operation_id, checkpoint_id, tenant_id, sandbox_id, snapshot_id, vcpus, memory_mib, disk_mib, created_at FROM published_checkpoints WHERE operation_id=?
 `
 
-func (q *Queries) GetRequestHash(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getRequestHash, id)
-	var request_hash string
-	err := row.Scan(&request_hash)
-	return request_hash, err
+func (q *Queries) GetPublishedCheckpoint(ctx context.Context, operationID string) (PublishedCheckpoint, error) {
+	row := q.db.QueryRowContext(ctx, getPublishedCheckpoint, operationID)
+	var i PublishedCheckpoint
+	err := row.Scan(
+		&i.OperationID,
+		&i.CheckpointID,
+		&i.TenantID,
+		&i.SandboxID,
+		&i.SnapshotID,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPublishedTemplate = `-- name: GetPublishedTemplate :one
+SELECT v.operation_id, v.template_id, v.image, v.vcpus, v.memory_mib, v.disk_mib, v.warmup, v.snapshot_id, v.target_warm,o.tenant_id FROM template_versions v JOIN template_owners o ON o.template_id=v.template_id WHERE v.operation_id=?
+`
+
+type GetPublishedTemplateRow struct {
+	OperationID string
+	TemplateID  string
+	Image       string
+	Vcpus       int64
+	MemoryMib   int64
+	DiskMib     int64
+	Warmup      string
+	SnapshotID  string
+	TargetWarm  int64
+	TenantID    string
+}
+
+func (q *Queries) GetPublishedTemplate(ctx context.Context, operationID string) (GetPublishedTemplateRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublishedTemplate, operationID)
+	var i GetPublishedTemplateRow
+	err := row.Scan(
+		&i.OperationID,
+		&i.TemplateID,
+		&i.Image,
+		&i.Vcpus,
+		&i.MemoryMib,
+		&i.DiskMib,
+		&i.Warmup,
+		&i.SnapshotID,
+		&i.TargetWarm,
+		&i.TenantID,
+	)
+	return i, err
+}
+
+const getRequestGC = `-- name: GetRequestGC :one
+SELECT operation_id, dry_run, batch, budget_ns FROM operation_gc_requests WHERE operation_id=?
+`
+
+func (q *Queries) GetRequestGC(ctx context.Context, operationID string) (OperationGcRequest, error) {
+	row := q.db.QueryRowContext(ctx, getRequestGC, operationID)
+	var i OperationGcRequest
+	err := row.Scan(
+		&i.OperationID,
+		&i.DryRun,
+		&i.Batch,
+		&i.BudgetNs,
+	)
+	return i, err
 }
 
 const getRequestID = `-- name: GetRequestID :one
@@ -262,105 +443,47 @@ func (q *Queries) GetRequestID(ctx context.Context, arg GetRequestIDParams) (str
 	return id, err
 }
 
-const getRequestIdentity = `-- name: GetRequestIdentity :one
-SELECT status,scope_kind,scope_id,request_hash,request FROM operations WHERE id=?
+const getRequestImport = `-- name: GetRequestImport :one
+SELECT operation_id, layout, digest, materialization, max_bytes, max_files FROM operation_import_requests WHERE operation_id=?
 `
 
-type GetRequestIdentityRow struct {
-	Status      string
-	ScopeKind   string
-	ScopeID     string
-	RequestHash string
-	Request     []byte
-}
-
-func (q *Queries) GetRequestIdentity(ctx context.Context, id string) (GetRequestIdentityRow, error) {
-	row := q.db.QueryRowContext(ctx, getRequestIdentity, id)
-	var i GetRequestIdentityRow
+func (q *Queries) GetRequestImport(ctx context.Context, operationID string) (OperationImportRequest, error) {
+	row := q.db.QueryRowContext(ctx, getRequestImport, operationID)
+	var i OperationImportRequest
 	err := row.Scan(
-		&i.Status,
-		&i.ScopeKind,
-		&i.ScopeID,
-		&i.RequestHash,
-		&i.Request,
+		&i.OperationID,
+		&i.Layout,
+		&i.Digest,
+		&i.Materialization,
+		&i.MaxBytes,
+		&i.MaxFiles,
 	)
 	return i, err
 }
 
-const getRequestState = `-- name: GetRequestState :one
-SELECT request_hash,request,scope_kind,scope_id,status,body FROM operations WHERE id=?
+const getRequestResource = `-- name: GetRequestResource :one
+SELECT operation_id, template_id, sandbox_id, snapshot_id, expected_instance, stop_operation_id, source_operation_id, cache_builder, cache_diff_id FROM operation_resource_requests WHERE operation_id=?
 `
 
-type GetRequestStateRow struct {
-	RequestHash string
-	Request     []byte
-	ScopeKind   string
-	ScopeID     string
-	Status      string
-	Body        []byte
-}
-
-func (q *Queries) GetRequestState(ctx context.Context, id string) (GetRequestStateRow, error) {
-	row := q.db.QueryRowContext(ctx, getRequestState, id)
-	var i GetRequestStateRow
+func (q *Queries) GetRequestResource(ctx context.Context, operationID string) (OperationResourceRequest, error) {
+	row := q.db.QueryRowContext(ctx, getRequestResource, operationID)
+	var i OperationResourceRequest
 	err := row.Scan(
-		&i.RequestHash,
-		&i.Request,
-		&i.ScopeKind,
-		&i.ScopeID,
-		&i.Status,
-		&i.Body,
+		&i.OperationID,
+		&i.TemplateID,
+		&i.SandboxID,
+		&i.SnapshotID,
+		&i.ExpectedInstance,
+		&i.StopOperationID,
+		&i.SourceOperationID,
+		&i.CacheBuilder,
+		&i.CacheDiffID,
 	)
-	return i, err
-}
-
-const getResourceLinkStep = `-- name: GetResourceLinkStep :one
-SELECT input,input_hash,status,candidate_resource_id FROM operation_steps WHERE operation_id=? AND step_key=? AND action='resource_link'
-`
-
-type GetResourceLinkStepParams struct {
-	OperationID string
-	StepKey     string
-}
-
-type GetResourceLinkStepRow struct {
-	Input               []byte
-	InputHash           string
-	Status              string
-	CandidateResourceID string
-}
-
-func (q *Queries) GetResourceLinkStep(ctx context.Context, arg GetResourceLinkStepParams) (GetResourceLinkStepRow, error) {
-	row := q.db.QueryRowContext(ctx, getResourceLinkStep, arg.OperationID, arg.StepKey)
-	var i GetResourceLinkStepRow
-	err := row.Scan(
-		&i.Input,
-		&i.InputHash,
-		&i.Status,
-		&i.CandidateResourceID,
-	)
-	return i, err
-}
-
-const getResultState = `-- name: GetResultState :one
-SELECT status,body FROM operations WHERE id=?
-`
-
-type GetResultStateRow struct {
-	Status string
-	Body   []byte
-}
-
-func (q *Queries) GetResultState(ctx context.Context, id string) (GetResultStateRow, error) {
-	row := q.db.QueryRowContext(ctx, getResultState, id)
-	var i GetResultStateRow
-	err := row.Scan(&i.Status, &i.Body)
 	return i, err
 }
 
 const getScopedOperation = `-- name: GetScopedOperation :one
-SELECT id, idem_key, status, body, request_hash, request
-FROM operations WHERE id=? AND scope_kind=? AND scope_id=?
+SELECT id, scope_kind, scope_id, idem_key, "action", request_kind, status, result_sandbox_id, result_vm_id, result_image_digest, result_template_id, result_checkpoint_id, result_snapshot_id, resource_ready, result_error, created_at, finished_at FROM operations WHERE id=? AND scope_kind=? AND scope_id=?
 `
 
 type GetScopedOperationParams struct {
@@ -369,31 +492,33 @@ type GetScopedOperationParams struct {
 	ScopeID   string
 }
 
-type GetScopedOperationRow struct {
-	ID          string
-	IdemKey     string
-	Status      string
-	Body        []byte
-	RequestHash string
-	Request     []byte
-}
-
-func (q *Queries) GetScopedOperation(ctx context.Context, arg GetScopedOperationParams) (GetScopedOperationRow, error) {
+func (q *Queries) GetScopedOperation(ctx context.Context, arg GetScopedOperationParams) (Operation, error) {
 	row := q.db.QueryRowContext(ctx, getScopedOperation, arg.ID, arg.ScopeKind, arg.ScopeID)
-	var i GetScopedOperationRow
+	var i Operation
 	err := row.Scan(
 		&i.ID,
+		&i.ScopeKind,
+		&i.ScopeID,
 		&i.IdemKey,
+		&i.Action,
+		&i.RequestKind,
 		&i.Status,
-		&i.Body,
-		&i.RequestHash,
-		&i.Request,
+		&i.ResultSandboxID,
+		&i.ResultVmID,
+		&i.ResultImageDigest,
+		&i.ResultTemplateID,
+		&i.ResultCheckpointID,
+		&i.ResultSnapshotID,
+		&i.ResourceReady,
+		&i.ResultError,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
 
 const getScopedRequest = `-- name: GetScopedRequest :one
-SELECT id,idem_key,status,request_hash,request,body FROM operations WHERE scope_kind=? AND scope_id=? AND idem_key=?
+SELECT id, scope_kind, scope_id, idem_key, "action", request_kind, status, result_sandbox_id, result_vm_id, result_image_digest, result_template_id, result_checkpoint_id, result_snapshot_id, resource_ready, result_error, created_at, finished_at FROM operations WHERE scope_kind=? AND scope_id=? AND idem_key=?
 `
 
 type GetScopedRequestParams struct {
@@ -402,25 +527,27 @@ type GetScopedRequestParams struct {
 	IdemKey   string
 }
 
-type GetScopedRequestRow struct {
-	ID          string
-	IdemKey     string
-	Status      string
-	RequestHash string
-	Request     []byte
-	Body        []byte
-}
-
-func (q *Queries) GetScopedRequest(ctx context.Context, arg GetScopedRequestParams) (GetScopedRequestRow, error) {
+func (q *Queries) GetScopedRequest(ctx context.Context, arg GetScopedRequestParams) (Operation, error) {
 	row := q.db.QueryRowContext(ctx, getScopedRequest, arg.ScopeKind, arg.ScopeID, arg.IdemKey)
-	var i GetScopedRequestRow
+	var i Operation
 	err := row.Scan(
 		&i.ID,
+		&i.ScopeKind,
+		&i.ScopeID,
 		&i.IdemKey,
+		&i.Action,
+		&i.RequestKind,
 		&i.Status,
-		&i.RequestHash,
-		&i.Request,
-		&i.Body,
+		&i.ResultSandboxID,
+		&i.ResultVmID,
+		&i.ResultImageDigest,
+		&i.ResultTemplateID,
+		&i.ResultCheckpointID,
+		&i.ResultSnapshotID,
+		&i.ResourceReady,
+		&i.ResultError,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
@@ -501,6 +628,170 @@ func (q *Queries) HasActivateStep(ctx context.Context, operationID string) (int6
 	return has_activate, err
 }
 
+const insertCommand = `-- name: InsertCommand :execrows
+INSERT INTO operation_commands(operation_id,claim_action,observed_generation,sandbox_id,checkpoint_id,template_id,ttl_seconds,on_expire,auto_renew,lease_deadline,policy_mode,max_connections,branch_count,has_template,policy_rule_count,environment_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+`
+
+type InsertCommandParams struct {
+	OperationID        string
+	ClaimAction        sql.NullString
+	ObservedGeneration string
+	SandboxID          string
+	CheckpointID       string
+	TemplateID         string
+	TtlSeconds         int64
+	OnExpire           string
+	AutoRenew          bool
+	LeaseDeadline      string
+	PolicyMode         string
+	MaxConnections     int64
+	BranchCount        int64
+	HasTemplate        bool
+	PolicyRuleCount    int64
+	EnvironmentCount   int64
+}
+
+func (q *Queries) InsertCommand(ctx context.Context, arg InsertCommandParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommand,
+		arg.OperationID,
+		arg.ClaimAction,
+		arg.ObservedGeneration,
+		arg.SandboxID,
+		arg.CheckpointID,
+		arg.TemplateID,
+		arg.TtlSeconds,
+		arg.OnExpire,
+		arg.AutoRenew,
+		arg.LeaseDeadline,
+		arg.PolicyMode,
+		arg.MaxConnections,
+		arg.BranchCount,
+		arg.HasTemplate,
+		arg.PolicyRuleCount,
+		arg.EnvironmentCount,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCommandEnv = `-- name: InsertCommandEnv :execrows
+INSERT INTO command_environment(operation_id,name,value,guest,header,placeholder,host_count) VALUES(?,?,?,?,?,?,?)
+`
+
+type InsertCommandEnvParams struct {
+	OperationID string
+	Name        string
+	Value       string
+	Guest       sql.NullBool
+	Header      sql.NullString
+	Placeholder sql.NullString
+	HostCount   sql.NullInt64
+}
+
+func (q *Queries) InsertCommandEnv(ctx context.Context, arg InsertCommandEnvParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommandEnv,
+		arg.OperationID,
+		arg.Name,
+		arg.Value,
+		arg.Guest,
+		arg.Header,
+		arg.Placeholder,
+		arg.HostCount,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCommandHost = `-- name: InsertCommandHost :execrows
+INSERT INTO command_injection_hosts(operation_id,name,position,host) VALUES(?,?,?,?)
+`
+
+type InsertCommandHostParams struct {
+	OperationID string
+	Name        string
+	Position    int64
+	Host        string
+}
+
+func (q *Queries) InsertCommandHost(ctx context.Context, arg InsertCommandHostParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommandHost,
+		arg.OperationID,
+		arg.Name,
+		arg.Position,
+		arg.Host,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCommandRule = `-- name: InsertCommandRule :execrows
+INSERT INTO command_policy_rules(operation_id,kind,position,value) VALUES(?,?,?,?)
+`
+
+type InsertCommandRuleParams struct {
+	OperationID string
+	Kind        string
+	Position    int64
+	Value       string
+}
+
+func (q *Queries) InsertCommandRule(ctx context.Context, arg InsertCommandRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommandRule,
+		arg.OperationID,
+		arg.Kind,
+		arg.Position,
+		arg.Value,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCommandTemplate = `-- name: InsertCommandTemplate :execrows
+INSERT INTO command_templates(operation_id,id,tenant_id,image,vcpus,memory_mib,disk_mib,snapshot_id,state,target_warm,warmup) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+`
+
+type InsertCommandTemplateParams struct {
+	OperationID string
+	ID          string
+	TenantID    string
+	Image       string
+	Vcpus       int64
+	MemoryMib   int64
+	DiskMib     int64
+	SnapshotID  string
+	State       string
+	TargetWarm  int64
+	Warmup      string
+}
+
+func (q *Queries) InsertCommandTemplate(ctx context.Context, arg InsertCommandTemplateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCommandTemplate,
+		arg.OperationID,
+		arg.ID,
+		arg.TenantID,
+		arg.Image,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.SnapshotID,
+		arg.State,
+		arg.TargetWarm,
+		arg.Warmup,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertCredential = `-- name: InsertCredential :execrows
 INSERT INTO operation_request_macs(operation_id,request_mac) VALUES(?,?)
 `
@@ -519,20 +810,27 @@ func (q *Queries) InsertCredential(ctx context.Context, arg InsertCredentialPara
 }
 
 const insertOperation = `-- name: InsertOperation :execrows
-INSERT INTO operations(id,scope_kind,scope_id,idem_key,request_hash,request,status,body,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+INSERT INTO operations(id,scope_kind,scope_id,idem_key,action,request_kind,status,created_at,finished_at,result_sandbox_id,result_vm_id,result_image_digest,result_template_id,result_checkpoint_id,result_snapshot_id,resource_ready,result_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `
 
 type InsertOperationParams struct {
-	ID          string
-	ScopeKind   string
-	ScopeID     string
-	IdemKey     string
-	RequestHash string
-	Request     []byte
-	Status      string
-	Body        []byte
-	CreatedAt   string
-	FinishedAt  string
+	ID                 string
+	ScopeKind          string
+	ScopeID            string
+	IdemKey            string
+	Action             string
+	RequestKind        string
+	Status             string
+	CreatedAt          string
+	FinishedAt         string
+	ResultSandboxID    string
+	ResultVmID         string
+	ResultImageDigest  string
+	ResultTemplateID   string
+	ResultCheckpointID string
+	ResultSnapshotID   string
+	ResourceReady      bool
+	ResultError        string
 }
 
 func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams) (int64, error) {
@@ -541,12 +839,55 @@ func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams
 		arg.ScopeKind,
 		arg.ScopeID,
 		arg.IdemKey,
-		arg.RequestHash,
-		arg.Request,
+		arg.Action,
+		arg.RequestKind,
 		arg.Status,
-		arg.Body,
 		arg.CreatedAt,
 		arg.FinishedAt,
+		arg.ResultSandboxID,
+		arg.ResultVmID,
+		arg.ResultImageDigest,
+		arg.ResultTemplateID,
+		arg.ResultCheckpointID,
+		arg.ResultSnapshotID,
+		arg.ResourceReady,
+		arg.ResultError,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertPhaseStep = `-- name: InsertPhaseStep :execrows
+INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance,status,phase,result_snapshot_id) VALUES(?,?,?,?,?,?,?,?,?,?)
+`
+
+type InsertPhaseStepParams struct {
+	OperationID         string
+	StepKey             string
+	Action              string
+	InputHash           string
+	Input               []byte
+	CandidateResourceID string
+	ExpectedInstance    string
+	Status              string
+	Phase               sql.NullString
+	ResultSnapshotID    string
+}
+
+func (q *Queries) InsertPhaseStep(ctx context.Context, arg InsertPhaseStepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPhaseStep,
+		arg.OperationID,
+		arg.StepKey,
+		arg.Action,
+		arg.InputHash,
+		arg.Input,
+		arg.CandidateResourceID,
+		arg.ExpectedInstance,
+		arg.Status,
+		arg.Phase,
+		arg.ResultSnapshotID,
 	)
 	if err != nil {
 		return 0, err
@@ -555,62 +896,312 @@ func (q *Queries) InsertOperation(ctx context.Context, arg InsertOperationParams
 }
 
 const insertPublication = `-- name: InsertPublication :execrows
-INSERT INTO operation_publications (operation_id, body) VALUES (?,?)
+INSERT INTO operation_publications(operation_id,response_hash,charge_tenant_id,template_version_id,template_state)
+VALUES(?1,?2,?3,
+ (SELECT published_operation_id FROM templates WHERE id=?4),?5)
 `
 
 type InsertPublicationParams struct {
-	OperationID string
-	Body        []byte
+	OperationID    string
+	ResponseHash   string
+	ChargeTenantID string
+	TemplateID     sql.NullString
+	TemplateState  string
 }
 
 func (q *Queries) InsertPublication(ctx context.Context, arg InsertPublicationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertPublication, arg.OperationID, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertPublication,
+		arg.OperationID,
+		arg.ResponseHash,
+		arg.ChargeTenantID,
+		arg.TemplateID,
+		arg.TemplateState,
+	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const listPublicationProofs = `-- name: ListPublicationProofs :many
-SELECT p.body AS publication,o.id,o.idem_key,o.scope_kind,o.scope_id,o.request,o.status,o.body AS result,
-       o.created_at,o.finished_at
-FROM operation_publications p
-JOIN operations o ON o.id=p.operation_id ORDER BY o.rowid
+const insertPublishedCheckpoint = `-- name: InsertPublishedCheckpoint :execrows
+INSERT INTO published_checkpoints(operation_id,checkpoint_id,tenant_id,sandbox_id,snapshot_id,vcpus,memory_mib,disk_mib,created_at) VALUES(?,?,?,?,?,?,?,?,?)
 `
 
-type ListPublicationProofsRow struct {
-	Publication []byte
-	ID          string
-	IdemKey     string
-	ScopeKind   string
-	ScopeID     string
-	Request     []byte
-	Status      string
-	Result      []byte
-	CreatedAt   string
-	FinishedAt  string
+type InsertPublishedCheckpointParams struct {
+	OperationID  string
+	CheckpointID string
+	TenantID     string
+	SandboxID    string
+	SnapshotID   string
+	Vcpus        int64
+	MemoryMib    int64
+	DiskMib      int64
+	CreatedAt    string
 }
 
-func (q *Queries) ListPublicationProofs(ctx context.Context) ([]ListPublicationProofsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPublicationProofs)
+func (q *Queries) InsertPublishedCheckpoint(ctx context.Context, arg InsertPublishedCheckpointParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPublishedCheckpoint,
+		arg.OperationID,
+		arg.CheckpointID,
+		arg.TenantID,
+		arg.SandboxID,
+		arg.SnapshotID,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertPublishedRule = `-- name: InsertPublishedRule :execrows
+INSERT INTO published_sandbox_rules(operation_id,sandbox_position,kind,position,value) VALUES(?,?,?,?,?)
+`
+
+type InsertPublishedRuleParams struct {
+	OperationID     string
+	SandboxPosition int64
+	Kind            string
+	Position        int64
+	Value           string
+}
+
+func (q *Queries) InsertPublishedRule(ctx context.Context, arg InsertPublishedRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPublishedRule,
+		arg.OperationID,
+		arg.SandboxPosition,
+		arg.Kind,
+		arg.Position,
+		arg.Value,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertPublishedSandbox = `-- name: InsertPublishedSandbox :execrows
+INSERT INTO published_sandboxes(operation_id,position,sandbox_id,tenant_id,state,vm_id,snapshot_id,instance,template_id,provision_source,vcpus,memory_mib,disk_mib,deadline,paused_until,ttl_seconds,on_expire,auto_renew,policy_mode,max_connections,requires_secrets,resume_attempt,epoch,sandbox_operation_id,last_error,created_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+`
+
+type InsertPublishedSandboxParams struct {
+	OperationID        string
+	Position           int64
+	SandboxID          string
+	TenantID           string
+	State              string
+	VmID               string
+	SnapshotID         string
+	Instance           string
+	TemplateID         string
+	ProvisionSource    string
+	Vcpus              int64
+	MemoryMib          int64
+	DiskMib            int64
+	Deadline           string
+	PausedUntil        string
+	TtlSeconds         int64
+	OnExpire           string
+	AutoRenew          bool
+	PolicyMode         string
+	MaxConnections     int64
+	RequiresSecrets    bool
+	ResumeAttempt      int64
+	Epoch              string
+	SandboxOperationID string
+	LastError          string
+	CreatedAt          string
+}
+
+func (q *Queries) InsertPublishedSandbox(ctx context.Context, arg InsertPublishedSandboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPublishedSandbox,
+		arg.OperationID,
+		arg.Position,
+		arg.SandboxID,
+		arg.TenantID,
+		arg.State,
+		arg.VmID,
+		arg.SnapshotID,
+		arg.Instance,
+		arg.TemplateID,
+		arg.ProvisionSource,
+		arg.Vcpus,
+		arg.MemoryMib,
+		arg.DiskMib,
+		arg.Deadline,
+		arg.PausedUntil,
+		arg.TtlSeconds,
+		arg.OnExpire,
+		arg.AutoRenew,
+		arg.PolicyMode,
+		arg.MaxConnections,
+		arg.RequiresSecrets,
+		arg.ResumeAttempt,
+		arg.Epoch,
+		arg.SandboxOperationID,
+		arg.LastError,
+		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertRequestGC = `-- name: InsertRequestGC :execrows
+INSERT INTO operation_gc_requests(operation_id,dry_run,batch,budget_ns) VALUES(?,?,?,?)
+`
+
+type InsertRequestGCParams struct {
+	OperationID string
+	DryRun      bool
+	Batch       int64
+	BudgetNs    int64
+}
+
+func (q *Queries) InsertRequestGC(ctx context.Context, arg InsertRequestGCParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRequestGC,
+		arg.OperationID,
+		arg.DryRun,
+		arg.Batch,
+		arg.BudgetNs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertRequestImport = `-- name: InsertRequestImport :execrows
+INSERT INTO operation_import_requests(operation_id,layout,digest,materialization,max_bytes,max_files) VALUES(?,?,?,?,?,?)
+`
+
+type InsertRequestImportParams struct {
+	OperationID     string
+	Layout          string
+	Digest          string
+	Materialization string
+	MaxBytes        int64
+	MaxFiles        int64
+}
+
+func (q *Queries) InsertRequestImport(ctx context.Context, arg InsertRequestImportParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRequestImport,
+		arg.OperationID,
+		arg.Layout,
+		arg.Digest,
+		arg.Materialization,
+		arg.MaxBytes,
+		arg.MaxFiles,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertRequestResource = `-- name: InsertRequestResource :execrows
+INSERT INTO operation_resource_requests(operation_id,template_id,sandbox_id,snapshot_id,expected_instance,stop_operation_id,source_operation_id,cache_builder,cache_diff_id) VALUES(?,?,?,?,?,?,?,?,?)
+`
+
+type InsertRequestResourceParams struct {
+	OperationID       string
+	TemplateID        string
+	SandboxID         string
+	SnapshotID        string
+	ExpectedInstance  string
+	StopOperationID   string
+	SourceOperationID string
+	CacheBuilder      string
+	CacheDiffID       string
+}
+
+func (q *Queries) InsertRequestResource(ctx context.Context, arg InsertRequestResourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRequestResource,
+		arg.OperationID,
+		arg.TemplateID,
+		arg.SandboxID,
+		arg.SnapshotID,
+		arg.ExpectedInstance,
+		arg.StopOperationID,
+		arg.SourceOperationID,
+		arg.CacheBuilder,
+		arg.CacheDiffID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertResultSandbox = `-- name: InsertResultSandbox :execrows
+INSERT INTO operation_result_sandboxes(operation_id,position,sandbox_id) VALUES(?,?,?)
+`
+
+type InsertResultSandboxParams struct {
+	OperationID string
+	Position    int64
+	SandboxID   string
+}
+
+func (q *Queries) InsertResultSandbox(ctx context.Context, arg InsertResultSandboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertResultSandbox, arg.OperationID, arg.Position, arg.SandboxID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const listPublicationIDs = `-- name: ListPublicationIDs :many
+SELECT operation_id FROM operation_publications ORDER BY operation_id
+`
+
+func (q *Queries) ListPublicationIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listPublicationIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPublicationProofsRow
+	var items []string
 	for rows.Next() {
-		var i ListPublicationProofsRow
+		var operation_id string
+		if err := rows.Scan(&operation_id); err != nil {
+			return nil, err
+		}
+		items = append(items, operation_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishedRules = `-- name: ListPublishedRules :many
+SELECT operation_id, sandbox_position, kind, position, value FROM published_sandbox_rules WHERE operation_id=? ORDER BY sandbox_position,kind,position
+`
+
+func (q *Queries) ListPublishedRules(ctx context.Context, operationID string) ([]PublishedSandboxRule, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishedRules, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PublishedSandboxRule
+	for rows.Next() {
+		var i PublishedSandboxRule
 		if err := rows.Scan(
-			&i.Publication,
-			&i.ID,
-			&i.IdemKey,
-			&i.ScopeKind,
-			&i.ScopeID,
-			&i.Request,
-			&i.Status,
-			&i.Result,
-			&i.CreatedAt,
-			&i.FinishedAt,
+			&i.OperationID,
+			&i.SandboxPosition,
+			&i.Kind,
+			&i.Position,
+			&i.Value,
 		); err != nil {
 			return nil, err
 		}
@@ -625,8 +1216,89 @@ func (q *Queries) ListPublicationProofs(ctx context.Context) ([]ListPublicationP
 	return items, nil
 }
 
+const listPublishedSandboxes = `-- name: ListPublishedSandboxes :many
+SELECT operation_id, position, sandbox_id, tenant_id, state, vm_id, snapshot_id, instance, template_id, provision_source, vcpus, memory_mib, disk_mib, deadline, paused_until, ttl_seconds, on_expire, auto_renew, policy_mode, max_connections, requires_secrets, resume_attempt, epoch, sandbox_operation_id, last_error, created_at FROM published_sandboxes WHERE operation_id=? ORDER BY position
+`
+
+func (q *Queries) ListPublishedSandboxes(ctx context.Context, operationID string) ([]PublishedSandbox, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishedSandboxes, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PublishedSandbox
+	for rows.Next() {
+		var i PublishedSandbox
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Position,
+			&i.SandboxID,
+			&i.TenantID,
+			&i.State,
+			&i.VmID,
+			&i.SnapshotID,
+			&i.Instance,
+			&i.TemplateID,
+			&i.ProvisionSource,
+			&i.Vcpus,
+			&i.MemoryMib,
+			&i.DiskMib,
+			&i.Deadline,
+			&i.PausedUntil,
+			&i.TtlSeconds,
+			&i.OnExpire,
+			&i.AutoRenew,
+			&i.PolicyMode,
+			&i.MaxConnections,
+			&i.RequiresSecrets,
+			&i.ResumeAttempt,
+			&i.Epoch,
+			&i.SandboxOperationID,
+			&i.LastError,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResultSandboxes = `-- name: ListResultSandboxes :many
+SELECT sandbox_id FROM operation_result_sandboxes WHERE operation_id=? ORDER BY position
+`
+
+func (q *Queries) ListResultSandboxes(ctx context.Context, operationID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listResultSandboxes, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sandbox_id string
+		if err := rows.Scan(&sandbox_id); err != nil {
+			return nil, err
+		}
+		items = append(items, sandbox_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStepsForRecovery = `-- name: ListStepsForRecovery :many
-SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,body
+SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance
 FROM operation_steps ORDER BY rowid
 `
 
@@ -639,7 +1311,6 @@ type ListStepsForRecoveryRow struct {
 	Input               []byte
 	CandidateResourceID string
 	ExpectedInstance    string
-	Body                []byte
 }
 
 func (q *Queries) ListStepsForRecovery(ctx context.Context) ([]ListStepsForRecoveryRow, error) {
@@ -660,7 +1331,6 @@ func (q *Queries) ListStepsForRecovery(ctx context.Context) ([]ListStepsForRecov
 			&i.Input,
 			&i.CandidateResourceID,
 			&i.ExpectedInstance,
-			&i.Body,
 		); err != nil {
 			return nil, err
 		}
@@ -703,21 +1373,50 @@ func (q *Queries) ListUnfinishedOperations(ctx context.Context) ([]string, error
 	return items, nil
 }
 
-const replaceLiveOperationBody = `-- name: ReplaceLiveOperationBody :execrows
-UPDATE operations SET body=? WHERE id=? AND status IN ('pending','running')
+const listUnpublishedOperations = `-- name: ListUnpublishedOperations :many
+SELECT o.id, o.scope_kind, o.scope_id, o.idem_key, o."action", o.request_kind, o.status, o.result_sandbox_id, o.result_vm_id, o.result_image_digest, o.result_template_id, o.result_checkpoint_id, o.result_snapshot_id, o.resource_ready, o.result_error, o.created_at, o.finished_at FROM operations o LEFT JOIN operation_publications p ON p.operation_id=o.id
+WHERE p.operation_id IS NULL ORDER BY o.id
 `
 
-type ReplaceLiveOperationBodyParams struct {
-	Body []byte
-	ID   string
-}
-
-func (q *Queries) ReplaceLiveOperationBody(ctx context.Context, arg ReplaceLiveOperationBodyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceLiveOperationBody, arg.Body, arg.ID)
+func (q *Queries) ListUnpublishedOperations(ctx context.Context) ([]Operation, error) {
+	rows, err := q.db.QueryContext(ctx, listUnpublishedOperations)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []Operation
+	for rows.Next() {
+		var i Operation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScopeKind,
+			&i.ScopeID,
+			&i.IdemKey,
+			&i.Action,
+			&i.RequestKind,
+			&i.Status,
+			&i.ResultSandboxID,
+			&i.ResultVmID,
+			&i.ResultImageDigest,
+			&i.ResultTemplateID,
+			&i.ResultCheckpointID,
+			&i.ResultSnapshotID,
+			&i.ResourceReady,
+			&i.ResultError,
+			&i.CreatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const runLiveOperation = `-- name: RunLiveOperation :execrows
@@ -732,17 +1431,41 @@ func (q *Queries) RunLiveOperation(ctx context.Context, id string) (int64, error
 	return result.RowsAffected()
 }
 
-const runLiveOperationResult = `-- name: RunLiveOperationResult :execrows
-UPDATE operations SET status='running',body=? WHERE id=? AND status IN ('pending','running')
+const updateLiveResult = `-- name: UpdateLiveResult :execrows
+UPDATE operations SET status=COALESCE(?1,status),finished_at=?2,
+ result_sandbox_id=?3,result_vm_id=?4,result_image_digest=?5,
+ result_template_id=?6,result_checkpoint_id=?7,result_snapshot_id=?8,
+ resource_ready=?9,result_error=?10 WHERE id=?11 AND status IN ('pending','running')
 `
 
-type RunLiveOperationResultParams struct {
-	Body []byte
-	ID   string
+type UpdateLiveResultParams struct {
+	NextStatus         sql.NullString
+	FinishedAt         string
+	ResultSandboxID    string
+	ResultVmID         string
+	ResultImageDigest  string
+	ResultTemplateID   string
+	ResultCheckpointID string
+	ResultSnapshotID   string
+	ResourceReady      bool
+	ResultError        string
+	ID                 string
 }
 
-func (q *Queries) RunLiveOperationResult(ctx context.Context, arg RunLiveOperationResultParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, runLiveOperationResult, arg.Body, arg.ID)
+func (q *Queries) UpdateLiveResult(ctx context.Context, arg UpdateLiveResultParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateLiveResult,
+		arg.NextStatus,
+		arg.FinishedAt,
+		arg.ResultSandboxID,
+		arg.ResultVmID,
+		arg.ResultImageDigest,
+		arg.ResultTemplateID,
+		arg.ResultCheckpointID,
+		arg.ResultSnapshotID,
+		arg.ResourceReady,
+		arg.ResultError,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}

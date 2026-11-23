@@ -2,6 +2,7 @@ package gc
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -86,6 +87,7 @@ func (c *Collector) run(step Step) error {
 	}
 	ctx, cancel := context.WithDeadline(c.ctx, step.Input.Deadline)
 	defer cancel()
+	previous := step.State
 	if !c.imageArtifactsMu.TryLock() {
 		step.State.Report.Deferred = append(step.State.Report.Deferred, types.GCItem{
 			Kind:   "busy",
@@ -126,16 +128,18 @@ func (c *Collector) run(step Step) error {
 				step.State.Report.Deferred = append(step.State.Report.Deferred, item)
 			}
 			step.State.Next++
-			if err = c.save(step, false); err != nil {
+			if err = c.save(step, previous, false); err != nil {
 				return err
 			}
+			previous = step.State
+			step.Status = "running"
 		}
 	}
 	step.State.Report.FinishedAt = time.Now().UTC()
-	return c.save(step, true)
+	return c.save(step, previous, true)
 }
 
-func (c *Collector) save(step Step, complete bool) error {
+func (c *Collector) save(step Step, previous progress, complete bool) error {
 	c.storeWriteMu.Lock()
 	defer c.storeWriteMu.Unlock()
 	tx, err := c.store.Database.BeginTx(c.ctx, nil)
@@ -146,23 +150,57 @@ func (c *Collector) save(step Step, complete bool) error {
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
+	queries := dbgen.New(tx)
+	status, phase, finished := "running", "collecting", ""
 	if complete {
-		err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(c.ctx, dbgen.CompleteLiveStepParams{
-			OperationID: step.OperationID,
-			StepKey:     "gc",
-			InputHash:   step.Hash,
-			Body:        operation.Encode(step.State),
-		}))
-	} else {
-		err = store.RequireOne(dbgen.New(tx).RecordLiveStepProgress(c.ctx, dbgen.RecordLiveStepProgressParams{
-			OperationID: step.OperationID,
-			StepKey:     "gc",
-			InputHash:   step.Hash,
-			Body:        operation.Encode(step.State),
-		}))
+		status, phase, finished = "succeeded", "complete", step.State.Report.FinishedAt.Format(time.RFC3339Nano)
 	}
-	if err != nil {
+	if err = store.RequireOne(queries.SetGCStatus(c.ctx, dbgen.SetGCStatusParams{
+		OperationID:    step.OperationID,
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		NextStatus:     status,
+		NextPhase: sql.NullString{
+			String: phase,
+			Valid:  true,
+		},
+		CompletedAt: finished,
+	})); err != nil {
 		return err
+	}
+	if err = store.RequireOne(queries.AdvanceGCProgress(c.ctx, dbgen.AdvanceGCProgressParams{
+		OperationID:       step.OperationID,
+		PreviousCandidate: int64(previous.Next),
+		NextCandidate:     int64(step.State.Next),
+	})); err != nil {
+		return err
+	}
+	for _, group := range []struct {
+		disposition string
+		items       []types.GCItem
+		start       int
+	}{
+		{"collected", step.State.Report.Collected, len(previous.Report.Collected)},
+		{"deferred", step.State.Report.Deferred, len(previous.Report.Deferred)},
+	} {
+		for i := group.start; i < len(group.items); i++ {
+			item := group.items[i]
+			if err = store.RequireOne(queries.InsertGCOutcome(c.ctx, dbgen.InsertGCOutcomeParams{
+				OperationID:      step.OperationID,
+				Disposition:      group.disposition,
+				Ordinal:          int64(i),
+				Kind:             item.Kind,
+				ResourceID:       item.ID,
+				TenantID:         item.TenantID,
+				CacheBuilder:     item.CacheBuilder,
+				CacheDiffID:      item.CacheDiffID,
+				Proof:            item.Proof,
+				ChildOperationID: item.OperationID,
+				Reason:           item.Reason,
+			})); err != nil {
+				return err
+			}
+		}
 	}
 	if complete {
 		if err = operations.Complete(c.ctx, step.OperationID); err != nil {

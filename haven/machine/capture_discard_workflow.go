@@ -2,7 +2,6 @@ package machine
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -67,21 +66,13 @@ func (cd *CaptureDiscard) captureDiscardReceipts(step *CaptureDiscardStep) ([]lo
 	var intents []loom.DeletionIntent
 	missing := 0
 	for _, path := range paths {
-		body, err := dbgen.New(cd.store.Database).GetDeletionReceipt(cd.ctx, dbgen.GetDeletionReceiptParams{
-			Path:        path,
-			OperationID: step.OperationID,
-			StepKey:     "capture_discard",
-		})
+		intent, err := store.LoadDeletionReceipt(cd.ctx, cd.store.Database, step.OperationID, "capture_discard", path)
 
 		if errors.Is(err, sql.ErrNoRows) {
 			missing++
 			continue
 		}
 		if err != nil {
-			return nil, err
-		}
-		var intent loom.DeletionIntent
-		if err = json.Unmarshal(body, &intent); err != nil {
 			return nil, err
 		}
 		intents = append(intents, intent)
@@ -129,22 +120,19 @@ func (cd *CaptureDiscard) captureDiscardReceipts(step *CaptureDiscardStep) ([]lo
 	}
 
 	for _, intent := range intents {
-		if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(cd.ctx, dbgen.InsertDeletionReceiptParams{
-			Path:        intent.Path,
-			OperationID: step.OperationID,
-			StepKey:     "capture_discard",
-			Body:        operation.Encode(intent),
-		})); err != nil {
+		if err = store.RecordDeletionReceipt(cd.ctx, tx, step.OperationID, "capture_discard", intent); err != nil {
 			return nil, err
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).BeginPendingStep(cd.ctx, dbgen.BeginPendingStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture_discard",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("deleting"),
-	})); err != nil {
+	if err = operation.AdvancePhase(cd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture_discard",
+		InputHash:      step.Hash,
+		PreviousStatus: "pending",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "running",
+		NextPhase:      "deleting",
+	}); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -240,13 +228,15 @@ func (cd *CaptureDiscard) markCaptureDiscardRemoved(step *CaptureDiscardStep) er
 	if err = cd.captureDiscardProof(cd.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceRunningStepBody(cd.ctx, dbgen.ReplaceRunningStepBodyParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture_discard",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.Phase),
-		NextBody:     operation.Encode("files_removed"),
-	})); err != nil {
+	if err = operation.AdvancePhase(cd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture_discard",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "running",
+		NextPhase:      "files_removed",
+	}); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -282,7 +272,6 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 	source := step.Input.Source
 	publication := source.Input.Snapshot
 	resource := source.Input.Source
-	body, previousState, completed := operation.Encode(publication), operation.Encode(step.Phase), operation.Encode("complete")
 	operations := operation.New(tx)
 	if err = quota.RemoveCostReference(cd.ctx, tx, quota.CostReference{
 		TenantID:   publication.TenantID,
@@ -321,9 +310,12 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteSnapshot(cd.ctx, dbgen.DeleteSnapshotParams{
-		ID:        publication.ID,
-		Published: 0,
-		Body:      body,
+		ID:                 publication.ID,
+		CaptureOperationID: publication.OperationID,
+		TenantID:           publication.TenantID,
+		SourceVmID:         publication.SourceVM,
+		SourceInstance:     publication.SourceInstance,
+		Directory:          publication.Dir,
 	})); err != nil {
 		return err
 	}
@@ -358,13 +350,15 @@ func (cd *CaptureDiscard) completeCaptureDiscard(step CaptureDiscardStep) error 
 			return err
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteRunningStep(cd.ctx, dbgen.CompleteRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "capture_discard",
-		InputHash:    step.Hash,
-		PreviousBody: previousState,
-		NewBody:      completed,
-	})); err != nil {
+	if err = operation.AdvancePhase(cd.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "capture_discard",
+		InputHash:      step.Hash,
+		PreviousStatus: "running",
+		PreviousPhase:  step.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      "complete",
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(cd.ctx, step.OperationID); err != nil {

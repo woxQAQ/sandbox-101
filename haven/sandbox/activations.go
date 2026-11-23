@@ -127,11 +127,7 @@ func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machi
 		Settings:          settings,
 		ResetIdentity:     true,
 	}
-	payload := operation.Encode(input)
-	if err := store.RequireOne(dbgen.New(tx).InsertSandboxSettings(a.ctx, dbgen.InsertSandboxSettingsParams{
-		SandboxID: resource.SandboxID,
-		Body:      operation.Encode(settings),
-	})); err != nil {
+	if err := insertSettings(a.ctx, tx, resource.SandboxID, settings); err != nil {
 		return err
 	}
 	if err := store.RequireOne(dbgen.New(tx).InsertFence(a.ctx, dbgen.InsertFenceParams{
@@ -140,16 +136,37 @@ func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machi
 	})); err != nil {
 		return err
 	}
-	return store.RequireOne(dbgen.New(tx).InsertStep(a.ctx, dbgen.InsertStepParams{
-		OperationID:         record.ID,
-		StepKey:             "activation",
-		Action:              "activate",
+	return insertActivationStep(a.ctx, tx, record.ID, resource.Resource.VMID, input)
+}
+
+const (
+	warmAttempt        = "warm"
+	goldenAttempt      = "golden"
+	activateAction     = "activate"
+	activationAdmitted = "admitted"
+)
+
+func insertActivationStep(ctx context.Context, tx *sql.Tx, operationID, vmID string, input ActivationInput) error {
+	payload := operation.Encode(input)
+	return store.RequireOne(dbgen.New(tx).InsertActivation(ctx, dbgen.InsertActivationParams{
+		OperationID:         operationID,
+		StepKey:             ActivationKey(input.Attempt),
 		InputHash:           operation.Digest(payload),
 		Input:               payload,
-		CandidateResourceID: resource.Resource.VMID,
-		ExpectedInstance:    resource.Resource.Instance,
-		Status:              "pending",
-		Body:                operation.Encode("admitted"),
+		CandidateResourceID: vmID,
+		ExpectedInstance:    input.ExpectedInstance,
+	}))
+}
+
+func transitionActivation(ctx context.Context, tx *sql.Tx, step ActivationStep, phase, status string) error {
+	return store.RequireOne(dbgen.New(tx).TransitionActivation(ctx, dbgen.TransitionActivationParams{
+		OperationID:    step.OperationID,
+		StepKey:        step.Key,
+		InputHash:      step.Hash,
+		PreviousPhase:  optionalID(step.Phase),
+		PreviousStatus: step.Status,
+		NextPhase:      optionalID(phase),
+		NextStatus:     status,
 	}))
 }
 
@@ -209,24 +226,15 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 	if operation.Terminal(current.Status) {
 		return cleanupErr
 	}
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     step.Key,
-		InputHash:   step.Hash,
-		Body:        operation.Encode("blocked"),
-	})); err != nil {
+	if err = transitionActivation(ctx, tx, current, "blocked", "failed"); err != nil {
 		return errors.Join(cleanupErr, err)
 	}
-	status, body, err := operation.New(tx).ResultState(ctx, step.OperationID)
+	status, result, err := operation.New(tx).ResultState(ctx, step.OperationID)
 	if err != nil {
 		return errors.Join(cleanupErr, err)
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(status) && !step.Input.AllowFallback {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return errors.Join(cleanupErr, err)
-		}
 		result.Error = "sandbox activation could not establish delivery"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,
@@ -240,11 +248,12 @@ func (a *Activations) BlockGuarded(step ActivationStep, source machine.ResourceS
 			return errors.Join(cleanupErr, err)
 		}
 		if record.SourceOperation == step.Input.ResourceOperation && record.Instance == step.Input.ExpectedInstance {
-			record.LastError = "sandbox activation could not establish delivery"
-			if err = store.RequireOne(dbgen.New(tx).UpdateSandboxBody(ctx, dbgen.UpdateSandboxBodyParams{
-				Body:   operation.Encode(record),
-				ID:     record.ID,
-				Tenant: record.TenantID,
+			if err = store.RequireOne(dbgen.New(tx).SetSandboxError(ctx, dbgen.SetSandboxErrorParams{
+				LastError:         "sandbox activation could not establish delivery",
+				Instance:          record.Instance,
+				SourceOperationID: optionalID(record.SourceOperation),
+				ID:                record.ID,
+				Tenant:            record.TenantID,
 			})); err != nil {
 				return errors.Join(cleanupErr, err)
 			}
@@ -359,13 +368,11 @@ func LoadActivation(ctx context.Context, query store.DBTX, id string) (Activatio
 	if err = json.Unmarshal(record.Input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(record.Body, &step.Phase); err != nil {
-		return step, err
-	}
+	step.Phase = record.Phase.String
 	if step.Key != ActivationKey(step.Input.Attempt) {
 		return step, fmt.Errorf("activation attempt key changed")
 	}
-	if record.Action != "activate" || record.ExpectedInstance != step.Input.ExpectedInstance || record.CandidateResourceID == "" {
+	if record.Action != activateAction || record.ExpectedInstance != step.Input.ExpectedInstance || record.CandidateResourceID == "" {
 		return step, fmt.Errorf("activation frozen identity changed")
 	}
 	return step, nil

@@ -3,7 +3,6 @@ package supply
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -68,10 +67,7 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 				return fmt.Errorf("%w: template pool occupation reached target", errs.ErrExhausted)
 			}
 		}
-		frozen := operation.Encode(struct {
-			Action  string
-			Request operation.Intent
-		}{input.Command.Action, input.Command})
+		frozen := operation.CommandRequest(input.Command)
 		payload := operation.Encode(input)
 		parent.Result.TemplateID = input.Template.ID
 		parent.Result.SandboxID = input.SandboxID
@@ -82,29 +78,18 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 			ScopeKind: "tenant",
 			ScopeID:   input.RequestTenantID,
 			Key:       parent.Key,
-			Hash:      operation.Digest(frozen),
 			Request:   frozen,
 			Status:    "pending",
-			Body:      operation.Encode(parent.Result),
+			Result:    parent.Result,
 		}); err != nil {
 			return err
 		}
 		if err = operations.InsertCredential(ctx, parent.ID, admission.MAC); err != nil {
 			return err
 		}
-		if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
-			OperationID:         parent.ID,
-			StepKey:             "supply",
-			Action:              input.Command.Action,
-			InputHash:           operation.Digest(payload),
-			Input:               payload,
-			CandidateResourceID: input.Template.ID,
-			ExpectedInstance:    "",
-			Status:              "pending",
-			Body: operation.Encode(SupplyState{
-				Phase: "admitted",
-			}),
-		})); err != nil {
+		if err = insertSupply(ctx, tx, parent.ID, input.Command.Action, input.Template.ID, "pending", payload, SupplyState{
+			Phase: "admitted",
+		}); err != nil {
 			return err
 		}
 		if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
@@ -134,16 +119,15 @@ func (admission *SupplyAdmission) AdmitResource(ctx context.Context, tx *sql.Tx,
 				},
 				CreatedAt: input.CreatedAt,
 			}
-			reservationBody, err := json.Marshal(reservation)
-			if err != nil {
-				return err
-			}
 			if err = store.RequireOne(dbgen.New(tx).InsertReservation(ctx, dbgen.InsertReservationParams{
-				OperationID:     parent.ID,
-				TemplateID:      reservation.Template.ID,
-				TemplateVersion: reservation.Template.Version,
-				VmID:            reservation.VMID,
-				Body:            reservationBody,
+				OperationID:       parent.ID,
+				TemplateID:        reservation.Template.ID,
+				TemplateVersion:   reservation.Template.Version,
+				VmID:              reservation.VMID,
+				SandboxID:         reservation.SandboxID,
+				SourceOperationID: reservation.Source.OperationID,
+				SourceInputHash:   reservation.Source.InputHash,
+				CreatedAtUnixNs:   reservation.CreatedAt.UnixNano(),
 			})); err != nil {
 				return err
 			}

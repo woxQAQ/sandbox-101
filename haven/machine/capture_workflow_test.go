@@ -18,7 +18,6 @@ import (
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
 )
 
 func TestHavenSnapshotUntrustedWriterAndIndependence(t *testing.T) {
@@ -184,7 +183,7 @@ func TestHavenSnapshotCompletionRequiresRunningStep(t *testing.T) {
 	if _, err := service.State.Database().Exec(`CREATE TRIGGER change_capture_status
 AFTER UPDATE OF published ON snapshots WHEN NEW.published=1 BEGIN
  UPDATE operation_steps SET status='pending'
- WHERE operation_id=json_extract(NEW.body,'$.operation_id') AND step_key='capture';
+ WHERE operation_id=NEW.capture_operation_id AND step_key='capture';
 END`); err != nil {
 		t.Fatal(err)
 	}
@@ -303,15 +302,11 @@ func TestHavenSnapshotRejectsUnprovenBytes(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "missing-checksums":
-				state := step.State
-				state.Files = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", operation.Encode(state), step.OperationID); err != nil {
+				if _, err := service.State.Database().Exec("DELETE FROM capture_files WHERE operation_id=?", step.OperationID); err != nil {
 					t.Fatal(err)
 				}
 			case "missing-boundary":
-				state := step.State
-				state.Boundary = nil
-				if _, err := service.State.Database().Exec("UPDATE operation_steps SET body=? WHERE operation_id=? AND step_key='capture'", operation.Encode(state), step.OperationID); err != nil {
+				if _, err := service.State.Database().Exec("DELETE FROM capture_boundaries WHERE operation_id=?", step.OperationID); err != nil {
 					t.Fatal(err)
 				}
 			}

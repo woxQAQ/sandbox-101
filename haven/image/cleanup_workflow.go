@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"reflect"
@@ -99,24 +100,30 @@ func (i *Images) saveImageCleanup(step *imageCleanupStep, state imageCleanupStat
 		_ = tx.Rollback()
 	}()
 	if state.Phase == "prepared" {
+		if err = store.RequireOne(dbgen.New(tx).BindCleanupReceipts(i.ctx, dbgen.BindCleanupReceiptsParams{
+			OperationID: step.OperationID,
+			ReceiptsHash: sql.NullString{
+				String: operation.Digest(operation.Encode(state.Intents)),
+				Valid:  true,
+			},
+		})); err != nil {
+			return err
+		}
 		for _, intent := range state.Intents {
-			if err = store.RequireOne(dbgen.New(tx).InsertDeletionReceipt(i.ctx, dbgen.InsertDeletionReceiptParams{
-				Path:        intent.Path,
-				OperationID: step.OperationID,
-				StepKey:     "image_cleanup",
-				Body:        operation.Encode(intent),
-			})); err != nil {
+			if err = store.RecordDeletionReceipt(i.ctx, tx, step.OperationID, "image_cleanup", intent); err != nil {
 				return err
 			}
 		}
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(i.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "image_cleanup",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(state),
-	})); err != nil {
+	if err = operation.AdvancePhase(i.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "image_cleanup",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     "running",
+		NextPhase:      state.Phase,
+	}); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -132,15 +139,11 @@ func (i *Images) verifyImageCleanupReceipts(step imageCleanupStep) error {
 		return fmt.Errorf("image cleanup deletion proof missing")
 	}
 	for index, intent := range step.State.Intents {
-		payload, err := dbgen.New(i.database).GetDeletionReceipt(i.ctx, dbgen.GetDeletionReceiptParams{
-			Path:        intent.Path,
-			OperationID: step.OperationID,
-			StepKey:     "image_cleanup",
-		})
+		retained, err := store.LoadDeletionReceipt(i.ctx, i.database, step.OperationID, "image_cleanup", intent.Path)
 		if err != nil {
 			return err
 		}
-		if string(payload) != string(operation.Encode(intent)) || intent.Format != 1 || !intent.Dir {
+		if !reflect.DeepEqual(retained, intent) || intent.Format != 1 || !intent.Dir {
 			return fmt.Errorf("image cleanup immutable deletion receipt changed")
 		}
 		if step.Input.Cache != nil {
@@ -269,9 +272,9 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 			return fmt.Errorf("retired cache gained a consumer")
 		}
 		if err = store.RequireOne(dbgen.New(tx).DeleteCache(i.ctx, dbgen.DeleteCacheParams{
-			Builder: cache.Witness.Cache.Builder,
-			DiffID:  cache.Witness.Cache.DiffID,
-			Body:    operation.Encode(cache),
+			Builder:           cache.Witness.Cache.Builder,
+			DiffID:            cache.Witness.Cache.DiffID,
+			SourceOperationID: cache.SourceOperation,
 		})); err != nil {
 			return err
 		}
@@ -307,7 +310,8 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 			if err = store.RequireOne(dbgen.New(tx).DeleteImportIntent(i.ctx, dbgen.DeleteImportIntentParams{
 				Digest:      source.Input.Options.Digest,
 				OperationID: source.OperationID,
-				Body:        operation.Encode(source.Input),
+				InputHash:   source.Hash,
+				Layout:      source.Input.Options.Materialization,
 			})); err != nil {
 				return err
 			}
@@ -327,12 +331,7 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 		}
 	}
 	for _, intent := range step.State.Intents {
-		if err = store.RequireOne(dbgen.New(tx).DeleteMatchingDeletionReceipt(i.ctx, dbgen.DeleteMatchingDeletionReceiptParams{
-			Path:        intent.Path,
-			OperationID: step.OperationID,
-			StepKey:     "image_cleanup",
-			Body:        operation.Encode(intent),
-		})); err != nil {
+		if err = store.RetireDeletionReceipt(i.ctx, tx, step.OperationID, "image_cleanup", intent); err != nil {
 			return err
 		}
 	}
@@ -347,13 +346,15 @@ func (i *Images) completeImageCleanup(step imageCleanupStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteUnchangedStep(i.ctx, dbgen.CompleteUnchangedStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      "image_cleanup",
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(state),
-	})); err != nil {
+	if err = operation.AdvancePhase(i.ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "image_cleanup",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  step.State.Phase,
+		NextStatus:     "succeeded",
+		NextPhase:      state.Phase,
+	}); err != nil {
 		return err
 	}
 	if err = operations.Complete(i.ctx, step.OperationID); err != nil {

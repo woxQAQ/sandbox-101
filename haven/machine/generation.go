@@ -43,7 +43,9 @@ func AdmitCandidate(ctx context.Context, tx *sql.Tx, owner string, record VMReco
 			String: owner,
 			Valid:  true,
 		},
-		Body: operation.Encode(record),
+		GenerationOperationID: owner,
+		Directory:             record.Resource.Dir,
+		ResourceHash:          operation.Digest(operation.Encode(record.Resource)),
 	})); err != nil {
 		return err
 	}
@@ -56,20 +58,18 @@ func AdmitCandidate(ctx context.Context, tx *sql.Tx, owner string, record VMReco
 func RetainGenerationIntent(ctx context.Context, tx *sql.Tx, owner string, record VMRecord) error {
 	queries := dbgen.New(tx)
 	if err := store.RequireOne(queries.InsertInstance(ctx, dbgen.InsertInstanceParams{
-		ID:          record.Resource.Instance,
-		VmID:        record.Resource.VMID,
-		OperationID: owner,
-		Body:        operation.Encode(record),
+		ID:           record.Resource.Instance,
+		VmID:         record.Resource.VMID,
+		OperationID:  owner,
+		ResourceHash: operation.Digest(operation.Encode(record.Resource)),
 	})); err != nil {
 		return err
 	}
 	return store.RequireOne(queries.InsertVersion(ctx, dbgen.InsertVersionParams{
-		VmID:        record.Resource.VMID,
-		OperationID: owner,
-		StepKey:     "resource",
-		Body: operation.Encode(RetainedVersion{
-			Resource: record.Resource,
-		}),
+		VmID:         record.Resource.VMID,
+		OperationID:  owner,
+		Instance:     record.Resource.Instance,
+		ResourceHash: operation.Digest(operation.Encode(record.Resource)),
 	}))
 }
 

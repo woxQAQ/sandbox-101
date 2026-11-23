@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -44,69 +43,79 @@ func (checkpoint Checkpoint) Public() types.Checkpoint {
 }
 
 func bindCheckpoint(ctx context.Context, query store.DBTX, checkpoint Checkpoint, operationID string) error {
-	body, err := json.Marshal(checkpoint)
-	if err != nil {
-		return err
-	}
 	return store.RequireOne(dbgen.New(query).InsertCheckpoint(ctx, dbgen.InsertCheckpointParams{
 		ID:          checkpoint.ID,
 		Tenant:      checkpoint.TenantID,
 		SnapshotID:  checkpoint.SnapshotID,
 		OperationID: operationID,
-		Body:        body,
+		TemplateID:  checkpoint.TemplateID,
+		SandboxID:   checkpoint.SandboxID,
+		CreatedAt:   checkpoint.CreatedAt.Format(time.RFC3339Nano),
+		Vcpus:       int64(checkpoint.Shape.VCPUs),
+		MemoryMib:   checkpoint.Shape.MemoryMiB,
+		DiskMib:     checkpoint.Shape.DiskMiB,
 	}))
 }
 
 func unbindCheckpoint(ctx context.Context, query store.DBTX, checkpoint Checkpoint) error {
-	body, err := json.Marshal(checkpoint)
-	if err != nil {
-		return err
-	}
 	return store.RequireOne(dbgen.New(query).DeleteCheckpoint(ctx, dbgen.DeleteCheckpointParams{
 		ID:         checkpoint.ID,
 		Tenant:     checkpoint.TenantID,
 		SnapshotID: checkpoint.SnapshotID,
-		Body:       body,
+		TemplateID: checkpoint.TemplateID,
+		SandboxID:  checkpoint.SandboxID,
+		CreatedAt:  checkpoint.CreatedAt.Format(time.RFC3339Nano),
+		Vcpus:      int64(checkpoint.Shape.VCPUs),
+		MemoryMib:  checkpoint.Shape.MemoryMiB,
+		DiskMib:    checkpoint.Shape.DiskMiB,
 	}))
 }
 
 func LoadCheckpoint(ctx context.Context, query store.DBTX, id string) (Checkpoint, error) {
-	var checkpoint Checkpoint
-	body, err := dbgen.New(query).GetCheckpoint(ctx, id)
+	row, err := dbgen.New(query).GetCheckpoint(ctx, id)
 	if err != nil {
-		return checkpoint, err
+		return Checkpoint{}, err
 	}
-	err = json.Unmarshal(body, &checkpoint)
-	return checkpoint, err
+	return checkpointFromRow(row)
+}
+
+func checkpointFromRow(row dbgen.CheckpointBinding) (Checkpoint, error) {
+	created, err := time.Parse(time.RFC3339Nano, row.CreatedAt)
+	return Checkpoint{
+		ID:         row.ID,
+		TenantID:   row.Tenant,
+		SnapshotID: row.SnapshotID,
+		SandboxID:  row.SandboxID,
+		TemplateID: row.TemplateID,
+		CreatedAt:  created,
+		Shape: loom.Shape{
+			VCPUs:     int(row.Vcpus),
+			MemoryMiB: row.MemoryMib,
+			DiskMiB:   row.DiskMib,
+		},
+	}, err
 }
 
 func LoadOwnedCheckpoint(ctx context.Context, query store.DBTX, id, tenant string) (Checkpoint, error) {
-	var checkpoint Checkpoint
-	body, err := dbgen.New(query).GetOwnedCheckpoint(ctx, dbgen.GetOwnedCheckpointParams{
+	row, err := dbgen.New(query).GetOwnedCheckpoint(ctx, dbgen.GetOwnedCheckpointParams{
 		ID:     id,
 		Tenant: tenant,
 	})
 	if err != nil {
-		return checkpoint, err
+		return Checkpoint{}, err
 	}
-	if err = json.Unmarshal(body, &checkpoint); err != nil {
-		return checkpoint, err
-	}
-	if checkpoint.ID != id || checkpoint.TenantID != tenant {
-		return checkpoint, fmt.Errorf("%w: checkpoint binding identity changed", errs.ErrManualRecovery)
-	}
-	return checkpoint, nil
+	return checkpointFromRow(row)
 }
 
 func CheckpointInventory(ctx context.Context, query store.DBTX) ([]Checkpoint, error) {
-	bodies, err := dbgen.New(query).ListCheckpoints(ctx)
+	rows, err := dbgen.New(query).ListCheckpoints(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Checkpoint, 0, len(bodies))
-	for _, body := range bodies {
-		var checkpoint Checkpoint
-		if err = json.Unmarshal(body, &checkpoint); err != nil {
+	out := make([]Checkpoint, 0, len(rows))
+	for _, row := range rows {
+		checkpoint, err := checkpointFromRow(row)
+		if err != nil {
 			return out, err
 		}
 		out = append(out, checkpoint)
@@ -164,10 +173,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 			SandboxID:    checkpoint.SandboxID,
 		},
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"checkpoint_delete", operation.SanitizedCommand(command)})
+	frozen := operation.CommandRequest(operation.SanitizedCommand(command))
 	input := operation.Encode(struct {
 		Checkpoint  Checkpoint
 		Publication machine.SnapshotSource
@@ -178,27 +184,25 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 		ScopeKind: "tenant",
 		ScopeID:   principal.TenantID,
 		Key:       key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "succeeded",
-		Body:      operation.Encode(record.Result),
+		Result:    record.Result,
 	}); err != nil {
 		return empty, err
 	}
 	if err = operations.InsertCredential(ctx, record.ID, mac); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         record.ID,
 		StepKey:             "checkpoint_delete",
 		Action:              "checkpoint_delete",
-		InputHash:           operation.Digest(input),
 		Input:               input,
 		CandidateResourceID: checkpoint.SnapshotID,
 		ExpectedInstance:    "",
 		Status:              "succeeded",
-		Body:                operation.Encode("complete"),
-	})); err != nil {
+		Phase:               "complete",
+	}); err != nil {
 		return empty, err
 	}
 	if err = unbindCheckpoint(ctx, tx, checkpoint); err != nil {
@@ -226,7 +230,8 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 		OperationID:  record.ID,
 		ResourceKind: "snapshot",
 		ResourceID:   checkpoint.SnapshotID,
-		Body:         operation.Encode(publication),
+		StepKey:      "checkpoint_delete",
+		WitnessHash:  operation.Digest(operation.Encode(publication)),
 	})); err != nil {
 		return empty, err
 	}
@@ -306,10 +311,7 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 	}
 	parent.Status = "succeeded"
 	parent.Result.SnapshotID = cp.SnapshotID
-	frozen := operation.Encode(struct {
-		Action  string
-		Request operation.Intent
-	}{"checkpoint", input.Command})
+	frozen := operation.CommandRequest(input.Command)
 	payload := operation.Encode(input)
 	operations := operation.New(tx)
 	if err = operations.Insert(ctx, operation.Admission{
@@ -317,30 +319,26 @@ func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.
 		ScopeKind: "tenant",
 		ScopeID:   input.RequestTenantID,
 		Key:       parent.Key,
-		Hash:      operation.Digest(frozen),
 		Request:   frozen,
 		Status:    "succeeded",
-		Body:      operation.Encode(parent.Result),
+		Result:    parent.Result,
 	}); err != nil {
 		return empty, err
 	}
 	if err = operations.InsertCredential(ctx, parent.ID, mac); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         parent.ID,
 		StepKey:             "lifecycle",
 		Action:              "checkpoint",
-		InputHash:           operation.Digest(payload),
 		Input:               payload,
 		CandidateResourceID: current.ID,
 		ExpectedInstance:    "",
 		Status:              "succeeded",
-		Body: operation.Encode(LifecycleState{
-			Phase:      "complete",
-			SnapshotID: cp.SnapshotID,
-		}),
-	})); err != nil {
+		Phase:               "complete",
+		SnapshotID:          cp.SnapshotID,
+	}); err != nil {
 		return empty, err
 	}
 	if err = bindCheckpoint(ctx, tx, cp, parent.ID); err != nil {

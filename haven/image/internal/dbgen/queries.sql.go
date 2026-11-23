@@ -7,29 +7,30 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 )
 
-const advanceLiveStep = `-- name: AdvanceLiveStep :execrows
-UPDATE operation_steps SET status='running',body=?1
-WHERE operation_id=?2 AND step_key=?3
-AND input_hash=?4 AND status IN ('pending','running') AND body=?5
+const appendImportLayer = `-- name: AppendImportLayer :execrows
+INSERT INTO image_import_layers(operation_id,ordinal,tar_bytes,entries,cache_hash,artifact_hash) VALUES(?,?,?,?,?,?)
 `
 
-type AdvanceLiveStepParams struct {
-	NewBody      []byte
+type AppendImportLayerParams struct {
 	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
+	Ordinal      int64
+	TarBytes     int64
+	Entries      int64
+	CacheHash    sql.NullString
+	ArtifactHash sql.NullString
 }
 
-func (q *Queries) AdvanceLiveStep(ctx context.Context, arg AdvanceLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, advanceLiveStep,
-		arg.NewBody,
+func (q *Queries) AppendImportLayer(ctx context.Context, arg AppendImportLayerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, appendImportLayer,
 		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
+		arg.Ordinal,
+		arg.TarBytes,
+		arg.Entries,
+		arg.CacheHash,
+		arg.ArtifactHash,
 	)
 	if err != nil {
 		return 0, err
@@ -37,28 +38,48 @@ func (q *Queries) AdvanceLiveStep(ctx context.Context, arg AdvanceLiveStepParams
 	return result.RowsAffected()
 }
 
-const completeLiveStep = `-- name: CompleteLiveStep :execrows
-UPDATE operation_steps SET status='succeeded',body=? WHERE operation_id=? AND step_key=? AND status IN ('pending','running') AND input_hash=?
+const bindCleanupReceipts = `-- name: BindCleanupReceipts :execrows
+UPDATE operation_steps SET receipts_hash=? WHERE operation_id=? AND step_key='image_cleanup' AND receipts_hash IS NULL
 `
 
-type CompleteLiveStepParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
+type BindCleanupReceiptsParams struct {
+	ReceiptsHash sql.NullString
+	OperationID  string
 }
 
-func (q *Queries) CompleteLiveStep(ctx context.Context, arg CompleteLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeLiveStep,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-	)
+func (q *Queries) BindCleanupReceipts(ctx context.Context, arg BindCleanupReceiptsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindCleanupReceipts, arg.ReceiptsHash, arg.OperationID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const cleanupHistoryPaths = `-- name: CleanupHistoryPaths :many
+SELECT path FROM deletion_history WHERE operation_id=? AND step_key='image_cleanup' ORDER BY ordinal
+`
+
+func (q *Queries) CleanupHistoryPaths(ctx context.Context, operationID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, cleanupHistoryPaths, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		items = append(items, path)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const completePendingCleanupKind = `-- name: CompletePendingCleanupKind :execrows
@@ -96,32 +117,6 @@ func (q *Queries) CompletePendingCleanupResource(ctx context.Context, arg Comple
 		arg.OperationID,
 		arg.ResourceKind,
 		arg.ResourceID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeUnchangedStep = `-- name: CompleteUnchangedStep :execrows
-UPDATE operation_steps SET status='succeeded',body=?1 WHERE operation_id=?2 AND step_key=?3 AND input_hash=?4 AND body=?5 AND status IN ('pending','running')
-`
-
-type CompleteUnchangedStepParams struct {
-	NewBody      []byte
-	OperationID  string
-	StepKey      string
-	InputHash    string
-	PreviousBody []byte
-}
-
-func (q *Queries) CompleteUnchangedStep(ctx context.Context, arg CompleteUnchangedStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeUnchangedStep,
-		arg.NewBody,
-		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
-		arg.PreviousBody,
 	)
 	if err != nil {
 		return 0, err
@@ -201,17 +196,17 @@ func (q *Queries) CountPendingOwnedCleanup(ctx context.Context, arg CountPending
 }
 
 const deleteCache = `-- name: DeleteCache :execrows
-DELETE FROM image_caches WHERE builder=? AND diff_id=? AND body=?
+DELETE FROM image_caches WHERE builder=? AND diff_id=? AND source_operation_id=?
 `
 
 type DeleteCacheParams struct {
-	Builder string
-	DiffID  string
-	Body    []byte
+	Builder           string
+	DiffID            string
+	SourceOperationID string
 }
 
 func (q *Queries) DeleteCache(ctx context.Context, arg DeleteCacheParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteCache, arg.Builder, arg.DiffID, arg.Body)
+	result, err := q.db.ExecContext(ctx, deleteCache, arg.Builder, arg.DiffID, arg.SourceOperationID)
 	if err != nil {
 		return 0, err
 	}
@@ -219,64 +214,22 @@ func (q *Queries) DeleteCache(ctx context.Context, arg DeleteCacheParams) (int64
 }
 
 const deleteImportIntent = `-- name: DeleteImportIntent :execrows
-DELETE FROM image_intents WHERE digest=? AND operation_id=? AND body=?
+DELETE FROM image_intents WHERE digest=? AND operation_id=? AND input_hash=? AND layout=?
 `
 
 type DeleteImportIntentParams struct {
 	Digest      string
 	OperationID string
-	Body        []byte
+	InputHash   string
+	Layout      string
 }
 
 func (q *Queries) DeleteImportIntent(ctx context.Context, arg DeleteImportIntentParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteImportIntent, arg.Digest, arg.OperationID, arg.Body)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const deleteMatchingDeletionReceipt = `-- name: DeleteMatchingDeletionReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=? AND body=?
-`
-
-type DeleteMatchingDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
-	Body        []byte
-}
-
-func (q *Queries) DeleteMatchingDeletionReceipt(ctx context.Context, arg DeleteMatchingDeletionReceiptParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteMatchingDeletionReceipt,
-		arg.Path,
+	result, err := q.db.ExecContext(ctx, deleteImportIntent,
+		arg.Digest,
 		arg.OperationID,
-		arg.StepKey,
-		arg.Body,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const failLiveStep = `-- name: FailLiveStep :execrows
-UPDATE operation_steps SET status='failed',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND status IN ('pending','running')
-`
-
-type FailLiveStepParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
-}
-
-func (q *Queries) FailLiveStep(ctx context.Context, arg FailLiveStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failLiveStep,
-		arg.Body,
-		arg.OperationID,
-		arg.StepKey,
 		arg.InputHash,
+		arg.Layout,
 	)
 	if err != nil {
 		return 0, err
@@ -284,69 +237,161 @@ func (q *Queries) FailLiveStep(ctx context.Context, arg FailLiveStepParams) (int
 	return result.RowsAffected()
 }
 
-const getCacheBody = `-- name: GetCacheBody :one
-SELECT body FROM image_caches WHERE builder=? AND diff_id=?
+const getArtifactValue = `-- name: GetArtifactValue :one
+SELECT artifact_hash, role, path, sha256, diff_id, device_id, guest_path, serial, cache_sha256 FROM image_artifact_values WHERE artifact_hash=?
 `
 
-type GetCacheBodyParams struct {
+func (q *Queries) GetArtifactValue(ctx context.Context, artifactHash string) (ImageArtifactValue, error) {
+	row := q.db.QueryRowContext(ctx, getArtifactValue, artifactHash)
+	var i ImageArtifactValue
+	err := row.Scan(
+		&i.ArtifactHash,
+		&i.Role,
+		&i.Path,
+		&i.Sha256,
+		&i.DiffID,
+		&i.DeviceID,
+		&i.GuestPath,
+		&i.Serial,
+		&i.CacheSha256,
+	)
+	return i, err
+}
+
+const getCache = `-- name: GetCache :one
+SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.builder=? AND c.diff_id=?
+`
+
+type GetCacheParams struct {
 	Builder string
 	DiffID  string
 }
 
-func (q *Queries) GetCacheBody(ctx context.Context, arg GetCacheBodyParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getCacheBody, arg.Builder, arg.DiffID)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+type GetCacheRow struct {
+	SourceOperationID string
+	ImageCacheWitness ImageCacheWitness
 }
 
-const getDeletionReceipt = `-- name: GetDeletionReceipt :one
-SELECT body FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?
+func (q *Queries) GetCache(ctx context.Context, arg GetCacheParams) (GetCacheRow, error) {
+	row := q.db.QueryRowContext(ctx, getCache, arg.Builder, arg.DiffID)
+	var i GetCacheRow
+	err := row.Scan(
+		&i.SourceOperationID,
+		&i.ImageCacheWitness.WitnessHash,
+		&i.ImageCacheWitness.Builder,
+		&i.ImageCacheWitness.DiffID,
+		&i.ImageCacheWitness.PhysicalBytes,
+		&i.ImageCacheWitness.Path,
+		&i.ImageCacheWitness.DirectoryDevice,
+		&i.ImageCacheWitness.DirectoryInode,
+		&i.ImageCacheWitness.DirectoryMode,
+		&i.ImageCacheWitness.DataDevice,
+		&i.ImageCacheWitness.DataInode,
+		&i.ImageCacheWitness.DataMode,
+		&i.ImageCacheWitness.ReceiptDevice,
+		&i.ImageCacheWitness.ReceiptInode,
+		&i.ImageCacheWitness.ReceiptMode,
+		&i.ImageCacheWitness.ReceiptSha256,
+		&i.ImageCacheWitness.Format,
+		&i.ImageCacheWitness.Profile,
+		&i.ImageCacheWitness.Sha256,
+		&i.ImageCacheWitness.TarBytes,
+		&i.ImageCacheWitness.Entries,
+	)
+	return i, err
+}
+
+const getCacheWitness = `-- name: GetCacheWitness :one
+SELECT witness_hash, builder, diff_id, physical_bytes, path, directory_device, directory_inode, directory_mode, data_device, data_inode, data_mode, receipt_device, receipt_inode, receipt_mode, receipt_sha256, format, profile, sha256, tar_bytes, entries FROM image_cache_witnesses WHERE witness_hash=?
 `
 
-type GetDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
+func (q *Queries) GetCacheWitness(ctx context.Context, witnessHash string) (ImageCacheWitness, error) {
+	row := q.db.QueryRowContext(ctx, getCacheWitness, witnessHash)
+	var i ImageCacheWitness
+	err := row.Scan(
+		&i.WitnessHash,
+		&i.Builder,
+		&i.DiffID,
+		&i.PhysicalBytes,
+		&i.Path,
+		&i.DirectoryDevice,
+		&i.DirectoryInode,
+		&i.DirectoryMode,
+		&i.DataDevice,
+		&i.DataInode,
+		&i.DataMode,
+		&i.ReceiptDevice,
+		&i.ReceiptInode,
+		&i.ReceiptMode,
+		&i.ReceiptSha256,
+		&i.Format,
+		&i.Profile,
+		&i.Sha256,
+		&i.TarBytes,
+		&i.Entries,
+	)
+	return i, err
 }
 
-func (q *Queries) GetDeletionReceipt(ctx context.Context, arg GetDeletionReceiptParams) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getDeletionReceipt, arg.Path, arg.OperationID, arg.StepKey)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+const getImagePreparation = `-- name: GetImagePreparation :one
+SELECT operation_id, path, work_device, work_inode, work_mode, output_device, output_inode, output_mode FROM image_preparations WHERE operation_id=?
+`
+
+func (q *Queries) GetImagePreparation(ctx context.Context, operationID string) (ImagePreparation, error) {
+	row := q.db.QueryRowContext(ctx, getImagePreparation, operationID)
+	var i ImagePreparation
+	err := row.Scan(
+		&i.OperationID,
+		&i.Path,
+		&i.WorkDevice,
+		&i.WorkInode,
+		&i.WorkMode,
+		&i.OutputDevice,
+		&i.OutputInode,
+		&i.OutputMode,
+	)
+	return i, err
 }
 
 const getImportIntent = `-- name: GetImportIntent :one
-SELECT operation_id,layout,body FROM image_intents WHERE digest=?
+SELECT operation_id,layout,input_hash FROM image_intents WHERE digest=?
 `
 
 type GetImportIntentRow struct {
 	OperationID string
 	Layout      string
-	Body        []byte
+	InputHash   string
 }
 
 func (q *Queries) GetImportIntent(ctx context.Context, digest string) (GetImportIntentRow, error) {
 	row := q.db.QueryRowContext(ctx, getImportIntent, digest)
 	var i GetImportIntentRow
-	err := row.Scan(&i.OperationID, &i.Layout, &i.Body)
+	err := row.Scan(&i.OperationID, &i.Layout, &i.InputHash)
 	return i, err
 }
 
-const getManifestBody = `-- name: GetManifestBody :one
-SELECT body FROM images WHERE digest=?
+const getManifest = `-- name: GetManifest :one
+SELECT manifest_hash, digest, format, layout, architecture, builder, layers_present, tools_present FROM image_manifests WHERE manifest_hash=?
 `
 
-func (q *Queries) GetManifestBody(ctx context.Context, digest string) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, getManifestBody, digest)
-	var body []byte
-	err := row.Scan(&body)
-	return body, err
+func (q *Queries) GetManifest(ctx context.Context, manifestHash string) (ImageManifest, error) {
+	row := q.db.QueryRowContext(ctx, getManifest, manifestHash)
+	var i ImageManifest
+	err := row.Scan(
+		&i.ManifestHash,
+		&i.Digest,
+		&i.Format,
+		&i.Layout,
+		&i.Architecture,
+		&i.Builder,
+		&i.LayersPresent,
+		&i.ToolsPresent,
+	)
+	return i, err
 }
 
 const getStep = `-- name: GetStep :one
-SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,body
+SELECT operation_id,step_key,action,status,input_hash,input,candidate_resource_id,expected_instance,phase,step_error,receipts_hash
 FROM operation_steps WHERE operation_id=? AND step_key=?
 `
 
@@ -364,7 +409,9 @@ type GetStepRow struct {
 	Input               []byte
 	CandidateResourceID string
 	ExpectedInstance    string
-	Body                []byte
+	Phase               sql.NullString
+	StepError           string
+	ReceiptsHash        sql.NullString
 }
 
 func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, error) {
@@ -379,23 +426,140 @@ func (q *Queries) GetStep(ctx context.Context, arg GetStepParams) (GetStepRow, e
 		&i.Input,
 		&i.CandidateResourceID,
 		&i.ExpectedInstance,
-		&i.Body,
+		&i.Phase,
+		&i.StepError,
+		&i.ReceiptsHash,
 	)
 	return i, err
 }
 
+const insertArtifact = `-- name: InsertArtifact :execrows
+INSERT INTO image_artifacts(manifest_hash,position,artifact_hash) VALUES(?,?,?)
+`
+
+type InsertArtifactParams struct {
+	ManifestHash string
+	Position     int64
+	ArtifactHash string
+}
+
+func (q *Queries) InsertArtifact(ctx context.Context, arg InsertArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertArtifact, arg.ManifestHash, arg.Position, arg.ArtifactHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertArtifactValue = `-- name: InsertArtifactValue :execrows
+INSERT INTO image_artifact_values(artifact_hash,role,path,sha256,diff_id,device_id,guest_path,serial,cache_sha256) VALUES(?,?,?,?,?,?,?,?,?)
+`
+
+type InsertArtifactValueParams struct {
+	ArtifactHash string
+	Role         string
+	Path         string
+	Sha256       string
+	DiffID       string
+	DeviceID     int64
+	GuestPath    string
+	Serial       string
+	CacheSha256  string
+}
+
+func (q *Queries) InsertArtifactValue(ctx context.Context, arg InsertArtifactValueParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertArtifactValue,
+		arg.ArtifactHash,
+		arg.Role,
+		arg.Path,
+		arg.Sha256,
+		arg.DiffID,
+		arg.DeviceID,
+		arg.GuestPath,
+		arg.Serial,
+		arg.CacheSha256,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertCache = `-- name: InsertCache :execrows
-INSERT INTO image_caches(builder,diff_id,body) VALUES(?,?,?)
+INSERT INTO image_caches(builder,diff_id,source_operation_id,witness_hash) VALUES(?,?,?,?)
 `
 
 type InsertCacheParams struct {
-	Builder string
-	DiffID  string
-	Body    []byte
+	Builder           string
+	DiffID            string
+	SourceOperationID string
+	WitnessHash       string
 }
 
 func (q *Queries) InsertCache(ctx context.Context, arg InsertCacheParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCache, arg.Builder, arg.DiffID, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertCache,
+		arg.Builder,
+		arg.DiffID,
+		arg.SourceOperationID,
+		arg.WitnessHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCacheWitness = `-- name: InsertCacheWitness :execrows
+INSERT INTO image_cache_witnesses(builder,diff_id,witness_hash,physical_bytes,path,directory_device,directory_inode,directory_mode,data_device,data_inode,data_mode,receipt_device,receipt_inode,receipt_mode,receipt_sha256,format,profile,sha256,tar_bytes,entries)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+`
+
+type InsertCacheWitnessParams struct {
+	Builder         string
+	DiffID          string
+	WitnessHash     string
+	PhysicalBytes   int64
+	Path            string
+	DirectoryDevice int64
+	DirectoryInode  int64
+	DirectoryMode   int64
+	DataDevice      int64
+	DataInode       int64
+	DataMode        int64
+	ReceiptDevice   int64
+	ReceiptInode    int64
+	ReceiptMode     int64
+	ReceiptSha256   string
+	Format          int64
+	Profile         string
+	Sha256          string
+	TarBytes        int64
+	Entries         int64
+}
+
+func (q *Queries) InsertCacheWitness(ctx context.Context, arg InsertCacheWitnessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCacheWitness,
+		arg.Builder,
+		arg.DiffID,
+		arg.WitnessHash,
+		arg.PhysicalBytes,
+		arg.Path,
+		arg.DirectoryDevice,
+		arg.DirectoryInode,
+		arg.DirectoryMode,
+		arg.DataDevice,
+		arg.DataInode,
+		arg.DataMode,
+		arg.ReceiptDevice,
+		arg.ReceiptInode,
+		arg.ReceiptMode,
+		arg.ReceiptSha256,
+		arg.Format,
+		arg.Profile,
+		arg.Sha256,
+		arg.TarBytes,
+		arg.Entries,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -403,7 +567,7 @@ func (q *Queries) InsertCache(ctx context.Context, arg InsertCacheParams) (int64
 }
 
 const insertCleanupIntent = `-- name: InsertCleanupIntent :execrows
-INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,body) VALUES(?,?,?,?,'pending',?)
+INSERT INTO cleanup_intents(id,operation_id,resource_kind,resource_id,status,step_key,witness_hash) VALUES(?,?,?,?,'pending',?,?)
 `
 
 type InsertCleanupIntentParams struct {
@@ -411,7 +575,8 @@ type InsertCleanupIntentParams struct {
 	OperationID  string
 	ResourceKind string
 	ResourceID   string
-	Body         []byte
+	StepKey      string
+	WitnessHash  string
 }
 
 func (q *Queries) InsertCleanupIntent(ctx context.Context, arg InsertCleanupIntentParams) (int64, error) {
@@ -420,7 +585,8 @@ func (q *Queries) InsertCleanupIntent(ctx context.Context, arg InsertCleanupInte
 		arg.OperationID,
 		arg.ResourceKind,
 		arg.ResourceID,
-		arg.Body,
+		arg.StepKey,
+		arg.WitnessHash,
 	)
 	if err != nil {
 		return 0, err
@@ -428,23 +594,49 @@ func (q *Queries) InsertCleanupIntent(ctx context.Context, arg InsertCleanupInte
 	return result.RowsAffected()
 }
 
-const insertDeletionReceipt = `-- name: InsertDeletionReceipt :execrows
-INSERT INTO deletion_intents(path,operation_id,step_key,body) VALUES(?,?,?,?)
+const insertFile = `-- name: InsertFile :execrows
+INSERT INTO image_files(manifest_hash,path,sha256) VALUES(?,?,?)
 `
 
-type InsertDeletionReceiptParams struct {
-	Path        string
-	OperationID string
-	StepKey     string
-	Body        []byte
+type InsertFileParams struct {
+	ManifestHash string
+	Path         string
+	Sha256       string
 }
 
-func (q *Queries) InsertDeletionReceipt(ctx context.Context, arg InsertDeletionReceiptParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertDeletionReceipt,
-		arg.Path,
+func (q *Queries) InsertFile(ctx context.Context, arg InsertFileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertFile, arg.ManifestHash, arg.Path, arg.Sha256)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertImagePreparation = `-- name: InsertImagePreparation :execrows
+INSERT INTO image_preparations(operation_id,path,work_device,work_inode,work_mode,output_device,output_inode,output_mode) VALUES(?,?,?,?,?,?,?,?)
+`
+
+type InsertImagePreparationParams struct {
+	OperationID  string
+	Path         string
+	WorkDevice   int64
+	WorkInode    int64
+	WorkMode     int64
+	OutputDevice int64
+	OutputInode  int64
+	OutputMode   int64
+}
+
+func (q *Queries) InsertImagePreparation(ctx context.Context, arg InsertImagePreparationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertImagePreparation,
 		arg.OperationID,
-		arg.StepKey,
-		arg.Body,
+		arg.Path,
+		arg.WorkDevice,
+		arg.WorkInode,
+		arg.WorkMode,
+		arg.OutputDevice,
+		arg.OutputInode,
+		arg.OutputMode,
 	)
 	if err != nil {
 		return 0, err
@@ -453,14 +645,14 @@ func (q *Queries) InsertDeletionReceipt(ctx context.Context, arg InsertDeletionR
 }
 
 const insertImportIntent = `-- name: InsertImportIntent :execrows
-INSERT INTO image_intents(digest,operation_id,layout,body) VALUES(?,?,?,?)
+INSERT INTO image_intents(digest,operation_id,layout,input_hash) VALUES(?,?,?,?)
 `
 
 type InsertImportIntentParams struct {
 	Digest      string
 	OperationID string
 	Layout      string
-	Body        []byte
+	InputHash   string
 }
 
 func (q *Queries) InsertImportIntent(ctx context.Context, arg InsertImportIntentParams) (int64, error) {
@@ -468,7 +660,43 @@ func (q *Queries) InsertImportIntent(ctx context.Context, arg InsertImportIntent
 		arg.Digest,
 		arg.OperationID,
 		arg.Layout,
-		arg.Body,
+		arg.InputHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertImportProgress = `-- name: InsertImportProgress :execrows
+INSERT INTO image_import_progress(operation_id) VALUES(?)
+`
+
+func (q *Queries) InsertImportProgress(ctx context.Context, operationID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertImportProgress, operationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertLayer = `-- name: InsertLayer :execrows
+INSERT INTO image_layers(manifest_hash,position,layer_digest,diff_id) VALUES(?,?,?,?)
+`
+
+type InsertLayerParams struct {
+	ManifestHash string
+	Position     int64
+	LayerDigest  string
+	DiffID       string
+}
+
+func (q *Queries) InsertLayer(ctx context.Context, arg InsertLayerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertLayer,
+		arg.ManifestHash,
+		arg.Position,
+		arg.LayerDigest,
+		arg.DiffID,
 	)
 	if err != nil {
 		return 0, err
@@ -477,50 +705,49 @@ func (q *Queries) InsertImportIntent(ctx context.Context, arg InsertImportIntent
 }
 
 const insertManifest = `-- name: InsertManifest :execrows
-INSERT INTO images(digest,body) VALUES(?,?)
+INSERT INTO image_manifests(digest,format,layout,architecture,builder,manifest_hash,layers_present,tools_present) VALUES(?,?,?,?,?,?,?,?)
 `
 
 type InsertManifestParams struct {
-	Digest string
-	Body   []byte
+	Digest        string
+	Format        int64
+	Layout        string
+	Architecture  string
+	Builder       string
+	ManifestHash  string
+	LayersPresent bool
+	ToolsPresent  bool
 }
 
 func (q *Queries) InsertManifest(ctx context.Context, arg InsertManifestParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertManifest, arg.Digest, arg.Body)
+	result, err := q.db.ExecContext(ctx, insertManifest,
+		arg.Digest,
+		arg.Format,
+		arg.Layout,
+		arg.Architecture,
+		arg.Builder,
+		arg.ManifestHash,
+		arg.LayersPresent,
+		arg.ToolsPresent,
+	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const insertStep = `-- name: InsertStep :execrows
-INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candidate_resource_id,expected_instance,status,body) VALUES(?,?,?,?,?,?,?,?,?)
+const insertTool = `-- name: InsertTool :execrows
+INSERT INTO image_tools(manifest_hash,name,version) VALUES(?,?,?)
 `
 
-type InsertStepParams struct {
-	OperationID         string
-	StepKey             string
-	Action              string
-	InputHash           string
-	Input               []byte
-	CandidateResourceID string
-	ExpectedInstance    string
-	Status              string
-	Body                []byte
+type InsertToolParams struct {
+	ManifestHash string
+	Name         string
+	Version      string
 }
 
-func (q *Queries) InsertStep(ctx context.Context, arg InsertStepParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertStep,
-		arg.OperationID,
-		arg.StepKey,
-		arg.Action,
-		arg.InputHash,
-		arg.Input,
-		arg.CandidateResourceID,
-		arg.ExpectedInstance,
-		arg.Status,
-		arg.Body,
-	)
+func (q *Queries) InsertTool(ctx context.Context, arg InsertToolParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTool, arg.ManifestHash, arg.Name, arg.Version)
 	if err != nil {
 		return 0, err
 	}
@@ -559,23 +786,50 @@ func (q *Queries) ListCacheKeys(ctx context.Context) ([]ListCacheKeysRow, error)
 	return items, nil
 }
 
-const listFundedCacheBodies = `-- name: ListFundedCacheBodies :many
-SELECT body FROM image_caches WHERE json_extract(body,'$.source_operation')=(CAST(? AS TEXT)||'')
+const listFundedCaches = `-- name: ListFundedCaches :many
+SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.source_operation_id=? ORDER BY c.builder,c.diff_id
 `
 
-func (q *Queries) ListFundedCacheBodies(ctx context.Context, dollar_1 string) ([][]byte, error) {
-	rows, err := q.db.QueryContext(ctx, listFundedCacheBodies, dollar_1)
+type ListFundedCachesRow struct {
+	SourceOperationID string
+	ImageCacheWitness ImageCacheWitness
+}
+
+func (q *Queries) ListFundedCaches(ctx context.Context, sourceOperationID string) ([]ListFundedCachesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFundedCaches, sourceOperationID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items [][]byte
+	var items []ListFundedCachesRow
 	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
+		var i ListFundedCachesRow
+		if err := rows.Scan(
+			&i.SourceOperationID,
+			&i.ImageCacheWitness.WitnessHash,
+			&i.ImageCacheWitness.Builder,
+			&i.ImageCacheWitness.DiffID,
+			&i.ImageCacheWitness.PhysicalBytes,
+			&i.ImageCacheWitness.Path,
+			&i.ImageCacheWitness.DirectoryDevice,
+			&i.ImageCacheWitness.DirectoryInode,
+			&i.ImageCacheWitness.DirectoryMode,
+			&i.ImageCacheWitness.DataDevice,
+			&i.ImageCacheWitness.DataInode,
+			&i.ImageCacheWitness.DataMode,
+			&i.ImageCacheWitness.ReceiptDevice,
+			&i.ImageCacheWitness.ReceiptInode,
+			&i.ImageCacheWitness.ReceiptMode,
+			&i.ImageCacheWitness.ReceiptSha256,
+			&i.ImageCacheWitness.Format,
+			&i.ImageCacheWitness.Profile,
+			&i.ImageCacheWitness.Sha256,
+			&i.ImageCacheWitness.TarBytes,
+			&i.ImageCacheWitness.Entries,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, body)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -586,23 +840,129 @@ func (q *Queries) ListFundedCacheBodies(ctx context.Context, dollar_1 string) ([
 	return items, nil
 }
 
-const listManifestBodies = `-- name: ListManifestBodies :many
-SELECT body FROM images
+const listImageArtifacts = `-- name: ListImageArtifacts :many
+SELECT v.artifact_hash, v.role, v.path, v.sha256, v.diff_id, v.device_id, v.guest_path, v.serial, v.cache_sha256 FROM image_artifacts a JOIN image_artifact_values v ON v.artifact_hash=a.artifact_hash WHERE a.manifest_hash=? ORDER BY a.position
 `
 
-func (q *Queries) ListManifestBodies(ctx context.Context) ([][]byte, error) {
-	rows, err := q.db.QueryContext(ctx, listManifestBodies)
+func (q *Queries) ListImageArtifacts(ctx context.Context, manifestHash string) ([]ImageArtifactValue, error) {
+	rows, err := q.db.QueryContext(ctx, listImageArtifacts, manifestHash)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items [][]byte
+	var items []ImageArtifactValue
 	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
+		var i ImageArtifactValue
+		if err := rows.Scan(
+			&i.ArtifactHash,
+			&i.Role,
+			&i.Path,
+			&i.Sha256,
+			&i.DiffID,
+			&i.DeviceID,
+			&i.GuestPath,
+			&i.Serial,
+			&i.CacheSha256,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, body)
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImageFiles = `-- name: ListImageFiles :many
+SELECT path,sha256 FROM image_files WHERE manifest_hash=? ORDER BY path
+`
+
+type ListImageFilesRow struct {
+	Path   string
+	Sha256 string
+}
+
+func (q *Queries) ListImageFiles(ctx context.Context, manifestHash string) ([]ListImageFilesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listImageFiles, manifestHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListImageFilesRow
+	for rows.Next() {
+		var i ListImageFilesRow
+		if err := rows.Scan(&i.Path, &i.Sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImageLayers = `-- name: ListImageLayers :many
+SELECT layer_digest,diff_id FROM image_layers WHERE manifest_hash=? ORDER BY position
+`
+
+type ListImageLayersRow struct {
+	LayerDigest string
+	DiffID      string
+}
+
+func (q *Queries) ListImageLayers(ctx context.Context, manifestHash string) ([]ListImageLayersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listImageLayers, manifestHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListImageLayersRow
+	for rows.Next() {
+		var i ListImageLayersRow
+		if err := rows.Scan(&i.LayerDigest, &i.DiffID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImageTools = `-- name: ListImageTools :many
+SELECT name,version FROM image_tools WHERE manifest_hash=? ORDER BY name
+`
+
+type ListImageToolsRow struct {
+	Name    string
+	Version string
+}
+
+func (q *Queries) ListImageTools(ctx context.Context, manifestHash string) ([]ListImageToolsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listImageTools, manifestHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListImageToolsRow
+	for rows.Next() {
+		var i ListImageToolsRow
+		if err := rows.Scan(&i.Name, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -694,23 +1054,134 @@ func (q *Queries) ListStepOperations(ctx context.Context, stepKey string) ([]str
 	return items, nil
 }
 
-const recordLiveStepProgress = `-- name: RecordLiveStepProgress :execrows
-UPDATE operation_steps SET status='running',body=? WHERE operation_id=? AND step_key=? AND input_hash=? AND status IN ('pending','running')
+const publishImage = `-- name: PublishImage :execrows
+INSERT INTO images(digest,manifest_hash) VALUES(?,?)
 `
 
-type RecordLiveStepProgressParams struct {
-	Body        []byte
-	OperationID string
-	StepKey     string
-	InputHash   string
+type PublishImageParams struct {
+	Digest       string
+	ManifestHash string
 }
 
-func (q *Queries) RecordLiveStepProgress(ctx context.Context, arg RecordLiveStepProgressParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recordLiveStepProgress,
-		arg.Body,
+func (q *Queries) PublishImage(ctx context.Context, arg PublishImageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, publishImage, arg.Digest, arg.ManifestHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const publishedManifestHash = `-- name: PublishedManifestHash :one
+SELECT manifest_hash FROM images WHERE digest=?
+`
+
+func (q *Queries) PublishedManifestHash(ctx context.Context, digest string) (string, error) {
+	row := q.db.QueryRowContext(ctx, publishedManifestHash, digest)
+	var manifest_hash string
+	err := row.Scan(&manifest_hash)
+	return manifest_hash, err
+}
+
+const readImportLayers = `-- name: ReadImportLayers :many
+SELECT ordinal,tar_bytes,entries,cache_hash,artifact_hash FROM image_import_layers WHERE operation_id=? ORDER BY ordinal
+`
+
+type ReadImportLayersRow struct {
+	Ordinal      int64
+	TarBytes     int64
+	Entries      int64
+	CacheHash    sql.NullString
+	ArtifactHash sql.NullString
+}
+
+func (q *Queries) ReadImportLayers(ctx context.Context, operationID string) ([]ReadImportLayersRow, error) {
+	rows, err := q.db.QueryContext(ctx, readImportLayers, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadImportLayersRow
+	for rows.Next() {
+		var i ReadImportLayersRow
+		if err := rows.Scan(
+			&i.Ordinal,
+			&i.TarBytes,
+			&i.Entries,
+			&i.CacheHash,
+			&i.ArtifactHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readImportProgress = `-- name: ReadImportProgress :one
+SELECT failed_phase,output_manifest_hash,output_file_hash,output_synced FROM image_import_progress WHERE operation_id=?
+`
+
+type ReadImportProgressRow struct {
+	FailedPhase        string
+	OutputManifestHash sql.NullString
+	OutputFileHash     sql.NullString
+	OutputSynced       sql.NullBool
+}
+
+func (q *Queries) ReadImportProgress(ctx context.Context, operationID string) (ReadImportProgressRow, error) {
+	row := q.db.QueryRowContext(ctx, readImportProgress, operationID)
+	var i ReadImportProgressRow
+	err := row.Scan(
+		&i.FailedPhase,
+		&i.OutputManifestHash,
+		&i.OutputFileHash,
+		&i.OutputSynced,
+	)
+	return i, err
+}
+
+const setImportError = `-- name: SetImportError :execrows
+UPDATE operation_steps SET step_error=? WHERE operation_id=? AND step_key='image_import'
+`
+
+type SetImportErrorParams struct {
+	StepError   string
+	OperationID string
+}
+
+func (q *Queries) SetImportError(ctx context.Context, arg SetImportErrorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImportError, arg.StepError, arg.OperationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateImportProgress = `-- name: UpdateImportProgress :execrows
+UPDATE image_import_progress SET failed_phase=?,output_manifest_hash=?,output_file_hash=?,output_synced=? WHERE operation_id=?
+`
+
+type UpdateImportProgressParams struct {
+	FailedPhase        string
+	OutputManifestHash sql.NullString
+	OutputFileHash     sql.NullString
+	OutputSynced       sql.NullBool
+	OperationID        string
+}
+
+func (q *Queries) UpdateImportProgress(ctx context.Context, arg UpdateImportProgressParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateImportProgress,
+		arg.FailedPhase,
+		arg.OutputManifestHash,
+		arg.OutputFileHash,
+		arg.OutputSynced,
 		arg.OperationID,
-		arg.StepKey,
-		arg.InputHash,
 	)
 	if err != nil {
 		return 0, err

@@ -167,7 +167,7 @@ func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 		{"INSERT", "vm_memory_backings", "1"},
 		{"DELETE", "snapshot_source_leases", "1"},
 		{"UPDATE", "quota_refs", "NEW.holder_id LIKE 'backing:%'"},
-		{"UPDATE", "operation_steps", "NEW.action='clone' AND json_extract(NEW.body,'$.backing_ready')=1"},
+		{"UPDATE", "resource_progress", "NEW.backing_ready=1"},
 	} {
 		for _, mode := range []string{
 			"ABORT,'fixture handoff rejection'",

@@ -9,7 +9,6 @@ import (
 	"github.com/woxQAQ/haven/internal/testapp"
 	"github.com/woxQAQ/haven/internal/testutil"
 	"github.com/woxQAQ/haven/machine"
-	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/sandbox"
 	"github.com/woxQAQ/haven/supply"
@@ -47,10 +46,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 				Key:        "supply",
 				TemplateID: "cold",
 			}
-			frozen := operation.Encode(struct {
-				Action  string
-				Request machine.FreshRequest
-			}{"claim", request})
+			frozen := machine.FreezeProvisionRequest(request, nil)
 			operation, err := service.Provisioning.Admit(ctx, sandbox.ProvisionAdmission{
 				Request: supply.ProvisionRequest{
 					TenantID: "tenant",

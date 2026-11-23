@@ -12,7 +12,6 @@ import (
 	"github.com/woxQAQ/haven/internal/errs"
 	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/machine/internal/dbgen"
-	"github.com/woxQAQ/haven/operation"
 	"github.com/woxQAQ/haven/quota"
 	"github.com/woxQAQ/haven/store"
 )
@@ -332,29 +331,11 @@ func (p *Provisioning) saveRestore(step *ResourceStep, next ResourceState) error
 	if _, _, _, err = p.ownership.VerifyProvisionIntent(p.proofs, p.ctx, tx, *step); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceLiveStep(p.ctx, dbgen.AdvanceLiveStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(p.ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if next.DiskIdentity != nil && step.State.DiskIdentity == nil {
-		previous := RetainedVersion{
-			Resource: step.Input.Resource,
-		}
-		version := RetainedVersion{
-			Resource:     step.Input.Resource,
-			DiskIdentity: next.DiskIdentity,
-		}
-		if err = store.RequireOne(dbgen.New(tx).ReplaceVersionBody(p.ctx, dbgen.ReplaceVersionBodyParams{
-			VmID:         step.Candidate,
-			OperationID:  step.OperationID,
-			PreviousBody: operation.Encode(previous),
-			NewBody:      operation.Encode(version),
-		})); err != nil {
+		if err = recordVersionDisk(p.ctx, tx, step, next.DiskIdentity); err != nil {
 			return err
 		}
 	}
@@ -428,13 +409,7 @@ func (p *Provisioning) transferRestore(step *ResourceStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).AdvanceRunningStep(p.ctx, dbgen.AdvanceRunningStepParams{
-		OperationID:  step.OperationID,
-		StepKey:      step.Key,
-		InputHash:    step.Hash,
-		PreviousBody: operation.Encode(step.State),
-		NewBody:      operation.Encode(next),
-	})); err != nil {
+	if err = transitionResource(p.ctx, tx, *step, next, "running"); err != nil {
 		return err
 	}
 	if err = p.fault("restore_transfer_before_commit"); err != nil {

@@ -23,11 +23,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	if request.TenantID == "" || request.Key == "" || len(request.Key) > 256 || !loom.ValidResourceID(request.SnapshotID, "snap-") {
 		return empty, fmt.Errorf("%w: snapshot delete requires scoped snapshot and key", errs.ErrInvalid)
 	}
-	frozen := operation.Encode(struct {
-		Action  string
-		Request SnapshotDeleteRequest
-	}{"snapshot_delete", request})
-	hash := operation.Digest(frozen)
+	frozen := request.operationRequest()
 	sd.storeWriteMu.Lock()
 	defer sd.storeWriteMu.Unlock()
 	closing := sd.lifetime.Closing() || sd.store.Reviewed
@@ -44,7 +40,7 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 	if cached, found, err := operation.New(tx).Cached(ctx, operation.Scope{
 		Kind: "tenant",
 		ID:   request.TenantID,
-	}, request.Key, hash); found || err != nil {
+	}, request.Key, frozen); found || err != nil {
 		if found && err == nil && !operation.Terminal(cached.Status) {
 			sd.dispatch(cached.ID)
 		}
@@ -83,29 +79,32 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 		ScopeKind: "tenant",
 		ScopeID:   request.TenantID,
 		Key:       request.Key,
-		Hash:      hash,
 		Request:   frozen,
 		Status:    "pending",
-		Body:      operation.Encode(accepted.Result),
+		Result:    accepted.Result,
 	}); err != nil {
 		return empty, err
 	}
-	if err = store.RequireOne(dbgen.New(tx).InsertStep(ctx, dbgen.InsertStepParams{
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
 		OperationID:         accepted.ID,
 		StepKey:             "snapshot_delete",
 		Action:              "snapshot_delete",
-		InputHash:           step.Hash,
 		Input:               payload,
 		CandidateResourceID: request.SnapshotID,
 		ExpectedInstance:    "",
 		Status:              "pending",
-		Body:                operation.Encode(step.Phase),
-	})); err != nil {
+		Phase:               step.Phase,
+	}); err != nil {
 		return empty, err
 	}
 	if err = store.RequireOne(dbgen.New(tx).MarkPublishedDeleting(ctx, dbgen.MarkPublishedDeletingParams{
-		ID:   request.SnapshotID,
-		Body: operation.Encode(source.Snapshot),
+		ID:                 request.SnapshotID,
+		CaptureOperationID: source.CaptureOperation,
+		TenantID:           source.Snapshot.TenantID,
+		SourceVmID:         source.Snapshot.SourceVM,
+		SourceInstance:     source.Snapshot.SourceInstance,
+		Directory:          source.Snapshot.Dir,
+		ManifestHash:       manifestHash(source.Snapshot.Manifest),
 	})); err != nil {
 		return empty, err
 	}
@@ -131,7 +130,8 @@ func (sd *SnapshotDeletion) AdmitSnapshotDelete(ctx context.Context, request Sna
 		OperationID:  accepted.ID,
 		ResourceKind: "snapshot",
 		ResourceID:   request.SnapshotID,
-		Body:         payload,
+		StepKey:      "snapshot_delete",
+		WitnessHash:  operation.Digest(payload),
 	})); err != nil {
 		return empty, err
 	}

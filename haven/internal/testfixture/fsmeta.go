@@ -232,7 +232,6 @@ func BootLayerEntries() []TarEntry {
 	}
 }
 
-//nolint:staticcheck // Exercise archive/tar's binary xattr encoding used by the OCI materializers.
 func LayeredOCILayout(t *testing.T) (string, []OCILayerFixture, string) {
 	t.Helper()
 	layout := t.TempDir()
@@ -246,7 +245,7 @@ func LayeredOCILayout(t *testing.T) (string, []OCILayerFixture, string) {
 		HardEntry("hard.bin", "shared.bin"),
 	)
 	base[len(base)-2].Header.PAXRecords = map[string]string{
-		"user.fixture": "retained",
+		"SCHILY.xattr.user.fixture": "retained",
 	}
 	base[len(base)-2].Header.Format = tar.FormatPAX
 	base[len(base)-2].Header.ModTime = time.Unix(1700000000, 123456789)

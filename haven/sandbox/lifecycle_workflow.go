@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -228,18 +227,11 @@ func (l *Lifecycle) lifecycleProof(ctx context.Context, tx *sql.Tx, step Lifecyc
 	if source.Hash != step.Input.Source.InputHash || source.Input.SandboxID != step.Input.Sandbox.ID || source.Input.TenantID != step.Input.OwnerTenantID || source.State.Witness != step.Input.SourceInstance || !sourceTerminal {
 		return fmt.Errorf("lifecycle original resource witness changed")
 	}
-	identity, err := operation.New(tx).RequestIdentity(ctx, step.OperationID)
+	identity, err := operation.New(tx).Projection(ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
-	var request struct {
-		Action  string
-		Request operation.Intent
-	}
-	if err = json.Unmarshal(identity.Request, &request); err != nil {
-		return err
-	}
-	if identity.ScopeKind != "tenant" || identity.ScopeID != step.Input.RequestTenantID || operation.Terminal(identity.Status) || operation.Digest(identity.Request) != identity.Hash || request.Action != step.Input.Command.Action || !reflect.DeepEqual(request.Request, step.Input.Command) {
+	if identity.ScopeKind != operation.ScopeTenant || identity.ScopeID != step.Input.RequestTenantID || operation.Terminal(identity.Status) || !identity.Request.Equal(operation.CommandRequest(step.Input.Command)) {
 		return fmt.Errorf("lifecycle parent identity changed")
 	}
 	return nil
@@ -301,15 +293,10 @@ func (l *Lifecycle) completeCheckpoint(step LifecycleStep, capture machine.Captu
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(l.ctx, dbgen.CompleteLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "lifecycle",
-		InputHash:   step.Hash,
-		Body: operation.Encode(LifecycleState{
-			Phase:      "complete",
-			SnapshotID: cp.SnapshotID,
-		}),
-	})); err != nil {
+	if err = transitionLifecycle(l.ctx, tx, step, LifecycleState{
+		Phase:      "complete",
+		SnapshotID: cp.SnapshotID,
+	}, "succeeded"); err != nil {
 		return err
 	}
 	if err = l.fault("checkpoint_completion_before_commit"); err != nil {
@@ -380,12 +367,7 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	}
 	retired := tombstone
 	retired.VMID, retired.Instance, retired.OperationID = "", "", ""
-	if err = store.RequireOne(dbgen.New(tx).RetireTerminatedBody(l.ctx, dbgen.RetireTerminatedBodyParams{
-		ID:           retired.ID,
-		Tenant:       retired.TenantID,
-		PreviousBody: operation.Encode(tombstone),
-		NextBody:     operation.Encode(retired),
-	})); err != nil {
+	if err = replaceSandbox(l.ctx, tx, tombstone, retired); err != nil {
 		return err
 	}
 	desired := step.Input.Settings
@@ -394,11 +376,7 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	desired.Instance = ""
 	desired.Deadline = time.Time{}
 	desired.PausedUntil = time.Time{}
-	if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(l.ctx, dbgen.ReplaceSettingsParams{
-		SandboxID:    step.Input.Sandbox.ID,
-		PreviousBody: operation.Encode(step.Input.Settings),
-		NextBody:     operation.Encode(desired),
-	})); err != nil {
+	if err = replaceSettings(l.ctx, tx, step.Input.Sandbox.ID, step.Input.Settings, desired); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).DeleteFence(l.ctx, dbgen.DeleteFenceParams{
@@ -407,14 +385,9 @@ func (l *Lifecycle) completeReleaseLifecycle(step LifecycleStep) error {
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(l.ctx, dbgen.CompleteLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "lifecycle",
-		InputHash:   step.Hash,
-		Body: operation.Encode(LifecycleState{
-			Phase: "complete",
-		}),
-	})); err != nil {
+	if err = transitionLifecycle(l.ctx, tx, step, LifecycleState{
+		Phase: "complete",
+	}, "succeeded"); err != nil {
 		return err
 	}
 	if err = l.committer.Complete(tx, append(superseded, operation.Outcome{
@@ -575,15 +548,10 @@ func CompleteLifecycleActivation(ctx context.Context, tx *sql.Tx, activation Act
 		}
 		snapshot = lifecycle.Input.Rollback.Checkpoint.SnapshotID
 	}
-	return store.RequireOne(dbgen.New(tx).CompleteLiveStep(ctx, dbgen.CompleteLiveStepParams{
-		OperationID: lifecycle.OperationID,
-		StepKey:     "lifecycle",
-		InputHash:   lifecycle.Hash,
-		Body: operation.Encode(LifecycleState{
-			Phase:      "complete",
-			SnapshotID: snapshot,
-		}),
-	}))
+	return transitionLifecycle(ctx, tx, lifecycle, LifecycleState{
+		Phase:      "complete",
+		SnapshotID: snapshot,
+	}, "succeeded")
 }
 
 // failLifecycle commits failure only from a durable child terminal result.
@@ -625,7 +593,7 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	if fence != step.OperationID {
 		return nil
 	}
-	status, body, err := operations.ResultState(l.ctx, step.OperationID)
+	status, result, err := operations.ResultState(l.ctx, step.OperationID)
 	if err != nil {
 		return err
 	}
@@ -634,20 +602,11 @@ func (l *Lifecycle) failLifecycle(step LifecycleStep) error {
 	}
 	next := current.State
 	next.Phase = "failed"
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(l.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "lifecycle",
-		InputHash:   step.Hash,
-		Body:        operation.Encode(next),
-	})); err != nil {
+	if err = transitionLifecycle(l.ctx, tx, current, next, "failed"); err != nil {
 		return err
 	}
 	var outcomes []operation.Outcome
 	if !operation.Terminal(status) {
-		var result operation.Result
-		if err = json.Unmarshal(body, &result); err != nil {
-			return err
-		}
 		result.Error = "sandbox workflow failed; resource responsibility retained"
 		outcomes = append(outcomes, operation.Outcome{
 			ID:     step.OperationID,

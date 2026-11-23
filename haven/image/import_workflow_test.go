@@ -716,7 +716,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 			}
 			testutil.WaitImportInterruption(t, service, operation.ID)
 			before, err := observeImageImport(ctx, service.State.Database(), operation.ID)
-			if err != nil || before.State.Proof == nil {
+			if err != nil || before.ManifestHash == "" {
 				t.Fatal(before, err)
 			}
 			if err = os.RemoveAll(options.Layout); err != nil {
@@ -731,7 +731,7 @@ func TestHavenActualOCIImportRecoveryUsesFrozenOutput(t *testing.T) {
 				t.Fatal(result, err)
 			}
 			after, err := observeImageImport(ctx, service.State.Database(), operation.ID)
-			if err != nil || !reflect.DeepEqual(before.State.Proof, after.State.Proof) || !reflect.DeepEqual(before.State.Boundary, after.State.Boundary) {
+			if err != nil || before != after {
 				t.Fatal("recovery replaced original output proof", before, after, err)
 			}
 		})
@@ -1125,10 +1125,10 @@ type imageImportEvidence struct {
 	Input struct {
 		Work string `json:"work"`
 	}
-	State struct {
-		Boundary *imageimport.ImageImportBoundary `json:"boundary,omitempty"`
-		Proof    *imageimport.ImageImportProof    `json:"proof,omitempty"`
-	}
+	Boundary     imageimport.ImageImportBoundary
+	ManifestHash string
+	FileHash     string
+	Synced       bool
 }
 
 func observeImageImport(ctx context.Context, database store.DBTX, id string) (imageImportEvidence, error) {
@@ -1143,7 +1143,8 @@ func observeImageImport(ctx context.Context, database store.DBTX, id string) (im
 	if err = json.Unmarshal(step.Input, &evidence.Input); err != nil {
 		return evidence, err
 	}
-	err = json.Unmarshal(step.Body, &evidence.State)
+	b := &evidence.Boundary
+	err = database.QueryRowContext(ctx, `SELECT b.path,b.work_device,b.work_inode,b.work_mode,b.output_device,b.output_inode,b.output_mode,p.output_manifest_hash,p.output_file_hash,p.output_synced FROM image_preparations b JOIN image_import_progress p USING(operation_id) WHERE b.operation_id=?`, id).Scan(&b.Path, &b.Work.Device, &b.Work.Inode, &b.Work.Mode, &b.Output.Device, &b.Output.Inode, &b.Output.Mode, &evidence.ManifestHash, &evidence.FileHash, &evidence.Synced)
 	return evidence, err
 }
 

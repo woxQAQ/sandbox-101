@@ -83,7 +83,7 @@ func TestHavenStepConcurrentReplayAndCancellation(t *testing.T) {
 	}
 }
 
-func TestHavenProvisionRejectsChangedFrozenBytes(t *testing.T) {
+func TestHavenProvisionRejectsChangedTemplateRequest(t *testing.T) {
 	service, backend := testapp.ColdService(t, func(point string) error {
 		if point == "admission_committed" {
 			return errs.ErrInterrupted
@@ -98,14 +98,14 @@ func TestHavenProvisionRejectsChangedFrozenBytes(t *testing.T) {
 	if !errors.Is(err, errs.ErrInterrupted) || accepted.ID == "" {
 		t.Fatalf("expected a committed admission before dispatch, got %v", err)
 	}
-	if _, err := service.State.Database().Exec("UPDATE operations SET request=CAST(request || ' ' AS BLOB) WHERE id=?", accepted.ID); err != nil {
+	if _, err := service.State.Database().Exec("UPDATE operation_resource_requests SET template_id='changed' WHERE operation_id=?", accepted.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Provisioning.Continue(accepted.ID); err == nil || !strings.Contains(err.Error(), "request checksum mismatch") {
-		t.Fatalf("expected request digest rejection, got %v", err)
+	if err := service.Provisioning.Continue(accepted.ID); err == nil || !strings.Contains(err.Error(), "cold request differs from frozen step") {
+		t.Fatalf("expected changed template rejection, got %v", err)
 	}
 	if backend.Count("prepare") != 0 || backend.Count("launch") != 0 {
-		t.Fatal("provisioning acted on changed request bytes")
+		t.Fatal("provisioning acted on changed template request")
 	}
 }
 
@@ -126,7 +126,21 @@ func TestHavenStepMissingSourceAndQuotaRetainState(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "missing-template-owner":
-				result, err := service.State.Database().Exec("DELETE FROM template_owners WHERE template_id='cold'")
+				// Simulate damage to an existing file. Normal writes are protected by the version's owner FK.
+				conn, err := service.State.Database().Conn(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = conn.ExecContext(t.Context(), "PRAGMA foreign_keys=OFF"); err != nil {
+					t.Fatal(err)
+				}
+				result, err := conn.ExecContext(t.Context(), "DELETE FROM template_owners WHERE template_id='cold'")
+				if _, reset := conn.ExecContext(t.Context(), "PRAGMA foreign_keys=ON"); reset != nil {
+					t.Fatal(reset)
+				}
+				if closeErr := conn.Close(); closeErr != nil {
+					t.Fatal(closeErr)
+				}
 				if err != nil {
 					t.Fatal(err)
 				}

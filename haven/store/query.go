@@ -31,17 +31,38 @@ func RequireOne(count int64, err error) error {
 	return nil
 }
 
-type workflowDatabase interface {
+type WorkflowDatabase interface {
 	DBTX
 
 	// BeginTx opens a transaction with the requested isolation and access mode.
 	BeginTx(ctx context.Context, options *sql.TxOptions) (*sql.Tx, error)
 }
 
+// ReadSnapshot shares an existing transaction or opens a consistent read for related rows.
+func ReadSnapshot(ctx context.Context, query DBTX, read func(*sql.Tx) error) error {
+	if tx, ok := query.(*sql.Tx); ok {
+		return read(tx)
+	}
+	db, ok := query.(WorkflowDatabase)
+	if !ok {
+		return fmt.Errorf("related records require a transaction-capable connection")
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{
+		ReadOnly: true,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	return read(tx)
+}
+
 // workflowPersistence borrows query, transaction and checkpoint capabilities
 // without exposing database close, key ownership or writer-lock release.
 type Workflow struct {
-	Database   workflowDatabase
+	Database   WorkflowDatabase
 	Directory  string
 	Reviewed   bool
 	Checkpoint func() error

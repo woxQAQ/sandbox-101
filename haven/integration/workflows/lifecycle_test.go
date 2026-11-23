@@ -312,7 +312,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 	if _, err = db.Exec(`DELETE FROM sandbox_settings WHERE sandbox_id=?`, claim.Result.SandboxID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`UPDATE checkpoint_bindings SET body=json_set(body,'$.snapshot_id','missing') WHERE id=?`, checkpoint.Result.CheckpointID); err != nil {
+	if _, err = db.Exec(`UPDATE checkpoint_bindings SET snapshot_id='missing' WHERE id=?`, checkpoint.Result.CheckpointID); err != nil {
 		t.Fatal(err)
 	}
 	for _, source := range []operation.Intent{

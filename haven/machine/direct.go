@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -57,13 +58,35 @@ func LoadDirectRetirement(ctx context.Context, query store.DBTX, id string) (Dir
 	if err = json.Unmarshal(record.Input, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(record.Body, &step.State); err != nil {
-		return step, err
+	step.State = DirectRetirementState{
+		Phase:     record.Phase.String,
+		RetiredBy: record.RetiredBy.String,
 	}
 	if record.Action != "direct_retirement" || record.CandidateResourceID != step.Input.Source.Candidate || record.ExpectedInstance != step.Input.Source.State.Witness || step.Input.Policy == nil {
 		return step, fmt.Errorf("direct retirement source identity changed")
 	}
 	return step, nil
+}
+
+func transitionDirect(ctx context.Context, tx *sql.Tx, step DirectRetirementStep, next DirectRetirementState, status string) error {
+	return store.RequireOne(dbgen.New(tx).TransitionDirectRetirement(ctx, dbgen.TransitionDirectRetirementParams{
+		OperationID:    step.OperationID,
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase: sql.NullString{
+			String: step.State.Phase,
+			Valid:  true,
+		},
+		NextStatus: status,
+		NextPhase: sql.NullString{
+			String: next.Phase,
+			Valid:  true,
+		},
+		RetiredBy: sql.NullString{
+			String: next.RetiredBy,
+			Valid:  next.RetiredBy != "",
+		},
+	}))
 }
 
 func DirectNetworkPolicy(policy egress.Policy) (*loom.NetworkPolicy, error) {
@@ -99,7 +122,18 @@ type NetworkPolicyRecord struct {
 	VMID        string
 	Instance    string
 	OperationID string
-	Body        []byte
+	PolicyHash  sql.NullString
+}
+
+// InstalledPolicyHash binds the host installation to the frozen retirement policy.
+func InstalledPolicyHash(policy *loom.NetworkPolicy) sql.NullString {
+	if policy == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{
+		String: operation.Digest(operation.Encode(policy)),
+		Valid:  true,
+	}
 }
 
 func policyOwner(ctx context.Context, query store.DBTX, id string) (instance, operationID string, err error) {
@@ -113,7 +147,7 @@ func LoadPolicyWitness(ctx context.Context, query store.DBTX, id string) (Networ
 		VMID:        id,
 		Instance:    row.Instance,
 		OperationID: row.OperationID,
-		Body:        row.Body,
+		PolicyHash:  row.PolicyHash,
 	}, err
 }
 
@@ -122,7 +156,7 @@ func RecordPolicyWitness(ctx context.Context, query store.DBTX, policy NetworkPo
 		VmID:        policy.VMID,
 		Instance:    policy.Instance,
 		OperationID: policy.OperationID,
-		Body:        policy.Body,
+		PolicyHash:  policy.PolicyHash,
 	}))
 }
 
@@ -131,7 +165,7 @@ func deletePolicyWitness(ctx context.Context, query store.DBTX, policy NetworkPo
 		VmID:        policy.VMID,
 		Instance:    policy.Instance,
 		OperationID: policy.OperationID,
-		Body:        policy.Body,
+		PolicyHash:  policy.PolicyHash,
 	}))
 }
 

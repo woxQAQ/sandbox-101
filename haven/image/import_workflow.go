@@ -167,17 +167,12 @@ func (i *Images) failImageImport(step imageImportStep) error {
 	current.State.Phase = "failed"
 	current.State.Error = "image import failed; node storage responsibility retained"
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).FailLiveStep(i.ctx, dbgen.FailLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "image_import",
-		InputHash:   step.Hash,
-		Body:        operation.Encode(current.State),
-	})); err != nil {
+	if err = transitionImport(i.ctx, tx, current, current.State.FailedPhase, "failed"); err != nil {
 		return err
 	}
-	if err = operations.FailResult(i.ctx, step.OperationID, operation.Encode(operation.Result{
+	if err = operations.FailResult(i.ctx, step.OperationID, operation.Result{
 		Error: current.State.Error,
-	})); err != nil {
+	}); err != nil {
 		return err
 	}
 	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(i.ctx, dbgen.InsertCleanupIntentParams{
@@ -185,7 +180,8 @@ func (i *Images) failImageImport(step imageImportStep) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "image_import",
 		ResourceID:   step.Input.Options.Digest,
-		Body:         operation.Encode(current),
+		StepKey:      "image_import",
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}
@@ -228,19 +224,15 @@ func (i *Images) completeImageImport(step imageImportStep) error {
 	if err != nil {
 		return err
 	}
-	if intent.OperationID != step.OperationID || intent.Layout != step.Input.Options.Materialization || string(intent.Body) != string(operation.Encode(step.Input)) {
+	if intent.OperationID != step.OperationID || intent.Layout != step.Input.Options.Materialization || intent.InputHash != step.Hash {
 		return fmt.Errorf("image publication ownership claim changed")
 	}
 	remaining, err := importRemainingCharge(i.ctx, tx, step)
 	if err != nil {
 		return err
 	}
-	state := step.State
-	state.Phase = "complete"
-	if err = store.RequireOne(catalog.InsertManifest(i.ctx, dbgen.InsertManifestParams{
-		Digest: proof.Manifest.Digest,
-		Body:   operation.Encode(proof.Manifest),
-	})); err != nil {
+	step.State.Phase = "complete"
+	if err = PublishManifest(i.ctx, tx, proof.Manifest); err != nil {
 		return err
 	}
 	if err = quota.TransferStorageReservation(i.ctx, tx, "import:"+step.OperationID, "image:"+proof.Manifest.Digest, remaining); err != nil {
@@ -252,24 +244,17 @@ func (i *Images) completeImageImport(step imageImportStep) error {
 		OperationID:  step.OperationID,
 		ResourceKind: "image_import",
 		ResourceID:   proof.Manifest.Digest,
-		Body: operation.Encode(struct {
-			Input imageImportInput
-			State imageImportState
-		}{step.Input, state}),
+		StepKey:      "image_import",
+		WitnessHash:  step.Hash,
 	})); err != nil {
 		return err
 	}
-	if err = store.RequireOne(dbgen.New(tx).CompleteLiveStep(i.ctx, dbgen.CompleteLiveStepParams{
-		OperationID: step.OperationID,
-		StepKey:     "image_import",
-		InputHash:   step.Hash,
-		Body:        operation.Encode(state),
-	})); err != nil {
+	if err = transitionImport(i.ctx, tx, step, current.State.Phase, "succeeded"); err != nil {
 		return err
 	}
-	if err = operations.CompleteResult(i.ctx, step.OperationID, operation.Encode(operation.Result{
+	if err = operations.CompleteResult(i.ctx, step.OperationID, operation.Result{
 		ImageDigest: proof.Manifest.Digest,
-	})); err != nil {
+	}); err != nil {
 		return err
 	}
 	if err = i.fault("image_import_publication_before_commit"); err != nil {

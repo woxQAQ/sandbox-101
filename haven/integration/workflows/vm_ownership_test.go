@@ -41,7 +41,7 @@ func TestHavenInstanceRejectsLateCompletionAfterOwnershipChange(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "resource-version":
-				if _, err := service.State.Database().Exec("UPDATE resource_versions SET body=json_set(body,'$.resource.instance',?) WHERE vm_id=?", operation.NewID("run-"), before.Candidate); err != nil {
+				if _, err := service.State.Database().Exec("UPDATE resource_versions SET instance=? WHERE vm_id=?", operation.NewID("run-"), before.Candidate); err != nil {
 					t.Fatal(err)
 				}
 			}

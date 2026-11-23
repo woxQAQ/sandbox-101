@@ -43,6 +43,16 @@ type imageImportStep struct {
 }
 
 func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportStep, error) {
+	var step imageImportStep
+	err := store.ReadSnapshot(ctx, q, func(tx *sql.Tx) error {
+		var err error
+		step, err = readImageImport(ctx, tx, id)
+		return err
+	})
+	return step, err
+}
+
+func readImageImport(ctx context.Context, q *sql.Tx, id string) (imageImportStep, error) {
 	step := imageImportStep{
 		OperationID: id,
 	}
@@ -53,7 +63,7 @@ func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportS
 	if err != nil {
 		return step, err
 	}
-	payload, body := record.Input, record.Body
+	payload := record.Input
 	action, candidate, expected := record.Action, record.CandidateResourceID, record.ExpectedInstance
 	step.Hash, step.Status = record.InputHash, record.Status
 	if operation.Digest(payload) != step.Hash {
@@ -62,8 +72,65 @@ func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportS
 	if err = json.Unmarshal(payload, &step.Input); err != nil {
 		return step, err
 	}
-	if err = json.Unmarshal(body, &step.State); err != nil {
+	queries := dbgen.New(q)
+	progress, err := queries.ReadImportProgress(ctx, id)
+	if err != nil {
+		return step, fmt.Errorf("cannot read import progress for %s: %v", id, err)
+	}
+	step.State = imageImportState{
+		Phase:       record.Phase.String,
+		FailedPhase: progress.FailedPhase,
+		Error:       record.StepError,
+	}
+	step.State.Boundary, err = readPreparation(ctx, queries, id)
+	if err != nil {
 		return step, err
+	}
+	if progress.OutputManifestHash.Valid {
+		proof := &imageimport.ImageImportProof{
+			ManifestSHA256: progress.OutputFileHash.String,
+			Synced:         progress.OutputSynced.Bool,
+		}
+		if err = readManifest(ctx, queries, progress.OutputManifestHash.String, &proof.Manifest); err != nil {
+			return step, fmt.Errorf("image output manifest unavailable: %v", err)
+		}
+		step.State.Proof = proof
+	}
+	rows, err := queries.ReadImportLayers(ctx, id)
+	if err != nil {
+		return step, err
+	}
+	for index, row := range rows {
+		if row.Ordinal != int64(index) {
+			return step, fmt.Errorf("image import layer sequence changed")
+		}
+		layer := imageimport.ImageLayerProof{
+			Bytes:   row.TarBytes,
+			Entries: row.Entries,
+		}
+		if row.CacheHash.Valid {
+			w, err := queries.GetCacheWitness(ctx, row.CacheHash.String)
+			if err != nil {
+				return step, fmt.Errorf("image layer cache unavailable: %v", err)
+			}
+			cache, err := cacheWitness(w)
+			if err != nil {
+				return step, err
+			}
+			layer.Cache = &cache
+		}
+		if row.ArtifactHash.Valid {
+			w, err := queries.GetArtifactValue(ctx, row.ArtifactHash.String)
+			if err != nil {
+				return step, fmt.Errorf("image layer artifact unavailable: %v", err)
+			}
+			a, err := artifactValue(w)
+			if err != nil {
+				return step, err
+			}
+			layer.Artifact = &a
+		}
+		step.State.Layers = append(step.State.Layers, layer)
 	}
 	if action != "image_import" || candidate != step.Input.Options.Digest || expected != "" {
 		return step, fmt.Errorf("image import step identity changed")
@@ -74,7 +141,101 @@ func loadImageImport(ctx context.Context, q store.DBTX, id string) (imageImportS
 	return step, nil
 }
 
+func transitionImport(ctx context.Context, tx *sql.Tx, step imageImportStep, previousPhase, status string) error {
+	current, err := readImageImport(ctx, tx, step.OperationID)
+	if err != nil {
+		return err
+	}
+	n := len(current.State.Layers)
+	next := step.State
+	if len(next.Layers) < n || (n > 0 && !reflect.DeepEqual(current.State.Layers, next.Layers[:n])) {
+		return fmt.Errorf("image import layer history changed")
+	}
+	if err = operation.AdvancePhase(ctx, tx, operation.PhaseChange{
+		OperationID:    step.OperationID,
+		StepKey:        "image_import",
+		InputHash:      step.Hash,
+		PreviousStatus: step.Status,
+		PreviousPhase:  previousPhase,
+		NextStatus:     status,
+		NextPhase:      next.Phase,
+	}); err != nil {
+		return err
+	}
+	queries := dbgen.New(tx)
+	if err = recordPreparation(ctx, queries, step.OperationID, current.State.Boundary, next.Boundary); err != nil {
+		return err
+	}
+	params := dbgen.UpdateImportProgressParams{
+		OperationID: step.OperationID,
+		FailedPhase: next.FailedPhase,
+	}
+	if current.State.Proof != nil && !reflect.DeepEqual(current.State.Proof, next.Proof) {
+		return fmt.Errorf("image output proof changed")
+	}
+	if p := next.Proof; p != nil {
+		hash := operation.Digest(operation.Encode(p.Manifest))
+		if current.State.Proof == nil {
+			if err = retainManifest(ctx, queries, hash, p.Manifest); err != nil {
+				return err
+			}
+		}
+		params.OutputManifestHash = sql.NullString{
+			String: hash,
+			Valid:  true,
+		}
+		params.OutputFileHash = sql.NullString{
+			String: p.ManifestSHA256,
+			Valid:  true,
+		}
+		params.OutputSynced = sql.NullBool{
+			Bool:  p.Synced,
+			Valid: true,
+		}
+	}
+	if err = store.RequireOne(queries.UpdateImportProgress(ctx, params)); err != nil {
+		return err
+	}
+	for index := n; index < len(next.Layers); index++ {
+		layer := next.Layers[index]
+		params := dbgen.AppendImportLayerParams{
+			OperationID: step.OperationID,
+			Ordinal:     int64(index),
+			TarBytes:    layer.Bytes,
+			Entries:     layer.Entries,
+		}
+		if layer.Cache != nil {
+			hash, err := retainCacheWitness(ctx, queries, layer.Cache)
+			if err != nil {
+				return err
+			}
+			params.CacheHash = sql.NullString{
+				String: hash,
+				Valid:  true,
+			}
+		}
+		if layer.Artifact != nil {
+			hash, err := retainArtifact(ctx, queries, *layer.Artifact)
+			if err != nil {
+				return err
+			}
+			params.ArtifactHash = sql.NullString{
+				String: hash,
+				Valid:  true,
+			}
+		}
+		if err = store.RequireOne(queries.AppendImportLayer(ctx, params)); err != nil {
+			return err
+		}
+	}
+	return store.RequireOne(queries.SetImportError(ctx, dbgen.SetImportErrorParams{
+		OperationID: step.OperationID,
+		StepError:   next.Error,
+	}))
+}
+
 func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
+	previousPhase := step.State.Phase
 	step.State.Phase = phase
 	i.storeWriteMu.Lock()
 	defer i.storeWriteMu.Unlock()
@@ -86,12 +247,7 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 		_ = tx.Rollback()
 	}()
 	operations := operation.New(tx)
-	if err = store.RequireOne(dbgen.New(tx).RecordLiveStepProgress(i.ctx, dbgen.RecordLiveStepProgressParams{
-		OperationID: step.OperationID,
-		StepKey:     "image_import",
-		InputHash:   step.Hash,
-		Body:        operation.Encode(step.State),
-	})); err != nil {
+	if err = transitionImport(i.ctx, tx, *step, previousPhase, "running"); err != nil {
 		return err
 	}
 	if err = operations.Run(i.ctx, step.OperationID); err != nil {
@@ -107,9 +263,7 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 			Builder: cache.Cache.Builder,
 			DiffID:  cache.Cache.DiffID,
 		}
-		record, lookup := LoadCacheRecord(i.ctx, tx,
-
-			key)
+		record, lookup := LoadCacheRecord(i.ctx, tx, key)
 		err = lookup
 		if err == nil {
 			if !reflect.DeepEqual(record.Witness, *cache) {
@@ -140,12 +294,10 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 				return err
 			}
 			if err = store.RequireOne(catalog.InsertCache(i.ctx, dbgen.InsertCacheParams{
-				Builder: key.Builder,
-				DiffID:  key.DiffID,
-				Body: operation.Encode(Cache{
-					Witness:         *cache,
-					SourceOperation: step.OperationID,
-				}),
+				Builder:           key.Builder,
+				DiffID:            key.DiffID,
+				SourceOperationID: step.OperationID,
+				WitnessHash:       operation.Digest(operation.Encode(cache)),
 			})); err != nil {
 				return err
 			}
@@ -156,6 +308,7 @@ func (i *Images) saveImageImport(step *imageImportStep, phase string) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	step.Status = "running"
 	return i.checkpoint()
 }
 

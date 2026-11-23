@@ -2,7 +2,6 @@ package machine_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -515,23 +514,8 @@ func TestHavenCaptureDiscardRequiresOwnPendingResult(t *testing.T) {
 			if !errors.Is(err, errs.ErrInterrupted) || accepted.ID == "" {
 				t.Fatal("fixture did not stop after committed admission", accepted, err)
 			}
-			var body []byte
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT body FROM operations WHERE id=?", accepted.ID).Scan(&body); err != nil {
-				t.Fatal(err)
-			}
-			var result map[string]json.RawMessage
-			if err = json.Unmarshal(body, &result); err != nil {
-				t.Fatal(err)
-			}
-			if _, found := result[field]; !found {
-				t.Fatal("fixture result lacks the original field", field)
-			}
-			delete(result, field)
-			body, err = json.Marshal(result)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = service.State.Database().ExecContext(ctx, "UPDATE operations SET body=? WHERE id=? AND status='pending'", body, accepted.ID); err != nil {
+			column := "result_" + field
+			if err = testutil.RequireWrite(service.State.Database().ExecContext(ctx, "UPDATE operations SET "+column+"='' WHERE id=? AND status='pending' AND "+column+"<>''", accepted.ID)); err != nil {
 				t.Fatal(err)
 			}
 			if handled, err := service.CaptureDiscard.Resume(accepted.ID); !handled || err == nil {

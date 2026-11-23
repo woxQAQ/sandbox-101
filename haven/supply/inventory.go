@@ -3,13 +3,13 @@ package supply
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom"
 	"github.com/woxQAQ/haven/ownership"
 	"github.com/woxQAQ/haven/store"
 	"github.com/woxQAQ/haven/supply/internal/dbgen"
@@ -61,13 +61,50 @@ func UnresolvedTemplates(ctx context.Context, query store.DBTX) ([]string, error
 // LoadTemplate decodes the frozen catalog value. Publication authorization is
 // checked separately by TemplateCatalog against the original supply workflow.
 func LoadTemplate(ctx context.Context, query store.DBTX, id string) (TemplateRecord, error) {
-	var record TemplateRecord
-	body, err := dbgen.New(query).GetTemplate(ctx, id)
+	version, err := dbgen.New(query).GetTemplate(ctx, id)
 	if err != nil {
-		return record, err
+		return TemplateRecord{}, err
 	}
-	err = json.Unmarshal(body, &record)
-	return record, err
+	return loadTemplateVersion(ctx, query, version)
+}
+
+func loadTemplateVersion(ctx context.Context, query store.DBTX, version string) (TemplateRecord, error) {
+	queries := dbgen.New(query)
+	row, err := queries.GetTemplateVersion(ctx, version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TemplateRecord{}, fmt.Errorf("%w: template version %q missing", errs.ErrManualRecovery, version)
+	}
+	if err != nil {
+		return TemplateRecord{}, err
+	}
+	record := TemplateRecord{
+		ID:         row.TemplateID,
+		TenantID:   row.TenantID,
+		Version:    row.OperationID,
+		State:      "ready",
+		SnapshotID: row.SnapshotID,
+		Warmup:     row.Warmup,
+		TargetWarm: int(row.TargetWarm),
+		Config: loom.Config{
+			Image: row.Image,
+			Shape: loom.Shape{
+				VCPUs:     int(row.Vcpus),
+				MemoryMiB: row.MemoryMib,
+				DiskMiB:   row.DiskMib,
+			},
+		},
+	}
+	labels, err := queries.GetTemplateLabels(ctx, version)
+	if err != nil {
+		return TemplateRecord{}, err
+	}
+	if len(labels) != 0 {
+		record.Config.Labels = make(map[string]string, len(labels))
+		for _, label := range labels {
+			record.Config.Labels[label.Name] = label.Value
+		}
+	}
+	return record, nil
 }
 
 // CurrentTemplate distinguishes absence from unreadable or corrupted catalog
@@ -125,28 +162,37 @@ func (record TemplateRecord) reservePublication(ctx context.Context, query store
 }
 
 func publishTemplate(ctx context.Context, query store.DBTX, desired TemplateRecord, previous *TemplateRecord) error {
-	body, err := json.Marshal(desired)
-	if err != nil {
+	queries := dbgen.New(query)
+	if err := store.RequireOne(queries.InsertTemplateVersion(ctx, dbgen.InsertTemplateVersionParams{
+		OperationID: desired.Version,
+		TemplateID:  desired.ID,
+		Image:       desired.Config.Image,
+		Vcpus:       int64(desired.Config.Shape.VCPUs),
+		MemoryMib:   desired.Config.Shape.MemoryMiB,
+		DiskMib:     desired.Config.Shape.DiskMiB,
+		Warmup:      desired.Warmup,
+		SnapshotID:  desired.SnapshotID,
+		TargetWarm:  int64(desired.TargetWarm),
+	})); err != nil {
 		return err
 	}
-	queries := dbgen.New(query)
+	for name, value := range desired.Config.Labels {
+		if err := store.RequireOne(queries.InsertTemplateLabel(ctx, dbgen.InsertTemplateLabelParams{
+			VersionID: desired.Version,
+			Name:      name,
+			Value:     value,
+		})); err != nil {
+			return err
+		}
+	}
 	if previous == nil {
 		return store.RequireOne(queries.InsertTemplate(ctx, dbgen.InsertTemplateParams{
 			ID:                   desired.ID,
-			Tenant:               desired.TenantID,
 			PublishedOperationID: desired.Version,
-			Body:                 body,
 		}))
 	}
-	before, err := json.Marshal(previous)
-	if err != nil {
-		return err
-	}
 	return store.RequireOne(queries.ReplaceTemplate(ctx, dbgen.ReplaceTemplateParams{
-		NewBody:              body,
 		ID:                   desired.ID,
-		Tenant:               desired.TenantID,
-		PreviousBody:         before,
 		PreviousOperationID:  previous.Version,
 		PublishedOperationID: desired.Version,
 	}))

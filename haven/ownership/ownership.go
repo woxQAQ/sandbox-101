@@ -19,6 +19,8 @@ type Birth struct {
 	ProvisionSource string     `json:"provision_source"`
 }
 
+const StateProvisioning = "provisioning"
+
 type Sandbox struct {
 	Identity        Birth          `json:"identity"`
 	LastError       string         `json:"last_error,omitempty"`
