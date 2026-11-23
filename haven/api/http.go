@@ -342,6 +342,46 @@ func decode(c *gin.Context, action, sandboxID, checkpointID string) (types.Comma
 	return command, true
 }
 
+// prefersAsync checks the first respond-async preference across all Prefer fields.
+// RFC 7240 defines it without a value and treats an empty value as absent.
+func prefersAsync(fields []string) bool {
+	const token = "respond-async"
+	for _, field := range fields {
+		for field != "" {
+			var preference string
+			preference, field = cutPreference(field)
+			head, _, _ := strings.Cut(preference, ";")
+			name, value, _ := strings.Cut(head, "=")
+			name = strings.Trim(name, " \t")
+			if len(name) == len(token) && strings.EqualFold(name, token) {
+				value = strings.Trim(value, " \t")
+				return value == "" || value == `""`
+			}
+		}
+	}
+	return false
+}
+
+// cutPreference splits at the first comma outside an HTTP quoted-string.
+func cutPreference(field string) (preference, rest string) {
+	quoted := false
+	for i := 0; i < len(field); i++ {
+		switch field[i] {
+		case '"':
+			quoted = !quoted
+		case '\\':
+			if quoted {
+				i++ // Skip the escaped byte inside a quoted-string.
+			}
+		case ',':
+			if !quoted {
+				return field[:i], field[i+1:]
+			}
+		}
+	}
+	return field, ""
+}
+
 // submit accepts one business command and delivers the accepted operation
 // synchronously or as an asynchronous pointer. All routes share this single
 // submit, wait and response behavior.
@@ -357,7 +397,7 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 		writeError(c, err)
 		return
 	}
-	if strings.Contains(request.Header.Get("Prefer"), "respond-async") {
+	if prefersAsync(request.Header.Values("Prefer")) {
 		view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
 		if err != nil {
 			writeError(c, err)
