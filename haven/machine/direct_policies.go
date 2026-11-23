@@ -62,11 +62,14 @@ func (dp *DirectPolicies) fault(point string) error {
 	return nil
 }
 
-func (dp *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
+// ResumePendingRetirement retries the operation's pending direct policy retirement.
+// It returns true when it attempts recovery, including when the attempt fails.
+// A (false, nil) result lets the caller continue the operation's workflow.
+func (dp *DirectPolicies) ResumePendingRetirement(ctx context.Context, operationID string) (bool, error) {
 	if dp.store.Reviewed {
 		return false, fmt.Errorf("%w: reviewed rollback cannot resume direct retirement", errs.ErrManualRecovery)
 	}
-	step, err := LoadDirectRetirement(ctx, dp.store.Database, id)
+	step, err := LoadDirectRetirement(ctx, dp.store.Database, operationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -78,5 +81,5 @@ func (dp *DirectPolicies) Resume(ctx context.Context, id string) (bool, error) {
 	}
 	unlock := dp.sandboxConfigLocks.Lock(step.Input.Source.Input.SandboxID)
 	defer unlock()
-	return true, dp.retireDirect(ctx, id)
+	return true, dp.retireDirect(ctx, operationID)
 }

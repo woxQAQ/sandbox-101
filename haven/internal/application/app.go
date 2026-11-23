@@ -487,7 +487,7 @@ func Open(opts Options) (*App, error) {
 		Provisioning: service.Provisioning,
 	}, []reconcile.ResumeWorkflow{
 		func(id string) (bool, error) {
-			return policies.Resume(lifetime.Context(), id)
+			return policies.ResumePendingRetirement(lifetime.Context(), id)
 		},
 		service.Images.Resume,
 		service.GC.Resume,

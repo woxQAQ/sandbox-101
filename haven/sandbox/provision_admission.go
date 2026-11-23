@@ -193,7 +193,7 @@ func (p *Provisioning) dispatch(id string) {
 		return
 	}
 	p.workers.Start(id, func() error {
-		if handled, err := p.policies.Resume(p.ctx, id); handled || err != nil {
+		if handled, err := p.policies.ResumePendingRetirement(p.ctx, id); handled || err != nil {
 			return err
 		}
 		return p.Continue(id)

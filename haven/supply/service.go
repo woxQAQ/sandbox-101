@@ -170,7 +170,7 @@ func (s *Supply) runResourceLink(parent, role string) (machine.ResourceLink, err
 }
 
 func (s *Supply) runResource(link machine.ResourceLink) error {
-	if handled, err := s.policies.Resume(s.ctx, link.ChildID); handled || err != nil {
+	if handled, err := s.policies.ResumePendingRetirement(s.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool

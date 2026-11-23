@@ -121,7 +121,7 @@ func (sb *Sandboxes) dispatch(id string) {
 		return
 	}
 	sb.workers.Start(id, func() error {
-		if handled, err := sb.policies.Resume(sb.ctx, id); handled || err != nil {
+		if handled, err := sb.policies.ResumePendingRetirement(sb.ctx, id); handled || err != nil {
 			return err
 		}
 		if handled, err := sb.warmClaims.Resume(id); handled || err != nil {

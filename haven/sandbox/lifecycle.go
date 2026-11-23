@@ -142,7 +142,7 @@ func (l *Lifecycle) dispatch(id string) {
 		return
 	}
 	l.workers.Start(id, func() error {
-		if handled, err := l.policies.Resume(l.ctx, id); handled || err != nil {
+		if handled, err := l.policies.ResumePendingRetirement(l.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := l.Resume(id)
@@ -175,7 +175,7 @@ func (l *Lifecycle) runResourceLink(parent, role string) (machine.ResourceLink, 
 }
 
 func (l *Lifecycle) runResource(link machine.ResourceLink) error {
-	if handled, err := l.policies.Resume(l.ctx, link.ChildID); handled || err != nil {
+	if handled, err := l.policies.ResumePendingRetirement(l.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool

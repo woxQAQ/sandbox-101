@@ -95,7 +95,7 @@ func (wc *WarmClaims) dispatch(id string) {
 		return
 	}
 	wc.workers.Start(id, func() error {
-		if handled, err := wc.policies.Resume(wc.ctx, id); handled || err != nil {
+		if handled, err := wc.policies.ResumePendingRetirement(wc.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := wc.Resume(id)
@@ -128,7 +128,7 @@ func (wc *WarmClaims) runResourceLink(parent, role string) (machine.ResourceLink
 }
 
 func (wc *WarmClaims) runResource(link machine.ResourceLink) error {
-	if handled, err := wc.policies.Resume(wc.ctx, link.ChildID); handled || err != nil {
+	if handled, err := wc.policies.ResumePendingRetirement(wc.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	switch link.Kind {

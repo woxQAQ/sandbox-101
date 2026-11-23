@@ -132,7 +132,7 @@ func (f *Forks) dispatch(id string) {
 		return
 	}
 	f.workers.Start(id, func() error {
-		if handled, err := f.policies.Resume(f.ctx, id); handled || err != nil {
+		if handled, err := f.policies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := f.Resume(id)
@@ -145,7 +145,7 @@ func (f *Forks) dispatchBranch(id string) {
 		return
 	}
 	f.workers.Start(id, func() error {
-		if handled, err := f.policies.Resume(f.ctx, id); handled || err != nil {
+		if handled, err := f.policies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
 			return err
 		}
 		return f.provisioning.Continue(id)
@@ -177,7 +177,7 @@ func (f *Forks) Resume(id string) (bool, error) {
 
 func (f *Forks) runResourceLink(parent, role string) (machine.ResourceLink, error) {
 	return f.links.Run(parent, role, func(link machine.ResourceLink) error {
-		if handled, err := f.policies.Resume(f.ctx, link.ChildID); handled || err != nil {
+		if handled, err := f.policies.ResumePendingRetirement(f.ctx, link.ChildID); handled || err != nil {
 			return err
 		}
 		var handled bool
