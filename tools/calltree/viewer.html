@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Haven 调用图</title>
+<style>
+:root { color-scheme: light; --ink:#192b39; --muted:#4e6575; --line:#cbd6dc; --wash:#edf3f5; --accent:#17587d; --paper:#fff; font:15px/1.5 "Source Sans 3",system-ui,sans-serif; color:var(--ink); background:var(--paper) }
+* { box-sizing:border-box }
+body { margin:0 }
+button,input,select { font:inherit; color:inherit }
+button { cursor:pointer; background:none; border:0 }
+button:disabled { cursor:default; opacity:.55 }
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,.open:focus-within { outline:3px solid #237da9; outline-offset:2px }
+header { min-height:64px; display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px clamp(16px,3vw,42px); background:#213d50; color:white }
+h1,h2,h3,p { margin:0 }
+h1 { font-size:20px; letter-spacing:-.025em; margin-right:auto }
+#status { font-size:13px; overflow-wrap:anywhere }
+.open { display:inline-block; cursor:pointer; background:#fff; color:#203d50; padding:6px 12px; border-radius:4px; font-weight:650 }
+.open input { position:absolute; width:1px; height:1px; opacity:0 }
+#error { color:#8a2727; background:#fef2f1; padding:10px 3vw }
+#empty { max-width:640px; margin:14vh auto; padding:24px }
+#empty p { margin-top:12px }
+code,pre,.symbol,.entry { font-family:"IBM Plex Mono",ui-monospace,monospace }
+code { overflow-wrap:anywhere }
+#workspace { display:grid; grid-template-columns:minmax(240px,25%) minmax(0,1fr); height:calc(100dvh - 64px) }
+aside { min-height:0; display:flex; flex-direction:column; background:var(--wash); border-right:1px solid var(--line); padding:18px 12px; gap:10px }
+.filters { display:flex; gap:6px }
+.filters select { flex:0 0 72px }
+select,input[type=search] { min-width:0; border:1px solid #adbec8; border-radius:4px; padding:6px; background:white }
+input[type=search] { width:100% }
+#entries { overflow:auto }
+.entry { display:block; width:100%; text-align:left; font-size:12px; padding:7px 9px; overflow-wrap:anywhere; border-left:3px solid transparent }
+.entry:hover,.symbol:hover { background:#deebf1 }
+.entry[aria-current=true] { background:#d4e6ef; border-color:var(--accent); font-weight:bold }
+.group { margin:13px 8px 4px; color:var(--muted); font-size:13px; font-weight:650 }
+main { overflow:auto; min-width:0; padding:22px clamp(12px,3vw,40px) 40px }
+#route { background:#f1f6f8; padding:12px 15px; margin-bottom:20px; border-radius:4px }
+#route p { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:7px }
+#route strong { overflow-wrap:anywhere }
+.symbol { color:var(--accent); text-align:left; font-size:13px; padding:2px 4px; overflow-wrap:anywhere; border-radius:3px }
+#route [aria-current=true] { background:#cce2ed }
+h2 { font-size:clamp(18px,2vw,27px); overflow-wrap:anywhere; line-height:1.3 }
+#signature { display:block; color:var(--muted); margin:8px 0 }
+#location { font-size:12px; color:var(--muted); overflow-wrap:anywhere }
+.toolbar { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin:18px 0 12px; border-bottom:1px solid var(--line) }
+.toolbar button { padding:7px 10px; border-bottom:3px solid transparent }
+.toolbar button[aria-pressed=true] { border-bottom-color:var(--accent); color:var(--accent); font-weight:650 }
+#back { margin-left:auto }
+#panel ul { margin:0; list-style:none; padding-left:17px; border-left:1px solid var(--line) }
+#panel>ul { padding-left:0; border:0 }
+#panel li { margin:2px 0; overflow-wrap:anywhere }
+.row { display:flex; gap:5px; align-items:baseline; padding:2px 0 }
+.expand { min-width:26px; color:var(--accent); border:1px solid var(--line); border-radius:3px; line-height:1.3 }
+.meta { color:var(--muted); font-size:12px; overflow-wrap:anywhere }
+pre { margin:6px 0; padding:14px; background:#f3f6f8; color:#182f40; font-size:13px; line-height:1.55; overflow:auto; tab-size:4 }
+[hidden] { display:none!important }
+@media(max-width:720px) { #workspace { display:block; height:auto } aside { border:0; max-height:36vh; padding:10px 14px } main { padding-top:14px } #status { max-width:42vw } }
+#workspace { grid-template-columns:clamp(205px,19vw,285px) minmax(0,1fr) }
+#workspace main { padding:16px clamp(12px,1.5vw,24px) 24px }
+#overview { text-align:left; padding:8px 10px; font-weight:650; background:#d7e7ef; color:#174b66; border-radius:4px }
+#atlas { border:1px solid #cbd6dc; border-radius:7px; overflow:hidden; background:#f8fbfc; margin-bottom:12px }
+.mapbar,.mapfoot { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:9px 12px; background:#fff }
+.mapbar { border-bottom:1px solid var(--line) }
+.mapbar strong { margin-right:auto; font-size:17px; overflow-wrap:anywhere }
+.mapbar button,.mapfoot button { border:1px solid var(--line); padding:3px 9px; border-radius:4px; background:#f7fafb }
+.mapfoot { border-top:1px solid var(--line); font-size:13px }
+#selection { flex:1 1 220px; overflow-wrap:anywhere }
+#map { display:block; width:100%; height:clamp(380px,calc(100dvh - 235px),920px); touch-action:none; cursor:grab; background:#f8fbfc }
+#map:active { cursor:grabbing }
+#legend { margin:0 0 8px; color:var(--muted); font-size:13px }
+@media(max-width:720px) { #map { height:63vh } }
+</style>
+</head>
+<body>
+<header><h1>Haven 调用图</h1><span id="status" role="status"></span><label class="open">打开 JSON<input type="file" accept=".json,application/json" id="file"></label></header>
+<p id="error" role="alert" hidden></p>
+<section id="empty"><h2>打开调用图报告</h2><p>选择 <code>go tool calltree</code> 生成的 JSON，在本机浏览路由、函数和源码。</p></section>
+<div id="workspace" hidden>
+<aside aria-label="入口索引"><button id="overview">全程序调用图</button><div class="filters"><select id="mode" aria-label="索引类型"><option value="routes">路由</option><option value="functions">函数</option></select><input type="search" id="search" aria-label="搜索索引" placeholder="搜索路径或函数名"></div><nav id="entries" aria-label="搜索结果"></nav></aside>
+<main><section id="atlas" aria-label="交互调用图"><div class="mapbar"><strong id="mapTitle"></strong><button id="mapBack" disabled>返回</button><button id="zoomOut" aria-label="缩小">−</button><button id="zoomIn" aria-label="放大">＋</button><button id="fit">适合窗口</button><button id="saveSVG">导出 SVG</button></div><svg id="map" tabindex="0" aria-label="可缩放的有向调用图"></svg><div class="mapfoot"><span id="selection"></span><button id="pkgFunctions" hidden>查看包内函数</button><button id="up" hidden>展开上游</button><button id="down" hidden>展开下游</button><button id="inspect" hidden>查看源码</button></div></section><p id="legend"></p><section id="details"><section id="route" aria-label="路由处理链"></section><h2 id="title"></h2><code id="signature"></code><div id="location"></div>
+<div class="toolbar" aria-label="函数视图"><button data-view="graph">调用图</button><button data-view="calls">下游调用</button><button data-view="callers">上游调用</button><button data-view="source">源码</button><button id="back" disabled>返回</button></div><section id="panel" aria-label="函数详情"></section></section></main>
+</div>
+<!-- snapshot -->
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const list = value => Array.isArray(value) ? value : [];
+function element(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+}
+function button(text, action, cls) {
+  const b = element('button', text, cls);
+  b.onclick = action;
+  return b;
+}
+function brief(id) { return id.replaceAll('github.com/woxQAQ/haven/', ''); }
+let data, ids, active, routeIndex, view, history, loadID = 0;
+const hasFunction = id => Object.hasOwn(data.functions, id);
+function install(report, name) {
+  if (report?.schema !== 1 || !object(report.functions) || !object(report.files) || !Array.isArray(report.routes) || !Object.hasOwn(report.functions, report.main)) throw Error('请选择 calltree schema 1 的 JSON 报告。');
+  for (const fn of Object.values(report.functions)) {
+    if (!object(fn) || typeof fn.signature !== 'string' || !list(fn.calls).every(c => object(c) && typeof c.dispatch === 'string' && list(c.targets).every(t => typeof t === 'string'))) throw Error('报告中的函数或调用点格式无效。');
+  }
+  for (const r of report.routes) {
+    if (!object(r) || typeof r.method !== 'string' || !Array.isArray(r.handlers) || !r.handlers.length || !r.handlers.every(h => object(h) && Object.hasOwn(report.functions,h.function))) throw Error('报告中的路由缺少有效的 handler。');
+  }
+  data = report; ids = Object.keys(data.functions).sort(); history = []; view = 'overview';
+  routeIndex = -1; active = data.main;
+  setupMap();
+  $('mode').value = 'routes'; $('search').value = '';
+  $('status').textContent = `${name} · ${data.routes.length} 个入口 · ${ids.length} 个函数`;
+  $('error').hidden = true; $('empty').hidden = true; $('workspace').hidden = false;
+  renderIndex(); render();
+}
+function error(message) { $('error').textContent = message; $('error').hidden = false; }
+$('file').onchange = async event => {
+  const file = event.target.files[0]; if (!file) return;
+  const version = ++loadID;
+  try { const text = await file.text(); if (version === loadID) install(JSON.parse(text), file.name); }
+  catch (e) { if (version === loadID) error(`读取报告失败。${e.message}`); }
+  finally { if (version === loadID) event.target.value = ''; }
+};
+function navigate(id, nextRoute = routeIndex) {
+  if (!hasFunction(id)) return;
+  history.push({active, routeIndex, view}); active = id; routeIndex = nextRoute; view = 'graph';
+  resetFunctionMap();
+  renderIndex(); render();
+}
+$('back').onclick = () => {
+  if (!history.length) return;
+  ({active, routeIndex, view} = history.pop()); if (view === 'graph') resetFunctionMap(); renderIndex(); render();
+};
+$('mapBack').onclick = () => $('back').onclick();
+function renderIndex() {
+  const out = document.createDocumentFragment();
+  const query = $('search').value.trim().toLowerCase();
+  if ($('mode').value === 'functions') {
+    for (const id of ids) {
+      if (!id.toLowerCase().includes(query)) continue;
+      const b = button(brief(id), () => navigate(id,-1), 'entry'); b.setAttribute('aria-current',id === active); out.append(b);
+    }
+  } else {
+    let group;
+    data.routes.forEach((r,i) => {
+      const label = `${r.method} ${r.path ?? ''}`.trim();
+      if (!`${r.surface} ${label}`.toLowerCase().includes(query)) return;
+      if (group !== r.surface) { group = r.surface; out.append(element('h3',group,'group')); }
+      const b = button(label, () => navigate(r.handlers.at(-1).function,i), 'entry'); b.setAttribute('aria-current',i === routeIndex); out.append(b);
+    });
+  }
+  if (!out.childNodes.length) out.append(element('p','没有匹配项。','group'));
+  $('entries').replaceChildren(out);
+}
+$('mode').onchange = renderIndex; $('search').oninput = renderIndex;
+function functionLink(id) {
+  const b = button(brief(id), () => navigate(id), 'symbol'); b.title = id; return b;
+}
+function render() {
+  const graphVisible = view === 'overview' || view === 'graph';
+  $('atlas').hidden = !graphVisible; $('legend').hidden = !graphVisible; $('mapBack').disabled = !history.length;
+  if (graphVisible) drawMap();
+  $('details').hidden = graphVisible;
+  if (graphVisible) return;
+  const fn = data.functions[active], route = data.routes[routeIndex];
+  $('route').replaceChildren(); $('route').hidden = !route;
+  if (route) {
+    $('route').append(element('strong',`${route.surface}  /  ${route.method} ${route.path ?? ''}`));
+    const chain = element('p');
+    for (const h of route.handlers) {
+      if (chain.childNodes.length) chain.append(element('span','›','meta'));
+      const b = functionLink(h.function); b.setAttribute('aria-current',h.function === active); chain.append(b);
+      for (const [k,v] of Object.entries(h.bindings ?? {})) chain.append(element('code',`${k}=${v}`,'meta'));
+    }
+    $('route').append(chain);
+  }
+  $('title').textContent = brief(active); $('signature').textContent = fn.signature;
+  $('location').textContent = [fn.at, fn.synthetic].filter(Boolean).join(' · ');
+  $('back').disabled = !history.length;
+  for (const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', b.dataset.view === view);
+  const panel = $('panel'); panel.replaceChildren();
+  if (view === 'calls') panel.append(callTree(active,new Set([active])));
+  if (view === 'callers') {
+    const ul = element('ul');
+    for (const id of list(fn.callers)) { const li = element('li'); li.append(functionLink(id)); ul.append(li); }
+    panel.append(ul.childElementCount ? ul : element('p','没有已解析的上游调用。','meta'));
+  }
+  if (view === 'source') showSource(fn);
+}
+for (const b of document.querySelectorAll('[data-view]')) b.onclick = () => { view = b.dataset.view; render(); };
+const dispatchLabel = {interface:'接口候选',function_value:'函数值候选',builtin:'内建函数'};
+function callTree(id, ancestors) {
+  const ul = element('ul');
+  for (const call of list(data.functions[id].calls)) {
+    const targets = list(call.targets), args = list(call.function_args);
+    const label = [call.mode,dispatchLabel[call.dispatch],call.at].filter(Boolean).join(' · ');
+    if (!targets.length) { const li = element('li'); li.append(element('code',call.operand ?? call.dispatch),element('small',`  ${label}${call.dispatch === 'builtin' ? '' : ' · 未解析'}`,'meta')); ul.append(li); }
+    for (const target of targets) ul.append(branch(target,label,ancestors));
+    for (const target of args) ul.append(branch(target,'函数参数 · '+(call.at ?? ''),ancestors));
+  }
+  return ul.childElementCount ? ul : element('p','没有记录到下游调用。','meta');
+}
+function branch(target,label,ancestors) {
+  const li = element('li'), row = element('div',undefined,'row'); li.append(row);
+  const local = hasFunction(target), cycle = ancestors.has(target);
+  if (local && !cycle && list(data.functions[target].calls).length) {
+    let children;
+    const b = button('+', () => {
+      if (!children) { children = callTree(target,new Set([...ancestors,target])); li.append(children); }
+      else children.hidden = !children.hidden;
+      b.textContent = children.hidden ? '+' : '−'; b.setAttribute('aria-expanded',!children.hidden);
+    },'expand'); b.setAttribute('aria-label',`展开或折叠 ${brief(target)}`); b.setAttribute('aria-expanded','false'); row.append(b);
+  }
+  const detail = element('div'); row.append(detail);
+  detail.append(local ? functionLink(target) : element('code',brief(target)));
+  detail.append(element('small','  '+[label,cycle ? '循环引用' : '',local ? '' : '外部'].filter(Boolean).join(' · '),'meta'));
+  return li;
+}
+function showSource(fn) {
+  const at = /^(.*):(\d+):\d+$/.exec(fn.at ?? ''), end = /^(.*):(\d+):\d+$/.exec(fn.end ?? '');
+  const src = at && data.files[at[1]]?.source;
+  if (typeof src !== 'string') { $('panel').append(element('p','此函数没有可用的源码位置。','meta')); return; }
+  const start = Number(at[2]), last = end?.[1] === at[1] ? Number(end[2]) : start;
+  const lines = src.split('\n').slice(start-1,last).map((line,i) => `${String(start+i).padStart(String(last).length)}  ${line}`);
+  $('panel').append(element('pre',lines.join('\n')));
+}
+</script>
+<script src="graph.js"></script>
+<script>
+const snapshot = $('snapshot');
+if (snapshot) { try { install(JSON.parse(snapshot.textContent),'内嵌报告'); } catch (e) { error(e.message); } }
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "status":"PARENT_MERGED_DESIGN_R2_OVERRIDE_PENDING_INDEPENDENT_REVIEW",
+  "baseline":"47f5ce71bfa8de2720e184fec516f0e27ca90f2d",
+  "finding":"R1",
+  "original_review":"/tmp/plan022-cold-design-review-t3-22a3542c/decision.json",
+  "rule":"Overrides only destination for these exact 14 whole declarations. All other original mappings, Test entrypoints, names, bodies, assertions, tags and cleanup remain unchanged. Preserve original design evidence bytes.",
+  "destination":"engine/engine_test.go",
+  "overrides":[
+    {"source":"engine/instance_recovery_test.go","line":15,"declaration":"instanceRecoveryBackend","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":27,"declaration":"(*instanceRecoveryBackend).Launch","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":51,"declaration":"(*instanceRecoveryBackend).Stop","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":56,"declaration":"(*instanceRecoveryBackend).Remove","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":64,"declaration":"(*instanceRecoveryBackend).Network","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":75,"declaration":"instanceRecoveryFixture","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":85,"declaration":"newInstanceRecoveryFixture","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":150,"declaration":"(*instanceRecoveryFixture).restart","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":158,"declaration":"instanceRecoveryEffects","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":165,"declaration":"(*instanceRecoveryBackend).effects","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/instance_recovery_test.go","line":174,"declaration":"(*instanceRecoveryFixture).mutate","prior_destination":"engine/operations_test.go"},
+    {"source":"engine/restore_materials_test.go","line":18,"declaration":"restoreCandidateFixture","prior_destination":"engine/restore_materials_test.go"},
+    {"source":"engine/restore_materials_test.go","line":81,"declaration":"damageRestoreCandidate","prior_destination":"engine/restore_materials_test.go"},
+    {"source":"engine/image_test.go","line":15,"declaration":"layerFixture","prior_destination":"engine/image_validation_test.go"}
+  ],
+  "unchanged":"All TestInstanceCondition entries and dedicated assertInstanceConditionRecovery stay operations_test.go; all completion/materials/cleanup/validation/compat Test entrypoints retain original targets. No new fixture file/wrapper/hook/interface/package/function/test.",
+  "proof_obligation":"AST-resolve each baseline declaration, override exactly once into engine_test.go; compare original Test declaration multiset/body tokens and all other destinations unchanged.",
+  "authority_order":["022-engine-shared-fixture-overrides-r2.json exact14 destinations","022-native-gate-supplement.md original native rootless exception only","022-execution-contract-r1.md including exact7 API objects","Original Engine + sandboxd mapping.json"],
+  "source_edits_started":false
+}

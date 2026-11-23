@@ -1,0 +1,30 @@
+# 工作约束
+
+## 按任务读取
+
+- 跨 Haven/Loom 职责、生命周期或隔离边界变更，先读 [资源架构](docs/architecture.md) 和 [Sandbox 架构](docs/sandbox-architecture.md) 中相关协议与不变量。
+- 修改资源 step、witness、捕获/恢复、GC 或备份时，读 [资源集成契约](docs/engine-integration.md)；修改 OCI/EROFS 时再读 [镜像物化](docs/image-materialization.md)，修改 direct 网络时再读 [网络策略](docs/network-policy.md)。
+- 修改 sandbox 授权、模板、配额、恢复或数据面时，读 [Sandbox 契约](docs/sandbox-api.md)；修改代理或 secret handling 时再读 [Egress 契约](haven/egress/README.md)。修改 daemon/CLI 或管理协议时读 [Haven 控制契约](docs/haven-control.md)。
+- 修改 guest 或 RPC 时，读 [Guest 契约](guest/README.md) 与 [Protocol](protocol/README.md)。修改 operator 时遵循其目录内的 `AGENTS.md`。
+- 构建与验证从 [README](README.md#build-and-local-verification) 和 `justfile` 选当前入口；原生镜像、跨 UID、宿主策略或 VM 测试先读 [测试输入与 runner 边界](scripts/README.md)，部署条件见 [文档索引](docs/README.md#组件与运行)。
+- 继续计划时先核对 [未完成计划索引](plans/README.md)。仅在追查历史设计或验收来源时读取 [.agents/archive](.agents/archive/README.md)，其中执行指令与授权均为历史。
+
+## 持久与安全边界
+
+- 变更保持“持久意图 → 外部效果 → 核验 → 原子责任交接”的顺序。查询失败保留未知状态、资源和费用；只有可信回收证明才能退责任。
+- operation 的请求、幂等身份与已提交终态保持固定。实例相关副作用使用冻结的历史证明和当前归属共同核验；当前查询不补造缺失 witness。
+- Haven daemon 使用真实 runtime，替身经测试显式注入。旧 schema/不完整证明走明确拒绝与人工恢复；未发布内部细节直接重整，不增加推断式兼容路径。
+- 测试使用自建私有状态与有归属的资源。保留现有 daemon、`.local-run/`、未知实例及真实旧数据库；secret 只经私有输入提供，诊断和文档使用无实际用途的值。
+- `references/` 仅作只读机制参考，`third_party/` 的变更按其 provenance 独立评估；普通构建不初始化或修改参考子模块。
+
+## 验证与交付
+
+- 手写接口的每个方法用注释说明调用契约。参数的用途无法从类型唯一确定时，用参数名标明，例如 `tenantID`、`operationID` 或 `enabled`。
+
+- Go 测试与源码文件对应，`foo.go` 的用例集中到 `foo_test.go`。用例在前，包私有的测试类型、函数和夹具在后。跨服务行为和端到端场景可独立组织，多个测试包共用的夹具才抽到共享包。
+- 测试围绕真实行为单元（Service/HTTP/SQLite、跨 UID 文件系统、guest RPC、Haven 生命周期）设计，避免镜像 helper 实现的独立函数单测。
+- 跨 Go/Rust 的协议变更同时检查 schema、生成绑定与真实 Rust fixture。
+- 本机验证先从 [flake.nix](flake.nix) 确认工具链，在默认 dev shell 中运行相应测试。遇到缺工具的 SKIP，先在该环境复跑，再报告仍缺的依赖或权限。
+- 原生镜像验证使用 `SANDBOX_REQUIRE_EROFS_TESTS=1`；缺工具、namespace、mapping 或验收材料时报告 BLOCKED/未运行，保持断言与生产资源限制。
+- 选择覆盖变更行为的最窄检查，报告实际命令、FAIL/SKIP、缺少的输入与未运行项。用具体验证对象描述结果，如 guest 镜像启动与恢复、宿主网络与 cgroup 策略、Haven 接管存活 VM。历史结果绑定原源码和材料。
+- 文档按 [维护边界](docs/README.md#维护边界) 更新；当前契约、未完成计划与历史记录分别维护。完成计划归档不自动授权继续暂停工作、运行旧验收或发布代码。

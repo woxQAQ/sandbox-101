@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "task": "implement-plan012-r1",
+  "slot_granted": false,
+  "io_max": "259:0 wbps=1048576",
+  "io_evidence": "/tmp/kix-b93fc24/cgroup-io-enforcement.txt",
+  "materials_dir": "/home/woxQAQ/sandbox-101/build/runtime/acceptance-materials/run.rVAvN3Ca",
+  "oci_layout": "/tmp/p010-r3.4mkybi8y/artifacts/kvm-acceptance-1854451212/oci",
+  "oci_index_sha256": "9b44a6b30f8f18bee0ee15ae070df9a66184c2447b470f768a81207f32e0b65b",
+  "oci_manifest": "sha256:85cbaa2cd1387166a4a2f6ac0b2bf6261aac829a8550f0bda36e1d49cc9ce3e1",
+  "oci_parent_verified_descriptors": 6,
+  "artifacts_dir": "/tmp/p012-production.ElQ9Ictd",
+  "base_guest_commit": "b93fc24",
+  "source_materials": "Fresh r3 OCI; archive integrity independently checked by parent. No claim of production acceptance yet.",
+  "slot_previous_owner": "test-plan010-kvm-r4",
+  "slot_previous_owner_released": true,
+  "slot_current_owner": "prepare-corrected-guest-oci-r1",
+  "handoff_expired": true,
+  "release_result": "012 production first claim failed incompatible workload agent; unit and cgroup cleaned, slot explicitly released. A new grant is required for any retry."
+}

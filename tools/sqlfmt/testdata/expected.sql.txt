@@ -1,0 +1,22 @@
+CREATE TABLE images (
+	digest TEXT PRIMARY KEY,
+	body BLOB NOT NULL
+);
+
+CREATE TABLE store_metadata (
+	singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+	format TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX active_image_collector ON cleanup_intents (
+	resource_kind,
+	resource_id
+) WHERE resource_kind IN ('import_work','image_cache') AND status='pending';
+
+CREATE UNIQUE INDEX single ON t (resource_id) WHERE resource_kind='supply_cleanup';
+
+CREATE TABLE notes (
+	id TEXT PRIMARY KEY,
+	body TEXT NOT NULL CHECK(body<>'a;b'),
+	UNIQUE(id)
+);

@@ -1,0 +1,4 @@
+# havenctl admin status --config /private/havenctl-admin.yaml
+# Explicit flags > HAVENCTL_ADMIN_* environment > this file > defaults.
+socket: /run/haven/management.sock
+key: ""

@@ -1,0 +1,85 @@
+package machine
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/woxQAQ/haven/execution"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom"
+	operation "github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/store"
+)
+
+type DirectBackend interface {
+	InstanceInspector
+
+	// SetNetworkEnabled sets the host network link state for the identified instance.
+	SetNetworkEnabled(ctx context.Context, resource loom.Resource, enabled bool) error
+}
+
+// DirectPolicies binds teardown to the original activation and instance. The
+// effect caller retains its existing lifecycle/configuration guard; recovery
+// acquires the same configuration guard as the original application runner.
+type DirectPolicies struct {
+	store              store.Workflow
+	storeWriteMu       execution.Guard
+	sandboxConfigLocks *execution.KeyedLocks[string]
+	proofs             ResourceProofs
+	backend            DirectBackend
+	faultPoint         func(string) error
+}
+
+type DirectPoliciesDependencies struct {
+	StoreWriteMu       execution.Guard
+	SandboxConfigLocks *execution.KeyedLocks[string]
+	Proofs             ResourceProofs
+	Backend            DirectBackend
+}
+
+func NewDirectPolicies(state *store.State, dependencies DirectPoliciesDependencies, fault func(string) error) *DirectPolicies {
+	return &DirectPolicies{
+		store: store.Workflow{
+			Database:   state.Database(),
+			Directory:  state.Directory(),
+			Reviewed:   state.Reviewed(),
+			Checkpoint: state.Checkpoint,
+		},
+		storeWriteMu:       dependencies.StoreWriteMu,
+		sandboxConfigLocks: dependencies.SandboxConfigLocks,
+		proofs:             dependencies.Proofs,
+		backend:            dependencies.Backend,
+		faultPoint:         fault,
+	}
+}
+
+func (dp *DirectPolicies) fault(point string) error {
+	if dp.faultPoint != nil {
+		return dp.faultPoint(point)
+	}
+	return nil
+}
+
+// ResumePendingRetirement retries the operation's pending direct policy retirement.
+// It returns true when it attempts recovery, including when the attempt fails.
+// A (false, nil) result lets the caller continue the operation's workflow.
+func (dp *DirectPolicies) ResumePendingRetirement(ctx context.Context, operationID string) (bool, error) {
+	if dp.store.Reviewed {
+		return false, fmt.Errorf("%w: reviewed rollback cannot resume direct retirement", errs.ErrManualRecovery)
+	}
+	step, err := LoadDirectRetirement(ctx, dp.store.Database, operationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if operation.Terminal(step.Status) || step.State.Phase != "pending" {
+		return false, nil
+	}
+	unlock := dp.sandboxConfigLocks.Lock(step.Input.Source.Input.SandboxID)
+	defer unlock()
+	return true, dp.retireDirect(ctx, operationID)
+}

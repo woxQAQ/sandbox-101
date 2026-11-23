@@ -1,0 +1,20 @@
+{
+  "status":"HISTORICAL_ACCEPTED_ORACLES_READONLY_RECHECKED_NOT_NEW_PRODUCT_PASS",
+  "algorithm":"SHA256 UTF8 json.dumps(sorted(set((Package,Test) from Action=pass and nonempty Test)), ensure_ascii=False,separators=(',',':'))",
+  "engine":{
+    "path":"/tmp/plan012-r4-engine-finish-37fa8d75/engine-final-race.jsonl",
+    "raw_sha256":"25efe6c4eb5524b1e4652bcf9f66ab4cdb021934713f5654cbf3459bfebbb092",
+    "run":448,"pass":448,"fail":0,"skip":0,"unique_pass":448,"run_pass_sets_equal":true,
+    "pass_pair_manifest_sha256":"a2a4959ba24810cb8e30036dd402032de5a2cbf3e2202100326d732d3c6774cc",
+    "required_native_tools":"/nix/store/ppifd9prd8f7a4kkbrq5m50ss153r4jr-sandbox-kvm-acceptance-userspace",
+    "required_env":{"SANDBOX_REQUIRE_EROFS_TESTS":"1"}
+  },
+  "sandboxd":{
+    "path":"/tmp/final12-combination-t3-fe782bd5/sandboxd-full-race.stdout",
+    "raw_sha256":"06b02af00762ba58be93a82dcb44b9d22e58ead0023df16974a1563ceb902fbb",
+    "run":678,"pass":678,"fail":0,"skip":0,"unique_pass":678,"run_pass_sets_equal":true,
+    "pass_pair_manifest_sha256":"064c984304643c2f0d6668ad6fd202c8db126495ba7a0996709b725164b7f5da"
+  },
+  "source_edits_or_product_tests_performed_by_parent":false,
+  "correction":"r1 blanket namespace ban conflicts with existing native tests; only sole executor original test-owned rootless native image namespaces allowed; no VM/privileged/new probes. Full supplement separately reviewed."
+}

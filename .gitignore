@@ -1,2 +1,8 @@
 .DS_Store
 .workbuddy/
+/target/
+/bin/
+/build/
+/.runtime/
+*.prof
+.direnv/

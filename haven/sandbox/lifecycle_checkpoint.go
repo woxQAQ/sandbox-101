@@ -1,0 +1,378 @@
+package sandbox
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"reflect"
+	"time"
+
+	"github.com/woxQAQ/haven/authorization"
+	"github.com/woxQAQ/haven/internal/errs"
+	"github.com/woxQAQ/haven/loom"
+	"github.com/woxQAQ/haven/machine"
+	"github.com/woxQAQ/haven/operation"
+	"github.com/woxQAQ/haven/quota"
+	"github.com/woxQAQ/haven/sandbox/internal/dbgen"
+	"github.com/woxQAQ/haven/store"
+	"github.com/woxQAQ/haven/types"
+)
+
+// Checkpoint is a tenant-owned business binding to a retained snapshot. Its
+// identity is independent of the sandbox's current VM generation.
+type Checkpoint struct {
+	TemplateID string     `json:"template_id,omitempty"`
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	SandboxID  string     `json:"sandbox_id"`
+	SnapshotID string     `json:"snapshot_id"`
+	Shape      loom.Shape `json:"shape"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+func (checkpoint Checkpoint) Public() types.Checkpoint {
+	return types.Checkpoint{
+		ID:         checkpoint.ID,
+		TenantID:   checkpoint.TenantID,
+		SandboxID:  checkpoint.SandboxID,
+		SnapshotID: checkpoint.SnapshotID,
+		Shape:      types.Shape(checkpoint.Shape),
+		CreatedAt:  checkpoint.CreatedAt,
+	}
+}
+
+func bindCheckpoint(ctx context.Context, query store.DBTX, checkpoint Checkpoint, operationID string) error {
+	return store.RequireOne(dbgen.New(query).InsertCheckpoint(ctx, dbgen.InsertCheckpointParams{
+		ID:          checkpoint.ID,
+		Tenant:      checkpoint.TenantID,
+		SnapshotID:  checkpoint.SnapshotID,
+		OperationID: operationID,
+		TemplateID:  checkpoint.TemplateID,
+		SandboxID:   checkpoint.SandboxID,
+		CreatedAt:   checkpoint.CreatedAt.Format(time.RFC3339Nano),
+		Vcpus:       int64(checkpoint.Shape.VCPUs),
+		MemoryMib:   checkpoint.Shape.MemoryMiB,
+		DiskMib:     checkpoint.Shape.DiskMiB,
+	}))
+}
+
+func unbindCheckpoint(ctx context.Context, query store.DBTX, checkpoint Checkpoint) error {
+	return store.RequireOne(dbgen.New(query).DeleteCheckpoint(ctx, dbgen.DeleteCheckpointParams{
+		ID:         checkpoint.ID,
+		Tenant:     checkpoint.TenantID,
+		SnapshotID: checkpoint.SnapshotID,
+		TemplateID: checkpoint.TemplateID,
+		SandboxID:  checkpoint.SandboxID,
+		CreatedAt:  checkpoint.CreatedAt.Format(time.RFC3339Nano),
+		Vcpus:      int64(checkpoint.Shape.VCPUs),
+		MemoryMib:  checkpoint.Shape.MemoryMiB,
+		DiskMib:    checkpoint.Shape.DiskMiB,
+	}))
+}
+
+func LoadCheckpoint(ctx context.Context, query store.DBTX, id string) (Checkpoint, error) {
+	row, err := dbgen.New(query).GetCheckpoint(ctx, id)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	return checkpointFromRow(row)
+}
+
+func checkpointFromRow(row dbgen.CheckpointBinding) (Checkpoint, error) {
+	created, err := time.Parse(time.RFC3339Nano, row.CreatedAt)
+	return Checkpoint{
+		ID:         row.ID,
+		TenantID:   row.Tenant,
+		SnapshotID: row.SnapshotID,
+		SandboxID:  row.SandboxID,
+		TemplateID: row.TemplateID,
+		CreatedAt:  created,
+		Shape: loom.Shape{
+			VCPUs:     int(row.Vcpus),
+			MemoryMiB: row.MemoryMib,
+			DiskMiB:   row.DiskMib,
+		},
+	}, err
+}
+
+func LoadOwnedCheckpoint(ctx context.Context, query store.DBTX, id, tenant string) (Checkpoint, error) {
+	row, err := dbgen.New(query).GetOwnedCheckpoint(ctx, dbgen.GetOwnedCheckpointParams{
+		ID:     id,
+		Tenant: tenant,
+	})
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	return checkpointFromRow(row)
+}
+
+func CheckpointInventory(ctx context.Context, query store.DBTX) ([]Checkpoint, error) {
+	rows, err := dbgen.New(query).ListCheckpoints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Checkpoint, 0, len(rows))
+	for _, row := range rows {
+		checkpoint, err := checkpointFromRow(row)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, checkpoint)
+	}
+	return out, nil
+}
+
+func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
+	var empty operation.State
+	if principal.TenantID == "" || principal.SandboxID != "" || key == "" || len(key) > 256 || command.Action != "checkpoint_delete" || command.CheckpointID == "" {
+		return empty, fmt.Errorf("%w: checkpoint deletion requires tenant authority, checkpoint and key", errs.ErrInvalid)
+	}
+	unlock := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
+	defer unlock()
+	mac := l.identity.CommandMAC(principal, command)
+	if cached, found, err := l.existing(ctx, principal, key, operation.CommandCredentials{
+		MAC: mac,
+	}); found || err != nil {
+		return cached, err
+	}
+	checkpoint, err := l.catalog.GetCheckpoint(ctx, principal, command.CheckpointID)
+	if err != nil {
+		return empty, err
+	}
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
+	if err = l.gate.Check(); err != nil {
+		return empty, err
+	}
+	tx, err := l.store.Database.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	current, err := LoadOwnedCheckpoint(ctx, tx, checkpoint.ID, checkpoint.TenantID)
+	if err != nil {
+		return empty, err
+	}
+	if !reflect.DeepEqual(current, checkpoint) {
+		return empty, fmt.Errorf("%w: checkpoint binding changed", errs.ErrConflict)
+	}
+	publication, err := l.proofs.Snapshots().SnapshotPublication(ctx, tx, checkpoint.TenantID, checkpoint.SnapshotID)
+	if err != nil {
+		return empty, err
+	}
+	record := operation.State{
+		ID:     operation.NewID("op-"),
+		Key:    key,
+		Status: "succeeded",
+		Result: operation.Result{
+			CheckpointID: checkpoint.ID,
+			SnapshotID:   checkpoint.SnapshotID,
+			SandboxID:    checkpoint.SandboxID,
+		},
+	}
+	frozen := operation.CommandRequest(operation.SanitizedCommand(command))
+	input := operation.Encode(struct {
+		Checkpoint  Checkpoint
+		Publication machine.SnapshotSource
+	}{checkpoint, publication})
+	operations := operation.New(tx)
+	if err = operations.RecordAdmission(ctx, operation.Admission{
+		ID:        record.ID,
+		ScopeKind: "tenant",
+		ScopeID:   principal.TenantID,
+		Key:       key,
+		Request:   frozen,
+		Status:    "succeeded",
+		Result:    record.Result,
+	}); err != nil {
+		return empty, err
+	}
+	if err = operations.RecordCommandMAC(ctx, record.ID, mac); err != nil {
+		return empty, err
+	}
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
+		OperationID:         record.ID,
+		StepKey:             "checkpoint_delete",
+		Action:              "checkpoint_delete",
+		Input:               input,
+		CandidateResourceID: checkpoint.SnapshotID,
+		ExpectedInstance:    "",
+		Status:              "succeeded",
+		Phase:               "complete",
+	}); err != nil {
+		return empty, err
+	}
+	if err = unbindCheckpoint(ctx, tx, checkpoint); err != nil {
+		return empty, err
+	}
+	if err = quota.RemoveResourceReference(ctx, tx, quota.ResourceReference{
+		Kind:       "snapshot",
+		ID:         checkpoint.SnapshotID,
+		HolderKind: "checkpoint_binding",
+		HolderID:   checkpoint.ID,
+	}); err != nil {
+		return empty, err
+	}
+	if err = quota.RemoveCostReference(ctx, tx, quota.CostReference{
+		TenantID:   checkpoint.TenantID,
+		Kind:       "snapshot",
+		Key:        checkpoint.SnapshotID,
+		HolderKind: "active_use",
+		HolderID:   "checkpoint-binding:" + checkpoint.ID,
+	}); err != nil {
+		return empty, err
+	}
+	if err = store.RequireOne(dbgen.New(tx).InsertCleanupIntent(ctx, dbgen.InsertCleanupIntentParams{
+		ID:           "checkpoint:" + record.ID,
+		OperationID:  record.ID,
+		ResourceKind: "snapshot",
+		ResourceID:   checkpoint.SnapshotID,
+		StepKey:      "checkpoint_delete",
+		WitnessHash:  operation.Digest(operation.Encode(publication)),
+	})); err != nil {
+		return empty, err
+	}
+	if err = l.fault("checkpoint_delete_before_commit"); err != nil {
+		return empty, err
+	}
+	if err = l.committer.Complete(tx, operation.Outcome{
+		ID:     record.ID,
+		Result: record.Result,
+		Frozen: true,
+	}); err != nil {
+		return empty, err
+	}
+	if err = tx.Commit(); err != nil {
+		return empty, err
+	}
+	return record, l.store.Checkpoint()
+}
+
+// A paused checkpoint adds a binding to the proven sleep publication. It does
+// not launch, capture or renew the source and cannot infer a missing pause receipt.
+func (l *Lifecycle) admitPausedCheckpoint(ctx context.Context, parent operation.State, input LifecycleInput, mac string) (operation.State, error) {
+	var empty operation.State
+	l.storeWriteMu.Lock()
+	defer l.storeWriteMu.Unlock()
+	if err := l.gate.Check(); err != nil {
+		return empty, err
+	}
+	tx, err := l.store.Database.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	current, err := LoadSandbox(ctx, tx, input.Sandbox.ID, input.OwnerTenantID)
+	if err != nil {
+		return empty, err
+	}
+	settings, err := LoadSettings(ctx, tx, current.ID)
+	if err != nil {
+		return empty, err
+	}
+	if !reflect.DeepEqual(current, input.Sandbox) || !reflect.DeepEqual(settings, input.Settings) || current.State != "paused" || current.VMID != "" || current.Instance != "" {
+		return empty, fmt.Errorf("%w: paused checkpoint source changed", errs.ErrConflict)
+	}
+	if _, err = LifecycleFence(ctx, tx, current.ID); err == nil {
+		return empty, fmt.Errorf("%w: paused checkpoint source is fenced", errs.ErrConflict)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return empty, err
+	}
+	source, err := machine.LoadResourceStep(ctx, tx, input.Source.OperationID)
+	if err != nil {
+		return empty, err
+	}
+	if source.Hash != input.Source.InputHash || source.State.Witness != input.SourceInstance {
+		return empty, fmt.Errorf("%w: paused checkpoint original generation changed", errs.ErrManualRecovery)
+	}
+	proof, err := pausedReceipt(ctx, tx, current, source)
+	if err != nil {
+		return empty, err
+	}
+	input.PauseOperation = proof
+	snapshot, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, tx, input.OwnerTenantID, current.SnapshotID)
+	if err != nil {
+		return empty, err
+	}
+	cp := Checkpoint{
+		ID:         input.CheckpointID,
+		TenantID:   input.OwnerTenantID,
+		SandboxID:  current.ID,
+		TemplateID: current.Identity.TemplateID,
+		Shape:      snapshot.Snapshot.Manifest.Config.Shape,
+		SnapshotID: current.SnapshotID,
+		CreatedAt:  time.Now().UTC(),
+	}
+	parent.Status = "succeeded"
+	parent.Result.SnapshotID = cp.SnapshotID
+	frozen := operation.CommandRequest(input.Command)
+	payload := operation.Encode(input)
+	operations := operation.New(tx)
+	if err = operations.RecordAdmission(ctx, operation.Admission{
+		ID:        parent.ID,
+		ScopeKind: "tenant",
+		ScopeID:   input.RequestTenantID,
+		Key:       parent.Key,
+		Request:   frozen,
+		Status:    "succeeded",
+		Result:    parent.Result,
+	}); err != nil {
+		return empty, err
+	}
+	if err = operations.RecordCommandMAC(ctx, parent.ID, mac); err != nil {
+		return empty, err
+	}
+	if err = operation.InsertPhaseStep(ctx, tx, operation.PhaseIntent{
+		OperationID:         parent.ID,
+		StepKey:             "lifecycle",
+		Action:              "checkpoint",
+		Input:               payload,
+		CandidateResourceID: current.ID,
+		ExpectedInstance:    "",
+		Status:              "succeeded",
+		Phase:               "complete",
+		SnapshotID:          cp.SnapshotID,
+	}); err != nil {
+		return empty, err
+	}
+	if err = bindCheckpoint(ctx, tx, cp, parent.ID); err != nil {
+		return empty, err
+	}
+	if err = quota.AddResourceReference(ctx, tx, quota.ResourceReference{
+		Kind:       "snapshot",
+		ID:         cp.SnapshotID,
+		HolderKind: "checkpoint_binding",
+		HolderID:   cp.ID,
+	}); err != nil {
+		return empty, err
+	}
+	if err = quota.AddCostReference(ctx, tx, quota.CostReference{
+		TenantID:   cp.TenantID,
+		Kind:       "snapshot",
+		Key:        cp.SnapshotID,
+		HolderKind: "active_use",
+		HolderID:   "checkpoint-binding:" + cp.ID,
+	}); err != nil {
+		return empty, err
+	}
+	if err = l.fault("paused_checkpoint_before_commit"); err != nil {
+		return empty, err
+	}
+	if err = l.committer.Complete(tx, operation.Outcome{
+		ID:     parent.ID,
+		Result: parent.Result,
+		Frozen: true,
+	}); err != nil {
+		return empty, err
+	}
+	if err = tx.Commit(); err != nil {
+		return empty, err
+	}
+	return parent, l.store.Checkpoint()
+}
