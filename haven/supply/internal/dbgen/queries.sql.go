@@ -530,6 +530,32 @@ func (q *Queries) MarkReadyCleanup(ctx context.Context, arg MarkReadyCleanupPara
 	return result.RowsAffected()
 }
 
+const markSelected = `-- name: MarkSelected :execrows
+UPDATE pool_slots SET status='selected' WHERE deleted_at IS NULL AND operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?
+`
+
+type MarkSelectedParams struct {
+	OperationID     string
+	VmID            string
+	Instance        string
+	SourceInputHash string
+	TemplateVersion string
+}
+
+func (q *Queries) MarkSelected(ctx context.Context, arg MarkSelectedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSelected,
+		arg.OperationID,
+		arg.VmID,
+		arg.Instance,
+		arg.SourceInputHash,
+		arg.TemplateVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const replaceTemplate = `-- name: ReplaceTemplate :execrows
 UPDATE templates SET published_operation_id=?1 WHERE id=?2 AND published_operation_id=?3
 `
@@ -560,32 +586,6 @@ type ReservePublicationParams struct {
 
 func (q *Queries) ReservePublication(ctx context.Context, arg ReservePublicationParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, reservePublication, arg.TemplateID, arg.TenantID, arg.CandidateOperationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const selectReservation = `-- name: SelectReservation :execrows
-UPDATE pool_slots SET status='selected' WHERE deleted_at IS NULL AND operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?
-`
-
-type SelectReservationParams struct {
-	OperationID     string
-	VmID            string
-	Instance        string
-	SourceInputHash string
-	TemplateVersion string
-}
-
-func (q *Queries) SelectReservation(ctx context.Context, arg SelectReservationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, selectReservation,
-		arg.OperationID,
-		arg.VmID,
-		arg.Instance,
-		arg.SourceInputHash,
-		arg.TemplateVersion,
-	)
 	if err != nil {
 		return 0, err
 	}

@@ -75,7 +75,7 @@ SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.t
 -- name: MarkReady :execrows
 UPDATE pool_slots SET status='ready',instance=? WHERE deleted_at IS NULL AND operation_id=? AND status='pending' AND instance='' AND source_input_hash=?;
 
--- name: SelectReservation :execrows
+-- name: MarkSelected :execrows
 UPDATE pool_slots SET status='selected' WHERE deleted_at IS NULL AND operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?;
 
 -- name: MarkPendingCleanup :execrows

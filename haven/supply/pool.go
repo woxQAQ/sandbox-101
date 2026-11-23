@@ -96,7 +96,7 @@ func SelectWarm(ctx context.Context, tx *sql.Tx, id string, reservation PoolRese
 	}); err != nil {
 		return err
 	}
-	return store.RequireOne(queries.SelectReservation(ctx, dbgen.SelectReservationParams{
+	return store.RequireOne(queries.MarkSelected(ctx, dbgen.MarkSelectedParams{
 		OperationID:     id,
 		VmID:            reservation.VMID,
 		Instance:        reservation.Instance,
