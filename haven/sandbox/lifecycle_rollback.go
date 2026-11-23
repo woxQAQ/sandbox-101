@@ -25,7 +25,7 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
-	if accepted, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
+	if accepted, found, err := l.existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	}); found || err != nil {
 		return accepted, err
@@ -64,7 +64,7 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	if string(operation.Encode(source.Input.Resource.Config)) != string(operation.Encode(snapshot.Snapshot.Manifest.Config)) {
 		return empty, fmt.Errorf("%w: rollback shape/image differs from sandbox", errs.ErrConflict)
 	}
-	if current.State == "running" && l.policy.CredentialsMissing(current.ID, settings) {
+	if current.State == "running" && l.admissionPolicy.CredentialsMissing(current.ID, settings) {
 		return empty, fmt.Errorf("%w: host credentials must be supplied again before rollback", errs.ErrConflict)
 	}
 	rawCaptures, err := machine.PendingPublishedCaptures(ctx, l.store.Database, source)

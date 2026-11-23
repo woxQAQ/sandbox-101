@@ -31,7 +31,7 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
-	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
+	if operation, found, err := l.existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     mac,
 		Secrets: credentials,
 	}); found || err != nil {
@@ -54,7 +54,7 @@ func (l *Lifecycle) AdmitResume(ctx context.Context, principal authorization.Pri
 	if !settings.PausedUntil.IsZero() && !time.Now().Before(settings.PausedUntil) {
 		return empty, fmt.Errorf("%w: paused sandbox expired", errs.ErrConflict)
 	}
-	if l.policy.CredentialsMissing(sandboxRecord.ID, settings) {
+	if l.admissionPolicy.CredentialsMissing(sandboxRecord.ID, settings) {
 		return empty, fmt.Errorf("%w: host credentials must be supplied again before resume", errs.ErrConflict)
 	}
 	source, err := l.proofs.Snapshots().LoadSnapshotSource(ctx, l.store.Database, sandboxRecord.TenantID, sandboxRecord.SnapshotID)

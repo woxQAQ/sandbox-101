@@ -20,12 +20,11 @@ type AdmissionPolicy struct {
 	maxTTL   time.Duration
 }
 
-// ClaimAdmission carries the sanitized command/settings and ephemeral host
-// credentials. Only the explicit frozen inputs and credential MAC are persisted.
-type ClaimAdmission struct {
+// PreparedCommand holds the sanitized command, validated settings and host-only secret values.
+// Only Command and Settings may be persisted.
+type PreparedCommand struct {
 	Command  operation.Intent
 	Settings Settings
-	MAC      string
 	Secrets  map[string]egress.Secret
 }
 
@@ -36,7 +35,8 @@ func NewAdmissionPolicy(maxTTL time.Duration, registry *ephemeral.Registry) *Adm
 	}
 }
 
-func (sc *AdmissionPolicy) Prepare(command operation.Intent) (*ClaimAdmission, error) {
+// PrepareCommand validates the command's settings, applies defaults and separates host secrets.
+func (sc *AdmissionPolicy) PrepareCommand(command operation.Intent) (*PreparedCommand, error) {
 	env, secrets, descriptors, err := SplitEnv(command.Env)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func (sc *AdmissionPolicy) Prepare(command operation.Intent) (*ClaimAdmission, e
 	if onExpire != "kill" && onExpire != "pause" {
 		return nil, errs.InvalidInput("on_expire must be kill or pause")
 	}
-	return &ClaimAdmission{
+	return &PreparedCommand{
 		Command: operation.SanitizedCommand(command),
 		Settings: Settings{
 			Env:        env,

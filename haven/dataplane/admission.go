@@ -61,7 +61,7 @@ func (p *Plane) admit(ctx context.Context, principal authorization.Principal, id
 	if err != nil {
 		return view, err
 	}
-	if p.policy.CredentialsMissing(id, settings) {
+	if p.admissionPolicy.CredentialsMissing(id, settings) {
 		return view, fmt.Errorf("%w: host credentials must be supplied again after restart", errs.ErrConflict)
 	}
 	if settings.ActiveEpoch != p.epoch {
@@ -155,7 +155,7 @@ func (p *Plane) finalAdmission(ctx context.Context, principal authorization.Prin
 	closing := p.lifetime.Closing() || p.store.Reviewed
 	bound := p.registry.Binding(id)
 	p.registrationMu.Unlock()
-	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != p.epoch || !time.Now().Before(settings.Deadline) || p.policy.CredentialsMissing(id, settings) {
+	if closing || view.State != "running" || view.Instance != instance || settings.Generation != generation || settings.ActiveEpoch != p.epoch || !time.Now().Before(settings.Deadline) || p.admissionPolicy.CredentialsMissing(id, settings) {
 		return view, sandbox.Settings{}, fmt.Errorf("%w: sandbox data admission changed", errs.ErrConflict)
 	}
 	source, err := p.catalog.ResourceForData(ctx, view)

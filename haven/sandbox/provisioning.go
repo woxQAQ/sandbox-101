@@ -115,7 +115,7 @@ type ProvisionAdmission struct {
 }
 
 type ProvisionTarget struct {
-	Activation    *ClaimAdmission
+	Activation    *Settings
 	Identity      *ownership.Birth
 	SlotHolder    string
 	Budget        *quota.SlotBudget

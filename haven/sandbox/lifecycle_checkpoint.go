@@ -122,7 +122,7 @@ func (l *Lifecycle) AdmitCheckpointDelete(ctx context.Context, principal authori
 	unlock := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer unlock()
 	mac := l.identity.CommandMAC(principal, command)
-	if cached, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
+	if cached, found, err := l.existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	}); found || err != nil {
 		return cached, err

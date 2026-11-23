@@ -36,7 +36,7 @@ func (sb *Sandboxes) AdmitConfigure(ctx context.Context, principal authorization
 	releaseKey := sb.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer releaseKey()
 	mac := sb.identity.CommandMAC(principal, command)
-	retry := &ClaimAdmission{
+	retry := operation.CommandCredentials{
 		MAC:     mac,
 		Secrets: secrets,
 	}
@@ -135,12 +135,12 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 	desired.TTLSeconds = old.TTLSeconds
 	desired.OnExpire = old.OnExpire
 	desired.AutoRenew = old.AutoRenew
-	settings, err := sb.policy.Prepare(desired)
+	prepared, err := sb.admissionPolicy.PrepareCommand(desired)
 	if err != nil {
 		return empty, noResource, false, err
 	}
-	settings.Settings.Deadline = old.Deadline
-	settings.Settings.PausedUntil = old.PausedUntil
+	prepared.Settings.Deadline = old.Deadline
+	prepared.Settings.PausedUntil = old.PausedUntil
 	source, err := machine.LoadResourceStep(ctx, tx, current.SourceOperation)
 	if err != nil {
 		return empty, noResource, false, err
@@ -183,7 +183,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 			ResourceReady: true,
 		},
 	}
-	settings.Settings.Generation = accepted.ID
+	prepared.Settings.Generation = accepted.ID
 	input := ActivationInput{
 		RequestTenantID:   principal.TenantID,
 		TenantID:          current.TenantID,
@@ -191,7 +191,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		ResourceOperation: source.OperationID,
 		ResourceHash:      source.Hash,
 		ExpectedInstance:  current.Instance,
-		Settings:          settings.Settings,
+		Settings:          prepared.Settings,
 		ResetIdentity:     false,
 	}
 	if current.State != "paused" {
@@ -225,7 +225,7 @@ func (sb *Sandboxes) admitConfiguration(ctx context.Context, principal authoriza
 		if err = store.RequireOne(dbgen.New(tx).ReplaceSettings(ctx, dbgen.ReplaceSettingsParams{
 			SandboxID:    current.ID,
 			PreviousBody: operation.Encode(old),
-			NextBody:     operation.Encode(settings.Settings),
+			NextBody:     operation.Encode(prepared.Settings),
 		})); err != nil {
 			return empty, noResource, false, err
 		}

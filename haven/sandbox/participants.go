@@ -509,12 +509,18 @@ func (p *Provisioning) AdmitIn(ctx context.Context, tx *sql.Tx, admission Provis
 			return empty, err
 		}
 	}
-	activation := claim
-	if target != nil && target.Activation != nil {
+	var activation *Settings
+	if target != nil {
+		activation = target.Activation
+	}
+	if claim != nil {
 		if activation != nil {
 			return empty, errors.New("resource has two activation admissions")
 		}
-		activation = target.Activation
+		activation = &claim.Settings
+		if err = operation.New(tx).InsertCredential(ctx, accepted.ID, claim.MAC); err != nil {
+			return empty, err
+		}
 	}
 	if activation != nil {
 		if err = p.activations.AdmitIn(tx, accepted, input, *activation); err != nil {

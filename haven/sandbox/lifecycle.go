@@ -72,7 +72,7 @@ type Lifecycle struct {
 	proofs                 machine.ResourceProofs
 	catalog                *Catalog
 	identity               *operation.CommandIdentity
-	policy                 *AdmissionPolicy
+	admissionPolicy        *AdmissionPolicy
 	activations            *Activations
 	warmClaims             *WarmClaims
 	provisioning           *Provisioning
@@ -106,7 +106,7 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 		proofs:                 dependencies.Proofs,
 		catalog:                NewCatalog(state.Database()),
 		identity:               dependencies.CommandIdentity,
-		policy:                 dependencies.AdmissionPolicy,
+		admissionPolicy:        dependencies.AdmissionPolicy,
 		activations:            dependencies.Activations,
 		warmClaims:             dependencies.WarmClaims,
 		provisioning:           dependencies.Provisioning,
@@ -129,11 +129,8 @@ func (l *Lifecycle) fault(point string) error {
 	return nil
 }
 
-func (l *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
-	accepted, found, err := l.identity.Existing(ctx, principal, key, operation.CommandCredentials{
-		MAC:     admission.MAC,
-		Secrets: admission.Secrets,
-	})
+func (l *Lifecycle) existing(ctx context.Context, principal authorization.Principal, key string, credentials operation.CommandCredentials) (operation.State, bool, error) {
+	accepted, found, err := l.identity.Existing(ctx, principal, key, credentials)
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		l.dispatch(accepted.ID)
 	}

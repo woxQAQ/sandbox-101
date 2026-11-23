@@ -116,8 +116,8 @@ func (a *Activations) fault(point string) error {
 
 // AdmitIn joins the initial activation and configuration fence to the caller's
 // resource transaction. Secret registration and dispatch follow its commit.
-func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machine.ResourceInput, claim ClaimAdmission) error {
-	claim.Settings.Generation = record.ID
+func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machine.ResourceInput, settings Settings) error {
+	settings.Generation = record.ID
 	input := ActivationInput{
 		RequestTenantID:   resource.TenantID,
 		TenantID:          resource.TenantID,
@@ -125,18 +125,13 @@ func (a *Activations) AdmitIn(tx *sql.Tx, record operation.State, resource machi
 		ResourceOperation: record.ID,
 		ResourceHash:      operation.Digest(operation.Encode(resource)),
 		ExpectedInstance:  resource.Resource.Instance,
-		Settings:          claim.Settings,
+		Settings:          settings,
 		ResetIdentity:     true,
 	}
 	payload := operation.Encode(input)
-	if claim.MAC != "" {
-		if err := operation.New(tx).InsertCredential(a.ctx, record.ID, claim.MAC); err != nil {
-			return err
-		}
-	}
 	if err := store.RequireOne(dbgen.New(tx).InsertSandboxSettings(a.ctx, dbgen.InsertSandboxSettingsParams{
 		SandboxID: resource.SandboxID,
-		Body:      operation.Encode(claim.Settings),
+		Body:      operation.Encode(settings),
 	})); err != nil {
 		return err
 	}

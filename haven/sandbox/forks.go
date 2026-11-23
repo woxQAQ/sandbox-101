@@ -68,7 +68,7 @@ type Forks struct {
 	history                machine.SnapshotProofs
 	catalog                *Catalog
 	identity               *operation.CommandIdentity
-	policy                 *AdmissionPolicy
+	admissionPolicy        *AdmissionPolicy
 	availability           *execution.Availability
 	operationMonitor       *operation.Monitor
 	provisioning           *Provisioning
@@ -98,7 +98,7 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 		history:                dependencies.History,
 		catalog:                NewCatalog(state.Database()),
 		identity:               dependencies.CommandIdentity,
-		policy:                 dependencies.AdmissionPolicy,
+		admissionPolicy:        dependencies.AdmissionPolicy,
 		availability:           dependencies.Availability,
 		operationMonitor:       dependencies.OperationMonitor,
 		provisioning:           dependencies.Provisioning,
@@ -119,11 +119,8 @@ func (f *Forks) fault(point string) error {
 	return nil
 }
 
-func (f *Forks) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
-	accepted, found, err := f.identity.Existing(ctx, principal, key, operation.CommandCredentials{
-		MAC:     admission.MAC,
-		Secrets: admission.Secrets,
-	})
+func (f *Forks) existing(ctx context.Context, principal authorization.Principal, key string, credentials operation.CommandCredentials) (operation.State, bool, error) {
+	accepted, found, err := f.identity.Existing(ctx, principal, key, credentials)
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		f.dispatch(accepted.ID)
 	}

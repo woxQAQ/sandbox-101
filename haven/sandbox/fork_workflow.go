@@ -214,10 +214,6 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 		command := step.Input.Command
 		command.Action, command.SandboxID, command.CheckpointID, command.Count = "fork_branch", target.ID, "", 0
 		frozen := machine.FreezeProvisionRequest(request, &command)
-		activation := &ClaimAdmission{
-			Command:  step.Input.Command,
-			Settings: step.Input.Settings,
-		}
 		child, err := f.provisioning.AdmitIn(f.ctx, tx, ProvisionAdmission{
 			Request: supply.ProvisionRequest{
 				TenantID: request.TenantID,
@@ -232,7 +228,7 @@ func (f *Forks) allocateFork(step *ForkStep) error {
 				SlotOperation: step.OperationID,
 				SlotHolder:    forkSlotHolder(step.OperationID, target.ID),
 				Parent:        parent,
-				Activation:    activation,
+				Activation:    &step.Input.Settings,
 			},
 		}, free)
 		if err != nil {

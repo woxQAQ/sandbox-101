@@ -36,7 +36,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 		return empty, err
 	}
 	mac := f.identity.CommandMAC(principal, command)
-	if acceptedOperation, found, err := f.existing(ctx, principal, key, &ClaimAdmission{
+	if acceptedOperation, found, err := f.existing(ctx, principal, key, operation.CommandCredentials{
 		MAC:     mac,
 		Secrets: secrets,
 	}); found || err != nil {
@@ -127,7 +127,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			}
 		}
 	}
-	admission, err := f.policy.Prepare(command)
+	prepared, err := f.admissionPolicy.PrepareCommand(command)
 	if err != nil {
 		return empty, err
 	}
@@ -151,9 +151,9 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 		Key:    key,
 		Status: "pending",
 	}
-	admission.Settings.Generation = parent.ID
-	input.Command = admission.Command
-	input.Settings = admission.Settings
+	prepared.Settings.Generation = parent.ID
+	input.Command = prepared.Command
+	input.Settings = prepared.Settings
 	for range command.Count {
 		target := ownership.Sandbox{
 			ID:          operation.NewID("sandbox_"),
@@ -202,7 +202,7 @@ func (f *Forks) AdmitFork(ctx context.Context, principal authorization.Principal
 			return empty, err
 		}
 	}
-	f.registry.SetOperationSecrets(parent.ID, admission.Secrets)
+	f.registry.SetOperationSecrets(parent.ID, prepared.Secrets)
 	if err = f.fault("fork_admitted"); err != nil {
 		return parent, err
 	}

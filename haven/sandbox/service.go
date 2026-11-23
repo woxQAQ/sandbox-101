@@ -57,7 +57,7 @@ type Sandboxes struct {
 	registry               *ephemeral.Registry
 	snapshotProofs         machine.SnapshotProofs
 	identity               *operation.CommandIdentity
-	policy                 *AdmissionPolicy
+	admissionPolicy        *AdmissionPolicy
 	availability           *execution.Availability
 	operationMonitor       *operation.Monitor
 	activations            *Activations
@@ -87,7 +87,7 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies) *Sandbox
 		registry:               dependencies.Registry,
 		snapshotProofs:         dependencies.SnapshotProofs,
 		identity:               dependencies.CommandIdentity,
-		policy:                 dependencies.AdmissionPolicy,
+		admissionPolicy:        dependencies.AdmissionPolicy,
 		availability:           dependencies.Availability,
 		operationMonitor:       dependencies.OperationMonitor,
 		activations:            dependencies.Activations,
@@ -108,11 +108,8 @@ func (sb *Sandboxes) fault(point string) error {
 	return nil
 }
 
-func (sb *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, admission *ClaimAdmission) (operation.State, bool, error) {
-	accepted, found, err := sb.identity.Existing(ctx, principal, key, operation.CommandCredentials{
-		MAC:     admission.MAC,
-		Secrets: admission.Secrets,
-	})
+func (sb *Sandboxes) existing(ctx context.Context, principal authorization.Principal, key string, credentials operation.CommandCredentials) (operation.State, bool, error) {
+	accepted, found, err := sb.identity.Existing(ctx, principal, key, credentials)
 	if found && err == nil && !operation.Terminal(accepted.Status) {
 		sb.dispatch(accepted.ID)
 	}

@@ -47,7 +47,7 @@ func (l *Lifecycle) AdmitForParent(ctx context.Context, request LifecycleRequest
 	releaseKey := l.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer releaseKey()
 	mac := l.identity.CommandMAC(principal, command)
-	if operation, found, err := l.existing(ctx, principal, key, &ClaimAdmission{
+	if operation, found, err := l.existing(ctx, principal, key, operation.CommandCredentials{
 		MAC: mac,
 	}); found || err != nil {
 		return operation, err

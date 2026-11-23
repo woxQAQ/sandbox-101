@@ -14,6 +14,14 @@ import (
 	"github.com/woxQAQ/haven/supply"
 )
 
+// ClaimAdmission carries the prepared command and its identity for claim retries.
+type ClaimAdmission struct {
+	PreparedCommand
+	// MAC is the message authentication code that binds the caller and original
+	// command, including host secret values, for comparison on idempotent retries.
+	MAC string
+}
+
 // AdmitClaim accepts one tenant claim and returns the operation responsible for delivery.
 // A matching retry resumes the original operation, including while the node is draining.
 func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Principal, key string, command operation.Intent) (operation.State, error) {
@@ -31,15 +39,20 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 		return empty, fmt.Errorf("%w: claim requires a key of 1..256 bytes", errs.ErrInvalid)
 	}
 	// Validate settings before taking the per-key guard. Only redacted values may be frozen.
-	admission, err := sb.policy.Prepare(command)
+	prepared, err := sb.admissionPolicy.PrepareCommand(command)
 	if err != nil {
 		return empty, err
 	}
-	// Bind the original values, including secrets, to the authenticated role for replay.
-	admission.MAC = sb.identity.CommandMAC(principal, command)
+	admission := ClaimAdmission{
+		PreparedCommand: *prepared,
+		MAC:             sb.identity.CommandMAC(principal, command),
+	}
 	unlock := sb.tenantIdempotencyLocks.Lock(principal.TenantID, key)
 	defer unlock()
-	if operation, found, err := sb.existing(ctx, principal, key, admission); found || err != nil {
+	if operation, found, err := sb.existing(ctx, principal, key, operation.CommandCredentials{
+		MAC:     admission.MAC,
+		Secrets: prepared.Secrets,
+	}); found || err != nil {
 		return operation, err
 	}
 	// Drain closes new admissions after the replay check.
@@ -85,7 +98,7 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 		if warm, found, err := sb.warmClaims.Admit(ctx, WarmClaimRequest{
 			Principal: principal,
 			Key:       key,
-			Admission: *admission,
+			Admission: admission,
 			Template:  template,
 			Restore:   verifiedSource,
 		}); found || err != nil {
@@ -106,6 +119,6 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 	}
 	return sb.provisioning.Admit(ctx, ProvisionAdmission{
 		Request: request,
-		Claim:   admission,
+		Claim:   &admission,
 	})
 }

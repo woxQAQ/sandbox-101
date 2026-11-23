@@ -61,7 +61,7 @@ type Plane struct {
 	epoch                 string
 	sign                  func(...string) string
 	catalog               *sandbox.Catalog
-	policy                *sandbox.AdmissionPolicy
+	admissionPolicy       *sandbox.AdmissionPolicy
 	sandboxes             *sandbox.Sandboxes
 	lifecycle             *sandbox.Lifecycle
 	operationMonitor      *operation.Monitor
@@ -86,7 +86,7 @@ func NewPlane(state *store.State, dependencies PlaneDependencies, options PlaneO
 		epoch:                 options.Epoch,
 		sign:                  state.Sign,
 		catalog:               sandbox.NewCatalog(state.Database()),
-		policy:                dependencies.AdmissionPolicy,
+		admissionPolicy:       dependencies.AdmissionPolicy,
 		sandboxes:             dependencies.Sandboxes,
 		lifecycle:             dependencies.Lifecycle,
 		operationMonitor:      dependencies.OperationMonitor,
