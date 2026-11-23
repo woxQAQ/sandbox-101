@@ -61,7 +61,7 @@ func (l *Lifecycle) AdmitRollback(ctx context.Context, principal authorization.P
 	if err != nil {
 		return empty, err
 	}
-	if string(operation.Encode(source.Input.Resource.Config)) != string(operation.Encode(snapshot.Snapshot.Manifest.Config)) {
+	if !source.Input.Resource.Config.Equal(snapshot.Snapshot.Manifest.Config) {
 		return empty, fmt.Errorf("%w: rollback shape/image differs from sandbox", errs.ErrConflict)
 	}
 	if current.State == "running" && l.admissionPolicy.CredentialsMissing(current.ID, settings) {

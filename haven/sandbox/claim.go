@@ -89,7 +89,7 @@ func (sb *Sandboxes) AdmitClaim(ctx context.Context, principal authorization.Pri
 		if err != nil {
 			return empty, err
 		}
-		if string(operation.Encode(template.Config)) != string(operation.Encode(verifiedSource.Snapshot.Manifest.Config)) {
+		if !template.Config.Equal(verifiedSource.Snapshot.Manifest.Config) {
 			return empty, fmt.Errorf("%w: template snapshot shape/image differs", errs.ErrConflict)
 		}
 		if err = machine.VerifyRestoreSourceFiles(verifiedSource); err != nil {

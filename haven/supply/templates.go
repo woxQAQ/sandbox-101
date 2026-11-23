@@ -402,7 +402,7 @@ func (s *Supply) publishTemplate(ctx context.Context, tx *sql.Tx, step SupplySte
 		if err != nil {
 			return operation.Result{}, err
 		}
-		if string(operation.Encode(source.Snapshot.Manifest.Config)) != string(operation.Encode(desired.Config)) {
+		if !source.Snapshot.Manifest.Config.Equal(desired.Config) {
 			return operation.Result{}, fmt.Errorf("template snapshot configuration changed")
 		}
 		if input.Command.Action == "template_put" {

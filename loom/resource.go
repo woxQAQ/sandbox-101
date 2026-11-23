@@ -2,7 +2,10 @@
 // effects. Durable intent, publication and recovery belong to the caller.
 package loom
 
-import "context"
+import (
+	"context"
+	"maps"
+)
 
 type Shape struct {
 	VCPUs     int   `json:"vcpus"`
@@ -14,6 +17,11 @@ type Config struct {
 	Image  string            `json:"image"`
 	Shape  Shape             `json:"shape"`
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// Equal compares the image, shape, and labels. Nil and empty label maps are equivalent.
+func (c Config) Equal(other Config) bool {
+	return c.Image == other.Image && c.Shape == other.Shape && maps.Equal(c.Labels, other.Labels)
 }
 
 // NetworkPolicy describes the versioned IPv4 rules for one explicit instance.

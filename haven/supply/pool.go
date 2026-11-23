@@ -171,11 +171,25 @@ func VerifyReadyWarm(proofs machine.ResourceProofs, ctx context.Context, tx *sql
 	if err != nil {
 		return reservation, source, err
 	}
-	if source.Hash != reservation.Source.InputHash || source.Status != "succeeded" || source.State.Witness != reservation.Instance || source.Candidate != reservation.VMID || source.Input.SandboxID != reservation.SandboxID || source.Input.TenantID != reservation.Template.TenantID || source.Input.SlotBudget != (quota.SlotBudget{
-		Kind:  "sandbox_slot",
-		Units: 0,
-	}) || source.Input.Restore == nil || source.Input.Restore.Snapshot.ID != reservation.Template.SnapshotID || string(operation.Encode(source.Input.Resource.Config)) != string(operation.Encode(reservation.Template.Config)) {
-		return reservation, source, fmt.Errorf("warm resource birth proof differs from refill")
+	if source.Hash != reservation.Source.InputHash || source.Status != "succeeded" {
+		return reservation, source, fmt.Errorf("warm resource step differs from the successful refill source")
+	}
+	if source.State.Witness != reservation.Instance || source.Candidate != reservation.VMID {
+		return reservation, source, fmt.Errorf("warm VM or instance differs from reservation")
+	}
+	input := source.Input
+	if input.SandboxID != reservation.SandboxID || input.TenantID != reservation.Template.TenantID {
+		return reservation, source, fmt.Errorf("warm resource sandbox or tenant differs from reservation")
+	}
+	warmBudget := quota.SlotBudget{Kind: "sandbox_slot", Units: 0}
+	if input.SlotBudget != warmBudget {
+		return reservation, source, fmt.Errorf("warm resource requires a zero-unit sandbox slot budget")
+	}
+	if input.Restore == nil || input.Restore.Snapshot.ID != reservation.Template.SnapshotID {
+		return reservation, source, fmt.Errorf("warm restore source differs from template snapshot")
+	}
+	if !input.Resource.Config.Equal(reservation.Template.Config) {
+		return reservation, source, fmt.Errorf("warm resource configuration differs from template")
 	}
 	link, linked, err := machine.LoadResourceLink(ctx, tx, id, "clone")
 	if err != nil {
