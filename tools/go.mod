@@ -4,6 +4,7 @@ go 1.26.5
 
 tool (
 	github.com/sqlc-dev/sqlc/cmd/sqlc
+	github.com/woxQAQ/haven/tools/longcond
 	github.com/woxQAQ/haven/tools/sqlfmt
 	github.com/woxQAQ/haven/tools/structfmt
 	github.com/woxQAQ/long-funcparam-detectorgo

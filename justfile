@@ -45,6 +45,10 @@ lint:
 check-funcparams *args:
     GOWORK=off go -C tools tool long-funcparam-detectorgo -ignore dbgen -ignore sandbox.pb.go {{args}} ../haven ../loom ../sdk ../types ../common ../tools ../protocol/gen
 
+# Report Go conditions exceeding the logical term limit (default 4).
+check-longconds *args:
+    go tool longcond {{args}} {{modules}}
+
 lint-fix:
     golangci-lint run --fix {{packages}}
 
