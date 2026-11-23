@@ -63,7 +63,7 @@ func TestHavenHTTPFormatsFrozenOperationFailure(t *testing.T) {
 	if view.Error == nil || view.Error.Code != types.CodeInternal || view.Error.Message != "internal service error" {
 		t.Fatal("HTTP failure was not formatted at the boundary", view)
 	}
-	internal, err := service.Delivery.PublicOperation(ctx, principal, accepted.ID)
+	internal, err := service.OperationViews.Get(ctx, principal, accepted.ID)
 	if err != nil || internal.Error != nil || internal.Status != "failed" {
 		t.Fatal("business publication retained an HTTP error", internal, err)
 	}

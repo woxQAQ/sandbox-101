@@ -25,7 +25,7 @@ type Services struct {
 	Catalog          *sandbox.Catalog
 	Templates        *supply.TemplateCatalog
 	Operations       *operation.Monitor
-	Delivery         *sandbox.OperationDelivery
+	OperationViews   *sandbox.OperationViews
 	Tenants          *authorization.Tenants
 	CommandAdmission *sandbox.CommandAdmission
 	Dataplane        *dataplane.Plane
@@ -235,7 +235,7 @@ func (h *Services) sandboxAction(action string) gin.HandlerFunc {
 }
 
 func (h *Services) getOperation(c *gin.Context) {
-	view, err := h.Delivery.PublicOperation(c.Request.Context(), principal(c), c.Param("id"))
+	view, err := h.OperationViews.Get(c.Request.Context(), principal(c), c.Param("id"))
 	if err != nil {
 		writeError(c, err)
 		return
@@ -358,7 +358,7 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 		return
 	}
 	if strings.Contains(request.Header.Get("Prefer"), "respond-async") {
-		view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
+		view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
 		if err != nil {
 			writeError(c, err)
 			return
@@ -372,7 +372,7 @@ func (h *Services) submit(c *gin.Context, command types.Command) {
 		writeError(c, err)
 		return
 	}
-	view, err := h.Delivery.PublicOperation(request.Context(), principal(c), accepted.ID)
+	view, err := h.OperationViews.Get(request.Context(), principal(c), accepted.ID)
 	if err != nil {
 		writeError(c, err)
 		return

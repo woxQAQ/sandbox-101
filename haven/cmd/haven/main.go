@@ -205,7 +205,7 @@ func serve(ctx context.Context, cfg config.Daemon, service *application.App) err
 			CommandAdmission: service.CommandAdmission,
 			Dataplane:        service.Dataplane,
 			Node:             service.Node,
-			Delivery:         service.Delivery,
+			OperationViews:   service.OperationViews,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,

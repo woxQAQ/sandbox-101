@@ -274,7 +274,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		Authentication:   service.Authentication,
 		CommandAdmission: service.CommandAdmission,
 		Operations:       service.Operations,
-		Delivery:         service.Delivery,
+		OperationViews:   service.OperationViews,
 	}))
 	t.Cleanup(server.Close)
 	admin := sdk.New(server.URL, service.Options.AdminToken)

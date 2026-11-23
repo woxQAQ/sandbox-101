@@ -849,7 +849,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+	result, err := service.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 	if err != nil || result.Result.Sandbox == nil {
 		t.Fatal(result, err)
 	}
@@ -862,7 +862,7 @@ func transportFixtureRoot(t *testing.T, longPath bool, guest guest.Agent) (*appl
 		CommandAdmission: service.CommandAdmission,
 		Dataplane:        service.Dataplane,
 		Node:             service.Node,
-		Delivery:         service.Delivery,
+		OperationViews:   service.OperationViews,
 	}))
 	t.Cleanup(server.Close)
 	return service, sdk.New(server.URL, result.Result.Tokens[result.Result.Sandbox.ID]), principal, result.Result.Sandbox.ID

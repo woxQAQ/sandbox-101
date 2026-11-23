@@ -52,7 +52,7 @@ func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
 	if !errors.Is(diagnostic, os.ErrNotExist) || !strings.Contains(diagnostic.Error(), privatePath) {
 		t.Fatal("private diagnostic lost its original context", diagnostic)
 	}
-	view, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+	view, err := service.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 	if err != nil || view.Status != "failed" || view.Error != nil || strings.Contains(string(operation.Encode(view)), privatePath) {
 		t.Fatal("private file absence became a public diagnosis", view, err)
 	}
@@ -60,7 +60,7 @@ func TestHavenPlainFailureKeepsDiagnosticOutsideFrozenResult(t *testing.T) {
 		t.Fatal("failed activation published a running sandbox")
 	}
 	reopened := testapp.ReopenCloneService(t, service, service.Options.Backend)
-	replayed, err := reopened.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+	replayed, err := reopened.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 	if err != nil || !reflect.DeepEqual(replayed, view) {
 		t.Fatal("restart changed the frozen public failure", replayed, err)
 	}

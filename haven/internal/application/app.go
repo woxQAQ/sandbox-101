@@ -80,7 +80,7 @@ type App struct {
 	Catalog          *sandbox.Catalog
 	TemplateCatalog  *supply.TemplateCatalog
 	Operations       *operation.Monitor
-	Delivery         *sandbox.OperationDelivery
+	OperationViews   *sandbox.OperationViews
 	Tenants          *authorization.Tenants
 	SnapshotDeletion *machine.SnapshotDeletion
 	CaptureDiscard   *machine.CaptureDiscard
@@ -180,7 +180,7 @@ func Open(opts Options) (*App, error) {
 		Catalog:         sandbox.NewCatalog(state.Database()),
 		TemplateCatalog: supply.NewTemplateCatalog(state.Database()),
 		Operations:      operations,
-		Delivery:        sandbox.NewOperationDelivery(state.Database(), operations, authentication),
+		OperationViews:  sandbox.NewOperationViews(state.Database(), operations, authentication),
 		Tenants: authorization.NewTenants(authorization.New(state.Database()), authorization.TenantDependencies{
 			StoreWriteMu: storeWriteMu,
 			Lifetime:     lifetime,

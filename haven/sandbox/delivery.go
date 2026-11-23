@@ -13,29 +13,28 @@ import (
 	"github.com/woxQAQ/haven/types"
 )
 
-// OperationDelivery confines sandbox capabilities and derives bearer tokens
-// while reading the original frozen operation view.
-type OperationDelivery struct {
+// OperationViews reads operation status and results within the caller's authority.
+type OperationViews struct {
 	database       *store.Database
 	operations     *operation.Monitor
 	authentication *authorization.Authentication
 }
 
-func NewOperationDelivery(database *store.Database, operations *operation.Monitor, authentication *authorization.Authentication) *OperationDelivery {
-	return &OperationDelivery{
+func NewOperationViews(database *store.Database, operations *operation.Monitor, authentication *authorization.Authentication) *OperationViews {
+	return &OperationViews{
 		database:       database,
 		operations:     operations,
 		authentication: authentication,
 	}
 }
 
-// PublicOperation authorizes delivery of the original business view. Status and
-// publication share one read snapshot; bearer tokens are derived only on delivery.
-func (d *OperationDelivery) PublicOperation(ctx context.Context, principal authorization.Principal, id string) (types.Operation, error) {
-	if _, err := d.operations.Operation(ctx, principal, id); err != nil {
+// Get returns the operation view authorized for principal. It reads the status and
+// any frozen terminal result in one snapshot and derives sandbox tokens on read.
+func (v *OperationViews) Get(ctx context.Context, principal authorization.Principal, id string) (types.Operation, error) {
+	if _, err := v.operations.Operation(ctx, principal, id); err != nil {
 		return types.Operation{}, err
 	}
-	tx, err := d.database.BeginTx(ctx, &sql.TxOptions{
+	tx, err := v.database.BeginTx(ctx, &sql.TxOptions{
 		ReadOnly: true,
 	})
 	if err != nil {
@@ -81,7 +80,7 @@ func (d *OperationDelivery) PublicOperation(ctx context.Context, principal autho
 			if out.Result.Tokens == nil {
 				out.Result.Tokens = make(map[string]string)
 			}
-			out.Result.Tokens[sandbox.ID] = d.authentication.SandboxToken(sandbox.TenantID, sandbox.ID)
+			out.Result.Tokens[sandbox.ID] = v.authentication.SandboxToken(sandbox.TenantID, sandbox.ID)
 		}
 	}
 	return out, nil

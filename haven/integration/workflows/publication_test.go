@@ -29,7 +29,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	}).Claim(t, "public-claim", nil, egress.Policy{
 		Mode: "none",
 	})
-	original, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+	original, err := service.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 		if command.Action == "release" {
 			releaseID = changed.ID
 		}
-		current, err := service.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+		current, err := service.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 		if err != nil || !bytes.Equal(frozen, operation.Encode(current)) {
 			t.Fatal("later workflow changed historical delivery", current, err)
 		}
@@ -84,13 +84,13 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	if err != nil || retired.SandboxID != acceptedRecord.Result.SandboxID {
 		t.Fatal(retired, err)
 	}
-	if _, err = service.Delivery.PublicOperation(ctx, retired, acceptedRecord.ID); err == nil {
+	if _, err = service.OperationViews.Get(ctx, retired, acceptedRecord.ID); err == nil {
 		t.Fatal("retired capability read a tenant-only claim")
 	}
-	if view, err := service.Delivery.PublicOperation(ctx, retired, releaseID); err != nil || view.Result.Tokens != nil {
+	if view, err := service.OperationViews.Get(ctx, retired, releaseID); err != nil || view.Result.Tokens != nil {
 		t.Fatal("retired capability cannot read its release without minting new tokens", view, err)
 	}
-	if _, err = service.Delivery.PublicOperation(ctx, authorization.Principal{
+	if _, err = service.OperationViews.Get(ctx, authorization.Principal{
 		TenantID: "other",
 	}, acceptedRecord.ID); err == nil {
 		t.Fatal("foreign operation visible")
@@ -113,7 +113,7 @@ func TestHavenPublicTerminalHistorySurvivesChangesAndReopen(t *testing.T) {
 	t.Cleanup(func() {
 		_ = reopened.Close(context.Background())
 	})
-	current, err := reopened.Delivery.PublicOperation(ctx, principal, acceptedRecord.ID)
+	current, err := reopened.OperationViews.Get(ctx, principal, acceptedRecord.ID)
 	if err != nil || !bytes.Equal(frozen, operation.Encode(current)) {
 		t.Fatal("reopen recomputed terminal result", current, err)
 	}
@@ -159,7 +159,7 @@ func TestHavenRenewRollsBackWithoutSandboxDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, err := service.Delivery.PublicOperation(ctx, principal, retried.ID)
+	published, err := service.OperationViews.Get(ctx, principal, retried.ID)
 	if err != nil || published.Result.Sandbox == nil || published.Result.Sandbox.TTLSeconds != 120 {
 		t.Fatal("retry did not publish the renewed lease", published, err)
 	}
@@ -225,7 +225,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := service.Delivery.PublicOperation(ctx, principal, repaired.ID)
+	view, err := service.OperationViews.Get(ctx, principal, repaired.ID)
 	if err != nil || view.Status != "succeeded" {
 		t.Fatal(view, err)
 	}
@@ -235,7 +235,7 @@ func TestHavenPublicPublicationFailureKeepsConfigurationFenced(t *testing.T) {
 	if _, err = service.Operations.Wait(ctx, principal, configure.ID); err == nil {
 		t.Fatal("superseded intent returned success")
 	}
-	old, err := service.Delivery.PublicOperation(ctx, principal, configure.ID)
+	old, err := service.OperationViews.Get(ctx, principal, configure.ID)
 	if err != nil || old.Status != "failed" || old.Step != "failed" || old.Error != nil || !old.CreatedAt.Equal(createdAt) || old.FinishedAt.IsZero() {
 		t.Fatal("superseded failure was not frozen", old, err)
 	}

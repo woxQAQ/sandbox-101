@@ -84,7 +84,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal(acceptedOperation, err, reason)
 			}
-			view, err := service.Delivery.PublicOperation(ctx, principal, acceptedOperation.ID)
+			view, err := service.OperationViews.Get(ctx, principal, acceptedOperation.ID)
 			if err != nil || len(view.Result.Sandboxes) != 3 || view.Result.Sandbox != nil || len(view.Result.Tokens) != 3 || len(view.IDs) != 3 {
 				t.Fatal(view, err)
 			}
@@ -262,7 +262,7 @@ func TestHavenForkBatchReopensFrozenTargets(t *testing.T) {
 				reason := service.Workers.State(acceptedOperation.ID).Err
 				t.Fatal("reopen changed batch targets or lost completion", result, err, reason)
 			}
-			view, err := service.Delivery.PublicOperation(ctx, principal, acceptedOperation.ID)
+			view, err := service.OperationViews.Get(ctx, principal, acceptedOperation.ID)
 			if err != nil || len(view.Result.Sandboxes) != 2 {
 				t.Fatal(view, err)
 			}

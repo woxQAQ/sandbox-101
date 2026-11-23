@@ -103,9 +103,6 @@ func LoadPublication(ctx context.Context, query store.DBTX, id string) (types.Op
 	return view, ValidateDelivery(view)
 }
 
-// PublicOperation authorizes delivery of the original business view. Status and
-// publication share one read snapshot; bearer tokens are derived only on delivery.
-
 // PublicationProof contains only frozen operation identity and delivery. Recovery
 // validates this history without reconstructing results from current resources.
 type PublicationProof struct {

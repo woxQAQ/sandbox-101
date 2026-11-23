@@ -34,7 +34,7 @@ func TestHavenStartupRejectsChangedDeliveryBeforeEffects(t *testing.T) {
 			}).Claim(t, "public-corruption", nil, egress.Policy{
 				Mode: "none",
 			})
-			view, err := service.Delivery.PublicOperation(context.Background(), authorization.Principal{
+			view, err := service.OperationViews.Get(context.Background(), authorization.Principal{
 				TenantID: "tenant",
 			}, claim.ID)
 			if err != nil {
