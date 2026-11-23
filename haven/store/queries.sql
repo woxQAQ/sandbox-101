@@ -2,7 +2,7 @@
 INSERT INTO deletion_intents(path,operation_id,step_key,receipt_hash) VALUES(?,?,?,?);
 
 -- name: LiveDeletionHash :one
-SELECT receipt_hash FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?;
+SELECT receipt_hash FROM deletion_intents WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=?;
 
 -- name: InsertDeletionReceipt :execrows
 INSERT INTO deletion_history(path,operation_id,step_key,format,directory,receipt_hash,ordinal)
@@ -17,7 +17,7 @@ SELECT r.format,r.directory,r.receipt_hash,n.relative_path,n.device,n.inode,n.mo
 LEFT JOIN deletion_nodes n ON n.receipt_path=r.path AND n.operation_id=r.operation_id AND n.step_key=r.step_key WHERE r.path=? AND r.operation_id=? AND r.step_key=?;
 
 -- name: DeleteMatchingReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=? AND receipt_hash=?;
+UPDATE deletion_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=? AND receipt_hash=?;
 
 -- name: InitializeMetadata :exec
 INSERT INTO store_metadata(singleton,format,version,identity,node_key_sha256,epoch) VALUES(1,sqlc.arg(format),sqlc.arg(version),sqlc.arg(identity),sqlc.arg(node_key_sha256),0);

@@ -377,7 +377,11 @@ func (admission *forkBranchAdmission) AdmitResource(ctx context.Context, tx *sql
 	if err := matchSettings(ctx, tx, admission.Target.ID, admission.Group.Input.Settings); err != nil {
 		return err
 	}
-	if err := store.RequireOne(dbgen.New(tx).DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
+	q := dbgen.New(tx)
+	if err := retireSettingsChildren(ctx, q, admission.Target.ID); err != nil {
+		return err
+	}
+	if err := store.RequireOne(q.DeleteUnchangedSettings(ctx, dbgen.DeleteUnchangedSettingsParams{
 		SandboxID:  admission.Target.ID,
 		Generation: admission.Group.Input.Settings.Generation,
 	})); err != nil {

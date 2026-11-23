@@ -27,12 +27,12 @@ func TestHavenSnapshotDeleteAtomicRetirement(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"DELETE", "snapshot_publications", "1"},
-		{"DELETE", "snapshots", "1"},
-		{"DELETE", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
-		{"DELETE", "quota_resources", "OLD.kind='snapshot'"},
-		{"DELETE", "deletion_intents", "1"},
-		{"DELETE", "resource_refs", "OLD.holder_kind='snapshot'"},
+		{"UPDATE OF deleted_at", "snapshot_publications", "1"},
+		{"UPDATE OF deleted_at", "snapshots", "1"},
+		{"UPDATE OF deleted_at", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
+		{"UPDATE OF deleted_at", "quota_resources", "OLD.kind='snapshot'"},
+		{"UPDATE OF deleted_at", "deletion_intents", "1"},
+		{"UPDATE OF deleted_at", "resource_refs", "OLD.holder_kind='snapshot'"},
 		{"UPDATE", "operation_steps", "NEW.action='snapshot_delete' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
@@ -83,7 +83,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			if step := awaitSnapshotDelete(t, service, operation.ID); step.Status != "succeeded" {
 				t.Fatal(step.Phase)
 			}
-			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_backing_fee BEFORE DELETE ON quota_resources WHEN OLD.kind='snapshot' BEGIN SELECT RAISE(%s); END", mode)); err != nil {
+			if _, err := service.State.Database().Exec(fmt.Sprintf("CREATE TRIGGER deny_backing_fee BEFORE UPDATE OF deleted_at ON quota_resources WHEN OLD.kind='snapshot' BEGIN SELECT RAISE(%s); END", mode)); err != nil {
 				t.Fatal(err)
 			}
 			clone := fixture.Clones[0]
@@ -101,7 +101,7 @@ func TestHavenSnapshotDeleteBackingRetirement(t *testing.T) {
 			}
 			snapshotDeleteCost(t, fixture, 192)
 			var backing, versions int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE vm_id=?)", clone.Result.VMID, clone.Result.VMID).Scan(&backing, &versions); err != nil || backing != 1 || versions != 1 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vm_memory_backings WHERE deleted_at IS NULL AND vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE deleted_at IS NULL AND vm_id=?)", clone.Result.VMID, clone.Result.VMID).Scan(&backing, &versions); err != nil || backing != 1 || versions != 1 {
 				t.Fatal("last backing retirement not atomic", backing, versions, err)
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_backing_fee"); err != nil {
@@ -471,7 +471,7 @@ func awaitSnapshotDelete(t *testing.T, service *application.App, id string) mach
 func snapshotDeleteCost(t *testing.T, fixture *snapshotDeletionFixture, want int) {
 	t.Helper()
 	var cost, owner int
-	if err := fixture.Service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE kind='snapshot' AND resource_key=?),(SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=?)", fixture.Capture.Result.SnapshotID, fixture.Capture.Result.SnapshotID).Scan(&cost, &owner); err != nil || cost != want || owner != 1 {
+	if err := fixture.Service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL AND kind='snapshot' AND resource_key=?),(SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=?)", fixture.Capture.Result.SnapshotID, fixture.Capture.Result.SnapshotID).Scan(&cost, &owner); err != nil || cost != want || owner != 1 {
 		t.Fatal("snapshot debt or permanent owner changed", cost, owner, err)
 	}
 }

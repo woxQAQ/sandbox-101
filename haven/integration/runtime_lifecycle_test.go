@@ -590,7 +590,7 @@ func (scenario runtimeScenario) verifyProvisioningTiers(t *testing.T, ctx contex
 	defer cancel()
 	var warmID string
 	for {
-		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM pool_slots WHERE template_id=? AND status='ready'", template.ID).Scan(&warmID)
+		err := db.QueryRowContext(poolCtx, "SELECT vm_id FROM pool_slots WHERE deleted_at IS NULL AND template_id=? AND status='ready'", template.ID).Scan(&warmID)
 		if err == nil {
 			break
 		}
@@ -1341,7 +1341,7 @@ func (inventory *vmInventory) getVM(ctx context.Context, id string) (vmObservati
 }
 
 func (inventory *vmInventory) listVMs(ctx context.Context) ([]string, error) {
-	rows, err := inventory.db.QueryContext(ctx, "SELECT id FROM vms ORDER BY id")
+	rows, err := inventory.db.QueryContext(ctx, "SELECT id FROM vms WHERE deleted_at IS NULL ORDER BY id")
 	if err != nil {
 		return nil, err
 	}

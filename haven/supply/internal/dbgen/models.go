@@ -4,7 +4,12 @@
 
 package dbgen
 
+import (
+	"database/sql"
+)
+
 type PoolSlot struct {
+	DeletedAt         sql.NullString
 	OperationID       string
 	TemplateID        string
 	TemplateVersion   string

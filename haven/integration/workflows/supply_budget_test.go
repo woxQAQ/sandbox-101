@@ -67,7 +67,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 				t.Fatal(source)
 			}
 			var slots int64
-			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != budget.Units {
+			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots); err != nil || slots != budget.Units {
 				t.Fatal(slots, err)
 			}
 			release, err := service.Deletion.AdmitRelease(ctx, machine.ReleaseRequest{
@@ -83,7 +83,7 @@ func TestHavenSupplySlotBudgets(t *testing.T) {
 				t.Fatal(released)
 			}
 			var remaining int
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM quota_resources WHERE tenant_id='tenant'").Scan(&remaining); err != nil || remaining != 0 {
+			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&remaining); err != nil || remaining != 0 {
 				t.Fatal(remaining, err)
 			}
 		})

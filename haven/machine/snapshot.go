@@ -145,14 +145,14 @@ func snapshotRecord(ctx context.Context, q store.DBTX, row dbgen.Snapshot) (Snap
 func LoadOwnedSnapshot(ctx context.Context, query store.DBTX, tenant, id string) (SnapshotRecord, error) {
 	var record SnapshotRecord
 	err := store.ReadSnapshot(ctx, query, func(tx *sql.Tx) error {
-		row, err := dbgen.New(tx).GetOwnedSnapshot(ctx, dbgen.GetOwnedSnapshotParams{
+		row, err := dbgen.New(tx).GetOwnedPublication(ctx, dbgen.GetOwnedPublicationParams{
 			ID:       id,
 			TenantID: tenant,
 		})
 		if err != nil {
 			return err
 		}
-		record, err = snapshotRecord(ctx, tx, row)
+		record, err = snapshotRecord(ctx, tx, row.Snapshot)
 		if err != nil {
 			return err
 		}

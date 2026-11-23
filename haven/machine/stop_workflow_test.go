@@ -51,7 +51,7 @@ func TestHavenStopCompletionAtomicity(t *testing.T) {
 				t.Fatal("fixture did not cross physical stop boundary", observation, err)
 			}
 			var storage, slots int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib),SUM(sandbox_slots) FROM quota_resources").Scan(&storage, &slots); err != nil || storage != 64 || slots != 1 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib),SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage, &slots); err != nil || storage != 64 || slots != 1 {
 				t.Fatal("uncommitted stop lost resource responsibility", storage, slots, err)
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_stop_completion"); err != nil {
@@ -110,7 +110,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				t.Fatal(err)
 			}
 			var charged int64
-			if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&charged); err != nil {
+			if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&charged); err != nil {
 				t.Fatal(err)
 			}
 			request := machine.StopRequest{
@@ -128,7 +128,7 @@ func TestHavenStopRequiresOriginalDiskFunding(t *testing.T) {
 				t.Fatal("rejected stop changed current custody", err)
 			}
 			var retained int64
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&retained); err != nil || retained != charged {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&retained); err != nil || retained != charged {
 				t.Fatal("rejected stop retired responsibility", retained, charged, err)
 			}
 			frozen, err := machine.LoadResourceStep(context.Background(), service.State.Database(), claim.ID)

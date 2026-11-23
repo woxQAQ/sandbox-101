@@ -9,6 +9,7 @@ import (
 )
 
 type CheckpointBinding struct {
+	DeletedAt   sql.NullString
 	ID          string
 	Tenant      string
 	SnapshotID  string
@@ -43,16 +44,18 @@ type Sandbox struct {
 }
 
 type SandboxSetting struct {
-	SandboxID      string
-	Generation     string
-	Instance       string
-	ActiveEpoch    string
-	TtlSeconds     int64
-	OnExpire       string
-	AutoRenew      bool
-	Deadline       string
-	PausedUntil    string
-	PolicyMode     string
-	MaxConnections int64
-	EnvPresent     bool
+	DeletedAt       sql.NullString
+	SandboxID       string
+	ActiveSandboxID sql.NullString
+	Generation      string
+	Instance        string
+	ActiveEpoch     string
+	TtlSeconds      int64
+	OnExpire        string
+	AutoRenew       bool
+	Deadline        string
+	PausedUntil     string
+	PolicyMode      string
+	MaxConnections  int64
+	EnvPresent      bool
 }

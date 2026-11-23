@@ -35,7 +35,7 @@ func TestHavenDiscardDoesNotMutateDevicesOnUnknownInspection(t *testing.T) {
 		t.Fatal("unknown full inventory authorized a device mutation")
 	}
 	var held int
-	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
+	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 		t.Fatal("unknown sibling retired liability", held, err)
 	}
 }
@@ -75,7 +75,7 @@ func TestHavenDiscardRetainsUnprovedRestoreDirectory(t *testing.T) {
 		t.Fatal("unproved directory was reclaimed", err)
 	}
 	var held int
-	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
+	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 		t.Fatal("unproved directory retired cost", held, err)
 	}
 }
@@ -125,7 +125,7 @@ func TestHavenDiscardFailedCandidate(t *testing.T) {
 			}
 			if source.Input.Restore != nil {
 				var cost int
-				if err = service.State.Database().QueryRow("SELECT storage_mib FROM quota_resources WHERE tenant_id=? AND kind='snapshot' AND resource_key=?", source.Input.TenantID, source.Input.Restore.Snapshot.ID).Scan(&cost); err != nil || cost != 192 {
+				if err = service.State.Database().QueryRow("SELECT storage_mib FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=? AND kind='snapshot' AND resource_key=?", source.Input.TenantID, source.Input.Restore.Snapshot.ID).Scan(&cost); err != nil || cost != 192 {
 					t.Fatal("discard refunded independent source snapshot", cost, err)
 				}
 			}
@@ -164,7 +164,7 @@ func TestHavenDiscardCrashRecovery(t *testing.T) {
 				testutil.AwaitDiscard(t, service, accepted.ID)
 			}
 			var held int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 				t.Fatal("incomplete discard retired cost", held, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
@@ -187,8 +187,8 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"DELETE", "quota_resources", "1"},
-		{"DELETE", "vms", "1"},
+		{"UPDATE OF deleted_at", "quota_resources", "1"},
+		{"UPDATE OF deleted_at", "vms", "1"},
 		{"UPDATE", "cleanup_intents", "NEW.status='done'"},
 		{"UPDATE", "operation_steps", "NEW.action='discard' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
@@ -216,7 +216,7 @@ func TestHavenDiscardAtomicRetirement(t *testing.T) {
 					t.Fatal("rejected SQL published discard success", result.State)
 				}
 				var held, vm, receipt int
-				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM vms WHERE id=?),(SELECT COUNT(*) FROM deletion_intents WHERE operation_id=?)", source.OperationID, source.Candidate, accepted.ID).Scan(&held, &vm, &receipt); err != nil || held != 64 || vm != 1 || receipt != 1 {
+				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL AND id=?),(SELECT COUNT(*) FROM deletion_intents WHERE deleted_at IS NULL AND operation_id=?)", source.OperationID, source.Candidate, accepted.ID).Scan(&held, &vm, &receipt); err != nil || held != 64 || vm != 1 || receipt != 1 {
 					t.Fatal("partial discard retirement", held, vm, receipt, err)
 				}
 				if _, err = service.State.Database().Exec("DROP TRIGGER deny_discard_retirement"); err != nil {
@@ -260,7 +260,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 			var path string
 			switch damage {
 			case "foreign-ref":
-				if _, err = service.State.Database().Exec("INSERT INTO resource_refs VALUES('vm',?,'reader','foreign')", source.Candidate); err != nil {
+				if _, err = service.State.Database().Exec("INSERT INTO resource_refs(resource_kind,resource_id,holder_kind,holder_id) VALUES('vm',?,'reader','foreign')", source.Candidate); err != nil {
 					t.Fatal(err)
 				}
 			case "unknown-file":
@@ -289,7 +289,7 @@ func TestHavenDiscardPreservesUnknownOrReplacedObjects(t *testing.T) {
 				}
 			}
 			var held int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", source.OperationID).Scan(&held); err != nil || held != 64 {
 				t.Fatal("uncertain discard retired cost", held, err)
 			}
 		})
@@ -381,10 +381,10 @@ func discardSucceeded(t *testing.T, service *application.App, discard machine.Di
 		q   string
 		arg any
 	}{
-		{"SELECT COUNT(*) FROM vms WHERE id=?", source.Candidate},
-		{"SELECT COUNT(*) FROM quota_resources WHERE source_operation_id=?", source.OperationID},
-		{"SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=?", source.OperationID},
-		{"SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?", source.Candidate},
+		{"SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL AND id=?", source.Candidate},
+		{"SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", source.OperationID},
+		{"SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND operation_id=?", source.OperationID},
+		{"SELECT COUNT(*) FROM vm_memory_backings WHERE deleted_at IS NULL AND vm_id=?", source.Candidate},
 	} {
 		var count int
 		if err = service.State.Database().QueryRow(check.q, check.arg).Scan(&count); err != nil || count != 0 {

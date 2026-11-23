@@ -137,7 +137,7 @@ func InstalledPolicyHash(policy *loom.NetworkPolicy) sql.NullString {
 }
 
 func policyOwner(ctx context.Context, query store.DBTX, id string) (instance, operationID string, err error) {
-	row, err := dbgen.New(query).GetNetworkPolicyOwner(ctx, id)
+	row, err := dbgen.New(query).GetNetworkPolicy(ctx, id)
 	return row.Instance, row.OperationID, err
 }
 

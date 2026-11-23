@@ -54,7 +54,7 @@ func (q *Queries) AssignWarmSandbox(ctx context.Context, arg AssignWarmSandboxPa
 }
 
 const clearEnvironment = `-- name: ClearEnvironment :exec
-DELETE FROM sandbox_environment WHERE sandbox_id=?
+UPDATE sandbox_environment SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) ClearEnvironment(ctx context.Context, sandboxID string) error {
@@ -63,7 +63,7 @@ func (q *Queries) ClearEnvironment(ctx context.Context, sandboxID string) error 
 }
 
 const clearPolicyRules = `-- name: ClearPolicyRules :exec
-DELETE FROM sandbox_policy_rules WHERE sandbox_id=?
+UPDATE sandbox_policy_rules SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) ClearPolicyRules(ctx context.Context, sandboxID string) error {
@@ -72,7 +72,7 @@ func (q *Queries) ClearPolicyRules(ctx context.Context, sandboxID string) error 
 }
 
 const clearSecretDescriptors = `-- name: ClearSecretDescriptors :exec
-DELETE FROM sandbox_secret_descriptors WHERE sandbox_id=?
+UPDATE sandbox_secret_descriptors SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) ClearSecretDescriptors(ctx context.Context, sandboxID string) error {
@@ -80,8 +80,17 @@ func (q *Queries) ClearSecretDescriptors(ctx context.Context, sandboxID string) 
 	return err
 }
 
+const clearSecretHosts = `-- name: ClearSecretHosts :exec
+UPDATE sandbox_secret_hosts SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?
+`
+
+func (q *Queries) ClearSecretHosts(ctx context.Context, sandboxID string) error {
+	_, err := q.db.ExecContext(ctx, clearSecretHosts, sandboxID)
+	return err
+}
+
 const countSandboxSettings = `-- name: CountSandboxSettings :one
-SELECT COUNT(*) FROM sandbox_settings WHERE sandbox_id=?
+SELECT COUNT(*) FROM sandbox_settings WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) CountSandboxSettings(ctx context.Context, sandboxID string) (int64, error) {
@@ -92,7 +101,7 @@ func (q *Queries) CountSandboxSettings(ctx context.Context, sandboxID string) (i
 }
 
 const deleteCheckpoint = `-- name: DeleteCheckpoint :execrows
-DELETE FROM checkpoint_bindings WHERE id=? AND tenant=? AND snapshot_id=? AND sandbox_id=? AND template_id=? AND vcpus=? AND memory_mib=? AND disk_mib=? AND created_at=?
+UPDATE checkpoint_bindings SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND id=? AND tenant=? AND snapshot_id=? AND sandbox_id=? AND template_id=? AND vcpus=? AND memory_mib=? AND disk_mib=? AND created_at=?
 `
 
 type DeleteCheckpointParams struct {
@@ -126,7 +135,7 @@ func (q *Queries) DeleteCheckpoint(ctx context.Context, arg DeleteCheckpointPara
 }
 
 const deleteFence = `-- name: DeleteFence :execrows
-DELETE FROM sandbox_operation_fences WHERE sandbox_id=? AND operation_id=?
+UPDATE sandbox_operation_fences SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=? AND operation_id=?
 `
 
 type DeleteFenceParams struct {
@@ -143,7 +152,7 @@ func (q *Queries) DeleteFence(ctx context.Context, arg DeleteFenceParams) (int64
 }
 
 const deleteUnchangedSettings = `-- name: DeleteUnchangedSettings :execrows
-DELETE FROM sandbox_settings WHERE sandbox_id=? AND generation=?
+UPDATE sandbox_settings SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=? AND generation=?
 `
 
 type DeleteUnchangedSettingsParams struct {
@@ -160,13 +169,14 @@ func (q *Queries) DeleteUnchangedSettings(ctx context.Context, arg DeleteUnchang
 }
 
 const getCheckpoint = `-- name: GetCheckpoint :one
-SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE id=?
+SELECT deleted_at, id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE deleted_at IS NULL AND id=?
 `
 
 func (q *Queries) GetCheckpoint(ctx context.Context, id string) (CheckpointBinding, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpoint, id)
 	var i CheckpointBinding
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.ID,
 		&i.Tenant,
 		&i.SnapshotID,
@@ -182,7 +192,7 @@ func (q *Queries) GetCheckpoint(ctx context.Context, id string) (CheckpointBindi
 }
 
 const getFence = `-- name: GetFence :one
-SELECT operation_id FROM sandbox_operation_fences WHERE sandbox_id=?
+SELECT operation_id FROM sandbox_operation_fences WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) GetFence(ctx context.Context, sandboxID string) (string, error) {
@@ -193,7 +203,7 @@ func (q *Queries) GetFence(ctx context.Context, sandboxID string) (string, error
 }
 
 const getOwnedCheckpoint = `-- name: GetOwnedCheckpoint :one
-SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE id=? AND tenant=?
+SELECT deleted_at, id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE deleted_at IS NULL AND id=? AND tenant=?
 `
 
 type GetOwnedCheckpointParams struct {
@@ -205,6 +215,7 @@ func (q *Queries) GetOwnedCheckpoint(ctx context.Context, arg GetOwnedCheckpoint
 	row := q.db.QueryRowContext(ctx, getOwnedCheckpoint, arg.ID, arg.Tenant)
 	var i CheckpointBinding
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.ID,
 		&i.Tenant,
 		&i.SnapshotID,
@@ -255,14 +266,16 @@ func (q *Queries) GetSandbox(ctx context.Context, arg GetSandboxParams) (Sandbox
 }
 
 const getSettings = `-- name: GetSettings :one
-SELECT sandbox_id, generation, instance, active_epoch, ttl_seconds, on_expire, auto_renew, deadline, paused_until, policy_mode, max_connections, env_present FROM sandbox_settings WHERE sandbox_id=?
+SELECT deleted_at, sandbox_id, active_sandbox_id, generation, instance, active_epoch, ttl_seconds, on_expire, auto_renew, deadline, paused_until, policy_mode, max_connections, env_present FROM sandbox_settings WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 func (q *Queries) GetSettings(ctx context.Context, sandboxID string) (SandboxSetting, error) {
 	row := q.db.QueryRowContext(ctx, getSettings, sandboxID)
 	var i SandboxSetting
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.SandboxID,
+		&i.ActiveSandboxID,
 		&i.Generation,
 		&i.Instance,
 		&i.ActiveEpoch,
@@ -547,7 +560,7 @@ func (q *Queries) ListCapabilitySubjects(ctx context.Context, includeRetired boo
 }
 
 const listCheckpoints = `-- name: ListCheckpoints :many
-SELECT id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings ORDER BY id
+SELECT deleted_at, id, tenant, snapshot_id, operation_id, sandbox_id, template_id, vcpus, memory_mib, disk_mib, created_at FROM checkpoint_bindings WHERE deleted_at IS NULL ORDER BY id
 `
 
 func (q *Queries) ListCheckpoints(ctx context.Context) ([]CheckpointBinding, error) {
@@ -560,6 +573,7 @@ func (q *Queries) ListCheckpoints(ctx context.Context) ([]CheckpointBinding, err
 	for rows.Next() {
 		var i CheckpointBinding
 		if err := rows.Scan(
+			&i.DeletedAt,
 			&i.ID,
 			&i.Tenant,
 			&i.SnapshotID,
@@ -585,7 +599,7 @@ func (q *Queries) ListCheckpoints(ctx context.Context) ([]CheckpointBinding, err
 }
 
 const listLeaseCandidates = `-- name: ListLeaseCandidates :many
-SELECT s.id,s.tenant,s.state FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state IN ('running','paused') ORDER BY s.id
+SELECT s.id,s.tenant,s.state FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE c.deleted_at IS NULL AND s.state IN ('running','paused') ORDER BY s.id
 `
 
 type ListLeaseCandidatesRow struct {
@@ -618,7 +632,7 @@ func (q *Queries) ListLeaseCandidates(ctx context.Context) ([]ListLeaseCandidate
 }
 
 const listRunningSubjects = `-- name: ListRunningSubjects :many
-SELECT s.id,s.tenant FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state='running' ORDER BY s.id
+SELECT s.id,s.tenant FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE c.deleted_at IS NULL AND s.state='running' ORDER BY s.id
 `
 
 type ListRunningSubjectsRow struct {
@@ -732,7 +746,7 @@ func (q *Queries) PublishSandboxInstance(ctx context.Context, arg PublishSandbox
 }
 
 const readEnvironment = `-- name: ReadEnvironment :many
-SELECT name,value FROM sandbox_environment WHERE sandbox_id=? ORDER BY name
+SELECT name,value FROM sandbox_environment WHERE deleted_at IS NULL AND sandbox_id=? ORDER BY name
 `
 
 type ReadEnvironmentRow struct {
@@ -764,7 +778,7 @@ func (q *Queries) ReadEnvironment(ctx context.Context, sandboxID string) ([]Read
 }
 
 const readPolicyRules = `-- name: ReadPolicyRules :many
-SELECT kind,value FROM sandbox_policy_rules WHERE sandbox_id=? ORDER BY kind,position
+SELECT kind,value FROM sandbox_policy_rules WHERE deleted_at IS NULL AND sandbox_id=? ORDER BY kind,position
 `
 
 type ReadPolicyRulesRow struct {
@@ -797,8 +811,8 @@ func (q *Queries) ReadPolicyRules(ctx context.Context, sandboxID string) ([]Read
 
 const readSecretDescriptors = `-- name: ReadSecretDescriptors :many
 SELECT d.name,d.header,d.placeholder,h.host FROM sandbox_secret_descriptors d
-LEFT JOIN sandbox_secret_hosts h ON h.sandbox_id=d.sandbox_id AND h.name=d.name
-WHERE d.sandbox_id=? ORDER BY d.name,h.position
+LEFT JOIN sandbox_secret_hosts h ON h.sandbox_id=d.sandbox_id AND h.name=d.name AND h.deleted_at IS NULL
+WHERE d.deleted_at IS NULL AND d.sandbox_id=? ORDER BY d.name,h.position
 `
 
 type ReadSecretDescriptorsRow struct {
@@ -900,7 +914,7 @@ func (q *Queries) ReplaceSandbox(ctx context.Context, arg ReplaceSandboxParams) 
 }
 
 const replaceSettings = `-- name: ReplaceSettings :execrows
-UPDATE sandbox_settings SET generation=?,instance=?,active_epoch=?,ttl_seconds=?,on_expire=?,auto_renew=?,deadline=?,paused_until=?,policy_mode=?,max_connections=?,env_present=? WHERE sandbox_id=?
+UPDATE sandbox_settings SET generation=?,instance=?,active_epoch=?,ttl_seconds=?,on_expire=?,auto_renew=?,deadline=?,paused_until=?,policy_mode=?,max_connections=?,env_present=? WHERE deleted_at IS NULL AND sandbox_id=?
 `
 
 type ReplaceSettingsParams struct {
@@ -1003,7 +1017,7 @@ func (q *Queries) TerminateLiveSandbox(ctx context.Context, arg TerminateLiveSan
 }
 
 const upsertFence = `-- name: UpsertFence :execrows
-INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) WHERE deleted_at IS NULL DO UPDATE SET operation_id=excluded.operation_id
 `
 
 type UpsertFenceParams struct {

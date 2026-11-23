@@ -114,11 +114,12 @@ CREATE TABLE command_injection_hosts (
 );
 
 CREATE TABLE operation_result_sandboxes (
+	deleted_at TEXT,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	position INTEGER NOT NULL,
-	sandbox_id TEXT NOT NULL,
-	PRIMARY KEY(operation_id,position)
+	sandbox_id TEXT NOT NULL
 );
+CREATE UNIQUE INDEX current_result_positions ON operation_result_sandboxes(operation_id,position) WHERE deleted_at IS NULL;
 
 CREATE TABLE operation_publications (
 	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(id),
@@ -314,7 +315,9 @@ CREATE TABLE resource_progress (
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
 CREATE TABLE restore_materials (
-	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES resource_progress(operation_id),
+	deleted_at TEXT,
+	operation_id TEXT NOT NULL REFERENCES resource_progress(operation_id),
+	active_operation_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN operation_id END) UNIQUE,
 	complete BOOLEAN NOT NULL,
 	files_present BOOLEAN NOT NULL,
 	version_device INTEGER NOT NULL,
@@ -324,17 +327,20 @@ CREATE TABLE restore_materials (
 	restore_inode INTEGER NOT NULL,
 	restore_mode INTEGER NOT NULL
 );
+CREATE INDEX current_restore_materials ON restore_materials(operation_id) WHERE deleted_at IS NULL;
 CREATE TABLE restore_files (
-	operation_id TEXT NOT NULL REFERENCES restore_materials(operation_id) ON DELETE CASCADE,
+	deleted_at TEXT,
+	operation_id TEXT NOT NULL,
+	active_operation_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN operation_id END) REFERENCES restore_materials(active_operation_id),
 	name TEXT NOT NULL,
 	source TEXT NOT NULL,
 	candidate TEXT NOT NULL,
 	size INTEGER NOT NULL,
 	device INTEGER NOT NULL,
 	inode INTEGER NOT NULL,
-	mode INTEGER NOT NULL,
-	PRIMARY KEY(operation_id,name)
+	mode INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX current_restore_files ON restore_files(operation_id,name) WHERE deleted_at IS NULL;
 CREATE INDEX resource_backing_sources ON resource_progress(restore_snapshot_id,backing_holder) WHERE backing_holder IS NOT NULL;
 
 CREATE TABLE resource_links (
@@ -416,14 +422,19 @@ CREATE TABLE template_owners (
 );
 
 CREATE TABLE snapshot_publications (
-	snapshot_id TEXT PRIMARY KEY NOT NULL REFERENCES snapshots(id),
+	deleted_at TEXT,
+	snapshot_id TEXT NOT NULL,
+	active_snapshot_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN snapshot_id END) UNIQUE REFERENCES snapshots(active_id),
 	tenant_id TEXT NOT NULL,
 	capture_operation_id TEXT NOT NULL REFERENCES operations(id),
 	record_hash TEXT NOT NULL
 );
 
+CREATE INDEX current_snapshot_publications ON snapshot_publications(snapshot_id) WHERE deleted_at IS NULL;
+
 CREATE TABLE checkpoint_bindings (
-	id TEXT PRIMARY KEY NOT NULL,
+	deleted_at TEXT,
+	id TEXT NOT NULL,
 	tenant TEXT NOT NULL,
 	snapshot_id TEXT NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
@@ -435,12 +446,15 @@ CREATE TABLE checkpoint_bindings (
 	created_at TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX current_checkpoint_ids ON checkpoint_bindings(id) WHERE deleted_at IS NULL;
+
 CREATE TABLE pool_slots (
-	operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(id),
+	deleted_at TEXT,
+	operation_id TEXT NOT NULL REFERENCES operations(id),
 	template_id TEXT NOT NULL,
 	template_version TEXT NOT NULL,
 	sandbox_id TEXT NOT NULL,
-	vm_id TEXT NOT NULL UNIQUE,
+	vm_id TEXT NOT NULL,
 	source_operation_id TEXT NOT NULL REFERENCES operations(id) DEFERRABLE INITIALLY DEFERRED,
 	source_input_hash TEXT NOT NULL,
 	instance TEXT NOT NULL DEFAULT '',
@@ -449,7 +463,9 @@ CREATE TABLE pool_slots (
 	CHECK(status NOT IN ('ready','selected') OR instance<>''),
 	FOREIGN KEY(template_id,template_version) REFERENCES template_versions(template_id,operation_id)
 );
-CREATE INDEX ready_warm_selection ON pool_slots(template_id,template_version,created_at_unix_ns,vm_id) WHERE status='ready';
+CREATE UNIQUE INDEX current_pool_operations ON pool_slots(operation_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX current_pool_vms ON pool_slots(vm_id) WHERE deleted_at IS NULL;
+CREATE INDEX ready_warm_selection ON pool_slots(template_id,template_version,created_at_unix_ns,vm_id) WHERE deleted_at IS NULL AND status='ready';
 
 CREATE TABLE snapshot_owners (
 	snapshot_id TEXT PRIMARY KEY NOT NULL,
@@ -464,7 +480,9 @@ CREATE TABLE operation_request_macs (
 );
 
 CREATE TABLE sandbox_settings (
-	sandbox_id TEXT PRIMARY KEY NOT NULL REFERENCES sandboxes(id),
+	deleted_at TEXT,
+	sandbox_id TEXT NOT NULL REFERENCES sandboxes(id),
+	active_sandbox_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN sandbox_id END) UNIQUE,
 	generation TEXT NOT NULL REFERENCES operations(id) DEFERRABLE INITIALLY DEFERRED,
 	instance TEXT NOT NULL,
 	active_epoch TEXT NOT NULL,
@@ -477,37 +495,49 @@ CREATE TABLE sandbox_settings (
 	max_connections INTEGER NOT NULL,
 	env_present BOOLEAN NOT NULL
 );
+CREATE INDEX current_sandbox_settings ON sandbox_settings(sandbox_id) WHERE deleted_at IS NULL;
 CREATE TABLE sandbox_environment (
-	sandbox_id TEXT NOT NULL REFERENCES sandbox_settings(sandbox_id) ON DELETE CASCADE,
+	deleted_at TEXT,
+	sandbox_id TEXT NOT NULL,
+	active_sandbox_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN sandbox_id END) REFERENCES sandbox_settings(active_sandbox_id),
 	name TEXT NOT NULL,
-	value TEXT NOT NULL,
-	PRIMARY KEY(sandbox_id,name)
+	value TEXT NOT NULL
 );
+CREATE UNIQUE INDEX current_environment_names ON sandbox_environment(sandbox_id,name) WHERE deleted_at IS NULL;
 CREATE TABLE sandbox_policy_rules (
-	sandbox_id TEXT NOT NULL REFERENCES sandbox_settings(sandbox_id) ON DELETE CASCADE,
+	deleted_at TEXT,
+	sandbox_id TEXT NOT NULL,
+	active_sandbox_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN sandbox_id END) REFERENCES sandbox_settings(active_sandbox_id),
 	kind TEXT NOT NULL CHECK(kind IN ('host','cidr')),
 	position INTEGER NOT NULL CHECK(position>=0),
-	value TEXT NOT NULL,
-	PRIMARY KEY(sandbox_id,kind,position)
+	value TEXT NOT NULL
 );
+CREATE UNIQUE INDEX current_policy_positions ON sandbox_policy_rules(sandbox_id,kind,position) WHERE deleted_at IS NULL;
 CREATE TABLE sandbox_secret_descriptors (
-	sandbox_id TEXT NOT NULL REFERENCES sandbox_settings(sandbox_id) ON DELETE CASCADE,
+	deleted_at TEXT,
+	sandbox_id TEXT NOT NULL,
+	active_sandbox_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN sandbox_id END) REFERENCES sandbox_settings(active_sandbox_id),
 	name TEXT NOT NULL,
 	header TEXT NOT NULL,
 	placeholder TEXT NOT NULL,
-	PRIMARY KEY(sandbox_id,name)
+	UNIQUE(active_sandbox_id,name)
 );
+CREATE INDEX current_secret_descriptors ON sandbox_secret_descriptors(sandbox_id,name) WHERE deleted_at IS NULL;
 CREATE TABLE sandbox_secret_hosts (
+	deleted_at TEXT,
+	active_sandbox_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN sandbox_id END),
 	sandbox_id TEXT NOT NULL,
 	name TEXT NOT NULL,
 	position INTEGER NOT NULL CHECK(position>=0),
 	host TEXT NOT NULL,
-	PRIMARY KEY(sandbox_id,name,position),
-	FOREIGN KEY(sandbox_id,name) REFERENCES sandbox_secret_descriptors(sandbox_id,name) ON DELETE CASCADE
+	FOREIGN KEY(active_sandbox_id,name) REFERENCES sandbox_secret_descriptors(active_sandbox_id,name)
 );
+CREATE UNIQUE INDEX current_secret_host_positions ON sandbox_secret_hosts(sandbox_id,name,position) WHERE deleted_at IS NULL;
 
 CREATE TABLE network_policies (
-	vm_id TEXT PRIMARY KEY NOT NULL REFERENCES vms(id),
+	deleted_at TEXT,
+	vm_id TEXT NOT NULL,
+	active_vm_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN vm_id END) UNIQUE REFERENCES vms(active_id),
 	instance TEXT NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	policy_hash TEXT,
@@ -516,14 +546,21 @@ CREATE TABLE network_policies (
 	FOREIGN KEY(operation_id,retirement_step) REFERENCES operation_steps(operation_id,step_key)
 );
 
+CREATE INDEX current_network_policies ON network_policies(vm_id) WHERE deleted_at IS NULL;
+
 CREATE TABLE sandbox_operation_fences (
-	sandbox_id TEXT PRIMARY KEY NOT NULL,
+	deleted_at TEXT,
+	sandbox_id TEXT NOT NULL,
 	operation_id TEXT NOT NULL REFERENCES operations(id)
 );
 
+CREATE UNIQUE INDEX current_sandbox_fences ON sandbox_operation_fences(sandbox_id) WHERE deleted_at IS NULL;
+
 CREATE TABLE vms (
-	id TEXT PRIMARY KEY NOT NULL,
-	slot INTEGER NOT NULL UNIQUE CHECK(slot>=0),
+	deleted_at TEXT,
+	id TEXT NOT NULL,
+	active_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN id END) UNIQUE,
+	slot INTEGER NOT NULL CHECK(slot>=0),
 	current_instance TEXT NOT NULL,
 	state TEXT NOT NULL CHECK(state IN ('creating','created','running','stopped')),
 	operation_id TEXT REFERENCES operations(id),
@@ -536,17 +573,26 @@ CREATE TABLE vms (
 	observation_hash TEXT
 );
 
+CREATE INDEX current_vm_ids ON vms(id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX current_vm_slots ON vms(slot) WHERE deleted_at IS NULL;
+
 CREATE TABLE instances (
-	id TEXT PRIMARY KEY NOT NULL,
-	vm_id TEXT NOT NULL REFERENCES vms(id),
+	deleted_at TEXT,
+	id TEXT NOT NULL,
+	vm_id TEXT NOT NULL,
+	active_vm_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN vm_id END) REFERENCES vms(active_id),
 	operation_id TEXT NOT NULL REFERENCES operations(id),
 	resource_hash TEXT NOT NULL,
 	observation_hash TEXT
 );
 
+CREATE UNIQUE INDEX current_instance_ids ON instances(id) WHERE deleted_at IS NULL;
+
 CREATE TABLE resource_versions (
-	operation_id TEXT PRIMARY KEY NOT NULL,
-	vm_id TEXT NOT NULL REFERENCES vms(id),
+	deleted_at TEXT,
+	operation_id TEXT NOT NULL,
+	vm_id TEXT NOT NULL,
+	active_vm_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN vm_id END) REFERENCES vms(active_id),
 	step_key TEXT NOT NULL,
 	instance TEXT NOT NULL CHECK(instance<>''),
 	resource_hash TEXT NOT NULL,
@@ -556,6 +602,8 @@ CREATE TABLE resource_versions (
 	CHECK((disk_device IS NULL)=(disk_inode IS NULL) AND (disk_device IS NULL)=(disk_mode IS NULL)),
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
+
+CREATE UNIQUE INDEX current_resource_versions ON resource_versions(operation_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE image_manifests (
 	manifest_hash TEXT PRIMARY KEY NOT NULL,
@@ -612,13 +660,17 @@ CREATE TABLE image_artifacts (
 );
 
 CREATE TABLE image_intents (
-	digest TEXT PRIMARY KEY NOT NULL,
-	operation_id TEXT NOT NULL UNIQUE REFERENCES operations(id),
+	deleted_at TEXT,
+	digest TEXT NOT NULL,
+	operation_id TEXT NOT NULL REFERENCES operations(id),
 	layout TEXT NOT NULL,
 	step_key TEXT NOT NULL DEFAULT 'image_import' CHECK(step_key='image_import'),
 	input_hash TEXT NOT NULL,
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
+
+CREATE UNIQUE INDEX current_image_intent_digest ON image_intents(digest) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX current_image_intent_operation ON image_intents(operation_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE image_cache_witnesses (
 	witness_hash TEXT PRIMARY KEY NOT NULL,
@@ -644,17 +696,20 @@ CREATE TABLE image_cache_witnesses (
 	UNIQUE(builder,diff_id,witness_hash)
 );
 CREATE TABLE image_caches (
+	deleted_at TEXT,
 	builder TEXT NOT NULL,
 	diff_id TEXT NOT NULL,
 	witness_hash TEXT NOT NULL,
 	source_operation_id TEXT NOT NULL REFERENCES operations(id),
-	FOREIGN KEY(builder,diff_id,witness_hash) REFERENCES image_cache_witnesses(builder,diff_id,witness_hash),
-	PRIMARY KEY(builder,diff_id)
+	FOREIGN KEY(builder,diff_id,witness_hash) REFERENCES image_cache_witnesses(builder,diff_id,witness_hash)
 );
-CREATE INDEX image_caches_by_source ON image_caches(source_operation_id);
+CREATE UNIQUE INDEX current_image_caches ON image_caches(builder,diff_id) WHERE deleted_at IS NULL;
+CREATE INDEX image_caches_by_source ON image_caches(source_operation_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE snapshots (
-	id TEXT PRIMARY KEY NOT NULL,
+	deleted_at TEXT,
+	id TEXT NOT NULL,
+	active_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN id END) UNIQUE,
 	source_vm_id TEXT NOT NULL,
 	tenant_id TEXT NOT NULL,
 	capture_operation_id TEXT NOT NULL REFERENCES operations(id),
@@ -666,56 +721,74 @@ CREATE TABLE snapshots (
 	CHECK((published=1)=(manifest_hash IS NOT NULL))
 );
 
+CREATE INDEX current_snapshot_ids ON snapshots(id) WHERE deleted_at IS NULL;
+
 CREATE TABLE resource_refs (
+	deleted_at TEXT,
 	resource_kind TEXT NOT NULL,
 	resource_id TEXT NOT NULL,
 	holder_kind TEXT NOT NULL,
-	holder_id TEXT NOT NULL,
-	PRIMARY KEY(resource_kind,resource_id,holder_kind,holder_id)
+	holder_id TEXT NOT NULL
 );
+CREATE UNIQUE INDEX current_resource_refs ON resource_refs(resource_kind,resource_id,holder_kind,holder_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE snapshot_source_leases (
-	snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
+	deleted_at TEXT,
+	snapshot_id TEXT NOT NULL,
+	active_snapshot_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN snapshot_id END) REFERENCES snapshots(active_id),
 	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,
-	PRIMARY KEY(operation_id,step_key),
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
+CREATE UNIQUE INDEX current_snapshot_source_steps ON snapshot_source_leases(operation_id,step_key) WHERE deleted_at IS NULL;
 
-CREATE INDEX source_leases_by_snapshot ON snapshot_source_leases(snapshot_id);
+CREATE INDEX source_leases_by_snapshot ON snapshot_source_leases(snapshot_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE vm_memory_backings (
-	path TEXT PRIMARY KEY NOT NULL,
-	vm_id TEXT NOT NULL REFERENCES vms(id),
+	deleted_at TEXT,
+	path TEXT NOT NULL,
+	vm_id TEXT NOT NULL,
+	active_vm_id TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN vm_id END) REFERENCES vms(active_id),
 	file_digest TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX current_memory_backings ON vm_memory_backings(path) WHERE deleted_at IS NULL;
+
 CREATE TABLE host_capacity_reservations (
-	owner_key TEXT PRIMARY KEY NOT NULL,
+	deleted_at TEXT,
+	owner_key TEXT NOT NULL,
 	storage_bytes INTEGER NOT NULL CHECK(typeof(storage_bytes)='integer' AND storage_bytes>=0),
 	memory_mib INTEGER NOT NULL CHECK(typeof(memory_mib)='integer' AND memory_mib>=0),
 	vcpus INTEGER NOT NULL CHECK(typeof(vcpus)='integer' AND vcpus>=0)
 );
 
+CREATE UNIQUE INDEX current_capacity_owners ON host_capacity_reservations(owner_key) WHERE deleted_at IS NULL;
+
 CREATE TABLE quota_resources (
+	deleted_at TEXT,
+	active_resource_key TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN resource_key END),
 	tenant_id TEXT NOT NULL,
 	kind TEXT NOT NULL CHECK(kind IN ('sandbox_slot','build_slot','vm_disk','snapshot','pending_storage')),
 	resource_key TEXT NOT NULL,
 	sandbox_slots INTEGER NOT NULL CHECK(typeof(sandbox_slots)='integer' AND sandbox_slots>=0),
 	storage_mib INTEGER NOT NULL CHECK(typeof(storage_mib)='integer' AND storage_mib>=0),
 	source_operation_id TEXT NOT NULL REFERENCES operations(id),
-	PRIMARY KEY(tenant_id,kind,resource_key)
+	UNIQUE(tenant_id,kind,active_resource_key)
 );
 
+CREATE INDEX current_quota_costs ON quota_resources(tenant_id,kind,resource_key) WHERE deleted_at IS NULL;
+
 CREATE TABLE quota_refs (
+	deleted_at TEXT,
+	active_resource_key TEXT GENERATED ALWAYS AS (CASE WHEN deleted_at IS NULL THEN resource_key END),
 	tenant_id TEXT NOT NULL,
 	kind TEXT NOT NULL,
 	resource_key TEXT NOT NULL,
 	holder_kind TEXT NOT NULL CHECK(holder_kind IN ('active_use','engine_dependency','cleanup')),
 	holder_id TEXT NOT NULL,
-	PRIMARY KEY(tenant_id,kind,resource_key,holder_kind,holder_id),
-	FOREIGN KEY(tenant_id,kind,resource_key) REFERENCES quota_resources(tenant_id,kind,resource_key)
+	FOREIGN KEY(tenant_id,kind,active_resource_key) REFERENCES quota_resources(tenant_id,kind,active_resource_key)
 );
+CREATE UNIQUE INDEX current_quota_refs ON quota_refs(tenant_id,kind,resource_key,holder_kind,holder_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE cleanup_intents (
 	id TEXT PRIMARY KEY NOT NULL,
@@ -748,12 +821,14 @@ CREATE TABLE deletion_history (
 	FOREIGN KEY(operation_id,step_key) REFERENCES operation_steps(operation_id,step_key)
 );
 CREATE TABLE deletion_intents (
-	path TEXT PRIMARY KEY NOT NULL,
+	deleted_at TEXT,
+	path TEXT NOT NULL,
 	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,
 	receipt_hash TEXT NOT NULL,
 	FOREIGN KEY(operation_id,step_key,path) REFERENCES deletion_history(operation_id,step_key,path)
 );
+CREATE UNIQUE INDEX current_deletion_paths ON deletion_intents(path) WHERE deleted_at IS NULL;
 CREATE TABLE deletion_nodes (
 	operation_id TEXT NOT NULL,
 	step_key TEXT NOT NULL,

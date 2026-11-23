@@ -14,16 +14,19 @@ INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candid
 INSERT INTO resource_progress(operation_id,restore_snapshot_id,backing_holder) VALUES(?,?,?);
 
 -- name: ReadRestoreMaterials :one
-SELECT * FROM restore_materials WHERE operation_id=?;
+SELECT * FROM restore_materials WHERE deleted_at IS NULL AND operation_id=?;
+
+-- name: ClearRestoreFiles :exec
+UPDATE restore_files SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?;
 
 -- name: ClearRestoreMaterials :execrows
-DELETE FROM restore_materials WHERE operation_id=?;
+UPDATE restore_materials SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?;
 
 -- name: InsertRestoreMaterials :execrows
 INSERT INTO restore_materials(operation_id,complete,files_present,version_device,version_inode,version_mode,restore_device,restore_inode,restore_mode) VALUES(?,?,?,?,?,?,?,?,?);
 
 -- name: ReadRestoreFiles :many
-SELECT * FROM restore_files WHERE operation_id=?;
+SELECT * FROM restore_files WHERE deleted_at IS NULL AND operation_id=?;
 
 -- name: InsertRestoreFile :execrows
 INSERT INTO restore_files(operation_id,name,source,candidate,size,device,inode,mode) VALUES(?,?,?,?,?,?,?,?);
@@ -162,7 +165,7 @@ UPDATE cleanup_intents SET status='done' WHERE id=? AND operation_id=? AND statu
 
 
 -- name: RetireDeletionReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?;
+UPDATE deletion_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=?;
 
 
 -- name: RetainCleanup :execrows

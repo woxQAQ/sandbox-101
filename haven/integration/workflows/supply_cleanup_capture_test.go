@@ -82,7 +82,7 @@ func TestHavenSupplyCleanupRetiresFailedBuildCapture(t *testing.T) {
 		}
 	}
 	var machines, storage, cleanup int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources),(SELECT COUNT(*) FROM cleanup_intents WHERE status IN ('pending','blocked','transferred'))").Scan(&machines, &storage, &cleanup); err != nil || machines != 0 || storage != 0 || cleanup != 0 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM cleanup_intents WHERE status IN ('pending','blocked','transferred'))").Scan(&machines, &storage, &cleanup); err != nil || machines != 0 || storage != 0 || cleanup != 0 {
 		t.Fatal("collector did not retire completed child responsibility", machines, storage, cleanup, err)
 	}
 	unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)

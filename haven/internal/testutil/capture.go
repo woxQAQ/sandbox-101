@@ -20,7 +20,7 @@ func CapturePublished(t *testing.T, service *application.App, step machine.Captu
 		t.Fatalf("snapshot and step publication disagree: status=%s manifest=%v phase=%s", step.Status, snapshot.Manifest != nil, step.State.Phase)
 	}
 	var storage, pending, charged int64
-	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='snapshot'),0) FROM quota_resources WHERE source_operation_id=?", step.OperationID).Scan(&storage, &pending, &charged); err != nil {
+	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='snapshot'),0) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", step.OperationID).Scan(&storage, &pending, &charged); err != nil {
 		t.Fatal(err)
 	}
 	if storage != 192 || want && (charged != 1 || pending != 0) || !want && (charged != 0 || pending != 1) {

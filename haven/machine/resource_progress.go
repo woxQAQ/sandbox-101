@@ -66,6 +66,9 @@ func readMaterials(ctx context.Context, q *dbgen.Queries, id string, r loom.Reso
 
 func replaceMaterials(ctx context.Context, q *dbgen.Queries, step ResourceStep, next *loom.RestoreMaterials) error {
 	if step.State.Materials != nil {
+		if err := q.ClearRestoreFiles(ctx, step.OperationID); err != nil {
+			return err
+		}
 		if err := store.RequireOne(q.ClearRestoreMaterials(ctx, step.OperationID)); err != nil {
 			return err
 		}

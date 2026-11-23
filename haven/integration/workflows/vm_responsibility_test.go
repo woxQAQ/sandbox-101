@@ -227,11 +227,11 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"DELETE", "quota_refs", "OLD.kind='vm_disk'"},
-		{"DELETE", "quota_resources", "OLD.kind='vm_disk'"},
-		{"DELETE", "instances", "1"},
-		{"DELETE", "vms", "1"},
-		{"DELETE", "deletion_intents", "1"},
+		{"UPDATE OF deleted_at", "quota_refs", "OLD.kind='vm_disk'"},
+		{"UPDATE OF deleted_at", "quota_resources", "OLD.kind='vm_disk'"},
+		{"UPDATE OF deleted_at", "instances", "1"},
+		{"UPDATE OF deleted_at", "vms", "1"},
+		{"UPDATE OF deleted_at", "deletion_intents", "1"},
 		{"UPDATE", "cleanup_intents", "NEW.status='done'"},
 		{"UPDATE", "operation_steps", "NEW.action='release' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
@@ -266,7 +266,7 @@ func TestHavenStepReleaseAtomicRetirement(t *testing.T) {
 					t.Fatal("fixture did not reach actual file removal", err)
 				}
 				var slots, storage, vm, receipt, cleanup int
-				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM vms),(SELECT COUNT(*) FROM deletion_intents),(SELECT COUNT(*) FROM cleanup_intents WHERE status='pending')").Scan(&slots, &storage, &vm, &receipt, &cleanup); err != nil || slots != 1 || storage != 64 || vm != 1 || receipt != 1 || cleanup != 1 {
+				if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM deletion_intents WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM cleanup_intents WHERE status='pending')").Scan(&slots, &storage, &vm, &receipt, &cleanup); err != nil || slots != 1 || storage != 64 || vm != 1 || receipt != 1 || cleanup != 1 {
 					t.Fatal("partial responsibility retirement", slots, storage, vm, receipt, cleanup, err)
 				}
 				if _, err = service.State.Database().Exec("DROP TRIGGER reject_retirement"); err != nil {
@@ -304,7 +304,7 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 	if !errors.Is(err, errs.ErrInterrupted) {
 		t.Fatal(err)
 	}
-	if _, err = service.State.Database().Exec("INSERT INTO resource_refs VALUES('vm',?,'reader','foreign-reader')", claim.Result.VMID); err != nil {
+	if _, err = service.State.Database().Exec("INSERT INTO resource_refs(resource_kind,resource_id,holder_kind,holder_id) VALUES('vm',?,'reader','foreign-reader')", claim.Result.VMID); err != nil {
 		t.Fatal(err)
 	}
 	service = testapp.ReopenCloneService(t, service, backend)
@@ -313,7 +313,7 @@ func TestHavenStepReleaseRetainsForeignReference(t *testing.T) {
 		t.Fatal("foreign reference did not fence host deletion")
 	}
 	var storage int64
-	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storage); err != nil || storage != 64 {
+	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage); err != nil || storage != 64 {
 		t.Fatal("foreign use released its responsibility", storage, err)
 	}
 }

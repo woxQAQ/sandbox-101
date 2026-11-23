@@ -64,12 +64,12 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				}
 				captures := backend.Count("capture")
 				var storageBefore int64
-				if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storageBefore); err != nil {
+				if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storageBefore); err != nil {
 					t.Fatal(err)
 				}
 				transition, row := "INSERT", "NEW"
 				if mode == "delete" {
-					transition, row = "DELETE", "OLD"
+					transition, row = "UPDATE OF deleted_at", "OLD"
 				}
 				raise := "RAISE(IGNORE)"
 				if rejection == "ABORT" {
@@ -84,9 +84,9 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				}
 				var bindings, resources, costs, requests int
 				if err := service.State.Database().QueryRow(`SELECT
-					(SELECT COUNT(*) FROM checkpoint_bindings),
-					(SELECT COUNT(*) FROM resource_refs WHERE holder_kind='checkpoint_binding'),
-					(SELECT COUNT(*) FROM quota_refs WHERE holder_id LIKE 'checkpoint-binding:%'),
+					(SELECT COUNT(*) FROM checkpoint_bindings WHERE deleted_at IS NULL),
+					(SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND holder_kind='checkpoint_binding'),
+					(SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL AND holder_id LIKE 'checkpoint-binding:%'),
 					(SELECT COUNT(*) FROM operations WHERE scope_kind='tenant' AND scope_id='tenant' AND idem_key='blocked')`).Scan(&bindings, &resources, &costs, &requests); err != nil {
 					t.Fatal(err)
 				}
@@ -106,7 +106,7 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 					t.Fatal("partial checkpoint responsibility committed", bindings, resources, costs, requests)
 				}
 				var retained int64
-				if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&retained); err != nil || retained < storageBefore {
+				if err := service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&retained); err != nil || retained < storageBefore {
 					t.Fatal("failed handoff retired storage responsibility", retained, storageBefore, err)
 				}
 				if mode == "delete" {
@@ -125,7 +125,7 @@ func TestHavenCheckpointResponsibilityRejectsSQL(t *testing.T) {
 				}
 				if mode == "running" {
 					var after int64
-					if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&after); err != nil || after != retained {
+					if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&after); err != nil || after != retained {
 						t.Fatal("replay changed retained capture cost", after, retained, err)
 					}
 				}

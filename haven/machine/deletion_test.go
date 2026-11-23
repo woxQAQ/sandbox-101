@@ -85,7 +85,7 @@ func TestHavenDeletionConflictDoesNotDispatch(t *testing.T) {
 				t.Fatal("conflicting replay changed cleanup custody", current, err)
 			}
 			var storage, slots int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib),SUM(sandbox_slots) FROM quota_resources").Scan(&storage, &slots); err != nil || storage != 64 || slots != 1 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib),SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage, &slots); err != nil || storage != 64 || slots != 1 {
 				t.Fatal("conflicting replay changed retained responsibility", storage, slots, err)
 			}
 			replay, err := admit(false)

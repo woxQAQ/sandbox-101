@@ -156,7 +156,7 @@ func TestHavenSupplyCleanupConservesResponsibility(t *testing.T) {
 				t.Fatal("node maintenance appeared in tenant operation scope")
 			}
 			var pool, warm, vms, slots, storage int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots),(SELECT COUNT(*) FROM pool_slots WHERE status='ready'),(SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&pool, &warm, &vms, &slots, &storage); err != nil || pool != 0 || warm != 0 || vms != 0 || slots != 0 || storage != 192 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND status='ready'),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL)").Scan(&pool, &warm, &vms, &slots, &storage); err != nil || pool != 0 || warm != 0 || vms != 0 || slots != 0 || storage != 192 {
 				t.Fatal(pool, warm, vms, slots, storage, err)
 			}
 			unchanged, err := service.OperationMonitor.GetForTenant(ctx, "tenant", original.ID)
@@ -226,7 +226,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 				}
 			}
 			var count int
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE status='cleanup'").Scan(&count); err != nil || count != 1 {
+			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND status='cleanup'").Scan(&count); err != nil || count != 1 {
 				t.Fatal("unproved cleanup freed pool capacity", count, err)
 			}
 			service = testapp.ReopenCloneService(t, service, service.Options.Backend)
@@ -236,7 +236,7 @@ func TestHavenSupplyCleanupFenceAndRecovery(t *testing.T) {
 			}, collector.ID); err != nil {
 				t.Fatal(err)
 			}
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots").Scan(&count); err != nil || count != 0 {
+			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL").Scan(&count); err != nil || count != 0 {
 				t.Fatal(count, err)
 			}
 		})

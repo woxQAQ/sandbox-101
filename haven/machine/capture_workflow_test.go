@@ -336,7 +336,7 @@ func TestHavenSnapshotAtomicPublication(t *testing.T) {
 		{"UPDATE", "snapshots", "NEW.published=1"},
 		{"INSERT", "snapshot_publications", "1"},
 		{"INSERT", "quota_resources", "NEW.kind='snapshot'"},
-		{"DELETE", "quota_refs", "OLD.kind='pending_storage'"},
+		{"UPDATE OF deleted_at", "quota_refs", "OLD.kind='pending_storage'"},
 		{"UPDATE", "vms", "NEW.operation_id IS NULL"},
 		{"UPDATE", "operation_steps", "NEW.action='snapshot' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
@@ -425,7 +425,7 @@ func TestHavenSnapshotAdmissionAndShutdown(t *testing.T) {
 			t.Fatal("ignored owner registration was accepted")
 		}
 		var snapshots int
-		if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM snapshots").Scan(&snapshots); err != nil || snapshots != 0 {
+		if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM snapshots WHERE deleted_at IS NULL").Scan(&snapshots); err != nil || snapshots != 0 {
 			t.Fatal("partial capture admission", err)
 		}
 		if backend.Count("pause") != 0 {

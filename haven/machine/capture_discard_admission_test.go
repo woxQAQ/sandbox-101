@@ -73,11 +73,11 @@ func TestHavenCaptureDiscardAuthorization(t *testing.T) {
 			case "not_capture":
 				request.FailedOperationID = failed.Input.Source.OperationID
 			case "extra_fee_holder":
-				if _, err := service.State.Database().Exec("INSERT INTO quota_refs VALUES(?,'pending_storage',?,'cleanup','foreign')", request.TenantID, failed.OperationID+":capture"); err != nil {
+				if _, err := service.State.Database().Exec("INSERT INTO quota_refs(tenant_id,kind,resource_key,holder_kind,holder_id) VALUES(?,'pending_storage',?,'cleanup','foreign')", request.TenantID, failed.OperationID+":capture"); err != nil {
 					t.Fatal(err)
 				}
 			case "snapshot_reader":
-				if _, err := service.State.Database().Exec("INSERT INTO resource_refs VALUES('snapshot',?,'step','foreign')", failed.Input.Snapshot.ID); err != nil {
+				if _, err := service.State.Database().Exec("INSERT INTO resource_refs(resource_kind,resource_id,holder_kind,holder_id) VALUES('snapshot',?,'step','foreign')", failed.Input.Snapshot.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

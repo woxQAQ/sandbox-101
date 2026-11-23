@@ -10,7 +10,7 @@ import (
 )
 
 const chargeWarmSlot = `-- name: ChargeWarmSlot :execrows
-UPDATE quota_resources SET sandbox_slots=1 WHERE tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?
+UPDATE quota_resources SET sandbox_slots=1 WHERE deleted_at IS NULL AND tenant_id=? AND kind='sandbox_slot' AND resource_key=? AND sandbox_slots=0 AND storage_mib=0 AND source_operation_id=?
 `
 
 type ChargeWarmSlotParams struct {
@@ -28,7 +28,7 @@ func (q *Queries) ChargeWarmSlot(ctx context.Context, arg ChargeWarmSlotParams) 
 }
 
 const countActiveSnapshotReferences = `-- name: CountActiveSnapshotReferences :one
-SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=?1 AND holder_kind!='backing' AND (holder_kind!='checkpoint' OR holder_id!=?2)
+SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind='snapshot' AND resource_id=?1 AND holder_kind!='backing' AND (holder_kind!='checkpoint' OR holder_id!=?2)
 `
 
 type CountActiveSnapshotReferencesParams struct {
@@ -46,7 +46,7 @@ func (q *Queries) CountActiveSnapshotReferences(ctx context.Context, arg CountAc
 }
 
 const countCost = `-- name: CountCost :one
-SELECT COUNT(*) FROM quota_resources WHERE kind=? AND resource_key=?
+SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND kind=? AND resource_key=?
 `
 
 type CountCostParams struct {
@@ -62,7 +62,7 @@ func (q *Queries) CountCost(ctx context.Context, arg CountCostParams) (int64, er
 }
 
 const countCostHolders = `-- name: CountCostHolders :one
-SELECT COUNT(*) FROM quota_refs WHERE kind=? AND resource_key=?
+SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL AND kind=? AND resource_key=?
 `
 
 type CountCostHoldersParams struct {
@@ -78,7 +78,7 @@ func (q *Queries) CountCostHolders(ctx context.Context, arg CountCostHoldersPara
 }
 
 const countCostReference = `-- name: CountCostReference :one
-SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?
+SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?
 `
 
 type CountCostReferenceParams struct {
@@ -103,7 +103,7 @@ func (q *Queries) CountCostReference(ctx context.Context, arg CountCostReference
 }
 
 const countMatchingCost = `-- name: CountMatchingCost :one
-SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=?
+SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=?
 AND storage_mib=? AND sandbox_slots=? AND source_operation_id=?
 `
 
@@ -131,7 +131,7 @@ func (q *Queries) CountMatchingCost(ctx context.Context, arg CountMatchingCostPa
 }
 
 const countMatchingReservation = `-- name: CountMatchingReservation :one
-SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
+SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
 `
 
 type CountMatchingReservationParams struct {
@@ -154,7 +154,7 @@ func (q *Queries) CountMatchingReservation(ctx context.Context, arg CountMatchin
 }
 
 const countReservation = `-- name: CountReservation :one
-SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?
+SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key=?
 `
 
 func (q *Queries) CountReservation(ctx context.Context, ownerKey string) (int64, error) {
@@ -165,7 +165,7 @@ func (q *Queries) CountReservation(ctx context.Context, ownerKey string) (int64,
 }
 
 const countResourceHolders = `-- name: CountResourceHolders :one
-SELECT COUNT(*) FROM resource_refs WHERE resource_kind=? AND resource_id=?
+SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind=? AND resource_id=?
 `
 
 type CountResourceHoldersParams struct {
@@ -181,7 +181,7 @@ func (q *Queries) CountResourceHolders(ctx context.Context, arg CountResourceHol
 }
 
 const countResourceReference = `-- name: CountResourceReference :one
-SELECT COUNT(*) FROM resource_refs WHERE resource_kind=? AND resource_id=? AND holder_kind=? AND holder_id=?
+SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind=? AND resource_id=? AND holder_kind=? AND holder_id=?
 `
 
 type CountResourceReferenceParams struct {
@@ -204,7 +204,7 @@ func (q *Queries) CountResourceReference(ctx context.Context, arg CountResourceR
 }
 
 const countStorageCost = `-- name: CountStorageCost :one
-SELECT COUNT(*) FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND storage_mib=? AND source_operation_id=?
+SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=? AND storage_mib=? AND source_operation_id=?
 `
 
 type CountStorageCostParams struct {
@@ -230,7 +230,7 @@ func (q *Queries) CountStorageCost(ctx context.Context, arg CountStorageCostPara
 
 const countStorageCostReference = `-- name: CountStorageCostReference :one
 SELECT COUNT(*) FROM quota_resources q JOIN quota_refs r USING(tenant_id,kind,resource_key)
-WHERE q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.storage_mib=? AND q.source_operation_id=? AND r.holder_kind=? AND r.holder_id=?
+WHERE q.deleted_at IS NULL AND r.deleted_at IS NULL AND q.tenant_id=? AND q.kind=? AND q.resource_key=? AND q.storage_mib=? AND q.source_operation_id=? AND r.holder_kind=? AND r.holder_id=?
 `
 
 type CountStorageCostReferenceParams struct {
@@ -259,7 +259,7 @@ func (q *Queries) CountStorageCostReference(ctx context.Context, arg CountStorag
 }
 
 const countTenantCostHolders = `-- name: CountTenantCostHolders :one
-SELECT COUNT(*) FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=?
+SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=?
 `
 
 type CountTenantCostHoldersParams struct {
@@ -276,7 +276,7 @@ func (q *Queries) CountTenantCostHolders(ctx context.Context, arg CountTenantCos
 }
 
 const deductReservationBytes = `-- name: DeductReservationBytes :execrows
-UPDATE host_capacity_reservations SET storage_bytes=storage_bytes-?1 WHERE owner_key=?2 AND storage_bytes>=?1
+UPDATE host_capacity_reservations SET storage_bytes=storage_bytes-?1 WHERE deleted_at IS NULL AND owner_key=?2 AND storage_bytes>=?1
 `
 
 type DeductReservationBytesParams struct {
@@ -293,7 +293,7 @@ func (q *Queries) DeductReservationBytes(ctx context.Context, arg DeductReservat
 }
 
 const deleteCost = `-- name: DeleteCost :execrows
-DELETE FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND source_operation_id=?
+UPDATE quota_resources SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=? AND source_operation_id=?
 `
 
 type DeleteCostParams struct {
@@ -317,7 +317,7 @@ func (q *Queries) DeleteCost(ctx context.Context, arg DeleteCostParams) (int64, 
 }
 
 const deleteCostAtKey = `-- name: DeleteCostAtKey :execrows
-DELETE FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=?
+UPDATE quota_resources SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=?
 `
 
 type DeleteCostAtKeyParams struct {
@@ -335,7 +335,7 @@ func (q *Queries) DeleteCostAtKey(ctx context.Context, arg DeleteCostAtKeyParams
 }
 
 const deleteCostReference = `-- name: DeleteCostReference :execrows
-DELETE FROM quota_refs WHERE tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?
+UPDATE quota_refs SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=? AND holder_kind=? AND holder_id=?
 `
 
 type DeleteCostReferenceParams struct {
@@ -361,7 +361,7 @@ func (q *Queries) DeleteCostReference(ctx context.Context, arg DeleteCostReferen
 }
 
 const deleteMatchingCost = `-- name: DeleteMatchingCost :execrows
-DELETE FROM quota_resources WHERE tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=? AND source_operation_id=?
+UPDATE quota_resources SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND tenant_id=? AND kind=? AND resource_key=? AND sandbox_slots=? AND storage_mib=? AND source_operation_id=?
 `
 
 type DeleteMatchingCostParams struct {
@@ -389,7 +389,7 @@ func (q *Queries) DeleteMatchingCost(ctx context.Context, arg DeleteMatchingCost
 }
 
 const deleteMatchingReservation = `-- name: DeleteMatchingReservation :execrows
-DELETE FROM host_capacity_reservations WHERE owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
+UPDATE host_capacity_reservations SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND owner_key=? AND storage_bytes=? AND memory_mib=? AND vcpus=?
 `
 
 type DeleteMatchingReservationParams struct {
@@ -413,7 +413,7 @@ func (q *Queries) DeleteMatchingReservation(ctx context.Context, arg DeleteMatch
 }
 
 const deleteReservation = `-- name: DeleteReservation :execrows
-DELETE FROM host_capacity_reservations WHERE owner_key=?
+UPDATE host_capacity_reservations SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND owner_key=?
 `
 
 func (q *Queries) DeleteReservation(ctx context.Context, ownerKey string) (int64, error) {
@@ -425,7 +425,7 @@ func (q *Queries) DeleteReservation(ctx context.Context, ownerKey string) (int64
 }
 
 const deleteResourceReference = `-- name: DeleteResourceReference :execrows
-DELETE FROM resource_refs WHERE resource_kind=? AND resource_id=? AND holder_kind=? AND holder_id=?
+UPDATE resource_refs SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND resource_kind=? AND resource_id=? AND holder_kind=? AND holder_id=?
 `
 
 type DeleteResourceReferenceParams struct {
@@ -449,7 +449,7 @@ func (q *Queries) DeleteResourceReference(ctx context.Context, arg DeleteResourc
 }
 
 const getFundedUsage = `-- name: GetFundedUsage :one
-SELECT CAST(SUM(storage_mib) AS INTEGER) AS storage_mib,CAST(SUM(sandbox_slots) AS INTEGER) AS sandbox_slots FROM quota_resources WHERE tenant_id=?
+SELECT CAST(SUM(storage_mib) AS INTEGER) AS storage_mib,CAST(SUM(sandbox_slots) AS INTEGER) AS sandbox_slots FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=?
 `
 
 type GetFundedUsageRow struct {
@@ -467,7 +467,7 @@ func (q *Queries) GetFundedUsage(ctx context.Context, tenantID string) (GetFunde
 const getUsage = `-- name: GetUsage :one
 SELECT CAST(COALESCE(SUM(sandbox_slots),0) AS INTEGER) AS slots,
 CAST(COALESCE(SUM(storage_mib),0) AS INTEGER) AS storage_mib
-FROM quota_resources WHERE tenant_id=?
+FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=?
 `
 
 type GetUsageRow struct {
@@ -585,18 +585,25 @@ func (q *Queries) InsertResourceReference(ctx context.Context, arg InsertResourc
 }
 
 const listResourceReferences = `-- name: ListResourceReferences :many
-SELECT resource_kind,resource_id,holder_kind,holder_id FROM resource_refs ORDER BY resource_kind,resource_id
+SELECT resource_kind,resource_id,holder_kind,holder_id FROM resource_refs WHERE deleted_at IS NULL ORDER BY resource_kind,resource_id
 `
 
-func (q *Queries) ListResourceReferences(ctx context.Context) ([]ResourceRef, error) {
+type ListResourceReferencesRow struct {
+	ResourceKind string
+	ResourceID   string
+	HolderKind   string
+	HolderID     string
+}
+
+func (q *Queries) ListResourceReferences(ctx context.Context) ([]ListResourceReferencesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listResourceReferences)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ResourceRef
+	var items []ListResourceReferencesRow
 	for rows.Next() {
-		var i ResourceRef
+		var i ListResourceReferencesRow
 		if err := rows.Scan(
 			&i.ResourceKind,
 			&i.ResourceID,
@@ -618,7 +625,7 @@ func (q *Queries) ListResourceReferences(ctx context.Context) ([]ResourceRef, er
 
 const moveCostReference = `-- name: MoveCostReference :execrows
 UPDATE quota_refs SET holder_id=?1
-WHERE tenant_id=?2 AND kind=?3 AND resource_key=?4
+WHERE deleted_at IS NULL AND tenant_id=?2 AND kind=?3 AND resource_key=?4
 AND holder_kind=?5 AND holder_id=?6
 `
 
@@ -647,7 +654,7 @@ func (q *Queries) MoveCostReference(ctx context.Context, arg MoveCostReferencePa
 }
 
 const reservedBytes = `-- name: ReservedBytes :one
-SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) FROM host_capacity_reservations
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) FROM host_capacity_reservations WHERE deleted_at IS NULL
 `
 
 func (q *Queries) ReservedBytes(ctx context.Context) (int64, error) {
@@ -658,7 +665,7 @@ func (q *Queries) ReservedBytes(ctx context.Context) (int64, error) {
 }
 
 const reservedCapacity = `-- name: ReservedCapacity :one
-SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) AS storage_bytes, CAST(COALESCE(SUM(memory_mib),0) AS INTEGER) AS memory_mib, CAST(COALESCE(SUM(vcpus),0) AS INTEGER) AS vcpus FROM host_capacity_reservations
+SELECT CAST(COALESCE(SUM(storage_bytes),0) AS INTEGER) AS storage_bytes, CAST(COALESCE(SUM(memory_mib),0) AS INTEGER) AS memory_mib, CAST(COALESCE(SUM(vcpus),0) AS INTEGER) AS vcpus FROM host_capacity_reservations WHERE deleted_at IS NULL
 `
 
 type ReservedCapacityRow struct {
@@ -675,7 +682,7 @@ func (q *Queries) ReservedCapacity(ctx context.Context) (ReservedCapacityRow, er
 }
 
 const resourceHolderIDs = `-- name: ResourceHolderIDs :many
-SELECT holder_id FROM resource_refs WHERE resource_kind=? AND resource_id=? AND holder_kind=? ORDER BY holder_id
+SELECT holder_id FROM resource_refs WHERE deleted_at IS NULL AND resource_kind=? AND resource_id=? AND holder_kind=? ORDER BY holder_id
 `
 
 type ResourceHolderIDsParams struct {
@@ -709,7 +716,7 @@ func (q *Queries) ResourceHolderIDs(ctx context.Context, arg ResourceHolderIDsPa
 
 const transferCostReference = `-- name: TransferCostReference :execrows
 UPDATE quota_refs SET holder_kind=?1,holder_id=?2
-WHERE tenant_id=?3 AND kind=?4 AND resource_key=?5
+WHERE deleted_at IS NULL AND tenant_id=?3 AND kind=?4 AND resource_key=?5
 AND holder_kind=?6 AND holder_id=?7
 `
 
@@ -741,7 +748,7 @@ func (q *Queries) TransferCostReference(ctx context.Context, arg TransferCostRef
 
 const transferResourceReference = `-- name: TransferResourceReference :execrows
 UPDATE resource_refs SET holder_kind=?1,holder_id=?2
-WHERE resource_kind=?3 AND resource_id=?4
+WHERE deleted_at IS NULL AND resource_kind=?3 AND resource_id=?4
 AND holder_kind=?5 AND holder_id=?6
 `
 
@@ -771,7 +778,7 @@ func (q *Queries) TransferResourceReference(ctx context.Context, arg TransferRes
 
 const transferStorageReservation = `-- name: TransferStorageReservation :execrows
 UPDATE host_capacity_reservations SET owner_key=?1
-WHERE owner_key=?2 AND storage_bytes=?3 AND memory_mib=0 AND vcpus=0
+WHERE deleted_at IS NULL AND owner_key=?2 AND storage_bytes=?3 AND memory_mib=0 AND vcpus=0
 `
 
 type TransferStorageReservationParams struct {

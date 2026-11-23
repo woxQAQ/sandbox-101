@@ -52,7 +52,7 @@ func (q *Queries) ClaimDeletion(ctx context.Context, arg ClaimDeletionParams) (i
 }
 
 const deleteMatchingReceipt = `-- name: DeleteMatchingReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=? AND receipt_hash=?
+UPDATE deletion_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=? AND receipt_hash=?
 `
 
 type DeleteMatchingReceiptParams struct {
@@ -236,7 +236,7 @@ func (q *Queries) ListJournal(ctx context.Context) ([]ListJournalRow, error) {
 }
 
 const liveDeletionHash = `-- name: LiveDeletionHash :one
-SELECT receipt_hash FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?
+SELECT receipt_hash FROM deletion_intents WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=?
 `
 
 type LiveDeletionHashParams struct {

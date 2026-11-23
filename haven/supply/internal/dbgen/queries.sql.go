@@ -26,7 +26,7 @@ func (q *Queries) CountOwnedIntent(ctx context.Context, arg CountOwnedIntentPara
 }
 
 const countReservation = `-- name: CountReservation :one
-SELECT COUNT(*) FROM pool_slots WHERE operation_id=?
+SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) CountReservation(ctx context.Context, operationID string) (int64, error) {
@@ -48,7 +48,7 @@ func (q *Queries) CountSnapshotUsers(ctx context.Context, snapshotID string) (in
 }
 
 const countTemplateReservations = `-- name: CountTemplateReservations :one
-SELECT COUNT(*) FROM pool_slots WHERE template_id=?
+SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND template_id=?
 `
 
 func (q *Queries) CountTemplateReservations(ctx context.Context, templateID string) (int64, error) {
@@ -59,7 +59,7 @@ func (q *Queries) CountTemplateReservations(ctx context.Context, templateID stri
 }
 
 const countWarmIdentity = `-- name: CountWarmIdentity :one
-SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.status='ready' AND p.vm_id=? AND p.template_id=? AND v.snapshot_id=?
+SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.deleted_at IS NULL AND p.status='ready' AND p.vm_id=? AND p.template_id=? AND v.snapshot_id=?
 `
 
 type CountWarmIdentityParams struct {
@@ -76,7 +76,7 @@ func (q *Queries) CountWarmIdentity(ctx context.Context, arg CountWarmIdentityPa
 }
 
 const countWarmSnapshot = `-- name: CountWarmSnapshot :one
-SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.status='ready' AND v.snapshot_id=?
+SELECT COUNT(*) FROM pool_slots p JOIN template_versions v ON v.operation_id=p.template_version WHERE p.deleted_at IS NULL AND p.status='ready' AND v.snapshot_id=?
 `
 
 func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int64, error) {
@@ -87,7 +87,7 @@ func (q *Queries) CountWarmSnapshot(ctx context.Context, snapshotID string) (int
 }
 
 const countWarmVM = `-- name: CountWarmVM :one
-SELECT COUNT(*) FROM pool_slots WHERE vm_id=? AND status='ready'
+SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND vm_id=? AND status='ready'
 `
 
 func (q *Queries) CountWarmVM(ctx context.Context, vmID string) (int64, error) {
@@ -98,7 +98,7 @@ func (q *Queries) CountWarmVM(ctx context.Context, vmID string) (int64, error) {
 }
 
 const deleteReservation = `-- name: DeleteReservation :execrows
-DELETE FROM pool_slots WHERE operation_id=? AND status=? AND instance=? AND source_input_hash=?
+UPDATE pool_slots SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=? AND status=? AND instance=? AND source_input_hash=?
 `
 
 type DeleteReservationParams struct {
@@ -122,7 +122,7 @@ func (q *Queries) DeleteReservation(ctx context.Context, arg DeleteReservationPa
 }
 
 const firstReady = `-- name: FirstReady :one
-SELECT p.operation_id FROM pool_slots p WHERE p.template_id=? AND p.template_version=? AND p.status='ready'
+SELECT p.operation_id FROM pool_slots p WHERE p.deleted_at IS NULL AND p.template_id=? AND p.template_version=? AND p.status='ready'
 ORDER BY p.created_at_unix_ns,p.vm_id LIMIT 1
 `
 
@@ -152,17 +152,6 @@ func (q *Queries) GetIntent(ctx context.Context, templateID string) (GetIntentRo
 	var i GetIntentRow
 	err := row.Scan(&i.TenantID, &i.CandidateOperationID)
 	return i, err
-}
-
-const getPermanentOwner = `-- name: GetPermanentOwner :one
-SELECT tenant_id FROM template_owners WHERE template_id=?
-`
-
-func (q *Queries) GetPermanentOwner(ctx context.Context, templateID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getPermanentOwner, templateID)
-	var tenant_id string
-	err := row.Scan(&tenant_id)
-	return tenant_id, err
 }
 
 const getPublisher = `-- name: GetPublisher :one
@@ -195,13 +184,14 @@ func (q *Queries) GetPublisher(ctx context.Context, arg GetPublisherParams) (Get
 }
 
 const getReservation = `-- name: GetReservation :one
-SELECT operation_id, template_id, template_version, sandbox_id, vm_id, source_operation_id, source_input_hash, instance, created_at_unix_ns, status FROM pool_slots WHERE operation_id=?
+SELECT deleted_at, operation_id, template_id, template_version, sandbox_id, vm_id, source_operation_id, source_input_hash, instance, created_at_unix_ns, status FROM pool_slots WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) GetReservation(ctx context.Context, operationID string) (PoolSlot, error) {
 	row := q.db.QueryRowContext(ctx, getReservation, operationID)
 	var i PoolSlot
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.OperationID,
 		&i.TemplateID,
 		&i.TemplateVersion,
@@ -217,7 +207,7 @@ func (q *Queries) GetReservation(ctx context.Context, operationID string) (PoolS
 }
 
 const getReservationForVM = `-- name: GetReservationForVM :one
-SELECT operation_id FROM pool_slots WHERE vm_id=?
+SELECT operation_id FROM pool_slots WHERE deleted_at IS NULL AND vm_id=?
 `
 
 func (q *Queries) GetReservationForVM(ctx context.Context, vmID string) (string, error) {
@@ -407,7 +397,7 @@ func (q *Queries) InsertTemplateVersion(ctx context.Context, arg InsertTemplateV
 }
 
 const listReady = `-- name: ListReady :many
-SELECT operation_id FROM pool_slots WHERE status='ready' ORDER BY operation_id
+SELECT operation_id FROM pool_slots WHERE deleted_at IS NULL AND status='ready' ORDER BY operation_id
 `
 
 func (q *Queries) ListReady(ctx context.Context) ([]string, error) {
@@ -466,7 +456,7 @@ func (q *Queries) ListTemplateIDs(ctx context.Context) ([]ListTemplateIDsRow, er
 }
 
 const listWarmVMs = `-- name: ListWarmVMs :many
-SELECT vm_id FROM pool_slots WHERE template_id=? AND status='ready' ORDER BY vm_id
+SELECT vm_id FROM pool_slots WHERE deleted_at IS NULL AND template_id=? AND status='ready' ORDER BY vm_id
 `
 
 func (q *Queries) ListWarmVMs(ctx context.Context, templateID string) ([]string, error) {
@@ -493,7 +483,7 @@ func (q *Queries) ListWarmVMs(ctx context.Context, templateID string) ([]string,
 }
 
 const markPendingCleanup = `-- name: MarkPendingCleanup :execrows
-UPDATE pool_slots SET status='cleanup' WHERE operation_id=? AND status='pending'
+UPDATE pool_slots SET status='cleanup' WHERE deleted_at IS NULL AND operation_id=? AND status='pending'
 `
 
 func (q *Queries) MarkPendingCleanup(ctx context.Context, operationID string) (int64, error) {
@@ -505,7 +495,7 @@ func (q *Queries) MarkPendingCleanup(ctx context.Context, operationID string) (i
 }
 
 const markReady = `-- name: MarkReady :execrows
-UPDATE pool_slots SET status='ready',instance=? WHERE operation_id=? AND status='pending' AND instance='' AND source_input_hash=?
+UPDATE pool_slots SET status='ready',instance=? WHERE deleted_at IS NULL AND operation_id=? AND status='pending' AND instance='' AND source_input_hash=?
 `
 
 type MarkReadyParams struct {
@@ -523,7 +513,7 @@ func (q *Queries) MarkReady(ctx context.Context, arg MarkReadyParams) (int64, er
 }
 
 const markReadyCleanup = `-- name: MarkReadyCleanup :execrows
-UPDATE pool_slots SET status='cleanup' WHERE operation_id=? AND status='ready' AND instance=? AND source_input_hash=?
+UPDATE pool_slots SET status='cleanup' WHERE deleted_at IS NULL AND operation_id=? AND status='ready' AND instance=? AND source_input_hash=?
 `
 
 type MarkReadyCleanupParams struct {
@@ -577,7 +567,7 @@ func (q *Queries) ReservePublication(ctx context.Context, arg ReservePublication
 }
 
 const selectReservation = `-- name: SelectReservation :execrows
-UPDATE pool_slots SET status='selected' WHERE operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?
+UPDATE pool_slots SET status='selected' WHERE deleted_at IS NULL AND operation_id=? AND status='ready' AND vm_id=? AND instance=? AND source_input_hash=? AND template_version=?
 `
 
 type SelectReservationParams struct {

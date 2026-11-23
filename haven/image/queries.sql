@@ -47,22 +47,22 @@ SELECT * FROM image_artifact_values WHERE artifact_hash=?;
 INSERT INTO image_artifact_values(artifact_hash,role,path,sha256,diff_id,device_id,guest_path,serial,cache_sha256) VALUES(?,?,?,?,?,?,?,?,?);
 
 -- name: GetImportIntent :one
-SELECT operation_id,layout,input_hash FROM image_intents WHERE digest=?;
+SELECT operation_id,layout,input_hash FROM image_intents WHERE deleted_at IS NULL AND digest=?;
 
 -- name: CountImportIntent :one
-SELECT COUNT(*) FROM image_intents WHERE digest=?;
+SELECT COUNT(*) FROM image_intents WHERE deleted_at IS NULL AND digest=?;
 
 -- name: InsertImportIntent :execrows
 INSERT INTO image_intents(digest,operation_id,layout,input_hash) VALUES(?,?,?,?);
 
 -- name: DeleteImportIntent :execrows
-DELETE FROM image_intents WHERE digest=? AND operation_id=? AND input_hash=? AND layout=?;
+UPDATE image_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND digest=? AND operation_id=? AND input_hash=? AND layout=?;
 
 -- name: GetCacheWitness :one
 SELECT * FROM image_cache_witnesses WHERE witness_hash=?;
 
 -- name: GetCache :one
-SELECT c.source_operation_id,sqlc.embed(w) FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.builder=? AND c.diff_id=?;
+SELECT c.source_operation_id,sqlc.embed(w) FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.deleted_at IS NULL AND c.builder=? AND c.diff_id=?;
 
 -- name: InsertCache :execrows
 INSERT INTO image_caches(builder,diff_id,source_operation_id,witness_hash) VALUES(?,?,?,?);
@@ -72,13 +72,13 @@ INSERT INTO image_cache_witnesses(builder,diff_id,witness_hash,physical_bytes,pa
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
 
 -- name: DeleteCache :execrows
-DELETE FROM image_caches WHERE builder=? AND diff_id=? AND source_operation_id=?;
+UPDATE image_caches SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND builder=? AND diff_id=? AND source_operation_id=?;
 
 -- name: ListCacheKeys :many
-SELECT builder,diff_id FROM image_caches ORDER BY builder,diff_id;
+SELECT builder,diff_id FROM image_caches WHERE deleted_at IS NULL ORDER BY builder,diff_id;
 
 -- name: ListFundedCaches :many
-SELECT c.source_operation_id,sqlc.embed(w) FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.source_operation_id=? ORDER BY c.builder,c.diff_id;
+SELECT c.source_operation_id,sqlc.embed(w) FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.deleted_at IS NULL AND c.source_operation_id=? ORDER BY c.builder,c.diff_id;
 
 -- name: ListStepOperations :many
 SELECT operation_id FROM operation_steps WHERE step_key=?;

@@ -74,7 +74,7 @@ func TestHavenSnapshotReleaseRetainsPublishedSnapshot(t *testing.T) {
 				t.Fatal("VM cleanup rewrote historical capture", err)
 			}
 			var storage, slots, done int
-			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND status='done')", "capture:"+capture.ID).Scan(&storage, &slots, &done); err != nil || storage != 192 || slots != 0 || done != 1 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND status='done')", "capture:"+capture.ID).Scan(&storage, &slots, &done); err != nil || storage != 192 || slots != 0 || done != 1 {
 				t.Fatal("VM cleanup lost snapshot charge or raw-output responsibility", storage, slots, done, err)
 			}
 			if backend.Count("capture") != 1 || backend.Count("launch") != 1 {
@@ -105,7 +105,7 @@ func TestHavenSnapshotReleaseHandoffAtomicity(t *testing.T) {
 		t.Fatal("failed handoff partially revoked sandbox", err)
 	}
 	var refs, cleanup int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND holder_kind='capture' AND holder_id=?),(SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND status='pending')", operation.ID, "capture:"+operation.ID).Scan(&refs, &cleanup); err != nil || refs != 1 || cleanup != 1 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind='vm' AND holder_kind='capture' AND holder_id=?),(SELECT COUNT(*) FROM cleanup_intents WHERE id=? AND status='pending')", operation.ID, "capture:"+operation.ID).Scan(&refs, &cleanup); err != nil || refs != 1 || cleanup != 1 {
 		t.Fatal("failed handoff lost capture obligation", refs, cleanup, err)
 	}
 	if backend.Count("stop") != 0 || backend.Count("remove") != 0 {
@@ -171,7 +171,7 @@ func TestHavenReleaseRequiresOriginalGenerationRecords(t *testing.T) {
 				t.Fatal("failed proof changed current VM custody", err)
 			}
 			var storage int64
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storage); err != nil || storage != 64 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage); err != nil || storage != 64 {
 				t.Fatal("unproved generation lost its storage responsibility", storage, err)
 			}
 			original, err := machine.LoadResourceStep(context.Background(), service.State.Database(), claim.ID)

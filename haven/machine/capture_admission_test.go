@@ -38,7 +38,7 @@ func TestHavenCaptureConflictDoesNotDispatch(t *testing.T) {
 		t.Fatal("conflicting capture request dispatched retained work", worker, err)
 	}
 	var storage int
-	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storage); err != nil || storage != 256 {
+	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage); err != nil || storage != 256 {
 		t.Fatal("conflicting request changed frozen responsibility", storage, err)
 	}
 	replay, err := service.Captures.AdmitCapture(context.Background(), request)

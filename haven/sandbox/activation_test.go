@@ -47,8 +47,8 @@ func TestHavenResumeActivationHandoffRejectsSQL(t *testing.T) {
 				t.Fatal("fixture lacks paused snapshot", before, err)
 			}
 			const responsibility = `SELECT
-			 (SELECT COUNT(*) FROM resource_refs WHERE resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?),
-			 (SELECT COUNT(*) FROM quota_refs WHERE tenant_id='tenant' AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?)`
+			 (SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind='snapshot' AND resource_id=? AND holder_kind='sleep' AND holder_id=?),
+			 (SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL AND tenant_id='tenant' AND kind='snapshot' AND resource_key=? AND holder_kind='active_use' AND holder_id=?)`
 			checkResponsibility := func(want int) {
 				t.Helper()
 				var references, charges int

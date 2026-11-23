@@ -67,7 +67,7 @@ func TestHavenGCDryRunAndSupplyCollection(t *testing.T) {
 		t.Fatal("collector removed unknown entry", err)
 	}
 	var count int
-	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots").Scan(&count); err != nil || count != 0 {
+	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL").Scan(&count); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 }
@@ -114,7 +114,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 		t.Fatal(report, err)
 	}
 	var remaining int
-	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots").Scan(&remaining); err != nil || remaining != 1 {
+	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL").Scan(&remaining); err != nil || remaining != 1 {
 		t.Fatal("batch consumed extra pool responsibility", remaining, err)
 	}
 	var before, after int
@@ -137,7 +137,7 @@ func TestHavenGCBatchAndCancellation(t *testing.T) {
 	if err != nil || len(report.Collected) != 1 {
 		t.Fatal(report, err)
 	}
-	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots").Scan(&remaining); err != nil || remaining != 0 {
+	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL").Scan(&remaining); err != nil || remaining != 0 {
 		t.Fatal(remaining, err)
 	}
 }

@@ -71,6 +71,11 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	if _, err = service.Catalog.GetCheckpoint(ctx, principal, checkpoint.Result.CheckpointID); err == nil {
 		t.Fatal("checkpoint binding remained published")
 	}
+	var sourceSnapshot string
+	if err := service.State.Database().QueryRowContext(ctx, `SELECT snapshot_id FROM checkpoint_bindings
+		WHERE id=? AND tenant=? AND deleted_at IS NOT NULL`, checkpoint.Result.CheckpointID, principal.TenantID).Scan(&sourceSnapshot); err != nil || sourceSnapshot != checkpoint.Result.SnapshotID {
+		t.Fatalf("retired checkpoint binding: snapshot=%q err=%v", sourceSnapshot, err)
+	}
 	if _, err = service.CommandAdmission.Execute(ctx, principal, "source-release", operation.Intent{
 		Action:    "release",
 		SandboxID: claim.Result.SandboxID,
@@ -87,7 +92,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 		t.Fatal(report, err)
 	}
 	var slots, storage int
-	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots),SUM(storage_mib) FROM quota_resources").Scan(&slots, &storage); err != nil || slots != 1 || storage != 256 {
+	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots),SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&slots, &storage); err != nil || slots != 1 || storage != 256 {
 		t.Fatal("snapshot backing responsibility retired early", slots, storage, err)
 	}
 	if _, err = service.Dataplane.Ready(ctx, principal, fork.Result.SandboxID); err != nil {
@@ -99,7 +104,7 @@ func TestHavenCheckpointDeleteRetainsForkBacking(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources").Scan(&slots, &storage); err != nil || slots != 0 || storage != 0 {
+	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL").Scan(&slots, &storage); err != nil || slots != 0 || storage != 0 {
 		t.Fatal("last backing reclamation did not retire snapshot", slots, storage, err)
 	}
 	original, err := service.OperationMonitor.GetForTenant(ctx, "tenant", checkpoint.ID)

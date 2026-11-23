@@ -162,7 +162,7 @@ func TestHavenTemplateWarmupCrashDoesNotReplay(t *testing.T) {
 		t.Fatal(fmt.Sprint(failed), err, executions.Load())
 	}
 	var slots int
-	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources").Scan(&slots); err != nil || slots != 1 {
+	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL").Scan(&slots); err != nil || slots != 1 {
 		t.Fatal("unknown warmup discarded build responsibility", slots, err)
 	}
 }
@@ -291,7 +291,7 @@ func TestHavenTemplateBuildAndGoldenClaim(t *testing.T) {
 		t.Fatal(published, err)
 	}
 	var vms, slots, storage int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms),(SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&vms, &slots, &storage); err != nil || vms != 0 || slots != 0 || storage != 192 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL)").Scan(&vms, &slots, &storage); err != nil || vms != 0 || slots != 0 || storage != 192 {
 		t.Fatal(vms, slots, storage, err)
 	}
 	claim, err := service.CommandAdmission.Execute(ctx, principal, "golden-claim", operation.Intent{

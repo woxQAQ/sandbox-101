@@ -12,7 +12,7 @@ import (
 
 const claimForDeletion = `-- name: ClaimForDeletion :execrows
 UPDATE vms SET operation_id=?1,deleting=1
-WHERE id=?2 AND current_instance=?3 AND operation_id IS NULL
+WHERE deleted_at IS NULL AND id=?2 AND current_instance=?3 AND operation_id IS NULL
 `
 
 type ClaimForDeletionParams struct {
@@ -31,7 +31,7 @@ func (q *Queries) ClaimForDeletion(ctx context.Context, arg ClaimForDeletionPara
 
 const claimRestoreGeneration = `-- name: ClaimRestoreGeneration :execrows
 UPDATE vms SET operation_id=?1,generation_operation_id=?2,directory=?3,resource_hash=?4,verified=0,agent_ready=0,deleting=0,observation_hash=NULL
-WHERE id=?5 AND operation_id IS NULL AND current_instance=?6 AND state='stopped'
+WHERE deleted_at IS NULL AND id=?5 AND operation_id IS NULL AND current_instance=?6 AND state='stopped'
 `
 
 type ClaimRestoreGenerationParams struct {
@@ -60,7 +60,7 @@ func (q *Queries) ClaimRestoreGeneration(ctx context.Context, arg ClaimRestoreGe
 
 const claimRunning = `-- name: ClaimRunning :execrows
 UPDATE vms SET operation_id=?1
-WHERE id=?2 AND current_instance=?3 AND operation_id IS NULL AND state='running'
+WHERE deleted_at IS NULL AND id=?2 AND current_instance=?3 AND operation_id IS NULL AND state='running'
 `
 
 type ClaimRunningParams struct {
@@ -79,7 +79,7 @@ func (q *Queries) ClaimRunning(ctx context.Context, arg ClaimRunningParams) (int
 
 const claimStopped = `-- name: ClaimStopped :execrows
 UPDATE vms SET operation_id=?1
-WHERE id=?2 AND operation_id IS NULL AND state='stopped' AND current_instance=?3
+WHERE deleted_at IS NULL AND id=?2 AND operation_id IS NULL AND state='stopped' AND current_instance=?3
 `
 
 type ClaimStoppedParams struct {
@@ -97,22 +97,22 @@ func (q *Queries) ClaimStopped(ctx context.Context, arg ClaimStoppedParams) (int
 }
 
 const completeStart = `-- name: CompleteStart :execrows
-UPDATE vms SET state='running',operation_id=NULL,verified=1,agent_ready=1,observation_hash=? WHERE id=? AND current_instance=? AND operation_id=? AND state='created'
+UPDATE vms SET state='running',operation_id=NULL,verified=1,agent_ready=1,observation_hash=? WHERE deleted_at IS NULL AND id=? AND operation_id=? AND current_instance=? AND state='created'
 `
 
 type CompleteStartParams struct {
 	ObservationHash sql.NullString
 	ID              string
-	CurrentInstance string
 	OperationID     sql.NullString
+	CurrentInstance string
 }
 
 func (q *Queries) CompleteStart(ctx context.Context, arg CompleteStartParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeStart,
 		arg.ObservationHash,
 		arg.ID,
-		arg.CurrentInstance,
 		arg.OperationID,
+		arg.CurrentInstance,
 	)
 	if err != nil {
 		return 0, err
@@ -121,7 +121,7 @@ func (q *Queries) CompleteStart(ctx context.Context, arg CompleteStartParams) (i
 }
 
 const completeStop = `-- name: CompleteStop :execrows
-UPDATE vms SET state='stopped',operation_id=NULL,verified=1,agent_ready=0,observation_hash=NULL WHERE id=? AND operation_id=? AND current_instance=?
+UPDATE vms SET state='stopped',operation_id=NULL,verified=1,agent_ready=0,observation_hash=NULL WHERE deleted_at IS NULL AND id=? AND operation_id=? AND current_instance=?
 `
 
 type CompleteStopParams struct {
@@ -139,7 +139,7 @@ func (q *Queries) CompleteStop(ctx context.Context, arg CompleteStopParams) (int
 }
 
 const countBacking = `-- name: CountBacking :one
-SELECT COUNT(*) FROM vm_memory_backings WHERE path=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE deleted_at IS NULL AND path=?
 `
 
 func (q *Queries) CountBacking(ctx context.Context, path string) (int64, error) {
@@ -167,7 +167,7 @@ func (q *Queries) CountCaptureOwner(ctx context.Context, arg CountCaptureOwnerPa
 }
 
 const countCurrent = `-- name: CountCurrent :one
-SELECT COUNT(*) FROM vms WHERE id=?
+SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL AND id=?
 `
 
 func (q *Queries) CountCurrent(ctx context.Context, id string) (int64, error) {
@@ -178,7 +178,7 @@ func (q *Queries) CountCurrent(ctx context.Context, id string) (int64, error) {
 }
 
 const countInstances = `-- name: CountInstances :one
-SELECT COUNT(*) FROM instances WHERE vm_id=?
+SELECT COUNT(*) FROM instances WHERE deleted_at IS NULL AND vm_id=?
 `
 
 func (q *Queries) CountInstances(ctx context.Context, vmID string) (int64, error) {
@@ -189,7 +189,7 @@ func (q *Queries) CountInstances(ctx context.Context, vmID string) (int64, error
 }
 
 const countMatchingBacking = `-- name: CountMatchingBacking :one
-SELECT COUNT(*) FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE deleted_at IS NULL AND path=? AND vm_id=? AND file_digest=?
 `
 
 type CountMatchingBackingParams struct {
@@ -206,7 +206,7 @@ func (q *Queries) CountMatchingBacking(ctx context.Context, arg CountMatchingBac
 }
 
 const countSnapshot = `-- name: CountSnapshot :one
-SELECT COUNT(*) FROM snapshots WHERE id=?
+SELECT COUNT(*) FROM snapshots WHERE deleted_at IS NULL AND id=?
 `
 
 func (q *Queries) CountSnapshot(ctx context.Context, id string) (int64, error) {
@@ -217,7 +217,7 @@ func (q *Queries) CountSnapshot(ctx context.Context, id string) (int64, error) {
 }
 
 const countSnapshotLeases = `-- name: CountSnapshotLeases :one
-SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND snapshot_id=?
 `
 
 func (q *Queries) CountSnapshotLeases(ctx context.Context, snapshotID string) (int64, error) {
@@ -228,7 +228,7 @@ func (q *Queries) CountSnapshotLeases(ctx context.Context, snapshotID string) (i
 }
 
 const countSnapshotPublication = `-- name: CountSnapshotPublication :one
-SELECT COUNT(*) FROM snapshot_publications WHERE snapshot_id=?
+SELECT COUNT(*) FROM snapshot_publications WHERE deleted_at IS NULL AND snapshot_id=?
 `
 
 func (q *Queries) CountSnapshotPublication(ctx context.Context, snapshotID string) (int64, error) {
@@ -239,7 +239,7 @@ func (q *Queries) CountSnapshotPublication(ctx context.Context, snapshotID strin
 }
 
 const countSourceLease = `-- name: CountSourceLease :one
-SELECT COUNT(*) FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND snapshot_id=? AND operation_id=? AND step_key=?
 `
 
 type CountSourceLeaseParams struct {
@@ -256,7 +256,7 @@ func (q *Queries) CountSourceLease(ctx context.Context, arg CountSourceLeasePara
 }
 
 const countStepLease = `-- name: CountStepLease :one
-SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=? AND step_key=?
+SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND operation_id=? AND step_key=?
 `
 
 type CountStepLeaseParams struct {
@@ -272,7 +272,7 @@ func (q *Queries) CountStepLease(ctx context.Context, arg CountStepLeaseParams) 
 }
 
 const countVMBackings = `-- name: CountVMBackings :one
-SELECT COUNT(*) FROM vm_memory_backings WHERE vm_id=?
+SELECT COUNT(*) FROM vm_memory_backings WHERE deleted_at IS NULL AND vm_id=?
 `
 
 func (q *Queries) CountVMBackings(ctx context.Context, vmID string) (int64, error) {
@@ -283,7 +283,7 @@ func (q *Queries) CountVMBackings(ctx context.Context, vmID string) (int64, erro
 }
 
 const countVersions = `-- name: CountVersions :one
-SELECT COUNT(*) FROM resource_versions WHERE vm_id=?
+SELECT COUNT(*) FROM resource_versions WHERE deleted_at IS NULL AND vm_id=?
 `
 
 func (q *Queries) CountVersions(ctx context.Context, vmID string) (int64, error) {
@@ -322,7 +322,7 @@ func (q *Queries) CreateCandidate(ctx context.Context, arg CreateCandidateParams
 }
 
 const deleteBacking = `-- name: DeleteBacking :execrows
-DELETE FROM vm_memory_backings WHERE path=? AND vm_id=? AND file_digest=?
+UPDATE vm_memory_backings SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND path=? AND vm_id=? AND file_digest=?
 `
 
 type DeleteBackingParams struct {
@@ -340,7 +340,7 @@ func (q *Queries) DeleteBacking(ctx context.Context, arg DeleteBackingParams) (i
 }
 
 const deleteInstance = `-- name: DeleteInstance :execrows
-DELETE FROM instances WHERE id=? AND vm_id=? AND operation_id=?
+UPDATE instances SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND id=? AND vm_id=? AND operation_id=?
 `
 
 type DeleteInstanceParams struct {
@@ -358,7 +358,7 @@ func (q *Queries) DeleteInstance(ctx context.Context, arg DeleteInstanceParams) 
 }
 
 const deleteMatchingNetworkPolicy = `-- name: DeleteMatchingNetworkPolicy :execrows
-DELETE FROM network_policies WHERE vm_id=?1 AND instance=?2 AND operation_id=?3 AND policy_hash IS ?4
+UPDATE network_policies SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND vm_id=?1 AND instance=?2 AND operation_id=?3 AND policy_hash IS ?4
 `
 
 type DeleteMatchingNetworkPolicyParams struct {
@@ -382,7 +382,7 @@ func (q *Queries) DeleteMatchingNetworkPolicy(ctx context.Context, arg DeleteMat
 }
 
 const deleteNetworkPolicy = `-- name: DeleteNetworkPolicy :execrows
-DELETE FROM network_policies WHERE vm_id=? AND instance=? AND operation_id=?
+UPDATE network_policies SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND vm_id=? AND instance=? AND operation_id=?
 `
 
 type DeleteNetworkPolicyParams struct {
@@ -400,7 +400,7 @@ func (q *Queries) DeleteNetworkPolicy(ctx context.Context, arg DeleteNetworkPoli
 }
 
 const deleteSnapshot = `-- name: DeleteSnapshot :execrows
-DELETE FROM snapshots WHERE id=?1 AND published=?2 AND deleting=1 AND capture_operation_id=?3 AND tenant_id=?4 AND source_vm_id=?5 AND source_instance=?6 AND directory=?7 AND manifest_hash IS ?8
+UPDATE snapshots SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND id=?1 AND published=?2 AND deleting=1 AND capture_operation_id=?3 AND tenant_id=?4 AND source_vm_id=?5 AND source_instance=?6 AND directory=?7 AND manifest_hash IS ?8
 `
 
 type DeleteSnapshotParams struct {
@@ -432,7 +432,7 @@ func (q *Queries) DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) 
 }
 
 const deleteSnapshotPublication = `-- name: DeleteSnapshotPublication :execrows
-DELETE FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND capture_operation_id=? AND record_hash=?
+UPDATE snapshot_publications SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND snapshot_id=? AND tenant_id=? AND capture_operation_id=? AND record_hash=?
 `
 
 type DeleteSnapshotPublicationParams struct {
@@ -456,7 +456,7 @@ func (q *Queries) DeleteSnapshotPublication(ctx context.Context, arg DeleteSnaps
 }
 
 const deleteSourceLease = `-- name: DeleteSourceLease :execrows
-DELETE FROM snapshot_source_leases WHERE snapshot_id=? AND operation_id=? AND step_key=?
+UPDATE snapshot_source_leases SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND snapshot_id=? AND operation_id=? AND step_key=?
 `
 
 type DeleteSourceLeaseParams struct {
@@ -474,7 +474,7 @@ func (q *Queries) DeleteSourceLease(ctx context.Context, arg DeleteSourceLeasePa
 }
 
 const deleteStopped = `-- name: DeleteStopped :execrows
-DELETE FROM vms WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'
+UPDATE vms SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND id=? AND operation_id=? AND current_instance=? AND state='stopped'
 `
 
 type DeleteStoppedParams struct {
@@ -492,7 +492,7 @@ func (q *Queries) DeleteStopped(ctx context.Context, arg DeleteStoppedParams) (i
 }
 
 const deleteVersion = `-- name: DeleteVersion :execrows
-DELETE FROM resource_versions WHERE vm_id=? AND operation_id=? AND step_key=?
+UPDATE resource_versions SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND vm_id=? AND operation_id=? AND step_key=?
 `
 
 type DeleteVersionParams struct {
@@ -510,7 +510,7 @@ func (q *Queries) DeleteVersion(ctx context.Context, arg DeleteVersionParams) (i
 }
 
 const getCapture = `-- name: GetCapture :one
-SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE id=? AND source_vm_id=?
+SELECT deleted_at, id, active_id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE deleted_at IS NULL AND id=? AND source_vm_id=?
 `
 
 type GetCaptureParams struct {
@@ -522,7 +522,9 @@ func (q *Queries) GetCapture(ctx context.Context, arg GetCaptureParams) (Snapsho
 	row := q.db.QueryRowContext(ctx, getCapture, arg.ID, arg.SourceVmID)
 	var i Snapshot
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.ID,
+		&i.ActiveID,
 		&i.SourceVmID,
 		&i.TenantID,
 		&i.CaptureOperationID,
@@ -536,7 +538,7 @@ func (q *Queries) GetCapture(ctx context.Context, arg GetCaptureParams) (Snapsho
 }
 
 const getCurrent = `-- name: GetCurrent :one
-SELECT v.id, v.slot, v.current_instance, v.state, v.operation_id, v.generation_operation_id, v.directory, v.resource_hash, v.verified, v.agent_ready, v.deleting, v.observation_hash,s.input,s.input_hash FROM vms v LEFT JOIN operation_steps s ON s.operation_id=v.generation_operation_id AND s.step_key='resource' WHERE v.id=?
+SELECT v.deleted_at, v.id, v.active_id, v.slot, v.current_instance, v.state, v.operation_id, v.generation_operation_id, v.directory, v.resource_hash, v.verified, v.agent_ready, v.deleting, v.observation_hash,s.input,s.input_hash FROM vms v LEFT JOIN operation_steps s ON s.operation_id=v.generation_operation_id AND s.step_key='resource' WHERE v.deleted_at IS NULL AND v.id=?
 `
 
 type GetCurrentRow struct {
@@ -549,7 +551,9 @@ func (q *Queries) GetCurrent(ctx context.Context, id string) (GetCurrentRow, err
 	row := q.db.QueryRowContext(ctx, getCurrent, id)
 	var i GetCurrentRow
 	err := row.Scan(
+		&i.Vm.DeletedAt,
 		&i.Vm.ID,
+		&i.Vm.ActiveID,
 		&i.Vm.Slot,
 		&i.Vm.CurrentInstance,
 		&i.Vm.State,
@@ -568,7 +572,7 @@ func (q *Queries) GetCurrent(ctx context.Context, id string) (GetCurrentRow, err
 }
 
 const getInstance = `-- name: GetInstance :one
-SELECT resource_hash,observation_hash FROM instances WHERE id = ? AND vm_id = ? AND operation_id = ?
+SELECT resource_hash,observation_hash FROM instances WHERE deleted_at IS NULL AND id = ? AND vm_id = ? AND operation_id = ?
 `
 
 type GetInstanceParams struct {
@@ -590,7 +594,7 @@ func (q *Queries) GetInstance(ctx context.Context, arg GetInstanceParams) (GetIn
 }
 
 const getNetworkPolicy = `-- name: GetNetworkPolicy :one
-SELECT operation_id,instance,policy_hash FROM network_policies WHERE vm_id=?
+SELECT operation_id,instance,policy_hash FROM network_policies WHERE deleted_at IS NULL AND vm_id=?
 `
 
 type GetNetworkPolicyRow struct {
@@ -606,25 +610,9 @@ func (q *Queries) GetNetworkPolicy(ctx context.Context, vmID string) (GetNetwork
 	return i, err
 }
 
-const getNetworkPolicyOwner = `-- name: GetNetworkPolicyOwner :one
-SELECT instance,operation_id FROM network_policies WHERE vm_id=?
-`
-
-type GetNetworkPolicyOwnerRow struct {
-	Instance    string
-	OperationID string
-}
-
-func (q *Queries) GetNetworkPolicyOwner(ctx context.Context, vmID string) (GetNetworkPolicyOwnerRow, error) {
-	row := q.db.QueryRowContext(ctx, getNetworkPolicyOwner, vmID)
-	var i GetNetworkPolicyOwnerRow
-	err := row.Scan(&i.Instance, &i.OperationID)
-	return i, err
-}
-
 const getOwnedPublication = `-- name: GetOwnedPublication :one
-SELECT s.id, s.source_vm_id, s.tenant_id, s.capture_operation_id, s.source_instance, s.directory, s.published, s.deleting, s.manifest_hash,o.source_operation_id,o.source_kind
-FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?
+SELECT s.deleted_at, s.id, s.active_id, s.source_vm_id, s.tenant_id, s.capture_operation_id, s.source_instance, s.directory, s.published, s.deleting, s.manifest_hash,o.source_operation_id,o.source_kind
+FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.deleted_at IS NULL AND s.id=? AND o.tenant_id=?
 `
 
 type GetOwnedPublicationParams struct {
@@ -642,7 +630,9 @@ func (q *Queries) GetOwnedPublication(ctx context.Context, arg GetOwnedPublicati
 	row := q.db.QueryRowContext(ctx, getOwnedPublication, arg.ID, arg.TenantID)
 	var i GetOwnedPublicationRow
 	err := row.Scan(
+		&i.Snapshot.DeletedAt,
 		&i.Snapshot.ID,
+		&i.Snapshot.ActiveID,
 		&i.Snapshot.SourceVmID,
 		&i.Snapshot.TenantID,
 		&i.Snapshot.CaptureOperationID,
@@ -657,34 +647,8 @@ func (q *Queries) GetOwnedPublication(ctx context.Context, arg GetOwnedPublicati
 	return i, err
 }
 
-const getOwnedSnapshot = `-- name: GetOwnedSnapshot :one
-SELECT s.id, s.source_vm_id, s.tenant_id, s.capture_operation_id, s.source_instance, s.directory, s.published, s.deleting, s.manifest_hash FROM snapshots s JOIN snapshot_owners o ON o.snapshot_id=s.id WHERE s.id=? AND o.tenant_id=?
-`
-
-type GetOwnedSnapshotParams struct {
-	ID       string
-	TenantID string
-}
-
-func (q *Queries) GetOwnedSnapshot(ctx context.Context, arg GetOwnedSnapshotParams) (Snapshot, error) {
-	row := q.db.QueryRowContext(ctx, getOwnedSnapshot, arg.ID, arg.TenantID)
-	var i Snapshot
-	err := row.Scan(
-		&i.ID,
-		&i.SourceVmID,
-		&i.TenantID,
-		&i.CaptureOperationID,
-		&i.SourceInstance,
-		&i.Directory,
-		&i.Published,
-		&i.Deleting,
-		&i.ManifestHash,
-	)
-	return i, err
-}
-
 const getPublishedBody = `-- name: GetPublishedBody :one
-SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE id=? AND published=1 AND deleting=? AND source_vm_id=?
+SELECT deleted_at, id, active_id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE deleted_at IS NULL AND id=? AND published=1 AND deleting=? AND source_vm_id=?
 `
 
 type GetPublishedBodyParams struct {
@@ -697,7 +661,9 @@ func (q *Queries) GetPublishedBody(ctx context.Context, arg GetPublishedBodyPara
 	row := q.db.QueryRowContext(ctx, getPublishedBody, arg.ID, arg.Deleting, arg.SourceVmID)
 	var i Snapshot
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.ID,
+		&i.ActiveID,
 		&i.SourceVmID,
 		&i.TenantID,
 		&i.CaptureOperationID,
@@ -711,7 +677,7 @@ func (q *Queries) GetPublishedBody(ctx context.Context, arg GetPublishedBodyPara
 }
 
 const getSnapshotPublication = `-- name: GetSnapshotPublication :one
-SELECT record_hash FROM snapshot_publications WHERE snapshot_id=? AND tenant_id=? AND capture_operation_id=?
+SELECT record_hash FROM snapshot_publications WHERE deleted_at IS NULL AND snapshot_id=? AND tenant_id=? AND capture_operation_id=?
 `
 
 type GetSnapshotPublicationParams struct {
@@ -728,7 +694,7 @@ func (q *Queries) GetSnapshotPublication(ctx context.Context, arg GetSnapshotPub
 }
 
 const getVersion = `-- name: GetVersion :one
-SELECT instance,resource_hash,disk_device,disk_inode,disk_mode FROM resource_versions WHERE vm_id = ? AND operation_id = ? AND step_key = ?
+SELECT instance,resource_hash,disk_device,disk_inode,disk_mode FROM resource_versions WHERE deleted_at IS NULL AND vm_id = ? AND operation_id = ? AND step_key = ?
 `
 
 type GetVersionParams struct {
@@ -913,7 +879,7 @@ func (q *Queries) InsertVersion(ctx context.Context, arg InsertVersionParams) (i
 }
 
 const listBackingPaths = `-- name: ListBackingPaths :many
-SELECT path FROM vm_memory_backings ORDER BY path
+SELECT path FROM vm_memory_backings WHERE deleted_at IS NULL ORDER BY path
 `
 
 func (q *Queries) ListBackingPaths(ctx context.Context) ([]string, error) {
@@ -940,7 +906,7 @@ func (q *Queries) ListBackingPaths(ctx context.Context) ([]string, error) {
 }
 
 const listCurrentBodies = `-- name: ListCurrentBodies :many
-SELECT id,directory FROM vms ORDER BY id
+SELECT id,directory FROM vms WHERE deleted_at IS NULL ORDER BY id
 `
 
 type ListCurrentBodiesRow struct {
@@ -972,7 +938,7 @@ func (q *Queries) ListCurrentBodies(ctx context.Context) ([]ListCurrentBodiesRow
 }
 
 const listSlots = `-- name: ListSlots :many
-SELECT slot FROM vms ORDER BY slot
+SELECT slot FROM vms WHERE deleted_at IS NULL ORDER BY slot
 `
 
 func (q *Queries) ListSlots(ctx context.Context) ([]int64, error) {
@@ -999,7 +965,7 @@ func (q *Queries) ListSlots(ctx context.Context) ([]int64, error) {
 }
 
 const listSnapshots = `-- name: ListSnapshots :many
-SELECT id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots ORDER BY id
+SELECT deleted_at, id, active_id, source_vm_id, tenant_id, capture_operation_id, source_instance, directory, published, deleting, manifest_hash FROM snapshots WHERE deleted_at IS NULL ORDER BY id
 `
 
 func (q *Queries) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
@@ -1012,7 +978,9 @@ func (q *Queries) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 	for rows.Next() {
 		var i Snapshot
 		if err := rows.Scan(
+			&i.DeletedAt,
 			&i.ID,
+			&i.ActiveID,
 			&i.SourceVmID,
 			&i.TenantID,
 			&i.CaptureOperationID,
@@ -1036,18 +1004,24 @@ func (q *Queries) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 }
 
 const listSourceLeases = `-- name: ListSourceLeases :many
-SELECT snapshot_id,operation_id,step_key FROM snapshot_source_leases ORDER BY operation_id
+SELECT snapshot_id,operation_id,step_key FROM snapshot_source_leases WHERE deleted_at IS NULL ORDER BY operation_id
 `
 
-func (q *Queries) ListSourceLeases(ctx context.Context) ([]SnapshotSourceLease, error) {
+type ListSourceLeasesRow struct {
+	SnapshotID  string
+	OperationID string
+	StepKey     string
+}
+
+func (q *Queries) ListSourceLeases(ctx context.Context) ([]ListSourceLeasesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listSourceLeases)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SnapshotSourceLease
+	var items []ListSourceLeasesRow
 	for rows.Next() {
-		var i SnapshotSourceLease
+		var i ListSourceLeasesRow
 		if err := rows.Scan(&i.SnapshotID, &i.OperationID, &i.StepKey); err != nil {
 			return nil, err
 		}
@@ -1063,7 +1037,7 @@ func (q *Queries) ListSourceLeases(ctx context.Context) ([]SnapshotSourceLease, 
 }
 
 const listVersionIDs = `-- name: ListVersionIDs :many
-SELECT operation_id FROM resource_versions ORDER BY operation_id
+SELECT operation_id FROM resource_versions WHERE deleted_at IS NULL ORDER BY operation_id
 `
 
 func (q *Queries) ListVersionIDs(ctx context.Context) ([]string, error) {
@@ -1090,7 +1064,7 @@ func (q *Queries) ListVersionIDs(ctx context.Context) ([]string, error) {
 }
 
 const markFailedDeleting = `-- name: MarkFailedDeleting :execrows
-UPDATE snapshots SET deleting=1 WHERE id=? AND published=0 AND deleting=0
+UPDATE snapshots SET deleting=1 WHERE deleted_at IS NULL AND id=? AND published=0 AND deleting=0
 `
 
 func (q *Queries) MarkFailedDeleting(ctx context.Context, id string) (int64, error) {
@@ -1102,7 +1076,7 @@ func (q *Queries) MarkFailedDeleting(ctx context.Context, id string) (int64, err
 }
 
 const markPublishedDeleting = `-- name: MarkPublishedDeleting :execrows
-UPDATE snapshots SET deleting=1 WHERE id=? AND published=1 AND deleting=0 AND capture_operation_id=? AND tenant_id=? AND source_vm_id=? AND source_instance=? AND directory=? AND manifest_hash=?
+UPDATE snapshots SET deleting=1 WHERE deleted_at IS NULL AND id=? AND published=1 AND deleting=0 AND capture_operation_id=? AND tenant_id=? AND source_vm_id=? AND source_instance=? AND directory=? AND manifest_hash=?
 `
 
 type MarkPublishedDeletingParams struct {
@@ -1132,7 +1106,7 @@ func (q *Queries) MarkPublishedDeleting(ctx context.Context, arg MarkPublishedDe
 }
 
 const publishInstanceObservation = `-- name: PublishInstanceObservation :execrows
-UPDATE instances SET observation_hash=? WHERE id=? AND vm_id=? AND operation_id=? AND resource_hash=? AND observation_hash IS NULL
+UPDATE instances SET observation_hash=? WHERE deleted_at IS NULL AND id=? AND vm_id=? AND operation_id=? AND resource_hash=? AND observation_hash IS NULL
 `
 
 type PublishInstanceObservationParams struct {
@@ -1158,7 +1132,7 @@ func (q *Queries) PublishInstanceObservation(ctx context.Context, arg PublishIns
 }
 
 const publishSnapshot = `-- name: PublishSnapshot :execrows
-UPDATE snapshots SET published=1,manifest_hash=? WHERE id=? AND source_vm_id=? AND capture_operation_id=? AND tenant_id=? AND source_instance=? AND directory=? AND published=0 AND deleting=0
+UPDATE snapshots SET published=1,manifest_hash=? WHERE deleted_at IS NULL AND id=? AND source_vm_id=? AND capture_operation_id=? AND tenant_id=? AND source_instance=? AND directory=? AND published=0 AND deleting=0
 `
 
 type PublishSnapshotParams struct {
@@ -1188,7 +1162,7 @@ func (q *Queries) PublishSnapshot(ctx context.Context, arg PublishSnapshotParams
 }
 
 const recordCreatedInstance = `-- name: RecordCreatedInstance :execrows
-UPDATE vms SET state='created',current_instance=? WHERE id=? AND operation_id=?
+UPDATE vms SET state='created',current_instance=? WHERE deleted_at IS NULL AND id=? AND operation_id=?
 `
 
 type RecordCreatedInstanceParams struct {
@@ -1206,7 +1180,7 @@ func (q *Queries) RecordCreatedInstance(ctx context.Context, arg RecordCreatedIn
 }
 
 const recordStopped = `-- name: RecordStopped :execrows
-UPDATE vms SET state='stopped',verified=1,agent_ready=0,observation_hash=NULL WHERE id=? AND current_instance=? AND operation_id=?
+UPDATE vms SET state='stopped',verified=1,agent_ready=0,observation_hash=NULL WHERE deleted_at IS NULL AND id=? AND current_instance=? AND operation_id=?
 `
 
 type RecordStoppedParams struct {
@@ -1225,7 +1199,7 @@ func (q *Queries) RecordStopped(ctx context.Context, arg RecordStoppedParams) (i
 
 const recordVersionDisk = `-- name: RecordVersionDisk :execrows
 UPDATE resource_versions SET disk_device=?,disk_inode=?,disk_mode=?
-WHERE vm_id=? AND operation_id=? AND step_key='resource' AND instance=? AND resource_hash=? AND disk_device IS NULL
+WHERE deleted_at IS NULL AND vm_id=? AND operation_id=? AND step_key='resource' AND instance=? AND resource_hash=? AND disk_device IS NULL
 `
 
 type RecordVersionDiskParams struct {
@@ -1255,7 +1229,7 @@ func (q *Queries) RecordVersionDisk(ctx context.Context, arg RecordVersionDiskPa
 }
 
 const releaseOwnership = `-- name: ReleaseOwnership :execrows
-UPDATE vms SET operation_id=NULL WHERE id=? AND current_instance=? AND operation_id=?
+UPDATE vms SET operation_id=NULL WHERE deleted_at IS NULL AND id=? AND current_instance=? AND operation_id=?
 `
 
 type ReleaseOwnershipParams struct {
@@ -1273,17 +1247,17 @@ func (q *Queries) ReleaseOwnership(ctx context.Context, arg ReleaseOwnershipPara
 }
 
 const releaseStoppedOwnership = `-- name: ReleaseStoppedOwnership :execrows
-UPDATE vms SET operation_id=NULL WHERE id=? AND operation_id=? AND current_instance=? AND state='stopped'
+UPDATE vms SET operation_id=NULL WHERE deleted_at IS NULL AND id=? AND current_instance=? AND operation_id=? AND state='stopped'
 `
 
 type ReleaseStoppedOwnershipParams struct {
 	ID              string
-	OperationID     sql.NullString
 	CurrentInstance string
+	OperationID     sql.NullString
 }
 
 func (q *Queries) ReleaseStoppedOwnership(ctx context.Context, arg ReleaseStoppedOwnershipParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, releaseStoppedOwnership, arg.ID, arg.OperationID, arg.CurrentInstance)
+	result, err := q.db.ExecContext(ctx, releaseStoppedOwnership, arg.ID, arg.CurrentInstance, arg.OperationID)
 	if err != nil {
 		return 0, err
 	}
@@ -1292,7 +1266,7 @@ func (q *Queries) ReleaseStoppedOwnership(ctx context.Context, arg ReleaseStoppe
 
 const transferOwnership = `-- name: TransferOwnership :execrows
 UPDATE vms SET operation_id=?1,deleting=1
-WHERE id=?2 AND operation_id=?3 AND current_instance=?4
+WHERE deleted_at IS NULL AND id=?2 AND operation_id=?3 AND current_instance=?4
 `
 
 type TransferOwnershipParams struct {
@@ -1317,7 +1291,7 @@ func (q *Queries) TransferOwnership(ctx context.Context, arg TransferOwnershipPa
 
 const upsertNetworkPolicy = `-- name: UpsertNetworkPolicy :execrows
 INSERT INTO network_policies(vm_id,instance,operation_id,policy_hash,retirement_step) VALUES(?1,?2,?3,?4,CASE WHEN ?4 IS NOT NULL THEN 'direct_retirement' END)
-ON CONFLICT(vm_id) DO UPDATE SET instance=excluded.instance,operation_id=excluded.operation_id,policy_hash=excluded.policy_hash,retirement_step=excluded.retirement_step
+ON CONFLICT(active_vm_id) DO UPDATE SET instance=excluded.instance,operation_id=excluded.operation_id,policy_hash=excluded.policy_hash,retirement_step=excluded.retirement_step
 `
 
 type UpsertNetworkPolicyParams struct {

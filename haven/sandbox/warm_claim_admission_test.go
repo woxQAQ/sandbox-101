@@ -146,10 +146,10 @@ func TestHavenWarmSelectionRejectsSQL(t *testing.T) {
 			}
 			const responsibility = `SELECT
 			 (SELECT COUNT(*) FROM operations),
-			 (SELECT COUNT(*) FROM resource_refs),
-			 (SELECT COUNT(*) FROM quota_refs),
-			 (SELECT SUM(sandbox_slots) FROM quota_resources),
-			 (SELECT SUM(storage_mib) FROM quota_resources)`
+			 (SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL),
+			 (SELECT COUNT(*) FROM quota_refs WHERE deleted_at IS NULL),
+			 (SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),
+			 (SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL)`
 			var before, after [5]int64
 			if err = service.State.Database().QueryRowContext(ctx, responsibility).Scan(&before[0], &before[1], &before[2], &before[3], &before[4]); err != nil {
 				t.Fatal(err)

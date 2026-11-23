@@ -139,7 +139,7 @@ def main():
             local = command("havenctl", [*admin_args, "status"],
                             {"HAVENCTL_ADMIN_SOCKET": str(directory / "wrong.sock")})
             assert business == local
-            assert local["format"] == "haven-single-control" and local["version"] == 0
+            assert local["format"] == "haven-single-control-soft-delete" and local["version"] == 0
             assert command("havenctl", [*haven_args, "list"]) == []
             # Both authenticated listeners use the same strict JSON failure contract.
             for path in ("/v1/tenants", "/v1/manage"):

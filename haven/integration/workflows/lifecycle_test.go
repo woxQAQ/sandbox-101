@@ -68,7 +68,7 @@ func TestHavenReleaseFailedCapture(t *testing.T) {
 		t.Fatal(released, reason, err)
 	}
 	var slots, storage, vms int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(sandbox_slots),0) FROM quota_resources),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources),(SELECT COUNT(*) FROM vms)").Scan(&slots, &storage, &vms); err != nil || slots != 0 || storage != 0 || vms != 0 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(sandbox_slots),0) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL)").Scan(&slots, &storage, &vms); err != nil || slots != 0 || storage != 0 || vms != 0 {
 		t.Fatal(slots, storage, vms, err)
 	}
 	after, err := service.OperationMonitor.GetForTenant(ctx, "tenant", captureLink.ChildID)
@@ -233,7 +233,7 @@ func TestHavenRollbackKeepsLogicalSandbox(t *testing.T) {
 				}
 			}
 			var slots int
-			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources").Scan(&slots); err != nil || slots != 1 {
+			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL").Scan(&slots); err != nil || slots != 1 {
 				t.Fatal(slots, err)
 			}
 		})
@@ -334,7 +334,7 @@ func TestHavenForkUsesCheckpointOwner(t *testing.T) {
 		}
 	}
 	var slots int
-	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != 3 {
+	if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots); err != nil || slots != 3 {
 		t.Fatal(slots, err)
 	}
 }
@@ -406,7 +406,7 @@ func TestHavenResumeFailurePreservesSleep(t *testing.T) {
 				t.Fatal(after, err)
 			}
 			var slots, storage, vms int
-			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM vms)").Scan(&slots, &storage, &vms); err != nil || slots != 1 || storage != 192 || vms != 0 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL)").Scan(&slots, &storage, &vms); err != nil || slots != 1 || storage != 192 || vms != 0 {
 				t.Fatal(slots, storage, vms, err)
 			}
 		})
@@ -540,7 +540,7 @@ func TestHavenLifecycleAdmissionAndHandoff(t *testing.T) {
 				t.Fatal(err)
 			}
 			var slots, storage int
-			if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots, &storage); err != nil {
+			if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots, &storage); err != nil {
 				t.Fatal(err)
 			}
 			switch action {

@@ -110,7 +110,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 				t.Fatal(replay, err)
 			}
 			var slots int
-			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != 4 {
+			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots); err != nil || slots != 4 {
 				t.Fatal(slots, err)
 			}
 			for _, id := range acceptedOperation.Result.SandboxIDs {
@@ -121,7 +121,7 @@ func TestHavenForkBatchSourcesAndDelivery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots); err != nil || slots != 1 {
+			if err = service.State.Database().QueryRow("SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots); err != nil || slots != 1 {
 				t.Fatal("batch retirement changed the source slot", slots, err)
 			}
 		})
@@ -167,7 +167,7 @@ func TestHavenForkBatchCompensatesFailedBirth(t *testing.T) {
 		}
 	}
 	var slots, vms int
-	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT COUNT(*) FROM vms)").Scan(&slots, &vms); err != nil || slots != 1 || vms != 1 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL)").Scan(&slots, &vms); err != nil || slots != 1 || vms != 1 {
 		t.Fatal("compensation retired unproven or unrelated responsibility", slots, vms, err)
 	}
 }
@@ -333,7 +333,7 @@ func TestHavenForkCompletionRejectsSQL(t *testing.T) {
 				t.Fatal("failed completion lost committed branch progress", group, err)
 			}
 			var leases, publications int
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM snapshot_source_leases WHERE operation_id=? AND step_key='fork_group'),(SELECT COUNT(*) FROM operation_publications WHERE operation_id=?)", accepted.ID, accepted.ID).Scan(&leases, &publications); err != nil || leases != 1 || publications != 0 {
+			if err = service.State.Database().QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM snapshot_source_leases WHERE deleted_at IS NULL AND operation_id=? AND step_key='fork_group'),(SELECT COUNT(*) FROM operation_publications WHERE operation_id=?)", accepted.ID, accepted.ID).Scan(&leases, &publications); err != nil || leases != 1 || publications != 0 {
 				t.Fatal("failed completion retired parent custody or published a result", leases, publications, err)
 			}
 			before, err := operation.LoadPublication(ctx, service.State.Database(), group.State.Children[0])

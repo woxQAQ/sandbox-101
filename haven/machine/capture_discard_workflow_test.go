@@ -275,7 +275,7 @@ func TestHavenCaptureDiscard(t *testing.T) {
 				t.Fatal("cleanup changed original public result", err)
 			}
 			var owner, slot, disk int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=?),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant'),(SELECT SUM(storage_mib) FROM quota_resources WHERE kind='vm_disk' AND tenant_id='tenant')", failed.Input.Snapshot.ID).Scan(&owner, &slot, &disk); err != nil || owner != 1 || slot != 1 || disk != 64 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM snapshot_owners WHERE snapshot_id=?),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND kind='vm_disk' AND tenant_id='tenant')", failed.Input.Snapshot.ID).Scan(&owner, &slot, &disk); err != nil || owner != 1 || slot != 1 || disk != 64 {
 				t.Fatal("cleanup changed permanent owner or source debt", owner, slot, disk, err)
 			}
 			replay, err := service.CaptureDiscard.AdmitCaptureDiscard(context.Background(), request)
@@ -350,9 +350,9 @@ func TestHavenCaptureDiscardRetirementAtomicity(t *testing.T) {
 		table     string
 		condition string
 	}{
-		{"DELETE", "quota_resources", "OLD.kind='pending_storage'"},
-		{"DELETE", "snapshots", "1"},
-		{"DELETE", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
+		{"UPDATE OF deleted_at", "quota_resources", "OLD.kind='pending_storage'"},
+		{"UPDATE OF deleted_at", "snapshots", "1"},
+		{"UPDATE OF deleted_at", "host_capacity_reservations", "OLD.owner_key LIKE 'snapshot:%'"},
 		{"UPDATE", "operation_steps", "NEW.action='capture_discard' AND NEW.status='succeeded'"},
 		{"UPDATE", "operations", "NEW.status='succeeded'"},
 	} {
@@ -619,7 +619,7 @@ func failedCaptureFixtureWithFault(t *testing.T, final bool, fault func(string) 
 func captureDiscardLiability(t *testing.T, service *application.App, failed machine.CaptureStep, want int) {
 	t.Helper()
 	var cost, reserved int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE source_operation_id=?),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?)", failed.OperationID, "snapshot:"+failed.Input.Snapshot.ID).Scan(&cost, &reserved); err != nil || cost != want || (want > 0) != (reserved == 1) {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?),(SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key=?)", failed.OperationID, "snapshot:"+failed.Input.Snapshot.ID).Scan(&cost, &reserved); err != nil || cost != want || (want > 0) != (reserved == 1) {
 		t.Fatal("capture liability changed without retirement", cost, reserved, err)
 	}
 }

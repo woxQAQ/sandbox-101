@@ -25,7 +25,7 @@ def generated_files(root):
     }
 
 
-def check_parameter_style(root):
+def check_query_source(root):
     # sqlc v1.30.0 can misnumber SQLite placeholders when a query mixes
     # sqlc.arg/narg macros with positional parameters. Check each query, ignoring
     # quoted SQL values, identifiers and comments that may contain question marks.
@@ -33,6 +33,10 @@ def check_parameter_style(root):
         for query in re.split(r"(?m)^-- name:", source.read_text())[1:]:
             name, _, body = query.partition("\n")
             sql = SQL_QUOTED.sub("", body)
+            if re.search(r"\b(?:DELETE\s+FROM|REPLACE\s+INTO)\b", sql, re.I):
+                raise SystemExit(
+                    f"FAIL: physical deletion in {source.relative_to(root)}:{name.strip()}"
+                )
             if re.search(r"\bsqlc\.(?:arg|narg)\s*\(", sql) and "?" in sql:
                 raise SystemExit(
                     f"FAIL: mixed sqlc named and positional parameters in {source.relative_to(root)}:{name.strip()}"
@@ -52,7 +56,7 @@ def check_generated_queries(files):
 
 
 def main():
-    check_parameter_style(HAVEN)
+    check_query_source(HAVEN)
     with tempfile.TemporaryDirectory(prefix="haven-sqlc-") as temporary:
         target = Path(temporary)
         shutil.copyfile(HAVEN / "sqlc.yaml", target / "sqlc.yaml")

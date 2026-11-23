@@ -82,7 +82,7 @@ func (fixture *NativeImageFixture) ImportOCI(ctx context.Context, options imagei
 func (fixture *NativeImageFixture) ImportWork(t *testing.T, imageID string) string {
 	t.Helper()
 	var id string
-	if err := fixture.DB.QueryRow("SELECT operation_id FROM image_intents WHERE digest=?", imageID).Scan(&id); err != nil {
+	if err := fixture.DB.QueryRow("SELECT operation_id FROM image_intents WHERE deleted_at IS NULL AND digest=?", imageID).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(fixture.StateDir, "imports", id)

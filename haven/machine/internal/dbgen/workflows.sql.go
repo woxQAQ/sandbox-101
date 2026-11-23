@@ -52,8 +52,17 @@ func (q *Queries) CleanupResourceCount(ctx context.Context, arg CleanupResourceC
 	return count, err
 }
 
+const clearRestoreFiles = `-- name: ClearRestoreFiles :exec
+UPDATE restore_files SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?
+`
+
+func (q *Queries) ClearRestoreFiles(ctx context.Context, operationID string) error {
+	_, err := q.db.ExecContext(ctx, clearRestoreFiles, operationID)
+	return err
+}
+
 const clearRestoreMaterials = `-- name: ClearRestoreMaterials :execrows
-DELETE FROM restore_materials WHERE operation_id=?
+UPDATE restore_materials SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) ClearRestoreMaterials(ctx context.Context, operationID string) (int64, error) {
@@ -798,7 +807,7 @@ func (q *Queries) ReadCaptureProgress(ctx context.Context, operationID string) (
 }
 
 const readRestoreFiles = `-- name: ReadRestoreFiles :many
-SELECT operation_id, name, source, candidate, size, device, inode, mode FROM restore_files WHERE operation_id=?
+SELECT deleted_at, operation_id, active_operation_id, name, source, candidate, size, device, inode, mode FROM restore_files WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) ReadRestoreFiles(ctx context.Context, operationID string) ([]RestoreFile, error) {
@@ -811,7 +820,9 @@ func (q *Queries) ReadRestoreFiles(ctx context.Context, operationID string) ([]R
 	for rows.Next() {
 		var i RestoreFile
 		if err := rows.Scan(
+			&i.DeletedAt,
 			&i.OperationID,
+			&i.ActiveOperationID,
 			&i.Name,
 			&i.Source,
 			&i.Candidate,
@@ -834,14 +845,16 @@ func (q *Queries) ReadRestoreFiles(ctx context.Context, operationID string) ([]R
 }
 
 const readRestoreMaterials = `-- name: ReadRestoreMaterials :one
-SELECT operation_id, complete, files_present, version_device, version_inode, version_mode, restore_device, restore_inode, restore_mode FROM restore_materials WHERE operation_id=?
+SELECT deleted_at, operation_id, active_operation_id, complete, files_present, version_device, version_inode, version_mode, restore_device, restore_inode, restore_mode FROM restore_materials WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) ReadRestoreMaterials(ctx context.Context, operationID string) (RestoreMaterial, error) {
 	row := q.db.QueryRowContext(ctx, readRestoreMaterials, operationID)
 	var i RestoreMaterial
 	err := row.Scan(
+		&i.DeletedAt,
 		&i.OperationID,
+		&i.ActiveOperationID,
 		&i.Complete,
 		&i.FilesPresent,
 		&i.VersionDevice,
@@ -889,7 +902,7 @@ func (q *Queries) RetainCleanup(ctx context.Context, arg RetainCleanupParams) (i
 }
 
 const retireDeletionReceipt = `-- name: RetireDeletionReceipt :execrows
-DELETE FROM deletion_intents WHERE path=? AND operation_id=? AND step_key=?
+UPDATE deletion_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND path=? AND operation_id=? AND step_key=?
 `
 
 type RetireDeletionReceiptParams struct {

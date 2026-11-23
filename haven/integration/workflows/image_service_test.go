@@ -68,8 +68,8 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			var storageBytes int64
 			var intents, pending int
 			if err = service.State.Database().QueryRow(`SELECT
-				(SELECT storage_bytes FROM host_capacity_reservations WHERE owner_key=?),
-				(SELECT COUNT(*) FROM image_intents WHERE operation_id=?),
+				(SELECT storage_bytes FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key=?),
+				(SELECT COUNT(*) FROM image_intents WHERE deleted_at IS NULL AND operation_id=?),
 				(SELECT COUNT(*) FROM cleanup_intents WHERE id IN (?,?) AND status='pending')`,
 				"import:"+id, id, "image_import:"+id, "image_cleanup:"+collector.ID,
 			).Scan(&storageBytes, &intents, &pending); err != nil || storageBytes != expectedStorageBytes || intents != 1 || pending != 2 {
@@ -91,8 +91,8 @@ func TestHavenImageCleanupRetainsResponsibilityUntilAtomicCompletion(t *testing.
 			}
 			var remaining int
 			if err = service.State.Database().QueryRow(`SELECT
-				(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key=?)+
-				(SELECT COUNT(*) FROM image_intents WHERE digest=?)+
+				(SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key=?)+
+				(SELECT COUNT(*) FROM image_intents WHERE deleted_at IS NULL AND digest=?)+
 				(SELECT COUNT(*) FROM cleanup_intents WHERE id IN (?,?) AND status='pending')`,
 				"import:"+id, options.Digest, "image_import:"+id, "image_cleanup:"+collector.ID,
 			).Scan(&remaining); err != nil || remaining != 0 {

@@ -17,7 +17,7 @@ func TestHavenRestorePeakQuotaPreservesIntegerBoundary(t *testing.T) {
 	service, _, request, prior := testapp.TargetSetup(t)
 	ctx := context.Background()
 	var charged int64
-	if err := service.State.Database().QueryRowContext(ctx, "SELECT SUM(storage_mib) FROM quota_resources WHERE tenant_id=?", request.TenantID).Scan(&charged); err != nil {
+	if err := service.State.Database().QueryRowContext(ctx, "SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id=?", request.TenantID).Scan(&charged); err != nil {
 		t.Fatal(err)
 	}
 	// An independently retained charge places the tenant one unit above the

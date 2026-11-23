@@ -125,7 +125,7 @@ func (q *Queries) CompletePendingCleanupResource(ctx context.Context, arg Comple
 }
 
 const countImportIntent = `-- name: CountImportIntent :one
-SELECT COUNT(*) FROM image_intents WHERE digest=?
+SELECT COUNT(*) FROM image_intents WHERE deleted_at IS NULL AND digest=?
 `
 
 func (q *Queries) CountImportIntent(ctx context.Context, digest string) (int64, error) {
@@ -196,7 +196,7 @@ func (q *Queries) CountPendingOwnedCleanup(ctx context.Context, arg CountPending
 }
 
 const deleteCache = `-- name: DeleteCache :execrows
-DELETE FROM image_caches WHERE builder=? AND diff_id=? AND source_operation_id=?
+UPDATE image_caches SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND builder=? AND diff_id=? AND source_operation_id=?
 `
 
 type DeleteCacheParams struct {
@@ -214,7 +214,7 @@ func (q *Queries) DeleteCache(ctx context.Context, arg DeleteCacheParams) (int64
 }
 
 const deleteImportIntent = `-- name: DeleteImportIntent :execrows
-DELETE FROM image_intents WHERE digest=? AND operation_id=? AND input_hash=? AND layout=?
+UPDATE image_intents SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND digest=? AND operation_id=? AND input_hash=? AND layout=?
 `
 
 type DeleteImportIntentParams struct {
@@ -259,7 +259,7 @@ func (q *Queries) GetArtifactValue(ctx context.Context, artifactHash string) (Im
 }
 
 const getCache = `-- name: GetCache :one
-SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.builder=? AND c.diff_id=?
+SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.deleted_at IS NULL AND c.builder=? AND c.diff_id=?
 `
 
 type GetCacheParams struct {
@@ -354,7 +354,7 @@ func (q *Queries) GetImagePreparation(ctx context.Context, operationID string) (
 }
 
 const getImportIntent = `-- name: GetImportIntent :one
-SELECT operation_id,layout,input_hash FROM image_intents WHERE digest=?
+SELECT operation_id,layout,input_hash FROM image_intents WHERE deleted_at IS NULL AND digest=?
 `
 
 type GetImportIntentRow struct {
@@ -755,7 +755,7 @@ func (q *Queries) InsertTool(ctx context.Context, arg InsertToolParams) (int64, 
 }
 
 const listCacheKeys = `-- name: ListCacheKeys :many
-SELECT builder,diff_id FROM image_caches ORDER BY builder,diff_id
+SELECT builder,diff_id FROM image_caches WHERE deleted_at IS NULL ORDER BY builder,diff_id
 `
 
 type ListCacheKeysRow struct {
@@ -787,7 +787,7 @@ func (q *Queries) ListCacheKeys(ctx context.Context) ([]ListCacheKeysRow, error)
 }
 
 const listFundedCaches = `-- name: ListFundedCaches :many
-SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.source_operation_id=? ORDER BY c.builder,c.diff_id
+SELECT c.source_operation_id,w.witness_hash, w.builder, w.diff_id, w.physical_bytes, w.path, w.directory_device, w.directory_inode, w.directory_mode, w.data_device, w.data_inode, w.data_mode, w.receipt_device, w.receipt_inode, w.receipt_mode, w.receipt_sha256, w.format, w.profile, w.sha256, w.tar_bytes, w.entries FROM image_caches c JOIN image_cache_witnesses w ON w.witness_hash=c.witness_hash WHERE c.deleted_at IS NULL AND c.source_operation_id=? ORDER BY c.builder,c.diff_id
 `
 
 type ListFundedCachesRow struct {

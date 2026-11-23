@@ -29,7 +29,9 @@ store 自有 journal、metadata 初始化、身份读取与 epoch 查询也通�
 
 其余静态 SQL 必须经所属包的 queries.sql/dbgen；用例、controllers 和能力非生成代码不能通过 raw Query/Exec/Scan 绕过私有 sqlc。
 
-领域查询位于各领域的 `queries.sql`，由 `haven/sqlc.yaml` 配置生成到该领域的 `internal/dbgen/`。生成结构不越过领域 API；事务内操作绑定原 `*sql.Tx`，必需单行写仍核验影响行数恰好为 1。
+领域 SQL 由 `haven/sqlc.yaml` 生成到所属包的 `internal/dbgen/`。相同业务键和归属条件下，多个调用方可以从同一份查询结果读取所需字段。按 tenant 查询、按 witness 比对、核验影响行数等契约分别保留。生成结构留在领域内，事务内操作绑定原 `*sql.Tx`。
+
+当前开发格式为 `haven-single-control-soft-delete`。VM、checkpoint、配额、租约、配置明细和其他可退休记录以 `deleted_at` 保存 UTC 删除时间。接纳、恢复、GC 和计费只读取 `deleted_at IS NULL` 的行。退休更新同时匹配活动行与原归属条件，成功后历史行保留原业务键和内容。可重用的键只约束活动记录；`active_*` 生成列在退休后为 NULL，让 SQLite 外键阻止仍有活动子项的父记录退休。配置和恢复材料在同一事务先退休子项，再替换或退休父项。备份包含这些历史行。
 
 `templates` 指向当前 `template_versions`，标签按版本存入 `template_version_labels`。`pool_slots` 的 ready 索引服务于选择，`warm_claims` 固定原 refill 和资源操作。重启时从这些历史记录、接纳请求和 `activation:warm` 的设置重建 claim，再核对接纳时的摘要。模板替换、slot 退休和当前 VM 归属转移都遵循这条历史链。
 
@@ -48,4 +50,4 @@ just generate-sql
 just check-sql
 ```
 
-工具版本固定在 `tools/go.mod`，生成绑定提交到版本控制，普通构建不需要 sqlc。`check-sql` 在私有临时目录重新生成并逐文件比较，能检测缺失、多余和修改的生成文件，拒绝命名/位置参数混用及生成后残留的 sqlc 参数宏，不改写工作树。`just fmt` 的 structfmt 阶段排除 sqlc 输出。
+工具版本固定在 `tools/go.mod`，生成绑定提交到版本控制，普通构建不需要 sqlc。`check-sql` 在私有临时目录重新生成并逐文件比较，能检测缺失、多余和修改的生成文件，拒绝领域查询中的物理删除、命名/位置参数混用及生成后残留的 sqlc 参数宏，不改写工作树。`just fmt` 的 structfmt 阶段排除 sqlc 输出。

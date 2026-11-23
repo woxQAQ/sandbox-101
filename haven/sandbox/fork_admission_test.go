@@ -32,7 +32,7 @@ func TestHavenForkRequiresExactlyOneSource(t *testing.T) {
 	readTotals := func() totals {
 		t.Helper()
 		var got totals
-		const query = `SELECT (SELECT COUNT(*) FROM operations), SUM(sandbox_slots), SUM(storage_mib) FROM quota_resources`
+		const query = `SELECT (SELECT COUNT(*) FROM operations), SUM(sandbox_slots), SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL`
 		if err := service.State.Database().QueryRowContext(ctx, query).Scan(&got.operations, &got.slots, &got.storage); err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestHavenForkBatchAdmissionIsAtomic(t *testing.T) {
 		t.Fatal(acceptedOperation, err)
 	}
 	var after, slots int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations),(SELECT SUM(sandbox_slots) FROM quota_resources)").Scan(&after, &slots); err != nil || after != before || slots != 1 || runtime.Count("capture") != 0 || runtime.Count("launch") != 1 {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL)").Scan(&after, &slots); err != nil || after != before || slots != 1 || runtime.Count("capture") != 0 || runtime.Count("launch") != 1 {
 		t.Fatal("rejected batch left intent or launched effects", after, before, slots, err)
 	}
 }

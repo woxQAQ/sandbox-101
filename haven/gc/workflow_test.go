@@ -36,7 +36,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 		t.Fatal(report, err)
 	}
 	var caches, imports, cacheCharges int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'import:%'),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'cache:%')").Scan(&caches, &imports, &cacheCharges); err != nil || caches != 1 || imports != 0 || cacheCharges != 1 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key LIKE 'import:%'),(SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key LIKE 'cache:%')").Scan(&caches, &imports, &cacheCharges); err != nil || caches != 1 || imports != 0 || cacheCharges != 1 {
 		t.Fatal(caches, imports, cacheCharges, err)
 	}
 	report, err = service.GC.Collect(ctx, root, "cache", types.GCOptions{
@@ -45,7 +45,7 @@ func TestHavenActualOCIFailedImportAndIndependentCacheGC(t *testing.T) {
 	if err != nil || len(report.Collected) != 1 || report.Collected[0].Kind != "image_cache" {
 		t.Fatal(report, err)
 	}
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches),(SELECT COUNT(*) FROM host_capacity_reservations WHERE owner_key LIKE 'cache:%')").Scan(&caches, &cacheCharges); err != nil || caches != 0 || cacheCharges != 0 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM image_caches WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM host_capacity_reservations WHERE deleted_at IS NULL AND owner_key LIKE 'cache:%')").Scan(&caches, &cacheCharges); err != nil || caches != 0 || cacheCharges != 0 {
 		t.Fatal(caches, cacheCharges, err)
 	}
 	unchanged, err := service.OperationMonitor.GetManagementOperation(ctx, authorization.Principal{

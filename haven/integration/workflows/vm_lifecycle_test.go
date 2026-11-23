@@ -185,7 +185,7 @@ func TestHavenStepAdmissionAtomicity(t *testing.T) {
 			}
 			service.StoreWriteMu.Unlock()
 			var count int
-			if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM vms v JOIN instances i ON i.vm_id=v.id JOIN resource_versions r ON r.vm_id=v.id WHERE v.id=? AND i.id=?", resource.VMID, resource.Instance).Scan(&count); err != nil {
+			if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM vms v JOIN instances i ON i.vm_id=v.id JOIN resource_versions r ON r.vm_id=v.id WHERE v.deleted_at IS NULL AND i.deleted_at IS NULL AND r.deleted_at IS NULL AND v.id=? AND i.id=?", resource.VMID, resource.Instance).Scan(&count); err != nil {
 				return err
 			}
 			if count != 1 {
@@ -290,9 +290,9 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 		{"instance", "UPDATE", "instances", "NEW.observation_hash IS NOT NULL"},
 		{"sandbox", "UPDATE", "sandboxes", "NEW.instance!=''"},
 		{"disk", "INSERT", "quota_resources", "NEW.kind='vm_disk'"},
-		{"pending-ref", "DELETE", "quota_refs", "OLD.kind='pending_storage'"},
-		{"pending-cost", "DELETE", "quota_resources", "OLD.kind='pending_storage'"},
-		{"source-ref", "DELETE", "resource_refs", "OLD.holder_kind='step'"},
+		{"pending-ref", "UPDATE OF deleted_at", "quota_refs", "OLD.kind='pending_storage'"},
+		{"pending-cost", "UPDATE OF deleted_at", "quota_resources", "OLD.kind='pending_storage'"},
+		{"source-ref", "UPDATE OF deleted_at", "resource_refs", "OLD.holder_kind='step'"},
 		{"witness", "UPDATE", "operation_steps", "NEW.status='succeeded'"},
 		{"parent", "UPDATE", "operations", "NEW.resource_ready=1"},
 	} {
@@ -313,7 +313,7 @@ func TestHavenInstanceAtomicCompletion(t *testing.T) {
 				}
 				coldResponsibility(t, service, operation, false)
 				var ready int
-				if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM instances WHERE observation_hash IS NOT NULL").Scan(&ready); err != nil || ready != 0 {
+				if err := service.State.Database().QueryRow("SELECT COUNT(*) FROM instances WHERE deleted_at IS NULL AND observation_hash IS NOT NULL").Scan(&ready); err != nil || ready != 0 {
 					t.Fatal("instance became ready outside completion transaction", ready, err)
 				}
 				if backend.Count("launch") != 1 {
@@ -413,7 +413,7 @@ func TestHavenTerminalResultImmutable(t *testing.T) {
 		t.Fatal("another generation/cleanup changed original failure", err)
 	}
 	var held int64
-	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&held); err != nil || held != 64 {
+	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&held); err != nil || held != 64 {
 		t.Fatal("cleanup refunded unrelated unknown allocation", held, err)
 	}
 	cached, err := service.Deletion.AdmitRelease(context.Background(), machine.ReleaseRequest{
@@ -462,7 +462,7 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 				testutil.AwaitColdWorker(t, service, release.ID)
 			}
 			var storage int64
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE tenant_id='tenant'").Scan(&storage); err != nil || storage != 64 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&storage); err != nil || storage != 64 {
 				t.Fatal("incomplete deletion refunded charge", storage, err)
 			}
 			service = testapp.ReopenCloneService(t, service, backend)
@@ -471,7 +471,7 @@ func TestHavenStepReleaseRecovery(t *testing.T) {
 				t.Fatal("release did not resume original cleanup", step.State)
 			}
 			var remaining int
-			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM quota_resources").Scan(&remaining); err != nil || remaining != 0 {
+			if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL").Scan(&remaining); err != nil || remaining != 0 {
 				t.Fatal("trusted cleanup did not retire responsibility", remaining, err)
 			}
 			if backend.Count("launch") != 1 {
@@ -519,7 +519,7 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 		t.Fatal("replacement file changed", err)
 	}
 	var storage int64
-	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources").Scan(&storage); err != nil || storage != 64 {
+	if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage); err != nil || storage != 64 {
 		t.Fatal("uncertain replacement retired its charge", storage, err)
 	}
 }
@@ -527,7 +527,7 @@ func TestHavenStepReleasePreservesReplacedDisk(t *testing.T) {
 func coldResponsibility(t *testing.T, service *application.App, acceptedOperation operation.State, witness bool) {
 	t.Helper()
 	var slots, storage, pending, disks int64
-	if err := service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='vm_disk'),0) FROM quota_resources WHERE source_operation_id=?", acceptedOperation.ID).Scan(&slots, &storage, &pending, &disks); err != nil {
+	if err := service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0),COALESCE(SUM(kind='pending_storage'),0),COALESCE(SUM(kind='vm_disk'),0) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id=?", acceptedOperation.ID).Scan(&slots, &storage, &pending, &disks); err != nil {
 		t.Fatal(err)
 	}
 	if slots != 1 || storage != 64 || witness && (pending != 0 || disks != 1) || !witness && (pending != 1 || disks != 0) {
@@ -541,7 +541,7 @@ func coldResponsibility(t *testing.T, service *application.App, acceptedOperatio
 		t.Fatalf("witness and step completion disagree: %+v", step.State)
 	}
 	var phase, instance string
-	if err := service.State.Database().QueryRow("SELECT state,current_instance FROM vms WHERE id=?", acceptedOperation.Result.VMID).Scan(&phase, &instance); err != nil {
+	if err := service.State.Database().QueryRow("SELECT state,current_instance FROM vms WHERE deleted_at IS NULL AND id=?", acceptedOperation.Result.VMID).Scan(&phase, &instance); err != nil {
 		t.Fatal(err)
 	}
 	if witness && (phase != "running" || instance != step.State.Witness) || !witness && phase == "running" {
@@ -559,7 +559,7 @@ func coldResponsibility(t *testing.T, service *application.App, acceptedOperatio
 		t.Fatal("sandbox instance handoff was not atomic", err)
 	}
 	var vmHolder, imageHolder, stepHolders int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?),(SELECT COUNT(*) FROM resource_refs WHERE resource_kind='image' AND holder_kind='vm' AND holder_id=?),(SELECT COUNT(*) FROM resource_refs WHERE holder_kind='step' AND holder_id=?)", acceptedOperation.Result.VMID, acceptedOperation.Result.SandboxID, acceptedOperation.Result.VMID, acceptedOperation.ID+":resource").Scan(&vmHolder, &imageHolder, &stepHolders); err != nil {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind='vm' AND resource_id=? AND holder_kind='sandbox' AND holder_id=?),(SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND resource_kind='image' AND holder_kind='vm' AND holder_id=?),(SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND holder_kind='step' AND holder_id=?)", acceptedOperation.Result.VMID, acceptedOperation.Result.SandboxID, acceptedOperation.Result.VMID, acceptedOperation.ID+":resource").Scan(&vmHolder, &imageHolder, &stepHolders); err != nil {
 		t.Fatal(err)
 	}
 	if witness && (vmHolder != 1 || imageHolder != 1 || stepHolders != 0) || !witness && (vmHolder != 0 || imageHolder != 0 || stepHolders != 2) {

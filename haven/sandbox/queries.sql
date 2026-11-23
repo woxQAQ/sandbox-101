@@ -1,11 +1,11 @@
 -- name: DeleteUnchangedSettings :execrows
-DELETE FROM sandbox_settings WHERE sandbox_id=? AND generation=?;
+UPDATE sandbox_settings SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=? AND generation=?;
 
 -- name: ListRunningSubjects :many
-SELECT s.id,s.tenant FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state='running' ORDER BY s.id;
+SELECT s.id,s.tenant FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE c.deleted_at IS NULL AND s.state='running' ORDER BY s.id;
 
 -- name: ListLeaseCandidates :many
-SELECT s.id,s.tenant,s.state FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE s.state IN ('running','paused') ORDER BY s.id;
+SELECT s.id,s.tenant,s.state FROM sandboxes s JOIN sandbox_settings c ON c.sandbox_id=s.id WHERE c.deleted_at IS NULL AND s.state IN ('running','paused') ORDER BY s.id;
 
 -- name: InsertSandbox :execrows
 INSERT INTO sandboxes(id,tenant,state,template_id,vcpus,memory_mib,disk_mib,creation_epoch,created_at,provision_source,last_error,operation_id,vm_id,instance,snapshot_id,source_operation_id,slot_operation_id,slot_input_hash)
@@ -40,10 +40,10 @@ INSERT INTO sandbox_settings(sandbox_id,generation,instance,active_epoch,ttl_sec
 INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?);
 
 -- name: CountSandboxSettings :one
-SELECT COUNT(*) FROM sandbox_settings WHERE sandbox_id=?;
+SELECT COUNT(*) FROM sandbox_settings WHERE deleted_at IS NULL AND sandbox_id=?;
 
 -- name: ReplaceSettings :execrows
-UPDATE sandbox_settings SET generation=?,instance=?,active_epoch=?,ttl_seconds=?,on_expire=?,auto_renew=?,deadline=?,paused_until=?,policy_mode=?,max_connections=?,env_present=? WHERE sandbox_id=?;
+UPDATE sandbox_settings SET generation=?,instance=?,active_epoch=?,ttl_seconds=?,on_expire=?,auto_renew=?,deadline=?,paused_until=?,policy_mode=?,max_connections=?,env_present=? WHERE deleted_at IS NULL AND sandbox_id=?;
 
 -- name: InsertEnvironment :execrows
 INSERT INTO sandbox_environment(sandbox_id,name,value) VALUES(?,?,?);
@@ -54,11 +54,13 @@ INSERT INTO sandbox_secret_descriptors(sandbox_id,name,header,placeholder) VALUE
 -- name: InsertSecretHost :execrows
 INSERT INTO sandbox_secret_hosts(sandbox_id,name,position,host) VALUES(?,?,?,?);
 -- name: ClearEnvironment :exec
-DELETE FROM sandbox_environment WHERE sandbox_id=?;
+UPDATE sandbox_environment SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?;
 -- name: ClearPolicyRules :exec
-DELETE FROM sandbox_policy_rules WHERE sandbox_id=?;
+UPDATE sandbox_policy_rules SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?;
 -- name: ClearSecretDescriptors :exec
-DELETE FROM sandbox_secret_descriptors WHERE sandbox_id=?;
+UPDATE sandbox_secret_descriptors SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?;
+-- name: ClearSecretHosts :exec
+UPDATE sandbox_secret_hosts SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=?;
 
 -- name: GetSandbox :one
 SELECT * FROM sandboxes WHERE id=? AND tenant=?;
@@ -67,24 +69,24 @@ SELECT * FROM sandboxes WHERE id=? AND tenant=?;
 SELECT tenant FROM sandboxes WHERE id=?;
 
 -- name: GetSettings :one
-SELECT * FROM sandbox_settings WHERE sandbox_id=?;
+SELECT * FROM sandbox_settings WHERE deleted_at IS NULL AND sandbox_id=?;
 
 -- name: ReadEnvironment :many
-SELECT name,value FROM sandbox_environment WHERE sandbox_id=? ORDER BY name;
+SELECT name,value FROM sandbox_environment WHERE deleted_at IS NULL AND sandbox_id=? ORDER BY name;
 
 -- name: ReadPolicyRules :many
-SELECT kind,value FROM sandbox_policy_rules WHERE sandbox_id=? ORDER BY kind,position;
+SELECT kind,value FROM sandbox_policy_rules WHERE deleted_at IS NULL AND sandbox_id=? ORDER BY kind,position;
 
 -- name: ReadSecretDescriptors :many
 SELECT d.name,d.header,d.placeholder,h.host FROM sandbox_secret_descriptors d
-LEFT JOIN sandbox_secret_hosts h ON h.sandbox_id=d.sandbox_id AND h.name=d.name
-WHERE d.sandbox_id=? ORDER BY d.name,h.position;
+LEFT JOIN sandbox_secret_hosts h ON h.sandbox_id=d.sandbox_id AND h.name=d.name AND h.deleted_at IS NULL
+WHERE d.deleted_at IS NULL AND d.sandbox_id=? ORDER BY d.name,h.position;
 
 -- name: UpsertFence :execrows
-INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) DO UPDATE SET operation_id=excluded.operation_id;
+INSERT INTO sandbox_operation_fences(sandbox_id,operation_id) VALUES(?,?) ON CONFLICT(sandbox_id) WHERE deleted_at IS NULL DO UPDATE SET operation_id=excluded.operation_id;
 
 -- name: GetFence :one
-SELECT operation_id FROM sandbox_operation_fences WHERE sandbox_id=?;
+SELECT operation_id FROM sandbox_operation_fences WHERE deleted_at IS NULL AND sandbox_id=?;
 
 -- name: ListSandboxIDs :many
 SELECT id,tenant FROM sandboxes ORDER BY id;
@@ -93,19 +95,19 @@ SELECT id,tenant FROM sandboxes ORDER BY id;
 SELECT tenant,id FROM sandboxes WHERE state<>'terminated' OR CAST(sqlc.arg(include_retired) AS BOOLEAN);
 
 -- name: GetCheckpoint :one
-SELECT * FROM checkpoint_bindings WHERE id=?;
+SELECT * FROM checkpoint_bindings WHERE deleted_at IS NULL AND id=?;
 
 -- name: GetOwnedCheckpoint :one
-SELECT * FROM checkpoint_bindings WHERE id=? AND tenant=?;
+SELECT * FROM checkpoint_bindings WHERE deleted_at IS NULL AND id=? AND tenant=?;
 
 -- name: ListCheckpoints :many
-SELECT * FROM checkpoint_bindings ORDER BY id;
+SELECT * FROM checkpoint_bindings WHERE deleted_at IS NULL ORDER BY id;
 
 -- name: InsertCheckpoint :execrows
 INSERT INTO checkpoint_bindings(id,tenant,snapshot_id,operation_id,sandbox_id,template_id,vcpus,memory_mib,disk_mib,created_at) VALUES(?,?,?,?,?,?,?,?,?,?);
 
 -- name: DeleteCheckpoint :execrows
-DELETE FROM checkpoint_bindings WHERE id=? AND tenant=? AND snapshot_id=? AND sandbox_id=? AND template_id=? AND vcpus=? AND memory_mib=? AND disk_mib=? AND created_at=?;
+UPDATE checkpoint_bindings SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND id=? AND tenant=? AND snapshot_id=? AND sandbox_id=? AND template_id=? AND vcpus=? AND memory_mib=? AND disk_mib=? AND created_at=?;
 
 -- name: DeleteFence :execrows
-DELETE FROM sandbox_operation_fences WHERE sandbox_id=? AND operation_id=?;
+UPDATE sandbox_operation_fences SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND sandbox_id=? AND operation_id=?;

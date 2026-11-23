@@ -61,7 +61,7 @@ func TestHavenLifecycleLinkRequiresWrite(t *testing.T) {
 				t.Fatal("checkpoint published without dependency handoff", err)
 			}
 			var slots, storage int
-			if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE tenant_id='tenant'").Scan(&slots, &storage); err != nil || slots != 1 || storage != 256 {
+			if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(sandbox_slots),0),COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant'").Scan(&slots, &storage); err != nil || slots != 1 || storage != 256 {
 				t.Fatal("denied dependency lost original responsibility", slots, storage, err)
 			}
 			captures := backend.Count("capture")

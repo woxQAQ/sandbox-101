@@ -38,7 +38,7 @@ func TestHavenPublishedRawCleanupRequiresTransfer(t *testing.T) {
 				t.Fatal("rejected handoff changed original responsibility", status, err)
 			}
 			var operations, owners, storage int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations WHERE idem_key='raw'),(SELECT COUNT(*) FROM vms WHERE operation_id IS NOT NULL),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&operations, &owners, &storage); err != nil || operations != 0 || owners != 0 || storage != 256 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM operations WHERE idem_key='raw'),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL AND operation_id IS NOT NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL)").Scan(&operations, &owners, &storage); err != nil || operations != 0 || owners != 0 || storage != 256 {
 				t.Fatal("rejected handoff leaked admission or changed custody", operations, owners, storage, err)
 			}
 			if _, err = os.Stat(capture.State.Boundary.Path); err != nil {
@@ -73,7 +73,7 @@ func TestHavenPublishedRawCleanupRetainsUnknownInstance(t *testing.T) {
 		t.Fatal("unknown instance allowed raw removal", err)
 	}
 	var holders, storage int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE holder_kind='capture'),(SELECT SUM(storage_mib) FROM quota_resources)").Scan(&holders, &storage); err != nil || holders != 2 || storage != 256 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND holder_kind='capture'),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL)").Scan(&holders, &storage); err != nil || holders != 2 || storage != 256 {
 		t.Fatal("unknown instance lost original responsibility", holders, storage, err)
 	}
 	backend.Mu.Lock()
@@ -111,7 +111,7 @@ func TestHavenPublishedRawCleanup(t *testing.T) {
 		t.Fatal("publication removed", err)
 	}
 	var slots, storage, vms, raw int
-	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources),(SELECT SUM(storage_mib) FROM quota_resources),(SELECT COUNT(*) FROM vms),(SELECT COUNT(*) FROM resource_refs WHERE holder_kind='capture')").Scan(&slots, &storage, &vms, &raw); err != nil || slots != 1 || storage != 256 || vms != 1 || raw != 0 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM vms WHERE deleted_at IS NULL),(SELECT COUNT(*) FROM resource_refs WHERE deleted_at IS NULL AND holder_kind='capture')").Scan(&slots, &storage, &vms, &raw); err != nil || slots != 1 || storage != 256 || vms != 1 || raw != 0 {
 		t.Fatal(slots, storage, vms, raw, err)
 	}
 }

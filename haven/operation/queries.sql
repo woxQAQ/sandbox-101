@@ -5,7 +5,7 @@ INSERT INTO operation_steps(operation_id,step_key,action,input_hash,input,candid
 UPDATE operation_steps SET status=sqlc.arg(next_status),phase=sqlc.arg(next_phase),result_snapshot_id=sqlc.arg(next_snapshot) WHERE operation_id=sqlc.arg(operation_id) AND step_key=sqlc.arg(step_key) AND input_hash=sqlc.arg(input_hash) AND status=sqlc.arg(previous_status) AND phase=sqlc.arg(previous_phase) AND result_snapshot_id=sqlc.arg(previous_snapshot) AND status IN ('pending','running');
 
 -- name: ListResultSandboxes :many
-SELECT sandbox_id FROM operation_result_sandboxes WHERE operation_id=? ORDER BY position;
+SELECT sandbox_id FROM operation_result_sandboxes WHERE deleted_at IS NULL AND operation_id=? ORDER BY position;
 
 -- name: UpdateLiveResult :execrows
 UPDATE operations SET status=COALESCE(sqlc.narg(next_status),status),finished_at=sqlc.arg(finished_at),
@@ -14,7 +14,7 @@ UPDATE operations SET status=COALESCE(sqlc.narg(next_status),status),finished_at
  resource_ready=sqlc.arg(resource_ready),result_error=sqlc.arg(result_error) WHERE id=sqlc.arg(id) AND status IN ('pending','running');
 
 -- name: ClearResultSandboxes :exec
-DELETE FROM operation_result_sandboxes WHERE operation_id=?;
+UPDATE operation_result_sandboxes SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?;
 
 -- name: InsertResultSandbox :execrows
 INSERT INTO operation_result_sandboxes(operation_id,position,sandbox_id) VALUES(?,?,?);

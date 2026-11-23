@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	storeFormat        = "haven-single-control"
+	storeFormat        = "haven-single-control-soft-delete"
 	storeVersion       = Version
 	storeApplicationID = ApplicationID
 )

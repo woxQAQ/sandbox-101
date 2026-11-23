@@ -120,6 +120,7 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 		"missing-db",
 		"corrupt-db",
 		"foreign-application",
+		"previous-format",
 		"previous-version",
 		"missing-identity-version",
 		"future-version",
@@ -148,6 +149,16 @@ func TestHavenStoreRejectsForeignStateBeforeDDL(t *testing.T) {
 				err = os.WriteFile(filepath.Join(directory, "haven.db"), []byte("corrupt fixture"), 0o600)
 			case "foreign-application":
 				storeTestSQL(t, filepath.Join(directory, "haven.db"), "PRAGMA application_id=0; CREATE TABLE engine_marker(value TEXT)")
+			case "previous-format":
+				identity := state.Identity()
+				identity.Format = "haven-single-control"
+				body, err := json.Marshal(identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "store.json"), body, 0o600); err != nil {
+					t.Fatal(err)
+				}
 			case "missing-identity-version":
 				path := filepath.Join(directory, "store.json")
 				body, err := os.ReadFile(path)

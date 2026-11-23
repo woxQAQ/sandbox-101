@@ -63,7 +63,7 @@ func TestHavenGCReclaimsInternalSleepSnapshot(t *testing.T) {
 		t.Fatal(report, err)
 	}
 	var storage int
-	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources").Scan(&storage); err != nil || storage != 0 {
+	if err = service.State.Database().QueryRow("SELECT COALESCE(SUM(storage_mib),0) FROM quota_resources WHERE deleted_at IS NULL").Scan(&storage); err != nil || storage != 0 {
 		t.Fatal(storage, err)
 	}
 }

@@ -53,7 +53,7 @@ func TestHavenRestoreStoppedTargetDiscard(t *testing.T) {
 				t.Fatal("restore failure promoted", failed.State)
 			}
 			var cost int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id IN (?,?)", prior.OperationID, acceptedOperation.ID).Scan(&cost); err != nil || cost != 128 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id IN (?,?)", prior.OperationID, acceptedOperation.ID).Scan(&cost); err != nil || cost != 128 {
 				t.Fatal("failure lost old/new disk debt", cost, err)
 			}
 			faults.Set(nil)
@@ -128,7 +128,7 @@ func TestHavenRestoreStoppedTargetRecovery(t *testing.T) {
 				t.Fatal("restore changed previous published result", err)
 			}
 			var cost int
-			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id IN (?,?)", prior.OperationID, acceptedOperation.ID).Scan(&cost); err != nil || cost != 128 {
+			if err = service.State.Database().QueryRow("SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id IN (?,?)", prior.OperationID, acceptedOperation.ID).Scan(&cost); err != nil || cost != 128 {
 				t.Fatal("recovery lost disk debt", cost, err)
 			}
 			launches := 3
@@ -243,7 +243,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 				t.Fatal(step.State)
 			}
 			ancestor := step.Input.Ancestors[0].OperationID
-			statement := fmt.Sprintf("CREATE TRIGGER deny_old_generation_retirement BEFORE DELETE ON instances WHEN OLD.operation_id='%s' BEGIN SELECT RAISE(%s); END", ancestor, mode)
+			statement := fmt.Sprintf("CREATE TRIGGER deny_old_generation_retirement BEFORE UPDATE OF deleted_at ON instances WHEN OLD.operation_id='%s' BEGIN SELECT RAISE(%s); END", ancestor, mode)
 			if _, err := service.State.Database().Exec(statement); err != nil {
 				t.Fatal(err)
 			}
@@ -260,7 +260,7 @@ func TestHavenRestoreStoppedTargetRetirementAtomicity(t *testing.T) {
 				t.Fatal("retirement denial committed", pending.State)
 			}
 			var instances, versions, cost int
-			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM instances WHERE vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE source_operation_id IN (?,?))", step.Candidate, step.Candidate, ancestor, acceptedOperation.ID).Scan(&instances, &versions, &cost); err != nil || instances != 2 || versions != 2 || cost != 128 {
+			if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM instances WHERE deleted_at IS NULL AND vm_id=?),(SELECT COUNT(*) FROM resource_versions WHERE deleted_at IS NULL AND vm_id=?),(SELECT SUM(storage_mib) FROM quota_resources WHERE deleted_at IS NULL AND source_operation_id IN (?,?))", step.Candidate, step.Candidate, ancestor, acceptedOperation.ID).Scan(&instances, &versions, &cost); err != nil || instances != 2 || versions != 2 || cost != 128 {
 				t.Fatal("retirement denial partially removed history/debt", instances, versions, cost, err)
 			}
 			if _, err = service.State.Database().Exec("DROP TRIGGER deny_old_generation_retirement"); err != nil {
@@ -296,7 +296,7 @@ func TestHavenRestoreStoppedTargetRelease(t *testing.T) {
 		t.Fatal("multi-version release failed", deleted.State, reason)
 	}
 	var versions, instances int
-	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_versions WHERE vm_id=?),(SELECT COUNT(*) FROM instances WHERE vm_id=?)", step.Candidate, step.Candidate).Scan(&versions, &instances); err != nil || versions != 0 || instances != 0 {
+	if err = service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM resource_versions WHERE deleted_at IS NULL AND vm_id=?),(SELECT COUNT(*) FROM instances WHERE deleted_at IS NULL AND vm_id=?)", step.Candidate, step.Candidate).Scan(&versions, &instances); err != nil || versions != 0 || instances != 0 {
 		t.Fatal("historical versions were not retired", versions, instances, err)
 	}
 	if backend.Count("launch") != 3 {
@@ -315,7 +315,7 @@ func TestHavenRestoreStoppedTarget(t *testing.T) {
 		t.Fatal("restore did not preserve logical VM and replace instance")
 	}
 	var disks, slots int
-	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM quota_resources WHERE kind='vm_disk' AND tenant_id='tenant'),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE tenant_id='tenant')").Scan(&disks, &slots); err != nil || disks != 3 || slots != 2 {
+	if err := service.State.Database().QueryRow("SELECT (SELECT COUNT(*) FROM quota_resources WHERE deleted_at IS NULL AND kind='vm_disk' AND tenant_id='tenant'),(SELECT SUM(sandbox_slots) FROM quota_resources WHERE deleted_at IS NULL AND tenant_id='tenant')").Scan(&disks, &slots); err != nil || disks != 3 || slots != 2 {
 		t.Fatal("restore lost old disk debt or allocated another slot", disks, slots, err)
 	}
 	if backend.Count("launch") != 3 {

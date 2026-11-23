@@ -76,7 +76,7 @@ func TestHavenWarmClaimAndFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			var slots int
-			if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM pool_slots WHERE operation_id=?", refill.ID).Scan(&slots); err != nil || slots != 0 {
+			if err = service.State.Database().QueryRowContext(ctx, "SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND operation_id=?", refill.ID).Scan(&slots); err != nil || slots != 0 {
 				t.Fatalf("expected retired refill slot, got %d, %v", slots, err)
 			}
 			published, err := service.TemplateCatalog.GetTemplate(ctx, principal, "golden")

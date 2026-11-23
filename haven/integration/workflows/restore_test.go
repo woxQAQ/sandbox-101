@@ -165,7 +165,7 @@ func TestHavenRestoreHandoffRejectsSQL(t *testing.T) {
 		condition string
 	}{
 		{"INSERT", "vm_memory_backings", "1"},
-		{"DELETE", "snapshot_source_leases", "1"},
+		{"UPDATE OF deleted_at", "snapshot_source_leases", "1"},
 		{"UPDATE", "quota_refs", "NEW.holder_id LIKE 'backing:%'"},
 		{"UPDATE", "resource_progress", "NEW.backing_ready=1"},
 	} {

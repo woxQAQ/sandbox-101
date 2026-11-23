@@ -120,8 +120,8 @@ func readSettings(ctx context.Context, tx *sql.Tx, id string) (Settings, error) 
 	return s, nil
 }
 
-func settingsRow(id string, s Settings) dbgen.SandboxSetting {
-	return dbgen.SandboxSetting{
+func settingsRow(id string, s Settings) dbgen.InsertSandboxSettingsParams {
+	return dbgen.InsertSandboxSettingsParams{
 		SandboxID:      id,
 		Generation:     s.Generation,
 		Instance:       s.Instance,
@@ -139,7 +139,7 @@ func settingsRow(id string, s Settings) dbgen.SandboxSetting {
 
 func insertSettings(ctx context.Context, tx *sql.Tx, id string, s Settings) error {
 	q := dbgen.New(tx)
-	if err := store.RequireOne(q.InsertSandboxSettings(ctx, dbgen.InsertSandboxSettingsParams(settingsRow(id, s)))); err != nil {
+	if err := store.RequireOne(q.InsertSandboxSettings(ctx, settingsRow(id, s))); err != nil {
 		return err
 	}
 	return writeSettingsChildren(ctx, q, id, s)
@@ -204,6 +204,19 @@ func matchSettings(ctx context.Context, tx *sql.Tx, id string, expected Settings
 	return nil
 }
 
+func retireSettingsChildren(ctx context.Context, q *dbgen.Queries, id string) error {
+	if err := q.ClearEnvironment(ctx, id); err != nil {
+		return err
+	}
+	if err := q.ClearPolicyRules(ctx, id); err != nil {
+		return err
+	}
+	if err := q.ClearSecretHosts(ctx, id); err != nil {
+		return err
+	}
+	return q.ClearSecretDescriptors(ctx, id)
+}
+
 func replaceSettings(ctx context.Context, tx *sql.Tx, id string, before, after Settings) error {
 	if err := matchSettings(ctx, tx, id, before); err != nil {
 		return err
@@ -211,13 +224,7 @@ func replaceSettings(ctx context.Context, tx *sql.Tx, id string, before, after S
 	q := dbgen.New(tx)
 	row := settingsRow(id, after)
 	if !reflect.DeepEqual(before.Env, after.Env) || !reflect.DeepEqual(before.Policy, after.Policy) || !reflect.DeepEqual(before.Secrets, after.Secrets) {
-		if err := q.ClearEnvironment(ctx, id); err != nil {
-			return err
-		}
-		if err := q.ClearPolicyRules(ctx, id); err != nil {
-			return err
-		}
-		if err := q.ClearSecretDescriptors(ctx, id); err != nil {
+		if err := retireSettingsChildren(ctx, q, id); err != nil {
 			return err
 		}
 		if err := writeSettingsChildren(ctx, q, id, after); err != nil {

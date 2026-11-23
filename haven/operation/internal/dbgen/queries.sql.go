@@ -45,7 +45,7 @@ func (q *Queries) AdvancePhase(ctx context.Context, arg AdvancePhaseParams) (int
 }
 
 const clearResultSandboxes = `-- name: ClearResultSandboxes :exec
-DELETE FROM operation_result_sandboxes WHERE operation_id=?
+UPDATE operation_result_sandboxes SET deleted_at=CURRENT_TIMESTAMP WHERE deleted_at IS NULL AND operation_id=?
 `
 
 func (q *Queries) ClearResultSandboxes(ctx context.Context, operationID string) error {
@@ -1271,7 +1271,7 @@ func (q *Queries) ListPublishedSandboxes(ctx context.Context, operationID string
 }
 
 const listResultSandboxes = `-- name: ListResultSandboxes :many
-SELECT sandbox_id FROM operation_result_sandboxes WHERE operation_id=? ORDER BY position
+SELECT sandbox_id FROM operation_result_sandboxes WHERE deleted_at IS NULL AND operation_id=? ORDER BY position
 `
 
 func (q *Queries) ListResultSandboxes(ctx context.Context, operationID string) ([]string, error) {

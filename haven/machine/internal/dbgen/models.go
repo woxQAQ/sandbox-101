@@ -43,30 +43,36 @@ type ResourceProgress struct {
 }
 
 type RestoreFile struct {
-	OperationID string
-	Name        string
-	Source      string
-	Candidate   string
-	Size        int64
-	Device      int64
-	Inode       int64
-	Mode        int64
+	DeletedAt         sql.NullString
+	OperationID       string
+	ActiveOperationID sql.NullString
+	Name              string
+	Source            string
+	Candidate         string
+	Size              int64
+	Device            int64
+	Inode             int64
+	Mode              int64
 }
 
 type RestoreMaterial struct {
-	OperationID   string
-	Complete      bool
-	FilesPresent  bool
-	VersionDevice int64
-	VersionInode  int64
-	VersionMode   int64
-	RestoreDevice int64
-	RestoreInode  int64
-	RestoreMode   int64
+	DeletedAt         sql.NullString
+	OperationID       string
+	ActiveOperationID sql.NullString
+	Complete          bool
+	FilesPresent      bool
+	VersionDevice     int64
+	VersionInode      int64
+	VersionMode       int64
+	RestoreDevice     int64
+	RestoreInode      int64
+	RestoreMode       int64
 }
 
 type Snapshot struct {
+	DeletedAt          sql.NullString
 	ID                 string
+	ActiveID           sql.NullString
 	SourceVmID         string
 	TenantID           string
 	CaptureOperationID string
@@ -77,14 +83,10 @@ type Snapshot struct {
 	ManifestHash       sql.NullString
 }
 
-type SnapshotSourceLease struct {
-	SnapshotID  string
-	OperationID string
-	StepKey     string
-}
-
 type Vm struct {
+	DeletedAt             sql.NullString
 	ID                    string
+	ActiveID              sql.NullString
 	Slot                  int64
 	CurrentInstance       string
 	State                 string

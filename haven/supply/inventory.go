@@ -147,11 +147,11 @@ func (record TemplateRecord) reservePublication(ctx context.Context, query store
 		return fmt.Errorf("%w: template owner cannot change", errs.ErrConflict)
 	}
 	queries := dbgen.New(query)
-	owner, err := queries.GetPermanentOwner(ctx, record.ID)
+	intent, err := queries.GetIntent(ctx, record.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if owner != "" && owner != record.TenantID {
+	if intent.TenantID != "" && intent.TenantID != record.TenantID {
 		return fmt.Errorf("%w: template permanent owner cannot change", errs.ErrConflict)
 	}
 	return store.RequireOne(queries.ReservePublication(ctx, dbgen.ReservePublicationParams{

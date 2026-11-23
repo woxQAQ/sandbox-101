@@ -28,7 +28,7 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 	}); err == nil || acceptedRecord.Status != "failed" {
 		t.Fatal(acceptedRecord, err)
 	}
-	if _, err := service.State.Database().Exec("INSERT INTO resource_refs VALUES('unknown-resource','private-object','unknown-holder','private-holder')"); err != nil {
+	if _, err := service.State.Database().Exec("INSERT INTO resource_refs(resource_kind,resource_id,holder_kind,holder_id) VALUES('unknown-resource','private-object','unknown-holder','private-holder')"); err != nil {
 		t.Fatal(err)
 	}
 	var before, after int
@@ -48,7 +48,7 @@ func TestHavenGCUnknownNormalizedRootBlocksCollection(t *testing.T) {
 		t.Fatal("blocked graph admitted destructive work", before, after, err)
 	}
 	var pending int
-	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE status='cleanup'").Scan(&pending); err != nil || pending != 1 {
+	if err = service.State.Database().QueryRow("SELECT COUNT(*) FROM pool_slots WHERE deleted_at IS NULL AND status='cleanup'").Scan(&pending); err != nil || pending != 1 {
 		t.Fatal("blocked graph lost supply responsibility", pending, err)
 	}
 }

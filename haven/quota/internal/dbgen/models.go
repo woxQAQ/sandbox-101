@@ -3,10 +3,3 @@
 //   sqlc v1.30.0
 
 package dbgen
-
-type ResourceRef struct {
-	ResourceKind string
-	ResourceID   string
-	HolderKind   string
-	HolderID     string
-}
