@@ -4,13 +4,14 @@ go 1.26.5
 
 tool (
 	github.com/sqlc-dev/sqlc/cmd/sqlc
+	github.com/woxQAQ/haven/tools/calltree
 	github.com/woxQAQ/haven/tools/longcond
 	github.com/woxQAQ/haven/tools/sqlfmt
 	github.com/woxQAQ/haven/tools/structfmt
 	github.com/woxQAQ/long-funcparam-detectorgo
 )
 
-require golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
+require golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a
 
 require (
 	cel.dev/expr v0.24.0 // indirect
