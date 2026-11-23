@@ -322,17 +322,17 @@ func Open(opts Options) (*App, error) {
 		Fault:   opts.Fault,
 	})
 	service.Provisioning = sandbox.NewVMProvisioning(state, sandbox.ProvisionDependencies{
-		VMGuards:    vmGuards,
-		Lifetime:    lifetime,
-		Gate:        admissionGate,
-		Workers:     workers,
-		Registry:    service.Ephemeral,
-		Proofs:      resourceProofs,
-		Activations: service.Activations,
-		Policies:    service.DirectPolicies,
-		Committer:   committer,
-		Ownership:   sandbox.ProvisionHistory{},
-		Handoff:     sandbox.ProvisionHandoff{},
+		VMGuards:       vmGuards,
+		Lifetime:       lifetime,
+		Gate:           admissionGate,
+		Workers:        workers,
+		Registry:       service.Ephemeral,
+		Proofs:         resourceProofs,
+		Activations:    service.Activations,
+		DirectPolicies: service.DirectPolicies,
+		Committer:      committer,
+		Ownership:      sandbox.ProvisionHistory{},
+		Handoff:        sandbox.ProvisionHandoff{},
 	}, sandbox.ProvisionOptions{
 		Backend: opts.Backend,
 		Capacity: sandbox.ProvisionCapacity{
@@ -357,7 +357,7 @@ func Open(opts Options) (*App, error) {
 		Provisioning:           service.Provisioning,
 		Captures:               service.Captures,
 		Deletion:               service.Deletion,
-		Policies:               service.DirectPolicies,
+		DirectPolicies:         service.DirectPolicies,
 		Links:                  service.ResourceLinks,
 	}, supply.SupplyOptions{
 		Backend: opts.Backend,
@@ -377,7 +377,7 @@ func Open(opts Options) (*App, error) {
 		Activations:           service.Activations,
 		Provisioning:          service.Provisioning,
 		Deletion:              service.Deletion,
-		Policies:              service.DirectPolicies,
+		DirectPolicies:        service.DirectPolicies,
 		Links:                 service.ResourceLinks,
 	}, opts.Fault)
 	service.Lifecycle = sandbox.NewLifecycle(state, sandbox.LifecycleDependencies{
@@ -400,7 +400,7 @@ func Open(opts Options) (*App, error) {
 		Deletion:               service.Deletion,
 		CaptureDiscard:         service.CaptureDiscard,
 		CaptureCleanup:         service.CaptureCleanup,
-		Policies:               service.DirectPolicies,
+		DirectPolicies:         service.DirectPolicies,
 		Links:                  service.ResourceLinks,
 	}, sandbox.LifecycleOptions{
 		Backend:   opts.Backend,
@@ -424,7 +424,7 @@ func Open(opts Options) (*App, error) {
 		Activations:            service.Activations,
 		WarmClaims:             service.WarmClaims,
 		Provisioning:           service.Provisioning,
-		Policies:               service.DirectPolicies,
+		DirectPolicies:         service.DirectPolicies,
 		Backend:                opts.Backend,
 		Guest:                  opts.Guest,
 		Fault:                  opts.Fault,
@@ -445,7 +445,7 @@ func Open(opts Options) (*App, error) {
 		Captures:               service.Captures,
 		Deletion:               service.Deletion,
 		Lifecycle:              service.Lifecycle,
-		Policies:               service.DirectPolicies,
+		DirectPolicies:         service.DirectPolicies,
 		Links:                  service.ResourceLinks,
 	}, sandbox.ForkOptions{
 		Backend: opts.Backend,
@@ -475,7 +475,7 @@ func Open(opts Options) (*App, error) {
 	})
 	service.Node = node.New(state, service.Availability)
 	service.CommandAdmission = sandbox.NewCommandAdmission(service.Sandboxes, service.Lifecycle, service.Supply, service.Forks, service.OperationMonitor)
-	policies := service.DirectPolicies
+	directPolicies := service.DirectPolicies
 	deletion := service.Deletion
 	service.Reconcile = reconcile.New(state, reconcile.Dependencies{
 		Lifetime:     lifetime,
@@ -487,7 +487,7 @@ func Open(opts Options) (*App, error) {
 		Provisioning: service.Provisioning,
 	}, []reconcile.ResumeWorkflow{
 		func(id string) (bool, error) {
-			return policies.ResumePendingRetirement(lifetime.Context(), id)
+			return directPolicies.ResumePendingRetirement(lifetime.Context(), id)
 		},
 		service.Images.Resume,
 		service.GC.Resume,

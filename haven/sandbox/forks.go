@@ -50,7 +50,7 @@ type ForkDependencies struct {
 	Captures               *machine.Captures
 	Deletion               *machine.Deletion
 	Lifecycle              *Lifecycle
-	Policies               *machine.DirectPolicies
+	DirectPolicies         *machine.DirectPolicies
 	Links                  *machine.ResourceLinks
 }
 
@@ -75,7 +75,7 @@ type Forks struct {
 	captures               *machine.Captures
 	deletion               *machine.Deletion
 	lifecycle              *Lifecycle
-	policies               *machine.DirectPolicies
+	directPolicies         *machine.DirectPolicies
 	links                  *machine.ResourceLinks
 	opts                   ForkOptions
 	committer              *operation.Committer
@@ -105,7 +105,7 @@ func NewForks(state *store.State, dependencies ForkDependencies, options ForkOpt
 		captures:               dependencies.Captures,
 		deletion:               dependencies.Deletion,
 		lifecycle:              dependencies.Lifecycle,
-		policies:               dependencies.Policies,
+		directPolicies:         dependencies.DirectPolicies,
 		links:                  dependencies.Links,
 		opts:                   options,
 		committer:              dependencies.Committer,
@@ -132,7 +132,7 @@ func (f *Forks) dispatch(id string) {
 		return
 	}
 	f.workers.Start(id, func() error {
-		if handled, err := f.policies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
+		if handled, err := f.directPolicies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := f.Resume(id)
@@ -145,7 +145,7 @@ func (f *Forks) dispatchBranch(id string) {
 		return
 	}
 	f.workers.Start(id, func() error {
-		if handled, err := f.policies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
+		if handled, err := f.directPolicies.ResumePendingRetirement(f.ctx, id); handled || err != nil {
 			return err
 		}
 		return f.provisioning.Continue(id)
@@ -177,7 +177,7 @@ func (f *Forks) Resume(id string) (bool, error) {
 
 func (f *Forks) runResourceLink(parent, role string) (machine.ResourceLink, error) {
 	return f.links.Run(parent, role, func(link machine.ResourceLink) error {
-		if handled, err := f.policies.ResumePendingRetirement(f.ctx, link.ChildID); handled || err != nil {
+		if handled, err := f.directPolicies.ResumePendingRetirement(f.ctx, link.ChildID); handled || err != nil {
 			return err
 		}
 		var handled bool

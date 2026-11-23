@@ -61,7 +61,7 @@ type SupplyDependencies struct {
 	Ownership              machine.SandboxOwnershipReader
 	Captures               *machine.Captures
 	Deletion               *machine.Deletion
-	Policies               *machine.DirectPolicies
+	DirectPolicies         *machine.DirectPolicies
 	Links                  *machine.ResourceLinks
 }
 
@@ -83,7 +83,7 @@ type Supply struct {
 	ownership              machine.SandboxOwnershipReader
 	captures               *machine.Captures
 	deletion               *machine.Deletion
-	policies               *machine.DirectPolicies
+	directPolicies         *machine.DirectPolicies
 	links                  *machine.ResourceLinks
 	opts                   SupplyOptions
 	committer              *operation.Committer
@@ -111,7 +111,7 @@ func NewSupply(state *store.State, dependencies SupplyDependencies, options Supp
 		ownership:              dependencies.Ownership,
 		captures:               dependencies.Captures,
 		deletion:               dependencies.Deletion,
-		policies:               dependencies.Policies,
+		directPolicies:         dependencies.DirectPolicies,
 		links:                  dependencies.Links,
 		opts:                   options,
 		committer:              dependencies.Committer,
@@ -170,7 +170,7 @@ func (s *Supply) runResourceLink(parent, role string) (machine.ResourceLink, err
 }
 
 func (s *Supply) runResource(link machine.ResourceLink) error {
-	if handled, err := s.policies.ResumePendingRetirement(s.ctx, link.ChildID); handled || err != nil {
+	if handled, err := s.directPolicies.ResumePendingRetirement(s.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool

@@ -16,14 +16,14 @@ import (
 // DirectBindings checks sandbox configuration and frozen activation authority
 // before binding a caller to the machine's original network policy.
 type DirectBindings struct {
-	database store.DBTX
-	policies *machine.DirectPolicies
+	database       store.DBTX
+	directPolicies *machine.DirectPolicies
 }
 
-func NewDirectBindings(database store.DBTX, policies *machine.DirectPolicies) *DirectBindings {
+func NewDirectBindings(database store.DBTX, directPolicies *machine.DirectPolicies) *DirectBindings {
 	return &DirectBindings{
-		database: database,
-		policies: policies,
+		database:       database,
+		directPolicies: directPolicies,
 	}
 }
 
@@ -66,5 +66,5 @@ func (db *DirectBindings) InstallDirect(ctx context.Context, binding egress.Bind
 	if activation.Hash != step.Input.ActivationHash || activation.Key != step.Input.ActivationKey {
 		return nil, fmt.Errorf("%w: direct activation witness changed", errs.ErrManualRecovery)
 	}
-	return db.policies.Bind(ctx, step, expected)
+	return db.directPolicies.Bind(ctx, step, expected)
 }

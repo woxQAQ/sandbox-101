@@ -26,37 +26,37 @@ type ProvisionOptions struct {
 // ProvisionDependencies supplies the coordinator's shared execution owners and
 // physical capabilities. Construction does not select workflow modes.
 type ProvisionDependencies struct {
-	VMGuards    machine.VMGuards
-	Lifetime    *execution.Lifetime
-	Gate        execution.AdmissionGate
-	Workers     *execution.Workers
-	Registry    *ephemeral.Registry
-	Proofs      machine.ResourceProofs
-	Activations *Activations
-	Policies    *machine.DirectPolicies
-	Committer   *operation.Committer
-	Ownership   machine.ProvisionOwnershipReader
-	Handoff     machine.ProvisionParticipant
+	VMGuards       machine.VMGuards
+	Lifetime       *execution.Lifetime
+	Gate           execution.AdmissionGate
+	Workers        *execution.Workers
+	Registry       *ephemeral.Registry
+	Proofs         machine.ResourceProofs
+	Activations    *Activations
+	DirectPolicies *machine.DirectPolicies
+	Committer      *operation.Committer
+	Ownership      machine.ProvisionOwnershipReader
+	Handoff        machine.ProvisionParticipant
 }
 
 // Provisioning admits and executes cold/clone/restore intents using the shared
 // admission gate and workers. It owns no independent shutdown or runner state.
 type Provisioning struct {
-	store        store.Workflow
-	ctx          context.Context
-	lifetime     *execution.Lifetime
-	storeWriteMu execution.Guard
-	gate         execution.AdmissionGate
-	workers      *execution.Workers
-	registry     *ephemeral.Registry
-	policies     *machine.DirectPolicies
-	proofs       machine.ResourceProofs
-	backend      machine.ProvisionBackend
-	activations  *Activations
-	capacity     ProvisionCapacity
-	faultPoint   func(string) error
-	committer    *operation.Committer
-	physical     *machine.Provisioning
+	store          store.Workflow
+	ctx            context.Context
+	lifetime       *execution.Lifetime
+	storeWriteMu   execution.Guard
+	gate           execution.AdmissionGate
+	workers        *execution.Workers
+	registry       *ephemeral.Registry
+	directPolicies *machine.DirectPolicies
+	proofs         machine.ResourceProofs
+	backend        machine.ProvisionBackend
+	activations    *Activations
+	capacity       ProvisionCapacity
+	faultPoint     func(string) error
+	committer      *operation.Committer
+	physical       *machine.Provisioning
 }
 
 func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, options ProvisionOptions) *Provisioning {
@@ -77,20 +77,20 @@ func NewVMProvisioning(state *store.State, dependencies ProvisionDependencies, o
 			Reviewed:   state.Reviewed(),
 			Checkpoint: state.Checkpoint,
 		},
-		ctx:          dependencies.Lifetime.Context(),
-		lifetime:     dependencies.Lifetime,
-		storeWriteMu: dependencies.VMGuards.StoreWriteMu,
-		proofs:       dependencies.Proofs,
-		gate:         dependencies.Gate,
-		workers:      dependencies.Workers,
-		registry:     dependencies.Registry,
-		policies:     dependencies.Policies,
-		backend:      options.Backend,
-		activations:  dependencies.Activations,
-		physical:     physical,
-		capacity:     options.Capacity,
-		faultPoint:   options.Fault,
-		committer:    dependencies.Committer,
+		ctx:            dependencies.Lifetime.Context(),
+		lifetime:       dependencies.Lifetime,
+		storeWriteMu:   dependencies.VMGuards.StoreWriteMu,
+		proofs:         dependencies.Proofs,
+		gate:           dependencies.Gate,
+		workers:        dependencies.Workers,
+		registry:       dependencies.Registry,
+		directPolicies: dependencies.DirectPolicies,
+		backend:        options.Backend,
+		activations:    dependencies.Activations,
+		physical:       physical,
+		capacity:       options.Capacity,
+		faultPoint:     options.Fault,
+		committer:      dependencies.Committer,
 	}
 }
 

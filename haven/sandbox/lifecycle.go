@@ -52,7 +52,7 @@ type LifecycleDependencies struct {
 	Deletion               *machine.Deletion
 	CaptureDiscard         *machine.CaptureDiscard
 	CaptureCleanup         *machine.CaptureCleanup
-	Policies               *machine.DirectPolicies
+	DirectPolicies         *machine.DirectPolicies
 	Links                  *machine.ResourceLinks
 }
 
@@ -81,7 +81,7 @@ type Lifecycle struct {
 	deletion               *machine.Deletion
 	captureDiscard         *machine.CaptureDiscard
 	captureCleanup         *machine.CaptureCleanup
-	policies               *machine.DirectPolicies
+	directPolicies         *machine.DirectPolicies
 	links                  *machine.ResourceLinks
 	opts                   LifecycleOptions
 	committer              *operation.Committer
@@ -115,7 +115,7 @@ func NewLifecycle(state *store.State, dependencies LifecycleDependencies, option
 		deletion:               dependencies.Deletion,
 		captureDiscard:         dependencies.CaptureDiscard,
 		captureCleanup:         dependencies.CaptureCleanup,
-		policies:               dependencies.Policies,
+		directPolicies:         dependencies.DirectPolicies,
 		links:                  dependencies.Links,
 		opts:                   options,
 		committer:              dependencies.Committer,
@@ -142,7 +142,7 @@ func (l *Lifecycle) dispatch(id string) {
 		return
 	}
 	l.workers.Start(id, func() error {
-		if handled, err := l.policies.ResumePendingRetirement(l.ctx, id); handled || err != nil {
+		if handled, err := l.directPolicies.ResumePendingRetirement(l.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := l.Resume(id)
@@ -175,7 +175,7 @@ func (l *Lifecycle) runResourceLink(parent, role string) (machine.ResourceLink, 
 }
 
 func (l *Lifecycle) runResource(link machine.ResourceLink) error {
-	if handled, err := l.policies.ResumePendingRetirement(l.ctx, link.ChildID); handled || err != nil {
+	if handled, err := l.directPolicies.ResumePendingRetirement(l.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	var handled bool

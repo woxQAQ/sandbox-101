@@ -32,7 +32,7 @@ type WarmClaimDependencies struct {
 	Activations           *Activations
 	Provisioning          *Provisioning
 	Deletion              *machine.Deletion
-	Policies              *machine.DirectPolicies
+	DirectPolicies        *machine.DirectPolicies
 	Links                 *machine.ResourceLinks
 }
 
@@ -51,7 +51,7 @@ type WarmClaims struct {
 	activations           *Activations
 	provisioning          *Provisioning
 	deletion              *machine.Deletion
-	policies              *machine.DirectPolicies
+	directPolicies        *machine.DirectPolicies
 	links                 *machine.ResourceLinks
 	faultPoint            func(string) error
 	committer             *operation.Committer
@@ -76,7 +76,7 @@ func NewWarmClaims(state *store.State, dependencies WarmClaimDependencies, fault
 		activations:           dependencies.Activations,
 		provisioning:          dependencies.Provisioning,
 		deletion:              dependencies.Deletion,
-		policies:              dependencies.Policies,
+		directPolicies:        dependencies.DirectPolicies,
 		links:                 dependencies.Links,
 		faultPoint:            fault,
 		committer:             dependencies.Committer,
@@ -95,7 +95,7 @@ func (wc *WarmClaims) dispatch(id string) {
 		return
 	}
 	wc.workers.Start(id, func() error {
-		if handled, err := wc.policies.ResumePendingRetirement(wc.ctx, id); handled || err != nil {
+		if handled, err := wc.directPolicies.ResumePendingRetirement(wc.ctx, id); handled || err != nil {
 			return err
 		}
 		_, err := wc.Resume(id)
@@ -128,7 +128,7 @@ func (wc *WarmClaims) runResourceLink(parent, role string) (machine.ResourceLink
 }
 
 func (wc *WarmClaims) runResource(link machine.ResourceLink) error {
-	if handled, err := wc.policies.ResumePendingRetirement(wc.ctx, link.ChildID); handled || err != nil {
+	if handled, err := wc.directPolicies.ResumePendingRetirement(wc.ctx, link.ChildID); handled || err != nil {
 		return err
 	}
 	switch link.Kind {

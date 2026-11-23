@@ -41,7 +41,7 @@ type SandboxDependencies struct {
 	Activations            *Activations
 	WarmClaims             *WarmClaims
 	Provisioning           *Provisioning
-	Policies               *machine.DirectPolicies
+	DirectPolicies         *machine.DirectPolicies
 }
 
 // Sandboxes owns logical sandbox claim and configuration admission. Resource
@@ -63,7 +63,7 @@ type Sandboxes struct {
 	activations            *Activations
 	warmClaims             *WarmClaims
 	provisioning           *Provisioning
-	policies               *machine.DirectPolicies
+	directPolicies         *machine.DirectPolicies
 	backend                SandboxBackend
 	guest                  ActivationGuest
 	injectFault            func(string) error
@@ -93,7 +93,7 @@ func NewSandboxes(state *store.State, dependencies SandboxDependencies) *Sandbox
 		activations:            dependencies.Activations,
 		warmClaims:             dependencies.WarmClaims,
 		provisioning:           dependencies.Provisioning,
-		policies:               dependencies.Policies,
+		directPolicies:         dependencies.DirectPolicies,
 		backend:                dependencies.Backend,
 		guest:                  dependencies.Guest,
 		injectFault:            dependencies.Fault,
@@ -121,7 +121,7 @@ func (sb *Sandboxes) dispatch(id string) {
 		return
 	}
 	sb.workers.Start(id, func() error {
-		if handled, err := sb.policies.ResumePendingRetirement(sb.ctx, id); handled || err != nil {
+		if handled, err := sb.directPolicies.ResumePendingRetirement(sb.ctx, id); handled || err != nil {
 			return err
 		}
 		if handled, err := sb.warmClaims.Resume(id); handled || err != nil {
